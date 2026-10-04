@@ -8,8 +8,9 @@ import { Global } from "@orbit/util/global"
 import { Effect, Stream } from "effect"
 import path from "path"
 import { Permission } from "../permission.js"
+import { PlanMode } from "../plan-mode.js"
 
-const plan = Agent.ID.make("plan")
+const plan = PlanMode.agent
 
 const enter = (directory: string) => `<system-reminder>
 You are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:
@@ -28,7 +29,7 @@ export const Plugin = define({
   id: "orbit.plan",
   effect: Effect.fn(function* (ctx) {
     const global = yield* Global.Service
-    const directory = path.join(global.home, ".orbit", "plan")
+    const directory = PlanMode.directory(global.home)
     const enterReminder = enter(directory)
     yield* ctx.agent.transform((editor) => {
       editor.update(plan, (item) => {
