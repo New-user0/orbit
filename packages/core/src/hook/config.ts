@@ -8,7 +8,9 @@ import { Option, Schema } from "effect"
  * Decodes the raw `hooks` value of a settings document entry by entry, so one bad hook costs only itself. Survivors
  * come back in encoded form, ready for the final `Config.Info` validation. Every skipped entry is reported at its
  * exact path: `invalid` when it is malformed, `unsupported` when it is well formed but its event or hook type cannot
- * honor it as written.
+ * honor it as written. A key that no field of the schema names is dropped from its entry, which survives, and is
+ * reported as `unsupported` too, so a misspelled `matcher` or a field written in another format never vanishes
+ * unnoticed.
  */
 
 export interface Diagnostic {
@@ -28,6 +30,12 @@ type EncodedHook = (typeof ConfigHooks.Hook)["Encoded"]
 const options = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
 // A group's own fields are checked here; its hooks are decoded one by one so a bad hook leaves its siblings alone.
 const Group = Schema.Struct({ matcher: ConfigHooks.Matcher.fields.matcher, hooks: Schema.Array(Schema.Unknown) })
+const hookFields = {
+  command: ConfigHooks.Command.fields,
+  prompt: ConfigHooks.Prompt.fields,
+  agent: ConfigHooks.Agent.fields,
+  http: ConfigHooks.Http.fields,
+} as const satisfies Record<EncodedHook["type"], object>
 
 export function decode(input: unknown): Result {
   if (!isRecord(input)) return { hooks: undefined, diagnostics: [invalid(["hooks"])] }
@@ -62,6 +70,7 @@ function decodeGroup(event: ConfigHooks.Event, raw: unknown, path: string[], dia
     diagnostics.push(invalid(path))
     return []
   }
+  reportExcess(raw, Group.fields, path, diagnostics)
   const hooks = group.value.hooks.flatMap((hook, index) =>
     decodeHook(event, hook, [...path, "hooks", String(index)], diagnostics),
   )
@@ -75,21 +84,37 @@ function decodeHook(event: ConfigHooks.Event, raw: unknown, path: string[], diag
     return []
   }
   const reason = unsupportedReason(event, hook.value, raw)
-  if (reason === undefined) return [hook.value]
-  diagnostics.push({ kind: "unsupported", path, message: reason })
-  return []
+  if (reason !== undefined) {
+    diagnostics.push({ kind: "unsupported", path, message: reason })
+    return []
+  }
+  reportExcess(raw, hookFields[hook.value.type], path, diagnostics)
+  return [hook.value]
 }
 
 /** Why no engine can run this hook as written, if that is so. */
 function unsupportedReason(event: ConfigHooks.Event, hook: EncodedHook, raw: unknown) {
   if ((hook.type === "prompt" || hook.type === "agent") && !isDecisionEvent(event))
     return "omitted prompt or agent hook on an event that does not accept them"
-  // The schema only models async on commands, so the raw entry is the one place that still shows the request.
-  if (hook.type !== "command" && isRecord(raw) && (raw.async === true || raw.async_rewake === true))
+  // The schema only models these two on commands, so the raw entry is the one place that still shows the request.
+  // Anything but an explicit false asks for a background hook, and it is never run in a mode its author did not write.
+  if (
+    hook.type !== "command" &&
+    isRecord(raw) &&
+    [raw.async, raw.async_rewake].some((value) => value !== undefined && value !== false)
+  )
     return "omitted background hook that is not a command"
   if (hook.type === "command" && event === "WorktreeCreate" && (hook.async === true || hook.async_rewake === true))
     return "omitted background hook on an event that waits for its result"
   return undefined
+}
+
+/** The decoded entry already lacks the keys that have no field; this tells the author which ones they were. */
+function reportExcess(raw: unknown, fields: object, path: string[], diagnostics: Diagnostic[]) {
+  if (!isRecord(raw)) return
+  Object.keys(raw)
+    .filter((key) => !Object.hasOwn(fields, key))
+    .forEach((key) => diagnostics.push({ kind: "unsupported", path: [...path, key], message: "omitted unknown field" }))
 }
 
 /** `http` limits are checked per list, so one malformed list leaves the other in force. */
@@ -98,6 +123,7 @@ function decodeHttp(input: unknown, path: string[], diagnostics: Diagnostic[]) {
     diagnostics.push(invalid(path))
     return undefined
   }
+  reportExcess(input, ConfigHooks.HttpPolicy.fields, path, diagnostics)
   return Object.fromEntries(
     Object.entries(ConfigHooks.HttpPolicy.fields).flatMap(([key, field]): [string, unknown][] => {
       if (!Object.hasOwn(input, key)) return []
