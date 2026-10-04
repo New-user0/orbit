@@ -4900,41 +4900,48 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
-  scenario("interrupts runner continuation on a decline inside Code Mode without tool output", function* (s) {
-    const registry = yield* Tool.Service
-    yield* transformTools(registry, {
-      declined: {
-        name: "declined",
-        description: "Fail because the user declined approval",
-        input: Schema.Struct({}),
-        output: Schema.Struct({}),
-        execute: () => Effect.die(new Permission.DeclinedError()),
-      },
+  // The program tries to handle the decline itself, or can only finish through a handler of the declined call, which an
+  // interrupted call never runs; the step ends anyway.
+  for (const [name, code] of [
+    [
+      "interrupts runner continuation on a decline inside Code Mode without tool output",
+      'try { await tools.declined({}) } catch (e) { return "handled" }',
+    ],
+    [
+      "interrupts runner continuation on a decline inside Code Mode when only its handler could end the program",
+      "return await new Promise((resolve) => { tools.declined({}).then(resolve, resolve) })",
+    ],
+  ] as const)
+    scenario(name, function* (s) {
+      const registry = yield* Tool.Service
+      yield* transformTools(registry, {
+        declined: {
+          name: "declined",
+          description: "Fail because the user declined approval",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () => Effect.die(new Permission.DeclinedError()),
+        },
+      })
+      yield* s.admit("Call declined from Code Mode")
+
+      yield* s.llm.push(TestLLM.tool("call-execute", "execute", { code }))
+
+      const exit = yield* s.resume.pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      expect(s.requests).toHaveLength(1)
+      expect(yield* s.context).toMatchObject([
+        Expected.user("Call declined from Code Mode"),
+        Expected.assistant({}, [
+          Expected.failedTool(
+            { id: "call-execute" },
+            { error: { type: "aborted", message: "The user declined this tool call" } },
+          ),
+        ]),
+      ])
     })
-    yield* s.admit("Call declined from Code Mode")
-
-    // The program tries to handle the decline itself; the step ends anyway.
-    yield* s.llm.push(
-      TestLLM.tool("call-execute", "execute", {
-        code: 'try { await tools.declined({}) } catch (e) { return "handled" }',
-      }),
-    )
-
-    const exit = yield* s.resume.pipe(Effect.exit)
-
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
-    expect(s.requests).toHaveLength(1)
-    expect(yield* s.context).toMatchObject([
-      Expected.user("Call declined from Code Mode"),
-      Expected.assistant({}, [
-        Expected.failedTool(
-          { id: "call-execute" },
-          { error: { type: "aborted", message: "The user declined this tool call" } },
-        ),
-      ]),
-    ])
-  })
 
   scenario("returns permission corrections to the model and continues", function* (s) {
     const registry = yield* Tool.Service

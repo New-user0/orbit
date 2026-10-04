@@ -152,18 +152,17 @@ export const extensionGlobals = <R>(
         )
       // Applies the host function when run. `observe` sees how the call ends: now, or once a returned Promise settles.
       const invoke = (observe: (run: Effect.Effect<unknown, unknown, R>) => Effect.Effect<unknown, unknown, R>) =>
-        Effect.suspend(() => {
-          let result: unknown
-          try {
-            result = value.apply(undefined, args)
-          } catch (reason) {
-            return settle(observe(Effect.fail(reason)))
-          }
-          if (!(result instanceof Promise)) return settle(observe(Effect.succeed(result)))
-          return ctx.pending.create(
-            settle(observe(Effect.tryPromise({ try: () => result, catch: (reason) => reason }))),
-          )
-        })
+        Effect.try({ try: () => value.apply(undefined, args), catch: (reason) => reason }).pipe(
+          Effect.matchEffect({
+            onFailure: (reason) => settle(observe(Effect.fail(reason))),
+            onSuccess: (result) =>
+              result instanceof Promise
+                ? ctx.pending.create(
+                    settle(observe(Effect.tryPromise({ try: () => result, catch: (reason) => reason }))),
+                  )
+                : settle(observe(Effect.succeed(result))),
+          }),
+        )
       if (describe === undefined) return invoke((run) => run)
       const call = describe(args)
       const hooks = ctx.tools.hooks

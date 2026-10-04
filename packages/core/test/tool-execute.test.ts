@@ -155,6 +155,9 @@ const reply = (name: string, run: Info["execute"]): [string, Info] => [
 const defects = (exit: Exit.Exit<unknown, unknown>) =>
   Exit.isFailure(exit) ? exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : [])) : []
 
+// A step that never ends is what a regression looks like here, so a real-clock bound turns the wait into a failure.
+const bounded = <A, E>(effect: Effect.Effect<A, E>) => Effect.timeout(effect, "2 seconds")
+
 test("a plain decline ends the execution with that defect and runs no later call", async () => {
   const ran: Array<string> = []
   const decline = new Permission.DeclinedError()
@@ -197,12 +200,67 @@ test("a decline interrupts calls still in flight instead of waiting for them", a
     ]),
   )
 
-  const exit = await Effect.runPromiseExit(
-    codeMode.execute({ code: `return await Promise.all([tools.slow({}), tools.declined({})])` }, context),
+  // Whether or not the program is waiting on the declined call, the call it does wait on is stopped, not finished.
+  for (const code of [
+    `return await Promise.all([tools.slow({}), tools.declined({})])`,
+    `const slow = tools.slow({}); tools.declined({}).catch(() => {}); return await slow`,
+    `const slow = tools.slow({}); try { await tools.declined({}) } catch (e) {}; return await slow`,
+  ]) {
+    interrupted.length = 0
+    const exit = await Effect.runPromiseExit(bounded(codeMode.execute({ code }, context)))
+
+    expect(defects(exit)).toEqual([decline])
+    expect(interrupted).toEqual(["slow"])
+  }
+})
+
+test("interrupting the execution still interrupts the calls it is waiting on", async () => {
+  const interrupted: Array<string> = []
+  const codeMode = createCodeMode(
+    new Map([
+      reply("slow", () =>
+        Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void interrupted.push("slow")))),
+      ),
+    ]),
   )
 
-  expect(defects(exit)).toEqual([decline])
+  // The program runs raced against a decline; that race must not stand between an interrupt and the calls.
+  const exit = await Effect.runPromiseExit(
+    codeMode.execute({ code: `return await tools.slow({})` }, context).pipe(Effect.timeout("100 millis")),
+  )
+
+  expect(Exit.isFailure(exit)).toBe(true)
   expect(interrupted).toEqual(["slow"])
+})
+
+test("a decline stops a program that can only finish through handlers of a call that never settles", async () => {
+  const ran: Array<string> = []
+  const decline = new Permission.DeclinedError()
+  const codeMode = createCodeMode(
+    new Map([
+      reply("declined", () => Effect.die(decline)),
+      reply("later", () =>
+        Effect.sync(() => {
+          ran.push("later")
+          return { output: "ran" }
+        }),
+      ),
+    ]),
+  )
+
+  // An interrupted call never runs its handlers, so a program that waits for one to settle it would wait forever.
+  for (const code of [
+    `return await new Promise((resolve) => { tools.declined({}).then(resolve, resolve) })`,
+    `const { promise, resolve } = Promise.withResolvers(); tools.declined({}).finally(() => resolve("settled")); return await promise`,
+    `let left = 2; const { promise, resolve } = Promise.withResolvers(); const done = () => { left -= 1; if (left === 0) resolve("settled") }; tools.declined({}).then(done, done); tools.declined({}).then(done, done); return await promise`,
+    // The same holds for a call the decline halts before it starts.
+    `tools.declined({}); return await new Promise((resolve) => { tools.later({}).then(resolve, resolve) })`,
+  ]) {
+    const exit = await Effect.runPromiseExit(bounded(codeMode.execute({ code }, context)))
+
+    expect(defects(exit)).toEqual([decline])
+  }
+  expect(ran).toEqual([])
 })
 
 test("a decline also stops a later fetch from being made", async () => {
@@ -235,6 +293,8 @@ test("a decline also stops a later fetch from being made", async () => {
         codeMode.execute({ code: `tools.declined({}); await fetch("${url}"); return "unreachable"` }, context),
       )
       expect(defects(exit)).toEqual([decline])
+      // The stop does not cancel a request that was already sent, which would still reach the server a moment later.
+      yield* Effect.sleep("200 millis")
       expect(hits).toEqual([url])
     }).pipe(Effect.scoped),
   )

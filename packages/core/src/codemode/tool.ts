@@ -10,7 +10,7 @@ import type {
   Namespace as ToolNamespace,
   Result,
 } from "@orbit/schema/tool"
-import { Cause, Effect, Ref, Schema, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Ref, Schema, Semaphore } from "effect"
 import { Permission } from "../permission.js"
 import { definition, normalizedName } from "../tool/runtime.js"
 import { CodeModeCatalog } from "./catalog.js"
@@ -84,13 +84,13 @@ export const create = (
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
         // A user's plain decline ends the step, as it does for a direct tool, so the program never gets to handle it.
-        // The first one is kept here; every later host call is interrupted before it starts, and once the program
-        // settles this execution dies with it for the step runner to recover. Feedback (CorrectedError) and policy
-        // blocks stay ordinary tool failures the program sees.
-        const declined = yield* Ref.make<Permission.DeclinedError | undefined>(undefined)
-        const halted = Effect.flatMap(Ref.get(declined), (decline) =>
-          decline === undefined ? Effect.void : Effect.interrupt,
-        )
+        // The first one is kept here and stops the whole execution at once: an interrupted call never runs its
+        // handlers, so a program that only finishes through them would wait forever, and a sibling call it still
+        // awaits would run to completion first. A host call that starts before the stop lands is interrupted before
+        // it runs, and the execution then dies with the decline for the step runner to recover. Feedback
+        // (CorrectedError) and policy blocks stay ordinary tool failures the program sees.
+        const declined = yield* Deferred.make<Permission.DeclinedError>()
+        const halted = Effect.flatMap(Deferred.isDone(declined), (done) => (done ? Effect.interrupt : Effect.void))
         const lock = Semaphore.makeUnsafe(1)
         const record = (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) =>
           lock.withPermit(
@@ -110,7 +110,7 @@ export const create = (
                       : [],
                   )[0]
                   if (decline === undefined) return Effect.failCause(cause)
-                  return Ref.update(declined, (first) => first ?? decline).pipe(Effect.andThen(Effect.interrupt))
+                  return Deferred.succeed(declined, decline).pipe(Effect.andThen(Effect.interrupt))
                 }),
               )
               const content =
@@ -130,10 +130,12 @@ export const create = (
             "extension.before": (call) => Effect.andThen(halted, progress["extension.before"](call)),
           },
         )
-        // The program settles however it likes, but a decline has the last word.
-        const settled = yield* Effect.exit(codeMode.execute(code))
-        const decline = yield* Ref.get(declined)
-        if (decline !== undefined) return yield* Effect.die(decline)
+        // The program settles however it likes, but a decline stops it and has the last word, even over a program
+        // that finished first.
+        const settled = yield* Effect.exit(
+          Effect.raceFirst(codeMode.execute(code), Effect.andThen(Deferred.await(declined), Effect.interrupt)),
+        )
+        if (yield* Deferred.isDone(declined)) return yield* Effect.flatMap(Deferred.await(declined), Effect.die)
         const result = yield* settled
         const toolCalls = yield* Ref.get(calls)
         const collected = (yield* Ref.get(files))
