@@ -6,13 +6,13 @@ import type { Watcher } from "../filesystem/watcher.js"
 import type { ConfigDiscovery } from "./discovery.js"
 
 export function plan(sources: ConfigDiscovery.Sources) {
+  const levels = [sources, ...(sources.home ? [sources.home] : [])]
   const directories = [
     ...(sources.global ? [sources.global] : []),
-    ...sources.project.filter((root) => root.present).map((root) => root.path),
+    ...levels.flatMap((level) => level.project.filter((root) => root.present).map((root) => root.path)),
   ]
   const files = [
-    ...sources.direct,
-    ...sources.project.map((root) => root.path),
+    ...levels.flatMap((level) => [...level.direct, ...level.local, ...level.project.map((root) => root.path)]),
     ...sources.claude,
     ...sources.agents,
     ...(sources.explicit ? [sources.explicit] : []),

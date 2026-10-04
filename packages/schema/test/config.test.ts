@@ -83,8 +83,53 @@ describe("Config.Entry", () => {
     ])
   })
 
+  test("round-trips the scope of every entry", () => {
+    const scopes = ["remote", "user", "project", "local", "flag", "managed"] as const
+    const entries = [
+      ...scopes.map(
+        (scope) => new Config.Document({ type: "document", scope, info: new Config.Info({ shell: "/bin/zsh" }) }),
+      ),
+      ...scopes.map(
+        (scope) => new Config.Directory({ type: "directory", scope, path: AbsolutePath.make("/project/.orbit") }),
+      ),
+    ]
+
+    const encoded = Schema.encodeSync(Schema.Array(Config.Entry))(entries)
+    const decoded = Schema.decodeUnknownSync(Schema.Array(Config.Entry))(encoded)
+
+    expect(encoded.map((entry) => entry.scope)).toEqual([...scopes, ...scopes])
+    expect(decoded).toEqual(entries)
+    expect(decoded[0]).toBeInstanceOf(Config.Document)
+    expect(decoded.map((entry) => entry.scope)).toEqual([...scopes, ...scopes])
+  })
+
+  test("accepts entries without a scope and encodes them without one", () => {
+    const decode = Schema.decodeUnknownSync(Schema.Array(Config.Entry))
+    const decoded = decode([
+      { type: "document", info: { shell: "/bin/zsh" } },
+      { type: "directory", path: "/project/.orbit" },
+    ])
+
+    expect(decoded.map((entry) => entry.scope)).toEqual([undefined, undefined])
+    const encoded = Schema.encodeSync(Schema.Array(Config.Entry))(decoded)
+    expect(encoded[0]).not.toHaveProperty("scope")
+    expect(encoded[1]).not.toHaveProperty("scope")
+    expect(
+      Schema.encodeSync(Config.Entry)(
+        new Config.Directory({ type: "directory", path: AbsolutePath.make("/x"), scope: undefined }),
+      ),
+    ).not.toHaveProperty("scope")
+  })
+
+  test("rejects an unknown scope", () => {
+    const decode = Schema.decodeUnknownSync(Config.Entry)
+    expect(() => decode({ type: "directory", path: "/project/.orbit", scope: "global" })).toThrow()
+    expect(() => decode({ type: "document", scope: 1, info: {} })).toThrow()
+  })
+
   test("has a stable public identifier", () => {
     expect(Config.Entry.ast.annotations?.identifier).toBe("Config.Entry")
+    expect(Config.Scope.ast.annotations?.identifier).toBe("Config.Scope")
   })
 
   test("omits undefined optional properties while encoding", () => {

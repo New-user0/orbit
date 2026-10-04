@@ -74,8 +74,16 @@ const isCloudflareChallenge = (error: HttpClientError.HttpClientError) => {
 const request = (url: string, format: Format, userAgent = orbitUserAgent) =>
   HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(headers(format, userAgent)))
 
-const assertHttpUrl = (url: URL) => {
+const parseHttpUrl = (value: string) => {
+  const url = new URL(value)
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("URL must use http:// or https://")
+  // "Always" saves the host as a rule pattern, where * is a wildcard. A URL can still spell one in its host
+  // (docs.example.com*, docs%2A.example.com), which would save a pattern that matches other hosts.
+  // No real host contains one.
+  if (url.hostname.includes("*")) throw new Error("URL host must not contain *")
+  // pastebin.com. is the same host, but a rule written for pastebin.com would not match it.
+  if (url.hostname.endsWith(".")) url.hostname = url.hostname.replace(/\.+$/, "")
+  return url
 }
 
 const execute = (http: HttpClient.HttpClient, url: string, format: Format, userAgent = orbitUserAgent) =>
@@ -123,15 +131,24 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              yield* Effect.try({
-                try: () => assertHttpUrl(new URL(input.url)),
+              const url = yield* Effect.try({
+                try: () => parseHttpUrl(input.url),
                 catch: (error) => error,
               })
 
+              // Rules are written against the host or the URL: the host is the resource, the URL an alias, and
+              // "always" saves only the host. The alias drops credentials and the fragment because neither
+              // changes what is fetched, so a rule on a URL cannot be sidestepped by appending them. Both are
+              // normalized: the host is lowercase ASCII, so a rule for bücher.example must be written
+              // xn--bcher-kva.example.
+              const alias = `${url.origin}${url.pathname}${url.search}`
               yield* permission.assert({
                 action: name,
-                resources: [input.url],
-                save: ["*"],
+                resources: [url.hostname],
+                // The URL parser adds the root slash to a bare origin, so the origin alone is an alias too and a rule
+                // written as https://example.com keeps matching.
+                aliases: url.pathname === "/" && !url.search ? [alias, url.origin] : [alias],
+                save: [url.hostname],
                 metadata: input,
                 sessionID: context.sessionID,
                 agent: context.agent,

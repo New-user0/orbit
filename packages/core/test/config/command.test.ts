@@ -23,6 +23,7 @@ import { Global } from "@orbit/util/global"
 import { AppProcess } from "@orbit/util/process"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
+import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Watcher } from "@orbit/core/filesystem/watcher"
@@ -53,6 +54,7 @@ const it = testEffect(
       AppProcess.node,
       Location.node,
       ShellSelect.node,
+      Permission.node,
       Session.node,
       Job.node,
       Agent.node,
