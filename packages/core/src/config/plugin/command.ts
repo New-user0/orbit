@@ -244,24 +244,33 @@ function evaluateTemplate(template: string, input: string, sessionID: SessionSch
 function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, services: Services) {
   return Effect.gen(function* () {
     if (sources.length === 0) return []
-    const shell = yield* services.shell.resolve({ priority: "config" })
+    // Like the shell tool, run in a shell the scanner can read: it parses bash and PowerShell, so under fish or nu the
+    // resources it derives would not be the commands that run, and a deny rule could miss them.
+    const shell = yield* services.shell.resolve({ priority: "compat" })
     const entries = yield* services.config.entries()
     const sandbox = Config.latest(entries, "sandbox")
     const sandboxTool = ShellSandbox.TOOL[process.platform]
+    const tool = sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined
     const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
     const cwd = services.location.directory
     const commands = yield* Effect.forEach(sources, (source) =>
       Effect.gen(function* () {
         const parsed = yield* ShellParse.scan(source, shell, cwd, { portable })
+        const resources = parsed.commands.map((command) => command.resource)
         yield* services.permission.assert({
           action: "shell",
-          // A span the scanner finds no command in, such as a bare redirect, is still asked about as written.
-          resources: parsed.commands.length > 0 ? parsed.commands.map((command) => command.resource) : [source],
+          // Ask about the span as written as well when its commands alone would mislead: the scanner found none (a bare
+          // redirect), or it changes directory, so the commands run somewhere the resources do not show. Saved rules
+          // match single commands, so they never cover such a span.
+          resources: resources.length === 0 || parsed.directories.length > 0 ? [...resources, source] : resources,
           save: parsed.commands.map((command) => command.save),
+          // ACP titles a shell ask from the command it carries, and with no tool call it can only read it from here.
+          metadata: { command: source },
           sessionID,
           // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
         })
         const args = ShellSelect.args(shell, source)
+        // Mirrors the sandbox launch in Shell.create: change the two together until they share one helper.
         const sandboxed = ShellSandbox.wrap({
           platform: process.platform,
           settings: sandbox ?? {},
@@ -269,7 +278,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           args,
           cwd,
           writable: [services.location.project.directory, cwd, tmpdir()],
-          tool: sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined,
+          tool,
         })
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")

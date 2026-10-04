@@ -1,5 +1,6 @@
+import path from "path"
 import { beforeEach, describe, expect } from "bun:test"
-import { Cause, DateTime, Effect, Exit, Fiber, Layer, Queue, Schema, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect"
 import { Document, Info } from "@orbit/schema/config"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import { SessionMessage } from "@orbit/schema/session-message"
@@ -9,6 +10,8 @@ import { Command } from "@orbit/core/command"
 import { Config } from "@orbit/core/config"
 import { ConfigCommandPlugin } from "@orbit/core/config/plugin/command"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Watcher } from "@orbit/core/filesystem/watcher"
+import { Instance } from "@orbit/core/instance/service"
 import { Job } from "@orbit/core/job"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
@@ -26,6 +29,7 @@ import { AppProcess } from "@orbit/util/process"
 import { tempGlobalLayer } from "../fixture/global"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "../fixture/mcp"
 import { offlineModels } from "../fixture/models"
+import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { permissionLayer } from "../lib/permission"
 import { host } from "../plugin/host"
@@ -37,6 +41,7 @@ const decode = Schema.decodeUnknownSync(Info)
 const spawned: { command: string; args: readonly string[]; cwd?: string }[] = []
 const asserted: Permission.AssertInput[] = []
 const denied = new Set<string>()
+const failing = new Set<string>()
 const printed = new Map<string, string>()
 
 const processes = Layer.mock(AppProcess.Service, {
@@ -45,6 +50,11 @@ const processes = Layer.mock(AppProcess.Service, {
       if (command._tag !== "StandardCommand") return yield* Effect.die("expected a standard command")
       spawned.push({ command: command.command, args: command.args, cwd: command.options.cwd })
       const source = command.args.at(-1) ?? ""
+      if (failing.has(source))
+        return yield* new AppProcess.AppProcessError({
+          command: `${command.command} -c ${source}`,
+          cause: new Error("spawn failed"),
+        })
       return {
         command: command.command,
         exitCode: 0,
@@ -70,10 +80,11 @@ const permission = permissionLayer({
     ),
 })
 
+// The two priorities answer differently, as they do for a user whose configured shell is one the scanner cannot read.
 const shell = Layer.succeed(
   ShellSelect.Service,
   ShellSelect.Service.of({
-    resolve: () => Effect.succeed("sh"),
+    resolve: (input) => Effect.succeed(input.priority === "compat" ? "sh" : "fish"),
     transform: () => Effect.die("unused shell.transform"),
     reload: () => Effect.die("unused shell.reload"),
   }),
@@ -103,11 +114,23 @@ const replacements = [
 ] satisfies LayerNode.Replacements
 const it = testEffect(AppNodeBuilder.build(nodes, [...replacements, Permission.node.replace(permission)]))
 const real = testEffect(AppNodeBuilder.build(nodes, replacements))
+// Real project config, plugins and permissions, so a command the user types is driven through Session.command.
+const routed = testEffect(
+  AppNodeBuilder.build(LayerNode.group([Session.node, Instance.node, Bus.node]), [
+    AppProcess.node.replace(processes),
+    ShellSelect.node.replace(shell),
+    Global.node.replace(tempGlobalLayer),
+    SessionExecution.node.replace(SessionExecution.noopLayer),
+    Watcher.node.replace(Watcher.configured({ enabled: false })),
+    offlineModels,
+  ]),
+)
 
 beforeEach(() => {
   spawned.length = 0
   asserted.length = 0
   denied.clear()
+  failing.clear()
   printed.clear()
 })
 
@@ -153,16 +176,33 @@ describe("command template shell spans", () => {
     )
   }
 
+  it.live("never expands $ARGUMENTS inside a span, so argument text cannot reach the shell", () =>
+    Effect.gen(function* () {
+      const probe = yield* install("Log: !`git log $ARGUMENTS`")
+      yield* probe.execute("; touch pwned")
+      expect(spawned.map((spawn) => spawn.args.at(-1))).toEqual(["git log $ARGUMENTS"])
+      expect(asserted.map((input) => input.resources)).toEqual([["git log $ARGUMENTS"]])
+      expect(probe.prompts).toEqual(["Log: <git log $ARGUMENTS>\n\n; touch pwned"])
+    }),
+  )
+
   it.live("asks for each authored span as a shell action, without a tool source", () =>
     Effect.gen(function* () {
       const probe = yield* install("Status: !`git status`\nLog: !`git log -n 3 && cat notes.txt`")
       yield* probe.execute("")
       expect(asserted).toStrictEqual([
-        { action: "shell", resources: ["git status"], save: ["git status *"], sessionID },
+        {
+          action: "shell",
+          resources: ["git status"],
+          save: ["git status *"],
+          metadata: { command: "git status" },
+          sessionID,
+        },
         {
           action: "shell",
           resources: ["git log -n 3", "cat notes.txt"],
           save: ["git log *", "cat *"],
+          metadata: { command: "git log -n 3 && cat notes.txt" },
           sessionID,
         },
       ])
@@ -178,7 +218,48 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("!`> out.txt`")
       yield* probe.execute("")
-      expect(asserted).toStrictEqual([{ action: "shell", resources: ["> out.txt"], save: [], sessionID }])
+      expect(asserted).toStrictEqual([
+        { action: "shell", resources: ["> out.txt"], save: [], metadata: { command: "> out.txt" }, sessionID },
+      ])
+    }),
+  )
+
+  it.live("asks about a span that changes directory as written, beside its commands", () =>
+    Effect.gen(function* () {
+      const probe = yield* install("Keys: !`cd keys && cat id_rsa`")
+      yield* probe.execute("")
+      // The commands alone would show `cat id_rsa` and hide that it reads somewhere else; a saved `cat *` never covers
+      // the whole span, so a later `cd` elsewhere still asks.
+      expect(asserted).toStrictEqual([
+        {
+          action: "shell",
+          resources: ["cat id_rsa", "cd keys && cat id_rsa"],
+          save: ["cat *"],
+          metadata: { command: "cd keys && cat id_rsa" },
+          sessionID,
+        },
+      ])
+    }),
+  )
+
+  it.live("runs spans in a shell the scanner can read, not the configured one", () =>
+    Effect.gen(function* () {
+      const probe = yield* install("Status: !`git status`")
+      yield* probe.execute("")
+      expect(spawned.map((spawn) => spawn.command)).toEqual(["sh"])
+    }),
+  )
+
+  it.live("fails the command, without a prompt, when a span's process cannot run", () =>
+    Effect.gen(function* () {
+      failing.add("git status")
+      const probe = yield* install("Status: !`git status`")
+      const error = yield* probe.execute("").pipe(Effect.flip)
+      expect(error).toBeInstanceOf(Command.ExecutionError)
+      expect(error.message).toBe(
+        'Shell interpolation failed for "git status": Command failed: sh -c git status: spawn failed',
+      )
+      expect(probe.prompts).toEqual([])
     }),
   )
 
@@ -322,23 +403,20 @@ describe("command template shell spans with the permission service", () => {
     }),
   )
 
-  real.live("runs nothing and submits nothing when the user rejects a span", () =>
+  real.live("fails the command with the user's feedback when a span is rejected with a message", () =>
     Effect.gen(function* () {
       const session = yield* createSession([])
       const permission = yield* Permission.Service
       const asked = yield* requests
       const probe = yield* install("Status: !`git status`", {}, session.id)
-      const running = yield* probe.execute("").pipe(Effect.forkScoped)
+      const running = yield* probe.execute("").pipe(Effect.flip, Effect.forkScoped)
 
       const request = yield* Queue.take(asked)
-      yield* permission.reply({ requestID: request.id, reply: "reject" })
-      const exit = yield* Fiber.await(running)
-      expect(
-        Exit.isFailure(exit) &&
-          exit.cause.reasons.some(
-            (reason) => Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError,
-          ),
-      ).toBe(true)
+      expect(request.metadata).toEqual({ command: "git status" })
+      yield* permission.reply({ requestID: request.id, reply: "reject", message: "Read the log instead" })
+      const error = yield* Fiber.join(running)
+      expect(error).toBeInstanceOf(Command.ExecutionError)
+      expect(error.message).toBe('Shell interpolation failed for "git status": Read the log instead')
       expect(spawned).toEqual([])
       expect(probe.prompts).toEqual([])
     }),
@@ -361,6 +439,46 @@ describe("command template shell spans with the permission service", () => {
   )
 })
 
+// The built-in Plan agent asks before every shell command, so a template with a span prompts with no configuration.
+describe("command template shell spans through Session.command", () => {
+  routed.live("fails with a typed error when the user rejects a span, and runs and submits nothing", () =>
+    Effect.gen(function* () {
+      const session = yield* planSession("Status: !`echo declined`")
+      const sessions = yield* Session.Service
+      const asked = yield* requests
+      const running = yield* sessions
+        .command({ sessionID: session.id, command: "probe", text: "" })
+        .pipe(Effect.flip, Effect.forkScoped)
+
+      const request = yield* Queue.take(asked)
+      expect(request).toMatchObject({ action: "shell", resources: ["echo declined"], sessionID: session.id })
+      yield* answer(session, request, "reject")
+      const error = yield* Fiber.join(running)
+      expect(error).toBeInstanceOf(Command.ExecutionError)
+      expect(error.message).toBe("Shell interpolation was declined")
+      expect(spawned.filter((spawn) => spawn.args.at(-1) === "echo declined")).toEqual([])
+      expect(yield* submitted(session)).toEqual([])
+    }),
+  )
+
+  // The same path with an approval, so the empty inbox above means the command stopped rather than went unobserved.
+  routed.live("runs the span and submits the prompt once the user approves it", () =>
+    Effect.gen(function* () {
+      const session = yield* planSession("Status: !`echo approved`")
+      const sessions = yield* Session.Service
+      const asked = yield* requests
+      const running = yield* sessions
+        .command({ sessionID: session.id, command: "probe", text: "" })
+        .pipe(Effect.forkScoped)
+
+      yield* answer(session, yield* Queue.take(asked), "once")
+      yield* Fiber.join(running)
+      expect(spawned.filter((spawn) => spawn.args.at(-1) === "echo approved")).toHaveLength(1)
+      expect(yield* submitted(session)).toEqual(["Status: <echo approved>"])
+    }),
+  )
+})
+
 // The build agent gets exactly these rules; an empty list leaves every shell command to ask.
 function createSession(rules: Permission.Ruleset) {
   return Effect.gen(function* () {
@@ -379,6 +497,40 @@ function createSession(rules: Permission.Ruleset) {
     // Creating a session probes the project with git through the same process service; keep only what the spans run.
     spawned.length = 0
     return session
+  })
+}
+
+// A project whose one command is `probe`, and a session on the Plan agent.
+function planSession(template: string) {
+  return Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.promise(() =>
+      Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ commands: { probe: { template } } })),
+    )
+    const sessions = yield* Session.Service
+    return yield* sessions.create({
+      location: Location.Ref.make({ directory: AbsolutePath.make(tmp.path) }),
+      title: "Plan session",
+      agent: Agent.ID.make("plan"),
+    })
+  })
+}
+
+// Permission requests live in the session's location, so the reply goes through that location's services.
+function answer(session: Session.Info, request: Permission.Request, reply: Permission.Reply) {
+  return Effect.gen(function* () {
+    const instances = yield* Instance.Service
+    yield* Permission.Service.use((permission) => permission.reply({ requestID: request.id, reply })).pipe(
+      instances.provide(session),
+    )
+  })
+}
+
+// Nothing delivers inbox items here, so the user prompts waiting in it are exactly what the command submitted.
+function submitted(session: Session.Info) {
+  return Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    return (yield* sessions.inbox(session.id)).flatMap((item) => (item.type === "user" ? [item.payload.text] : []))
   })
 }
 
