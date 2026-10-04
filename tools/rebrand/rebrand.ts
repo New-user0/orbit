@@ -8,11 +8,12 @@
  *
  * The upstream names are assembled at runtime so this file never contains them literally.
  * THIRD_PARTY_NOTICES.txt is the only file allowed to keep the upstream name (MIT notice).
+ * files.ts lists the files; without .git, which an exported tree lacks, --check reads the tree instead.
  */
 import { $ } from "bun"
 import path from "node:path"
+import { hasGit, listFiles, readText, root } from "./files.ts"
 
-const root = path.resolve(import.meta.dir, "../..")
 const word = ["open", "code"].join("")
 const org = ["anomaly", "co"].join("")
 const share = ["op", "ncd"].join("")
@@ -61,7 +62,13 @@ if (mode !== "--check" && mode !== "--apply") {
   process.exit(2)
 }
 
-const files = (await $`git ls-files -co --exclude-standard`.cwd(root).text()).split("\n").filter(Boolean)
+// Renaming a path is a `git mv`, so a tree without .git cannot be rewritten.
+if (mode === "--apply" && !hasGit()) {
+  console.error("--apply needs a git checkout")
+  process.exit(2)
+}
+
+const files = await listFiles()
 const hits = mode === "--check" ? await check(files) : await apply(files)
 if (mode === "--check" && hits.length > 0) {
   console.error(hits.slice(0, 200).join("\n"))
@@ -143,14 +150,6 @@ async function scan(directory: string | undefined) {
   }
   console.error(found.join("\n"))
   return 1
-}
-
-async function readText(file: string) {
-  const blob = Bun.file(path.join(root, file))
-  if (!(await blob.exists())) return
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  if (bytes.includes(0)) return
-  return new TextDecoder().decode(bytes)
 }
 
 function brand(match: string) {

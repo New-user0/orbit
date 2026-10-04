@@ -2,7 +2,7 @@ export type ThinkingMode = "show" | "hide"
 
 const MODES: readonly ThinkingMode[] = ["show", "hide"] as const
 
-// OpenAI's Responses API surfaces reasoning summaries that start with a bolded
+// Some providers surface reasoning summaries that start with a bolded
 // title block: "**Inspecting PR workflow**\n\n<body>". Treat that first block,
 // or a complete title still awaiting its body while streaming, as disclosure
 // metadata so the TUI can style its header independently from the markdown body.

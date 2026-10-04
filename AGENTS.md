@@ -4,6 +4,7 @@
 - This repository does not use Changesets. Do not add `.changeset` files; follow the existing release workflow instead.
 - Base new branches, worktrees and pull requests on the repository's default branch unless the requester names another.
 - Run `bun tools/rebrand/rebrand.ts --check` before committing; the upstream product name must not appear anywhere except `THIRD_PARTY_NOTICES.txt`. After merging upstream changes, run it with `--apply` first.
+- Run `bun tools/rebrand/vendor.ts --check` before committing too. Other agent products' names, directories, instruction files and variables belong only in `packages/compat`, and model vendors' names only in provider adapter code. Fix a hit by rewording it or moving it there. Add an entry to the allowlist in `tools/rebrand/vendor.ts`, with a reason, only when neither fits.
 - Orbit makes no network calls other than to model providers, MCP servers and integrations the user configured. Do not add telemetry, update checks, hosted catalogs or default-on remote services.
 
 ## Live V2 TUI Testing

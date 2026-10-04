@@ -18,6 +18,8 @@ jobs:
       - uses: ./.github/actions/setup-bun
       - name: Brand gate
         run: bun tools/rebrand/rebrand.ts --check
+      - name: Vendor branding gate
+        run: bun tools/rebrand/vendor.ts --check
       - name: Lint and typecheck
         run: bun run check
 
