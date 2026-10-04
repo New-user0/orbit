@@ -74,9 +74,11 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
       ? globalRoots.includes(resolved) || globalFiles.includes(resolved)
       : globalRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep))
   // Global sources must not re-enter through the project walk. The home directory is the user's own config, not a
-  // project's, so the walk leaves its Orbit files to the home source below.
+  // project's, so the walk leaves its Orbit files to the home source below. realpath keeps the spelling it is given
+  // while Windows ignores case, and a lowercase cwd then names home differently from Global.home: path.relative
+  // compares case-insensitively there, where === would send home's files through the walk as project config.
   const visible = discovered
-    .filter((candidate) => candidate.parent !== homeDirectory && !reentersGlobal(candidate))
+    .filter((candidate) => path.relative(candidate.parent, homeDirectory) !== "" && !reentersGlobal(candidate))
     .map(({ item }) => item)
 
   // Home-level files are probed directly so they apply wherever the project sits, and under --bare.

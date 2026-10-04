@@ -1708,10 +1708,11 @@ function scopeLayer(
   directory: string,
   options?: Config.Options,
   remote?: ReturnType<typeof remoteNodes>,
+  globalDirectory = path.join(home, ".config", "orbit"),
 ) {
   return testLayer(
     directory,
-    path.join(home, ".config", "orbit"),
+    globalDirectory,
     directory,
     undefined,
     undefined,
@@ -1954,6 +1955,34 @@ describe("Config scopes", () => {
     }),
   )
 
+  it.live("loads a global config directory that is ~/.orbit once, beside the other home files", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const global = path.join(home, ".orbit")
+      yield* write({
+        [path.join(global, "orbit.json")]: marker("global"),
+        [path.join(global, "orbit.local.json")]: marker("global-local"),
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(home, "project", "orbit.json")]: marker("project"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(home, path.join(home, "project"), undefined, undefined, global)),
+      )
+
+      // Hosts that pin ORBIT_CONFIG_DIR to ~/.orbit make the home source's .orbit the global directory too: it loads
+      // once, with the global documents, and the rest of home's files follow it.
+      expect(labels(tmp.path, entries)).toEqual([
+        "user:global",
+        "user:dir(home/.orbit)",
+        "user:global-local",
+        "user:home",
+        "project:project",
+      ])
+    }),
+  )
+
   it.live("loads the home directory's orbit files for a project outside home", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
@@ -2095,5 +2124,87 @@ describe("Config scopes", () => {
           ),
         ).toEqual([])
       }),
+  )
+})
+
+// Windows ignores path case, but realpath keeps the spelling it is given: a child started with a lowercase cwd walks
+// c:\users\om while Global.home says C:\Users\Om. Both spellings must still be recognized as the same home directory.
+describe.skipIf(process.platform !== "win32")("Config scopes with differently cased paths", () => {
+  const writeHome = Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* write({
+      [path.join(tmp.path, "home", "orbit.json")]: marker("home"),
+      [path.join(tmp.path, "home", ".orbit", "orbit.json")]: marker("home-dot"),
+      [path.join(tmp.path, "home", ".claude", "settings.json")]: {},
+      [path.join(tmp.path, "home", ".agents", "settings.json")]: {},
+      [path.join(tmp.path, "home", "project", "orbit.json")]: marker("project"),
+    })
+    return tmp.path
+  })
+
+  // The entries and the claude and agents compatibility roots inside the fixture; the machine running the test may keep
+  // its own ~/.claude above it.
+  const load = (root: string, home: string, location: string, options: Config.Options) =>
+    Effect.gen(function* () {
+      const config = yield* Config.Service
+      const compatibility = yield* config.compatibility!()
+      const inRoot = (directories: readonly AbsolutePath[]) =>
+        directories.filter((directory) => inFixture(root, directory))
+      return {
+        entries: labels(root, yield* config.entries()),
+        claude: inRoot(compatibility.claude),
+        agents: inRoot(compatibility.agents),
+      }
+    }).pipe(Effect.provide(scopeLayer(home, location, options)))
+
+  it.live("recognizes the home directory when the location spells it differently", () =>
+    Effect.gen(function* () {
+      const root = yield* writeHome
+      const home = path.join(root, "home")
+      const location = path.join(root, "HOME", "project")
+
+      // Home's files and compatibility roots load once, as user config, and never again as project config.
+      expect(yield* load(root, home, location, {})).toEqual({
+        entries: [
+          "user:dir(home/.config/orbit)",
+          "user:home",
+          "user:home-dot",
+          "user:dir(home/.orbit)",
+          "project:project",
+        ],
+        claude: [AbsolutePath.make(path.join(home, ".claude"))],
+        agents: [AbsolutePath.make(path.join(home, ".agents"))],
+      })
+      expect(yield* load(root, home, location, { global: false })).toEqual({
+        entries: ["project:project"],
+        claude: [],
+        agents: [],
+      })
+    }),
+  )
+
+  it.live("recognizes the home directory when Global.home spells it differently", () =>
+    Effect.gen(function* () {
+      const root = yield* writeHome
+      const home = path.join(root, "HOME")
+      const location = path.join(root, "home", "project")
+
+      expect(yield* load(root, home, location, {})).toEqual({
+        entries: [
+          "user:dir(HOME/.config/orbit)",
+          "user:home",
+          "user:home-dot",
+          "user:dir(HOME/.orbit)",
+          "project:project",
+        ],
+        claude: [AbsolutePath.make(path.join(home, ".claude"))],
+        agents: [AbsolutePath.make(path.join(home, ".agents"))],
+      })
+      expect(yield* load(root, home, location, { global: false })).toEqual({
+        entries: ["project:project"],
+        claude: [],
+        agents: [],
+      })
+    }),
   )
 })

@@ -11,11 +11,13 @@ no hosted catalog fetches.
 Providers are configured in `orbit.json` in the global config directory (`orb debug paths` prints it) or in a
 project. Values accept `{env:VAR}` and `{file:path}`.
 
-- **Config precedence:** later sources win: remote config, the global config directory, `~/orbit.json` and
-  `~/.orbit`, project `orbit.json` files and `.orbit/` directories (outermost first), `orbit.local.json` files (personal
-  overrides, such as `.orbit/orbit.local.json`; keep them out of version control), then `ORBIT_CONFIG` and
-  `ORBIT_CONFIG_CONTENT`. `ORBIT_CONFIG` used to rank below project files and now outranks them, so a host that sets a
-  key in both places must drop it from `ORBIT_CONFIG` for the project file to apply.
+- **Config precedence:** later sources win: remote config; your own config (the global config directory, then
+  `~/orbit.json` and `~/.orbit`); project `orbit.json` files and `.orbit/` directories (outermost first); project
+  `orbit.local.json` files (personal overrides, such as `.orbit/orbit.local.json`; keep them out of version control);
+  then `ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT`. An `orbit.local.json` in the global config directory, `~` or
+  `~/.orbit` is part of your own config: it overrides the shared files beside it but ranks below every project file.
+  `ORBIT_CONFIG` used to rank below project files and now outranks them, so a host that sets a key in both places must
+  drop it from `ORBIT_CONFIG` for the project file to apply.
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and
   OS roots. `ORBIT_CLIENT_CERT`, `ORBIT_CLIENT_KEY` and `ORBIT_CLIENT_KEY_PASSPHRASE` add a client certificate.
