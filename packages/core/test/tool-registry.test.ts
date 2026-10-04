@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Agent } from "@orbit/core/agent"
-import type { Permission } from "@orbit/core/permission"
+import { Permission } from "@orbit/core/permission"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Image } from "@orbit/core/image"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
@@ -14,6 +14,7 @@ import { codeModeListings, executeTool, toolDefinitions } from "./lib/tool"
 import { Deferred, Effect, Exit, Fiber, Layer, Logger, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
 import { z } from "zod"
 import { testEffect } from "./lib/effect"
+import { allowAllPermission } from "./lib/permission"
 
 const imageStore = Layer.mock(Image.Service, {
   normalize: (resource, content) => {
@@ -39,6 +40,7 @@ const imageStore = Layer.mock(Image.Service, {
 })
 const registryLayer = AppNodeBuilder.build(LayerNode.group([Tool.node, PluginHooks.node]), [
   Image.node.replace(imageStore),
+  Permission.node.replace(allowAllPermission),
 ])
 const it = testEffect(registryLayer)
 const identity = {

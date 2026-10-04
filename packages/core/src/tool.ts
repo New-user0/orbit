@@ -9,6 +9,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import type { Agent } from "./agent.js"
 import { CodeModeCatalog } from "./codemode/catalog.js"
 import { CodeModeTool } from "./codemode/tool.js"
+import { CodeModeWeb } from "./codemode/web.js"
 import { Image } from "./image.js"
 import { Permission } from "./permission.js"
 import { PluginHooks } from "./plugin/hooks.js"
@@ -69,6 +70,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const hooks = yield* PluginHooks.Service
     const image = yield* Image.Service
+    const permission = yield* Permission.Service
 
     type NormalizedItem = Tool.Content | "decode" | "size"
     const normalizeImages = Effect.fnUntraced(function* (content: ReadonlyArray<Tool.Content>) {
@@ -155,6 +157,39 @@ const layer = Layer.effect(
       }
     })
 
+    // Fail closed: a function the Code Mode runtime exposes is callable only once it is listed here.
+    const authorize: CodeModeTool.Authorize = (call, context) => {
+      if (call.extension !== CodeModeWeb.extension.name || call.name !== "fetch")
+        return Effect.fail(
+          new Tool.Error({ message: `Code Mode function ${call.extension}.${call.name} is not authorized` }),
+        )
+      return Effect.try({
+        try: () => CodeModeWeb.request(call.args),
+        catch: (error) => new Tool.Error({ message: error instanceof Error ? error.message : String(error) }),
+      }).pipe(
+        Effect.flatMap((web) =>
+          permission
+            .assert({
+              action: "webfetch",
+              ...web,
+              sessionID: context.sessionID,
+              agent: context.agent,
+              // Every call in a program shares the execute call's ID, so the metadata tells them apart.
+              source: { type: "tool", messageID: context.messageID, id: context.id },
+            })
+            .pipe(
+              // The program sees a policy block's reason or the user's feedback as an error it can catch.
+              Effect.mapError(
+                (error) =>
+                  new Tool.Error({
+                    message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                  }),
+              ),
+            ),
+        ),
+      )
+    }
+
     let catalog: { data: Data; names: string; value: CodeModeCatalog.Inventory } | undefined
     const state = State.create<Data, Editor>({
       name: "tool",
@@ -237,10 +272,13 @@ const layer = Layer.effect(
           const codeModeInventory = { tools: codeModeTools, namespaces }
           const codeModeEnabled = !whollyDisabled("execute", rules)
           const codeModeTool = codeModeEnabled
-            ? CodeModeTool.create(codeModeInventory, (name, tool, input, context) =>
-                beforeExecute(name, input, context).pipe(
-                  Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
-                ),
+            ? CodeModeTool.create(
+                codeModeInventory,
+                (name, tool, input, context) =>
+                  beforeExecute(name, input, context).pipe(
+                    Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
+                  ),
+                authorize,
               )
             : undefined
           const names = Array.from(codeModeTools.keys()).join("\0")
@@ -328,5 +366,5 @@ function namespaceError(name: string) {
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [PluginHooks.node, Image.node],
+  deps: [PluginHooks.node, Image.node, Permission.node],
 })

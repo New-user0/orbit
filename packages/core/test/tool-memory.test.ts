@@ -8,12 +8,14 @@ import { Global } from "@orbit/util/global"
 import { Bus } from "@orbit/core/bus"
 import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
 import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
 import { MemoryTool } from "@orbit/core/tool/plugin/memory"
 import { tempLocationLayer } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
+import { allowAllPermission } from "./lib/permission"
 import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
 
 const node = makeLocationNode({
@@ -64,6 +66,7 @@ describe("memory tool", () => {
           AppNodeBuilder.build(LayerNode.group([Tool.node, node, Bus.node, InstructionDiscovery.node]), [
             Location.node.replace(tempLocationLayer),
             Global.node.replace(Global.layerWith({ data })),
+            Permission.node.replace(allowAllPermission),
           ]),
         ),
       )

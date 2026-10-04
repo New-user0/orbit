@@ -69,9 +69,14 @@ const description = [
   "Await every call whose completion matters; pending calls are interrupted when execution ends. Run independent calls concurrently with `Promise.all`.",
 ].join("\n")
 
+// A call the program makes straight to a host function, such as `fetch`, is not a tool call, so it is authorized
+// before it runs. A plain decline dies as a defect, as it does for a tool; any other failure fails the call.
+export type Authorize = (call: CodeMode.ExtensionInvocation, context: Context) => Effect.Effect<void, Error>
+
 export const create = (
   inventory: Inventory,
   executeTool: (name: string, tool: Info, input: unknown, context: Context) => Effect.Effect<Result, Error>,
+  authorize: Authorize,
 ) => {
   return {
     name: "execute",
@@ -91,28 +96,25 @@ export const create = (
         // (CorrectedError) and policy blocks stay ordinary tool failures the program sees.
         const declined = yield* Deferred.make<Permission.DeclinedError>()
         const halted = Effect.flatMap(Deferred.isDone(declined), (done) => (done ? Effect.interrupt : Effect.void))
+        const latchDecline = <E>(cause: Cause.Cause<E>) => {
+          const decline = cause.reasons.flatMap((reason) =>
+            Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError ? [reason.defect] : [],
+          )[0]
+          if (decline === undefined) return Effect.failCause(cause)
+          return Deferred.succeed(declined, decline).pipe(Effect.andThen(Effect.interrupt))
+        }
         const lock = Semaphore.makeUnsafe(1)
         const record = (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) =>
           lock.withPermit(
             Ref.updateAndGet(calls, update).pipe(Effect.tap((toolCalls) => context.progress({ toolCalls }))),
           )
-        const progress = progressHooks(record)
+        const progress = progressHooks(record, (call) => authorize(call, context).pipe(Effect.catchCause(latchDecline)))
         const codeMode = runtime(
           inventory,
           (name, tool, input) =>
             Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(callIndex, (index) => index + 1)
-              const executed = yield* executeTool(name, tool, input, context).pipe(
-                Effect.catchCause((cause) => {
-                  const decline = cause.reasons.flatMap((reason) =>
-                    Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError
-                      ? [reason.defect]
-                      : [],
-                  )[0]
-                  if (decline === undefined) return Effect.failCause(cause)
-                  return Deferred.succeed(declined, decline).pipe(Effect.andThen(Effect.interrupt))
-                }),
-              )
+              const executed = yield* executeTool(name, tool, input, context).pipe(Effect.catchCause(latchDecline))
               const content =
                 typeof executed.content === "string"
                   ? [{ type: "text" as const, text: executed.content }]
@@ -171,7 +173,10 @@ export const create = (
 }
 
 // Rows appear in start order; the same call object arrives at both hooks, so a call finds its row again.
-function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) => Effect.Effect<unknown>) {
+function progressHooks(
+  record: (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) => Effect.Effect<unknown>,
+  authorize: (call: CodeMode.ExtensionInvocation) => Effect.Effect<void, Error>,
+) {
   const rows = new WeakMap<object, number>()
   const start = (call: object, entry: ExecuteCall) =>
     record((items) => {
@@ -193,15 +198,17 @@ function progressHooks(record: (update: (items: Array<ExecuteCall>) => Array<Exe
       return start(call, { tool: call.name, status: "running", ...(shown ? { input: shown } : {}) })
     },
     "tool.after": settle,
-    // Only listed extension functions get a row; anything else stays out of the TUI.
-    "extension.before": (call) => {
-      switch (call.name) {
-        case "fetch":
-          return start(call, { tool: call.name, status: "running", input: CodeModeWeb.display(call.args) })
-        default:
-          return Effect.void
-      }
-    },
+    // A call that is not authorized never starts, so it never reaches `extension.after`: it gets its error row here, and
+    // an authorized one its running row only once it may go ahead. Only listed extension functions get a row; anything
+    // else stays out of the TUI.
+    "extension.before": (call) =>
+      Effect.suspend(() => {
+        const row = call.name === "fetch" ? { tool: call.name, input: CodeModeWeb.display(call.args) } : undefined
+        return authorize(call).pipe(
+          Effect.tapError(() => (row ? record((items) => [...items, { ...row, status: "error" }]) : Effect.void)),
+          Effect.andThen(() => (row ? start(call, { ...row, status: "running" }) : Effect.void)),
+        )
+      }),
     "extension.after": settle,
   } satisfies CodeMode.Hooks
 }

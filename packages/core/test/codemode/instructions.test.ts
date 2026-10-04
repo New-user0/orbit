@@ -3,11 +3,13 @@ import { CodeModeCatalog } from "@orbit/core/codemode/catalog"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Tool } from "@orbit/core/tool"
 import { Effect, Schema } from "effect"
 import { it } from "../lib/effect"
 import { readInitial, readUpdate } from "../lib/instructions"
+import { allowAllPermission } from "../lib/permission"
 
 const echo: CodeModeCatalog.Tool = {
   type: "tool",
@@ -86,6 +88,7 @@ describe("CodeModeInstructions", () => {
     }
     const layer = AppNodeBuilder.build(Tool.node, [
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
+      Permission.node.replace(allowAllPermission),
     ])
 
     return Effect.gen(function* () {
