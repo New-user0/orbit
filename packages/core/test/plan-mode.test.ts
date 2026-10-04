@@ -108,7 +108,7 @@ describe("PlanMode.previousAgent", () => {
 })
 
 describe("PlanMode.readOnlyAgents", () => {
-  it.effect("are built-in subagents that cannot edit files, run commands, or start other agents", () =>
+  it.effect("are built-in subagents whose default permissions cannot edit files, run commands, or start agents", () =>
     Effect.gen(function* () {
       const agents = yield* Agent.Service
       yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) }))

@@ -33,6 +33,7 @@ export const Plugin = {
   id: "orbit.tool.plan-mode",
   effect: Effect.fn("PlanModeTools.Plugin")(function* (ctx: Context) {
     const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
     const forms = yield* Form.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
@@ -99,9 +100,16 @@ export const Plugin = {
               }
             const file = path.join(PlanMode.directory(global.home), `${context.sessionID}.md`)
             yield* fs.writeWithDirs(file, input.plan)
-            // The agent the session planned from is recorded in its durable history, so a restart does not lose it.
+            // The agent the session planned from is in its durable history, so a restart does not lose it. When the
+            // history names none (the session started in Plan mode, or had no agent selected), return to the agent the
+            // runner picks for a session without one: the configured default.
             const previous = yield* PlanMode.previousAgent(sessions, context.sessionID)
-            yield* sessions.switchAgent({ sessionID: context.sessionID, agent: previous ?? Agent.defaultID })
+            const target = previous ?? (yield* agents.select()).id
+            // Approving a plan has to leave Plan mode, which a configured default of Plan mode itself would not do.
+            yield* sessions.switchAgent({
+              sessionID: context.sessionID,
+              agent: target === plan ? Agent.defaultID : target,
+            })
             return {
               output: { approved: true },
               content: `The user approved the plan, saved at ${file}. Plan mode has ended; carry out the plan.`,

@@ -10,7 +10,13 @@ import type { SessionStore } from "./session/store.js"
 /** The agent a session runs as while it is in Plan mode. */
 export const agent = Agent.ID.make("plan")
 
-/** Subagents Plan mode may start: they search and read, and cannot change anything. */
+/**
+ * The subagents Plan mode is meant to be limited to: they search and read. Nothing enforces this yet, so Plan mode can
+ * still start any subagent its permissions allow, `general` (which can edit) included.
+ *
+ * "Read-only" is a property of these agents' built-in permissions, which user config can widen. Whatever enforces this
+ * list should check an agent's effective permissions rather than trust its id alone.
+ */
 export const readOnlyAgents: ReadonlySet<string> = new Set([Agent.ID.make("explore")])
 
 /** Where Plan mode saves plans. It is the only place the plan agent may edit. */

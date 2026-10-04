@@ -12,6 +12,7 @@ import { Database } from "@orbit/core/database/database"
 import { Form } from "@orbit/core/form"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
+import { PlanMode } from "@orbit/core/plan-mode"
 import { Project } from "@orbit/core/project"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
@@ -35,17 +36,18 @@ const custom = Agent.ID.make("custom")
 const APPROVE = "Approve the plan and start"
 
 /**
- * One server process: the real Session and SessionStore over a database file, plus the Plan mode tools. Building
- * another one over the same file after this one finishes is a restart, so only what reached disk carries over.
+ * One server process: the real Session, SessionStore and Agent over a database file, plus the Plan mode tools.
+ * Building another one over the same file after this one finishes is a restart, so only what reached disk carries
+ * over: the session history does, the agents registered in memory do not.
  */
 const server = (input: { home: string; database: string; decisions: string[] }) => {
   const asked: Form.CreateInput[] = []
   const node = makeLocationNode({
     name: "test/plan-mode-tool-plugin",
     layer: Layer.effectDiscard(registerToolPlugin(PlanModeTools.Plugin)),
-    deps: [Tool.node, Session.node, Form.node, FSUtil.node, Global.node],
+    deps: [Tool.node, Session.node, Form.node, FSUtil.node, Global.node, Agent.node],
   })
-  const layer = AppNodeBuilder.build(LayerNode.group([Tool.node, SessionStore.node, Session.node, node]), [
+  const layer = AppNodeBuilder.build(LayerNode.group([Tool.node, SessionStore.node, Session.node, Agent.node, node]), [
     Location.node.replace(tempLocationLayer),
     Global.node.replace(Global.layerWith({ home: input.home })),
     Database.node.replace(Database.configured({ path: input.database })),
@@ -66,16 +68,26 @@ const server = (input: { home: string; database: string; decisions: string[] }) 
   return { asked, layer }
 }
 
-/** Runs a Plan mode tool the way the runner does: as whichever agent the session has selected. */
+/** Runs a Plan mode tool the way the runner does: as the agent the session resolves to, the default when it has none. */
 const callTool = Effect.fn("callTool")(function* (name: string, input: unknown) {
   const sessions = yield* Session.Service
+  const agents = yield* Agent.Service
   const registry = yield* Tool.Service
   const session = yield* sessions.get(sessionID)
   return yield* executeTool(registry, {
     ...toolIdentity,
-    agent: session.agent ?? build,
+    agent: (yield* agents.select(session.agent)).id,
     sessionID,
     call: { type: "tool-call" as const, id: `call-${name}`, name, input },
+  })
+})
+
+/** What `default_agent` in config does: the agent a session with no agent selected runs as. */
+const configureDefault = Effect.fn("configureDefault")(function* (id: Agent.ID) {
+  const agents = yield* Agent.Service
+  yield* agents.transform((editor) => {
+    editor.update(id, () => {})
+    editor.default(id)
   })
 })
 
@@ -168,13 +180,85 @@ describe("plan mode tools", () => {
       const test = server({ ...paths, decisions: [APPROVE] })
       yield* Effect.gen(function* () {
         const sessions = yield* Session.Service
-        // Started in Plan mode, so no agent switch was ever recorded.
+        // Started in Plan mode, so no agent switch was ever recorded. No default is configured, so it is build.
         yield* sessions.create({ id: sessionID, location, agent: plan })
         expect(yield* sessions.messages({ sessionID, type: "agent-switched" })).toEqual([])
 
         const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: build })
+      }).pipe(Effect.provide(test.layer))
+    }),
+  )
+
+  it.live("returns to the configured default agent when a session started in Plan mode", () =>
+    Effect.gen(function* () {
+      const paths = yield* disk()
+      const test = server({ ...paths, decisions: [APPROVE] })
+      yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        yield* configureDefault(custom)
+        yield* sessions.create({ id: sessionID, location, agent: plan })
+        expect(yield* sessions.messages({ sessionID, type: "agent-switched" })).toEqual([])
+
+        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        expect(approved.output).toEqual({ approved: true })
+        expect(yield* sessions.get(sessionID)).toMatchObject({ agent: custom })
+      }).pipe(Effect.provide(test.layer))
+    }),
+  )
+
+  it.live("returns to the configured default agent when the session had no agent selected", () =>
+    Effect.gen(function* () {
+      const paths = yield* disk()
+      const test = server({ ...paths, decisions: [APPROVE] })
+      yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        yield* configureDefault(custom)
+        // No agent selected: the runner runs this session as the configured default, so the tool is called as it.
+        yield* sessions.create({ id: sessionID, location })
+        expect((yield* callTool("enter_plan_mode", {})).status).toBe("completed")
+        expect(yield* sessions.get(sessionID)).toMatchObject({ agent: plan })
+        // The history cannot say where the session came from, because the session row had no agent to record.
+        expect(yield* PlanMode.previousAgent(sessions, sessionID)).toBeUndefined()
+
+        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        expect(approved.output).toEqual({ approved: true })
+        expect(yield* sessions.get(sessionID)).toMatchObject({ agent: custom })
+      }).pipe(Effect.provide(test.layer))
+    }),
+  )
+
+  it.live("leaves Plan mode for build when Plan mode is itself the configured default agent", () =>
+    Effect.gen(function* () {
+      const paths = yield* disk()
+      const test = server({ ...paths, decisions: [APPROVE] })
+      yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        yield* configureDefault(plan)
+        // No agent selected, so the runner starts this session in Plan mode.
+        yield* sessions.create({ id: sessionID, location })
+
+        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        expect(approved.output).toEqual({ approved: true })
+        expect(yield* sessions.get(sessionID)).toMatchObject({ agent: build })
+      }).pipe(Effect.provide(test.layer))
+    }),
+  )
+
+  it.live("prefers the agent the session planned from over the configured default agent", () =>
+    Effect.gen(function* () {
+      const paths = yield* disk()
+      const test = server({ ...paths, decisions: [APPROVE] })
+      yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        yield* configureDefault(custom)
+        yield* sessions.create({ id: sessionID, location, agent: general })
+        yield* callTool("enter_plan_mode", {})
+
+        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        expect(approved.output).toEqual({ approved: true })
+        expect(yield* sessions.get(sessionID)).toMatchObject({ agent: general })
       }).pipe(Effect.provide(test.layer))
     }),
   )
