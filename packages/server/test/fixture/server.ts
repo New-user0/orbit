@@ -1,8 +1,16 @@
 import { Effect } from "effect"
 import { HttpServer } from "effect/unstable/http"
+import type { ServerOptions } from "../../src/options"
 import { ServerProcess } from "../../src/process"
 
-export const startServer = Effect.fnUntraced(function* (directory: string) {
+/**
+ * A server on an ephemeral port. Tests put project config next to the code under test, so it trusts every folder
+ * unless a test asks otherwise with `trust: { implicit: false }`.
+ */
+export const startServer = Effect.fnUntraced(function* (
+  directory: string,
+  options: { readonly trust?: ServerOptions["trust"] } = {},
+) {
   const server = yield* ServerProcess.start<never, never>({
     hostname: "127.0.0.1",
     port: 0,
@@ -12,6 +20,7 @@ export const startServer = Effect.fnUntraced(function* (directory: string) {
     config: { directory },
     fs: { filewatcher: false },
     models: { fetch: false },
+    trust: options.trust ?? { implicit: true },
   })
   return {
     base: HttpServer.formatAddress(server.address),

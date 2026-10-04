@@ -1,11 +1,16 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
+import { CompatNames } from "@orbit/compat/names"
 import { Document, Info } from "@orbit/schema/config"
 import { Tool } from "@orbit/schema/tool"
 import { Agent } from "@orbit/core/agent"
+import { Bus } from "@orbit/core/bus"
+import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
+import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Config } from "@orbit/core/config"
 import { LifecycleHooksPlugin } from "@orbit/core/config/plugin/lifecycle-hooks"
@@ -13,9 +18,14 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { Session } from "@orbit/core/session"
+import { WellKnown } from "@orbit/core/wellknown"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { SessionMessage } from "@orbit/schema/session-message"
-import { Effect, Exit, Layer, Logger, Schema } from "effect"
-import { tempLocationLayer } from "../fixture/location"
+import { Global } from "@orbit/util/global"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import { Effect, Exit, Layer, Logger, Schedule, Schema } from "effect"
+import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
+import { location, tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -299,6 +309,77 @@ describe("LifecycleHooksPlugin with hooks of other types", () => {
         .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
         .pipe(Effect.exit)
       expect(Exit.isFailure(exit) ? String(exit.cause) : "").toContain("Blocked by a PreToolUse hook: no shell today")
+    }),
+  )
+})
+
+describe("LifecycleHooksPlugin under workspace trust", () => {
+  // The real configuration loader for a project in a home of its own, in a folder that nothing trusts on its own.
+  const projectConfig = (home: string, project: string) => {
+    const place = Layer.succeed(
+      Location.Service,
+      Location.Service.of(location({ directory: AbsolutePath.make(project) })),
+    )
+    return Layer.mergeAll(
+      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node]), [
+        Config.node.replace(Config.configured()),
+        WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+        Location.node.replace(place),
+        Global.node.replace(Global.layerWith({ config: path.join(home, ".config", "orbit"), home })),
+        Credential.node.replace(emptyCredentialNode),
+        WellKnown.node.replace(emptyWellknownNode),
+        Watcher.node.replace(Watcher.testLayer),
+      ]),
+      place,
+    )
+  }
+
+  // Exit code 2 blocks the call it reaches, in bash and in PowerShell alike.
+  const block = (matcher: string) => ({ PreToolUse: [{ matcher, hooks: [{ type: "command", command: "exit 2" }] }] })
+
+  const reloaded = (config: Config.Interface, trusted: boolean) =>
+    config.entries().pipe(
+      Effect.filterOrFail((entries) => entries.some((entry) => entry.trusted === false) !== trusted),
+      Effect.retry({ times: 500, schedule: Schedule.spaced("10 millis") }),
+    )
+
+  it.live("runs the user's hooks, and the project's and its other-product settings hooks only once trusted", () =>
+    Effect.gen(function* () {
+      const home = (yield* tmpdirScoped()).path
+      const project = path.join(home, "work", "repo")
+      const write = (file: string, contents: unknown) =>
+        fs.mkdir(path.dirname(file), { recursive: true }).then(() => fs.writeFile(file, JSON.stringify(contents)))
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(home, ".config", "orbit", "orbit.json"), { hooks: block("read") }),
+          write(path.join(project, "orbit.json"), { hooks: block("shell") }),
+          // The other product's name for the grep tool, so this one only ever runs through the compatibility reader.
+          write(path.join(project, CompatNames.vendor.directory, "settings.json"), { hooks: block("Grep") }),
+        ]),
+      )
+
+      yield* Effect.gen(function* () {
+        const registry = yield* PluginHooks.Service
+        const config = yield* Config.Service
+        const trust = yield* WorkspaceTrust.Service
+        yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+        const blocked = (tool: string) =>
+          registry
+            .trigger("tool", "execute.before", { ...base, tool, input: {} })
+            .pipe(Effect.exit, Effect.map(Exit.isFailure))
+        const everything = Effect.all({ read: blocked("read"), shell: blocked("shell"), grep: blocked("grep") })
+
+        // Untrusted, only what the user wrote runs.
+        expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
+
+        yield* trust.grant(project, { persist: false, via: "test" })
+        yield* reloaded(config, true)
+        expect(yield* everything).toEqual({ read: true, shell: true, grep: true })
+
+        yield* trust.revoke(project)
+        yield* reloaded(config, false)
+        expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
+      }).pipe(Effect.provide(projectConfig(home, project)))
     }),
   )
 })

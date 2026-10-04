@@ -32,6 +32,7 @@ import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { WellKnown } from "@orbit/core/wellknown"
 import { Workspace } from "@orbit/core/workspace"
 import { Watcher } from "@orbit/core/filesystem/watcher"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Context, Effect, Layer, Option } from "effect"
@@ -128,6 +129,7 @@ function makeRoutes<AuthError, AuthServices>(
         content: options.config?.content,
       }),
     ),
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: options.trust?.implicit })),
     InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: options.config?.project })),
     ShellSelect.node.replace(ShellSelect.configured({ gitbash: options.windows?.gitbash })),
     Mcp.node.replace(

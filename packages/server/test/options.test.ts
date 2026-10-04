@@ -25,6 +25,15 @@ test("accepts durable event persistence configuration", () => {
   expect(Option.getOrThrow(decode({ events: { persist: true } })).events).toEqual({ persist: true })
 })
 
+test("accepts an optional implicit trust setting", () => {
+  expect(Option.getOrThrow(decode({})).trust).toBeUndefined()
+  expect(Option.getOrThrow(decode({ trust: {} })).trust).toEqual({})
+  expect(Option.getOrThrow(decode({ trust: { implicit: true } })).trust).toEqual({ implicit: true })
+  expect(Option.getOrThrow(decode({ trust: { implicit: false } })).trust).toEqual({ implicit: false })
+  expect(Option.isNone(decode({ trust: { implicit: "yes" } }))).toBe(true)
+  expect(Option.isNone(decode({ trust: true }))).toBe(true)
+})
+
 test("accepts an optional CORS allowlist", () => {
   expect(Option.getOrThrow(decode({})).cors).toBeUndefined()
   expect(Option.getOrThrow(decode({ cors: [] })).cors).toEqual([])

@@ -10,6 +10,7 @@ import type { CompatRoots } from "@orbit/compat/roots"
 import { CompatSettings } from "@orbit/compat/settings"
 import { CompatSwitch } from "@orbit/compat/switch"
 import { Directory, Document, Info, type Patch, type Entry, type Scope, Event } from "@orbit/schema/config"
+import { Trust } from "@orbit/schema/trust"
 import { Credential } from "./credential.js"
 import { Bus } from "./bus.js"
 import { Watcher } from "./filesystem/watcher.js"
@@ -21,7 +22,9 @@ import { ConfigVariable } from "./config/variable.js"
 import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigDiscovery } from "./config/discovery.js"
 import { ConfigWatch } from "./config/watch.js"
+import { ConfigTrust } from "./config/trust.js"
 import { WellKnown } from "./wellknown.js"
+import { WorkspaceTrust } from "./workspace-trust.js"
 
 export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
   return entries.findLast((entry): entry is Document => entry.type === "document" && entry.info[key] !== undefined)
@@ -44,6 +47,10 @@ export interface Interface {
    * scope in the order remote, user, project, local, flag, then managed, and each entry carries its scope. Within a
    * scope, outer sources come before inner ones. While compatibility is on, the documents that other products' files
    * make, such as hook settings and an MCP file, open the scope they belong to, so Orbit's own documents outrank them.
+   *
+   * While the project's folder is untrusted, the project and local entries are stamped `trusted: false`, and a
+   * document loses what an untrusted folder may not supply and lists its kinds in `withheld`; see `ConfigTrust`. The
+   * entries of every other scope are never subject to trust. A grant reloads the config, which publishes `config.updated`.
    */
   readonly entries: () => Effect.Effect<Entry[]>
   /**
@@ -126,6 +133,9 @@ export const layer = (options?: Options) =>
       const credentials = yield* Credential.Service
       const globalService = yield* Global.Service
       const wellknown = yield* WellKnown.Service
+      const trust = yield* WorkspaceTrust.Service
+      // Whether the last load found the project's folder trusted, for telling whether a trust change concerns it.
+      let trusted = true
       const reloadLock = Semaphore.makeUnsafe(1)
       const updateLock = Semaphore.makeUnsafe(1)
       const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
@@ -313,7 +323,7 @@ export const layer = (options?: Options) =>
         // them. Within a scope, outer sources come first, base documents before their local counterparts, and
         // ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The documents of other products' files open their scope,
         // so a native document of the same scope outranks them.
-        return [
+        const entries = [
           ...remote,
           ...compat.user,
           ...user,
@@ -324,6 +334,11 @@ export const layer = (options?: Options) =>
           ...explicit,
           ...content,
         ]
+        // One read of the trust store decides whether the project's own entries apply as written. Nothing here waits
+        // for a person: an untrusted folder just loads with what it may not supply taken out, until a grant reloads it.
+        const status = yield* trust.status(location.project.canonical)
+        trusted = status.trusted
+        return status.trusted ? entries : entries.map(ConfigTrust.stamp)
       })
 
       const initial = yield* ConfigDiscovery.discover(options)
@@ -401,6 +416,15 @@ export const layer = (options?: Options) =>
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
+      // Trust changes arrive for every folder the server knows. Asking the store again, rather than comparing paths,
+      // settles whether this project's decision moved however the folder was spelled, and costs one read.
+      yield* bus.subscribe(Trust.Event.Updated).pipe(
+        Stream.filterEffect(() =>
+          trust.status(location.project.canonical).pipe(Effect.map((status) => status.trusted !== trusted)),
+        ),
+        Stream.runForEach(() => requestReload),
+        Effect.forkScoped({ startImmediately: true }),
+      )
       yield* Effect.sleep("10 minutes").pipe(
         Effect.andThen(
           Effect.suspend(() => {
@@ -469,7 +493,16 @@ export function configured(options?: Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [Watcher.node, Bus.node, FSUtil.node, Global.node, Location.node, Credential.node, WellKnown.node],
+    deps: [
+      Watcher.node,
+      Bus.node,
+      FSUtil.node,
+      Global.node,
+      Location.node,
+      Credential.node,
+      WellKnown.node,
+      WorkspaceTrust.node,
+    ],
   })
 }
 

@@ -63,6 +63,60 @@ it.live("returns ordered config entries for the requested directory", () =>
   }),
 )
 
+for (const implicit of [false, true]) {
+  it.live(
+    `${implicit ? "applies" : "withholds"} a project's executable config on a server with implicit trust ${implicit ? "on" : "off"}`,
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-config-trust-")))
+        const global = path.join(tmp.path, "global")
+        const project = path.join(tmp.path, "project")
+        const config = path.join(project, "orbit.json")
+        yield* Effect.promise(() =>
+          Promise.all([fs.mkdir(global, { recursive: true }), fs.mkdir(project, { recursive: true })]),
+        )
+        yield* Effect.promise(() =>
+          fs.writeFile(
+            config,
+            JSON.stringify({
+              model: "acme/fast",
+              permissions: [
+                { action: "shell", resource: "*", effect: "allow" },
+                { action: "shell", resource: "rm *", effect: "deny" },
+              ],
+              mcp: { servers: { docs: { type: "remote", url: "https://example.com/mcp" } } },
+            }),
+          ),
+        )
+        const server = yield* startServer(global, { trust: { implicit } })
+        const url = new URL("/api/config", server.base)
+        url.searchParams.set("location[directory]", project)
+        const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
+        const entries = Schema.decodeUnknownSync(Schema.Array(Config.Entry))(
+          yield* Effect.promise(() => response.json()),
+        )
+        const document = entries.find(
+          (entry): entry is Config.Document => entry.type === "document" && entry.path === config,
+        )
+
+        expect(response.status).toBe(200)
+        expect(document?.scope).toBe("project")
+        expect(document?.info.model).toBeDefined()
+        if (implicit) {
+          expect(document).not.toHaveProperty("trusted")
+          expect(document?.info.mcp?.servers?.docs).toBeDefined()
+          expect(document?.info.permissions).toHaveLength(2)
+          return
+        }
+        // The same file, as an untrusted server reports it: what it may not supply is gone, and the entry says so.
+        expect(document?.trusted).toBe(false)
+        expect(document?.withheld).toEqual(["mcp", "permissions"])
+        expect(document?.info.mcp).toBeUndefined()
+        expect(document?.info.permissions).toEqual([{ action: "shell", resource: "rm *", effect: "deny" }])
+      }),
+  )
+}
+
 it.live("updates the global shell without replacing unrelated JSONC", () =>
   Effect.gen(function* () {
     const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-config-shells-")))

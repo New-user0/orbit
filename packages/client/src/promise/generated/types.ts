@@ -435,6 +435,20 @@ export type WebSearchResult = { url: string; title?: string; content?: string; t
 
 export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
 
+export type TrustKind =
+  | "hooks"
+  | "mcp"
+  | "plugins"
+  | "commands"
+  | "permissions"
+  | "providers"
+  | "shell"
+  | "formatter"
+  | "lsp"
+  | "sandbox"
+  | "network"
+  | "settings"
+
 export type ConfigHooksCommand = {
   type: "command"
   command: string
@@ -1158,6 +1172,15 @@ export type WebsearchUpdated = {
   type: "websearch.updated"
   location?: LocationRef
   data: {}
+}
+
+export type TrustUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "trust.updated"
+  location?: LocationRef
+  data: { directory: string; trusted: boolean }
 }
 
 export type SessionIdle = {
@@ -2142,6 +2165,8 @@ export type ConfigEntry =
       type: "document"
       path?: string
       scope?: ConfigScope
+      trusted?: boolean
+      withheld?: Array<TrustKind>
       info: {
         $schema?: string
         shell?: string
@@ -2341,7 +2366,7 @@ export type ConfigEntry =
         }
       }
     }
-  | { type: "directory"; path: string; scope?: ConfigScope }
+  | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean }
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
 
@@ -2587,6 +2612,7 @@ export type V2Event =
   | FormReplied
   | FormCancelled
   | WebsearchUpdated
+  | TrustUpdated
   | SessionStatusUpdated
   | SessionIdle
   | TuiPromptAppend

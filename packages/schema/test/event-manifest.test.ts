@@ -12,6 +12,7 @@ import {
   Project,
   Reference,
   Session,
+  Trust,
   Workspace,
 } from "../src/index.js"
 import { EventManifest } from "../src/event-manifest.js"
@@ -21,6 +22,7 @@ import { McpEvent } from "../src/mcp-event.js"
 import { SessionEvent } from "../src/session-event.js"
 import { SessionID } from "../src/session-id.js"
 import { SessionMessage } from "../src/session-message.js"
+import { AbsolutePath } from "../src/schema.js"
 import { WorkspaceEvent } from "../src/workspace-event.js"
 
 describe("public event manifest", () => {
@@ -104,6 +106,21 @@ describe("public event manifest", () => {
     expect(EventManifest.Server.has("credential.deleted")).toBe(false)
     expect(EventManifest.Server.has("integration.connection.updated")).toBe(false)
     expect(EventManifest.Latest.has("integration.connection.updated")).toBe(false)
+  })
+
+  test("keeps the workspace trust event public, canonical, and ephemeral", () => {
+    expect(Trust.Event.Definitions).toEqual([Trust.Event.Updated])
+    expect(EventManifest.ServerDefinitions).toContain(Trust.Event.Updated)
+    expect(EventManifest.Definitions).toContain(Trust.Event.Updated)
+    expect(EventManifest.ServerDefinitions.filter((definition) => definition.type === "trust.updated")).toEqual([
+      Trust.Event.Updated,
+    ])
+    expect(EventManifest.Server.get("trust.updated")).toBe(Trust.Event.Updated)
+    expect(EventManifest.Latest.get("trust.updated")).toBe(Trust.Event.Updated)
+    expect(Trust.Event.Updated.durability).toBe("ephemeral")
+    expect(EventManifest.Durable.has("trust.updated")).toBe(false)
+    const directory = AbsolutePath.make("/repo")
+    expect(Trust.Event.Updated.data.make({ directory, trusted: true })).toEqual({ directory, trusted: true })
   })
 
   test("derives durable definitions from explicit definition durability", () => {

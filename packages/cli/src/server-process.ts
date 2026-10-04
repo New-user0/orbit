@@ -111,6 +111,10 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             file: process.env.ORBIT_CONFIG,
             content: process.env.ORBIT_CONFIG_CONTENT,
           },
+          // A private or foreground server belongs to whoever starts it, so it can trust the folders it is pointed at.
+          // The background service is shared by every client and project, and an environment variable that happened
+          // to be set when the first client started it must not decide for all of them.
+          trust: { implicit: options.mode === "service" ? false : truthy(process.env.ORBIT_TRUST_PROJECT) },
           windows: {
             gitbash: process.env.ORBIT_GIT_BASH_PATH,
           },
