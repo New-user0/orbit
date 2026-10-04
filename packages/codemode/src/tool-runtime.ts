@@ -52,7 +52,7 @@ export type CallResult =
   | { readonly status: "failure"; readonly error: unknown }
   | { readonly status: "interrupted" }
 
-/** Hooks around every call the program makes into the host. A failing `before` denies the call. */
+/** Hooks around every call the program makes into the host. A failing `before` denies the call: it is never started. */
 export type Hooks<R = never> = {
   readonly "tool.before"?: ((call: ToolInvocation) => Effect.Effect<void, unknown, R>) | undefined
   readonly "tool.after"?: ((call: ToolInvocation, result: CallResult) => Effect.Effect<void, never, R>) | undefined

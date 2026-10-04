@@ -608,6 +608,10 @@ Nothing is exposed unless a host provides it; extension calls are not tool calls
       (`fetch.json`). Like any program function it vanishes at the data boundary.
 - [x] Each call to an extension global runs inside the host's `extension.before`/`extension.after` hooks as
       `{ extension, name, args }`, with the host's own error on failure; calls to functions inside results do not.
+      The order is `before`, the host function, `after`, so a failing `before` denies the call and the host function
+      is never applied. An `async` global answers with a promise, so a denial is a rejected promise; any other
+      global runs `before` at the call and a denial throws, even for a function that returns a Promise (which is not
+      recognized as asynchronous, though a Promise it returns still becomes a program promise).
 - [x] A host `Promise` becomes a program promise. Whatever host code returns, resolves, throws, or rejects with
       crosses the same way, so `catch (e)` receives a copy of the thrown value (an `Error` of the matching type, or
       plain data).

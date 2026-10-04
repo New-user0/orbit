@@ -134,28 +134,47 @@ export const extensionGlobals = <R>(
   }
 
   // A host function as a program function. Arguments cross in; a global's call runs inside the host's extension
-  // hooks, which see the host's own error on failure; then whatever came back, or was thrown, crosses out so the
-  // program catches a copy. Functions inside results are part of a value's API and skip the hooks.
+  // hooks, in order: `before`, the host function, then `after`, which sees the host's own error on failure. A failing
+  // `before` denies the call, so the host function is never applied. Then whatever came back, or was thrown, crosses
+  // out so the program catches a copy. Functions inside results are part of a value's API and skip the hooks.
+  //
+  // An `async` function always answers with a promise, so its whole call, `before` included, runs inside a program
+  // promise and a denial rejects it. Any other function runs `before` at the call and a denial throws there, even for
+  // a function that returns a Promise once allowed. That Promise becomes a program promise, and `after` waits for it.
   const wrap = (value: Function, label: string, describe?: (args: ReadonlyArray<unknown>) => ExtensionInvocation) =>
     fn<R>(builtins, value.name, value.length, (_, values) => {
       const args = values.map((item, index) => toHost(item, `Argument ${index + 1} to ${label}`))
-      const hooks = ctx.tools.hooks
+      const thrown = (reason: unknown) => new Throw(fromHost(reason, label))
       const settle = (run: Effect.Effect<unknown, unknown, R>) =>
-        (describe === undefined
-          ? run
-          : hooked(describe(args), hooks["extension.before"], hooks["extension.after"], run)
-        ).pipe(
-          Effect.mapError((reason) => new Throw(fromHost(reason, label))),
+        run.pipe(
+          Effect.mapError(thrown),
           Effect.map((settled) => fromHost(settled, label)),
         )
-      let result: unknown
-      try {
-        result = value.apply(undefined, args)
-      } catch (reason) {
-        return settle(Effect.fail(reason))
+      // Applies the host function when run. `observe` sees how the call ends: now, or once a returned Promise settles.
+      const invoke = (observe: (run: Effect.Effect<unknown, unknown, R>) => Effect.Effect<unknown, unknown, R>) =>
+        Effect.try({ try: () => value.apply(undefined, args), catch: (reason) => reason }).pipe(
+          Effect.matchEffect({
+            onFailure: (reason) => settle(observe(Effect.fail(reason))),
+            onSuccess: (result) =>
+              result instanceof Promise
+                ? ctx.pending.create(
+                    settle(observe(Effect.tryPromise({ try: () => result, catch: (reason) => reason }))),
+                  )
+                : settle(observe(Effect.succeed(result))),
+          }),
+        )
+      if (describe === undefined) return invoke((run) => run)
+      const call = describe(args)
+      const hooks = ctx.tools.hooks
+      if (isAsync(value)) {
+        const run = Effect.tryPromise({ try: () => value.apply(undefined, args), catch: (reason) => reason })
+        return ctx.pending.create(settle(hooked(call, hooks["extension.before"], hooks["extension.after"], run)))
       }
-      if (!(result instanceof Promise)) return settle(Effect.succeed(result))
-      return ctx.pending.create(settle(Effect.tryPromise({ try: () => result, catch: (reason) => reason })))
+      const before = hooks["extension.before"]
+      return Effect.andThen(
+        before === undefined ? Effect.void : Effect.mapError(before(call), thrown),
+        invoke((run) => hooked(call, undefined, hooks["extension.after"], run)),
+      )
     })
 
   return extensions.flatMap((extension) =>
@@ -197,6 +216,10 @@ const isPrimitive = (value: unknown): value is string | number | boolean | null 
   typeof value === "string" ||
   typeof value === "number" ||
   typeof value === "boolean"
+
+// Only a function declared `async` is known to answer with a promise before it is applied. A plain function that
+// returns a Promise, or a bound async function, is not detected.
+const isAsync = (value: Function) => Object.prototype.toString.call(value) === "[object AsyncFunction]"
 
 const describeHost = (value: unknown): string => {
   if (typeof value !== "object" || value === null) return `a ${typeof value}`

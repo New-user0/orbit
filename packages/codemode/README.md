@@ -91,8 +91,9 @@ runtime.execute(source) // Effect<CodeMode.Result, never, ToolServices>
 The Effect environment is inferred from the supplied tools. `hooks` surround every call the program makes into the
 host: `tool.before`/`tool.after` receive `{ name, input }` with decoded input, `extension.before`/`extension.after`
 receive `{ extension, name, args }`. An `after` hook also receives how the call ended (`success` with its value,
-`failure` with its error, or `interrupted`). A failing `before` hook denies the call, and the program catches the
-failure as a thrown error.
+`failure` with its error, or `interrupted`). A call runs in the order `before`, the tool or host function, `after`. A
+failing `before` hook denies the call: the tool or host function is never started, no `after` hook runs, and the
+program catches the failure as a thrown error.
 
 ### `Extension.make`
 
@@ -100,13 +101,18 @@ Extensions are host functions a program calls directly as globals, such as `fetc
 catalog, not counted against `maxToolCalls`, and not described to the model; the host decides what they mean.
 
 ```ts
-const web = Extension.make({ name: "web", globals: { fetch: (url: string) => globalThis.fetch(url) } })
+const web = Extension.make({ name: "web", globals: { fetch: async (url: string) => globalThis.fetch(url) } })
 const runtime = CodeMode.make({ tools, extensions: [web] })
 ```
 
 Every value crossing in either direction is converted, never shared: arguments come in as copies, results go out as
 copies, and a function inside a result is callable the same way. A global that shadows a built-in or another
 extension throws at `CodeMode.make`.
+
+A denied extension call fails the way the function would have answered. An `async` function always answers with a
+promise, so its denial is a rejected promise. Any other function answers directly, so its denial is thrown at the
+call. A plain function that returns a Promise is not recognized as asynchronous: it is denied by a throw, and when
+allowed it still gives the program a promise. Declare a global `async` when callers should see rejections.
 
 ### OpenAPI tools
 
