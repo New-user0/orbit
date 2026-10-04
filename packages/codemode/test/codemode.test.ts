@@ -285,6 +285,108 @@ describe("CodeMode call hooks", () => {
     })
   })
 
+  // Each host function logs when it is applied, so the log shows where the call sits between the hooks.
+  const web = (events: Array<string>) =>
+    Extension.make({
+      name: "web",
+      globals: {
+        fetch: async (url: string) => {
+          events.push(`host fetch ${url}`)
+          return url
+        },
+        ping: () => {
+          events.push("host ping")
+          return "pong"
+        },
+        // Not declared async, but it answers with a Promise.
+        later: (url: string) => {
+          events.push(`host later ${url}`)
+          return Promise.resolve(url)
+        },
+      },
+    })
+
+  test("run the host function after before and ahead of after, async or not", async () => {
+    const events: Array<string> = []
+    const runtime = CodeMode.make({ extensions: [web(events)], hooks: observe(events) })
+
+    expect(
+      await Effect.runPromise(
+        runtime.execute(`return [await fetch("https://a.test/"), ping(), await later("https://b.test/")]`),
+      ),
+    ).toMatchObject({ ok: true, value: ["https://a.test/", "pong", "https://b.test/"] })
+    expect(events).toEqual([
+      'extension.before {"extension":"web","name":"fetch","args":["https://a.test/"]}',
+      "host fetch https://a.test/",
+      "extension.after fetch success",
+      'extension.before {"extension":"web","name":"ping","args":[]}',
+      "host ping",
+      "extension.after ping success",
+      'extension.before {"extension":"web","name":"later","args":["https://b.test/"]}',
+      "host later https://b.test/",
+      "extension.after later success",
+    ])
+  })
+
+  test("an allowed plain function that returns a Promise still gives the program a promise, observed by after", async () => {
+    const events: Array<string> = []
+    const runtime = CodeMode.make({ extensions: [web(events)], hooks: observe(events) })
+
+    expect(
+      await Effect.runPromise(
+        runtime.execute(`
+          const pending = later("https://b.test/")
+          return [typeof pending.then, await pending]
+        `),
+      ),
+    ).toMatchObject({ ok: true, value: ["function", "https://b.test/"] })
+    expect(events).toEqual([
+      'extension.before {"extension":"web","name":"later","args":["https://b.test/"]}',
+      "host later https://b.test/",
+      "extension.after later success",
+    ])
+  })
+
+  test("a failing before hook leaves the host function unapplied; async denials reject, others throw", async () => {
+    const events: Array<string> = []
+    const runtime = CodeMode.make({
+      extensions: [web(events)],
+      hooks: {
+        "extension.before": (call) => Effect.fail(new Error(`${call.name} is not allowed`)),
+        "extension.after": (call) => Effect.sync(() => void events.push(`extension.after ${call.name}`)),
+      },
+    })
+
+    // An async function always answers with a promise, so its denial is a rejection.
+    expect(
+      await Effect.runPromise(
+        runtime.execute(`
+          const pending = fetch("https://a.test/")
+          return [typeof pending.then, await pending.catch((e) => [e instanceof Error, e.message])]
+        `),
+      ),
+    ).toMatchObject({ ok: true, value: ["function", [true, "fetch is not allowed"]] })
+    // Any other function throws at the call, including one that would have returned a Promise.
+    expect(
+      await Effect.runPromise(
+        runtime.execute(`
+          const denied = []
+          try { ping() } catch (e) { denied.push([e instanceof Error, e.message]) }
+          try { later("https://b.test/") } catch (e) { denied.push([e instanceof Error, e.message]) }
+          return denied
+        `),
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: [
+        [true, "ping is not allowed"],
+        [true, "later is not allowed"],
+      ],
+    })
+    // Neither the host function nor an `after` hook ran for a denied call.
+    expect(events).toEqual([])
+  })
+
   test("see a tool defect as the failure the program gets, and an interrupted extension call", async () => {
     const events: Array<string> = []
     const broken = Tool.make({

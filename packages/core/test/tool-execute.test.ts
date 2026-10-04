@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test"
 import { CodeModeTool } from "@orbit/core/codemode/tool"
+import { Permission } from "@orbit/core/permission"
 import { Tool } from "@orbit/core/tool"
 import { execute } from "@orbit/core/tool/runtime"
 import { Agent } from "@orbit/schema/agent"
 import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import type { Info } from "@orbit/schema/tool"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 
 const context = {
   sessionID: Session.ID.make("ses_execute"),
@@ -144,4 +145,140 @@ test("execute supports callable namespace tools", async () => {
     ],
   })
   expect(result.content).toEqual([{ type: "text", text: '[\n  "admin",\n  "created"\n]' }])
+})
+
+const reply = (name: string, run: Info["execute"]): [string, Info] => [
+  name,
+  { name, description: `Settles as ${name}`, input: Schema.Struct({}), output: Schema.String, execute: run },
+]
+
+const defects = (exit: Exit.Exit<unknown, unknown>) =>
+  Exit.isFailure(exit) ? exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : [])) : []
+
+test("a plain decline ends the execution with that defect and runs no later call", async () => {
+  const ran: Array<string> = []
+  const decline = new Permission.DeclinedError()
+  const codeMode = createCodeMode(
+    new Map([
+      reply("declined", () => Effect.die(decline)),
+      reply("later", () =>
+        Effect.sync(() => {
+          ran.push("later")
+          return { output: "ran" }
+        }),
+      ),
+    ]),
+  )
+
+  // The program cannot carry on: not behind a try/catch, not by leaving the declined call un-awaited, and not by
+  // finishing without ever looking at it.
+  for (const code of [
+    `try { await tools.declined({}) } catch (e) { return "caught" }; await tools.later({}); return "unreachable"`,
+    `tools.declined({}); await tools.later({}); return "unreachable"`,
+    `tools.declined({}); return "done"`,
+  ]) {
+    const exit = await Effect.runPromiseExit(codeMode.execute({ code }, context))
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(defects(exit)).toEqual([decline])
+    expect(defects(exit)[0]).toBe(decline)
+  }
+  expect(ran).toEqual([])
+})
+
+test("a decline interrupts calls still in flight instead of waiting for them", async () => {
+  const interrupted: Array<string> = []
+  const decline = new Permission.DeclinedError()
+  const codeMode = createCodeMode(
+    new Map([
+      reply("slow", () =>
+        Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void interrupted.push("slow")))),
+      ),
+      reply("declined", () => Effect.die(decline)),
+    ]),
+  )
+
+  const exit = await Effect.runPromiseExit(
+    codeMode.execute({ code: `return await Promise.all([tools.slow({}), tools.declined({})])` }, context),
+  )
+
+  expect(defects(exit)).toEqual([decline])
+  expect(interrupted).toEqual(["slow"])
+})
+
+test("a decline also stops a later fetch from being made", async () => {
+  const hits: Array<string> = []
+  const decline = new Permission.DeclinedError()
+  const codeMode = createCodeMode(new Map([reply("declined", () => Effect.die(decline))]))
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: (request) => {
+              hits.push(request.url)
+              return new Response("served")
+            },
+          }),
+        ),
+        (server) => Effect.promise(() => server.stop(true)),
+      )
+      const url = `http://127.0.0.1:${server.port}/`
+
+      const served = yield* codeMode.execute({ code: `return await (await fetch("${url}")).text()` }, context)
+      expect(served.output.output).toBe("served")
+      expect(hits).toEqual([url])
+
+      const exit = yield* Effect.exit(
+        codeMode.execute({ code: `tools.declined({}); await fetch("${url}"); return "unreachable"` }, context),
+      )
+      expect(defects(exit)).toEqual([decline])
+      expect(hits).toEqual([url])
+    }).pipe(Effect.scoped),
+  )
+})
+
+test("feedback and policy blocks stay tool failures the program can catch", async () => {
+  const ran: Array<string> = []
+  const codeMode = createCodeMode(
+    new Map([
+      reply("corrected", () =>
+        Effect.fail(new Permission.CorrectedError({ feedback: "Use the staging bucket" })).pipe(
+          Effect.mapError((error) => new Tool.Error({ message: error.feedback })),
+        ),
+      ),
+      reply("blocked", () =>
+        Effect.fail(new Permission.BlockedError({ rules: [], permission: "blocked", resources: ["*"] })).pipe(
+          Effect.mapError((error) => new Tool.Error({ message: error.message })),
+        ),
+      ),
+      reply("later", () =>
+        Effect.sync(() => {
+          ran.push("later")
+          return { output: "ran" }
+        }),
+      ),
+    ]),
+  )
+
+  const result = await Effect.runPromise(
+    codeMode.execute(
+      {
+        code: `
+          const seen = []
+          try { await tools.corrected({}) } catch (e) { seen.push(e.message) }
+          try { await tools.blocked({}) } catch (e) { seen.push(e.message) }
+          seen.push(await tools.later({}))
+          return seen
+        `,
+      },
+      context,
+    ),
+  )
+
+  expect(JSON.parse(result.output.output)).toEqual(["Use the staging bucket", "Permission denied: blocked", "ran"])
+  expect(result.output.error).toBeUndefined()
+  expect(ran).toEqual(["later"])
 })

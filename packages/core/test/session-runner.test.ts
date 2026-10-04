@@ -4900,6 +4900,42 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
+  scenario("interrupts runner continuation on a decline inside Code Mode without tool output", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(registry, {
+      declined: {
+        name: "declined",
+        description: "Fail because the user declined approval",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () => Effect.die(new Permission.DeclinedError()),
+      },
+    })
+    yield* s.admit("Call declined from Code Mode")
+
+    // The program tries to handle the decline itself; the step ends anyway.
+    yield* s.llm.push(
+      TestLLM.tool("call-execute", "execute", {
+        code: 'try { await tools.declined({}) } catch (e) { return "handled" }',
+      }),
+    )
+
+    const exit = yield* s.resume.pipe(Effect.exit)
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call declined from Code Mode"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-execute" },
+          { error: { type: "aborted", message: "The user declined this tool call" } },
+        ),
+      ]),
+    ])
+  })
+
   scenario("returns permission corrections to the model and continues", function* (s) {
     const registry = yield* Tool.Service
     yield* transformTools(
