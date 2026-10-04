@@ -1,0 +1,136 @@
+export * as Lsp from "./index.js"
+
+import { ConfigLSP } from "@orbit/schema/config/lsp"
+import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { FSUtil } from "@orbit/util/fs-util"
+import { Context, Effect, Layer, Schema } from "effect"
+import path from "path"
+import { Config } from "../config.js"
+import { Location } from "../location.js"
+import { which } from "../util/which.js"
+import { LspClient } from "./client.js"
+
+/**
+ * Language servers for the files a Location edits. Servers come from the `lsp` config and from built-in definitions
+ * whose command is already on PATH; nothing is downloaded. Each server starts the first time a matching file needs
+ * it and stops with the Location. `lsp: false` turns them all off.
+ */
+
+export type Diagnostic = LspClient.Diagnostic
+
+export class Error extends Schema.TaggedError<Error>()("Lsp.Error", { message: Schema.String }) {}
+
+export interface Server {
+  readonly id: string
+  readonly command: readonly string[]
+  readonly extensions: readonly string[]
+  readonly env?: Record<string, string>
+  readonly initialization?: Record<string, unknown>
+}
+
+export const BUILT_IN: readonly Server[] = [
+  {
+    id: "typescript",
+    command: ["typescript-language-server", "--stdio"],
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"],
+  },
+  { id: "pyright", command: ["pyright-langserver", "--stdio"], extensions: [".py", ".pyi"] },
+  { id: "gopls", command: ["gopls"], extensions: [".go"] },
+  { id: "rust-analyzer", command: ["rust-analyzer"], extensions: [".rs"] },
+]
+
+export interface Interface {
+  /** Diagnostics for each file that has a language server, keyed by absolute path. */
+  readonly diagnostics: (files: readonly string[]) => Effect.Effect<Record<string, Diagnostic[]>>
+  /** Sends a request about a file to its language server. */
+  readonly request: (method: string, file: string, params: Record<string, unknown>) => Effect.Effect<unknown, Error>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@orbit/Lsp") {}
+
+const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const config = yield* Config.Service
+    const fs = yield* FSUtil.Service
+    const location = yield* Location.Service
+    // One start attempt per server; a server that fails to start stays off until the Location reloads.
+    const clients = new Map<string, Promise<LspClient.Client | undefined>>()
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(() =>
+        Promise.all(
+          [...clients.values()].map((pending) => pending.then((client) => client?.shutdown()).catch(() => undefined)),
+        ),
+      ),
+    )
+
+    const servers = Effect.fn("Lsp.servers")(function* () {
+      const configured = Config.latest(yield* config.entries(), "lsp")
+      if (configured === false) return []
+      const overrides = typeof configured === "object" ? configured : {}
+      const custom = Object.entries(overrides).flatMap(([id, entry]) =>
+        Schema.is(ConfigLSP.Server)(entry) && !entry.disabled && entry.extensions
+          ? [
+              {
+                id,
+                command: entry.command,
+                extensions: entry.extensions,
+                env: entry.env,
+                initialization: entry.initialization,
+              },
+            ]
+          : [],
+      )
+      const builtIn = BUILT_IN.filter((server) => !(server.id in overrides) && which(server.command[0]!) !== null)
+      return [...custom, ...builtIn]
+    })
+
+    const client = Effect.fn("Lsp.client")(function* (file: string) {
+      const server = (yield* servers()).find((item) => item.extensions.includes(path.extname(file).toLowerCase()))
+      if (!server) return undefined
+      const pending =
+        clients.get(server.id) ??
+        LspClient.start({ ...server, root: location.project.directory }).catch((error: unknown) => {
+          console.warn(`language server ${server.id} failed to start`, error)
+          return undefined
+        })
+      clients.set(server.id, pending)
+      return yield* Effect.promise(() => pending)
+    })
+
+    return Service.of({
+      diagnostics: Effect.fn("Lsp.diagnostics")(
+        function* (files) {
+          const found = yield* Effect.forEach(
+            files,
+            (file) =>
+              Effect.gen(function* () {
+                const target = yield* client(file)
+                const text = target
+                  ? yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
+                  : undefined
+                if (!target || text === undefined) return []
+                const items = yield* Effect.promise(() => target.diagnostics(file, text).catch(() => []))
+                return [[file, items] as const]
+              }),
+            { concurrency: "unbounded" },
+          )
+          return Object.fromEntries(found.flat())
+        },
+        Effect.orElseSucceed(() => ({})),
+      ),
+      request: Effect.fn("Lsp.request")(function* (method, file, params) {
+        const target = yield* client(file)
+        if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+        const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
+        if (text === undefined) return yield* new Error({ message: `Cannot read ${file}.` })
+        return yield* Effect.tryPromise({
+          try: () => target.request(method, file, text, params),
+          catch: (cause) => new Error({ message: `${target.id} could not answer: ${String(cause)}` }),
+        })
+      }),
+    })
+  }),
+)
+
+export const node = makeLocationNode({ service: Service, layer, deps: [Config.node, FSUtil.node, Location.node] })

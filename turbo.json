@@ -1,0 +1,110 @@
+{
+  "$schema": "https://v2-8-13.turborepo.dev/schema.json",
+  "globalDependencies": [
+    "patches/**",
+    "bunfig.toml",
+    ".npmrc",
+    ".github/actions/setup-bun/**",
+    ".github/workflows/test.yml"
+  ],
+  "globalEnv": [
+    "CI",
+    "ORBIT_DISABLE_SHARE"
+  ],
+  "globalPassThroughEnv": [
+    "CI",
+    "ORBIT_DISABLE_SHARE"
+  ],
+  "tasks": {
+    "typecheck": {},
+    "@orbit/cli#typecheck": {
+      "dependsOn": [
+        "@orbit/core#typecheck"
+      ]
+    },
+    "test:components": {
+      "outputs": [],
+      "cache": false
+    },
+    "@orbit/sdk#typecheck": {
+      "dependsOn": [
+        "@orbit/core#typecheck"
+      ]
+    },
+    "@orbit/server#typecheck": {
+      "dependsOn": [
+        "@orbit/core#typecheck"
+      ]
+    },
+    "@orbit/simulation#typecheck": {
+      "dependsOn": [
+        "@orbit/core#typecheck"
+      ]
+    },
+    "@orbit/tui#typecheck": {
+      "dependsOn": [
+        "@orbit/core#typecheck"
+      ]
+    },
+    "build": {
+      "dependsOn": [],
+      "outputs": [
+        "dist/**"
+      ]
+    },
+    "@orbit/ai#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/codemode#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/core#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/httpapi-codegen#test": {
+      "outputs": []
+    },
+    "@orbit/server#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/cli#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/tui#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/latex#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/ui#test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "@orbit/sdk#verify:package": {
+      "outputs": []
+    }
+  }
+}

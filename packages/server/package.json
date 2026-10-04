@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@orbit/server",
+  "version": "2.0.22",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://orbit.invalid",
+    "directory": "packages/server"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "build": "bun run script/build.ts",
+    "test": "bun test --only-failures",
+    "typecheck": "tsgo -b",
+    "probe:workerd": "bun run script/workerd-probe.ts"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/platform-node-shared": "catalog:",
+    "@orbit/core": "workspace:*",
+    "@orbit/protocol": "workspace:*",
+    "@orbit/schema": "workspace:*",
+    "@orbit/simulation": "workspace:*",
+    "@orbit/util": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@orbit/client": "workspace:*",
+    "@orbit/plugin": "workspace:*",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

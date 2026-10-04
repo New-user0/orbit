@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@orbit/util/effect/layer-node": ["./dist/effect/layer-node.d.ts"],
+      "@orbit/util/effect/app-node": ["./dist/effect/app-node.d.ts"]
+    }
+  },
+  "include": ["../core/test/effect/layer-node/layer-node-types.test.ts"]
+}

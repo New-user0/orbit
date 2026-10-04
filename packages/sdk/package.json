@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "version": "2.0.22",
+  "name": "@orbit/sdk",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://orbit.invalid",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./effect": "./src/effect/index.ts",
+    "./workerd": "./src/workerd.ts",
+    "./workerd/effect": "./src/effect/workerd.ts"
+  },
+  "scripts": {
+    "build": "bun run script/build.ts",
+    "test": "bun test --timeout 5000",
+    "typecheck": "tsgo -b",
+    "verify:package": "bun run script/verify-package.ts"
+  },
+  "dependencies": {
+    "@orbit/client": "workspace:*",
+    "@orbit/core": "workspace:*",
+    "@orbit/plugin": "workspace:*",
+    "@orbit/schema": "workspace:*",
+    "@orbit/server": "workspace:*",
+    "@orbit/util": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@orbit/ai": "workspace:*",
+    "@orbit/httpapi-codegen": "workspace:*",
+    "@orbit/protocol": "workspace:*",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

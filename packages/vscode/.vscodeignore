@@ -1,0 +1,7 @@
+**
+!dist/extension.js
+!dist/webview.js
+!dist/webview.css
+!images/orbit.svg
+!package.json
+!README.md

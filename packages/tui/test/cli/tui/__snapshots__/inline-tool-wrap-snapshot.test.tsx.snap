@@ -1,0 +1,22 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`TUI inline tool wrapping snapshots consecutive grep, glob, and read rows at a narrow width 1`] = `
+"   ✱ Grep "ORBIT.*DB|database|sqlite|drizzle|dev.*db|data.
+     *dir|xdg|APPDATA" in packages/orbit/src (151 matches)
+   ✱ Glob "**/*db*" in packages/orbit (6 matches)
+   → Read packages/orbit/src/storage/db.ts [offset=1, limit=130]
+   ✕ Read packages/orbit/src/index.ts [offset=1, limit=100]
+   ✱ Grep "export const ORBIT_DB|ORBIT_DB|ORBIT_DEV|Global\\.Path\\.
+     data|data =" in packages/orbit/src (115 matches)"
+`;
+
+exports[`TUI inline tool wrapping snapshots expanded tool errors under the tool text 1`] = `
+"   ✱ Grep "ORBIT.*DB|database|sqlite|drizzle|dev.*db|data.
+     *dir|xdg|APPDATA" in packages/orbit/src (151 matches)
+   ✱ Glob "**/*db*" in packages/orbit (6 matches)
+   → Read packages/orbit/src/storage/db.ts [offset=1, limit=130]
+   ✕ Read packages/orbit/src/index.ts [offset=1, limit=100]
+     No LSP server available for this file type.
+   ✱ Grep "export const ORBIT_DB|ORBIT_DB|ORBIT_DEV|Global\\.Path\\.
+     data|data =" in packages/orbit/src (115 matches)"
+`;

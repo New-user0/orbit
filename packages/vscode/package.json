@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "orbit-code",
+  "displayName": "Orbit",
+  "description": "Chat with the Orbit coding agent from VS Code, using any model Orbit is configured for.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "orbit",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://orbit.invalid",
+    "directory": "packages/vscode"
+  },
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onWebviewPanel:orbit.chat"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "orbit",
+          "title": "Orbit",
+          "icon": "images/orbit.svg"
+        }
+      ]
+    },
+    "views": {
+      "orbit": [
+        {
+          "type": "webview",
+          "id": "orbit.chat",
+          "name": "Chat",
+          "when": "config.orbit.placement == sidebar"
+        },
+        {
+          "type": "webview",
+          "id": "orbit.start",
+          "name": "Orbit",
+          "when": "config.orbit.placement != sidebar"
+        },
+        {
+          "id": "orbit.runs",
+          "name": "Runs",
+          "when": "config.orbit.placement == sidebar"
+        }
+      ],
+      "explorer": [
+        {
+          "id": "orbit.runs.explorer",
+          "name": "Orbit Runs",
+          "when": "config.orbit.placement != sidebar"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "orbit.open",
+        "title": "Open Orbit",
+        "category": "Orbit",
+        "icon": {
+          "light": "images/orbit-light.svg",
+          "dark": "images/orbit-dark.svg"
+        }
+      },
+      {
+        "command": "orbit.newSession",
+        "title": "New Session",
+        "category": "Orbit",
+        "icon": "$(add)"
+      },
+      {
+        "command": "orbit.history",
+        "title": "Continue a Session…",
+        "category": "Orbit",
+        "icon": "$(history)"
+      },
+      {
+        "command": "orbit.outputStyle",
+        "title": "Choose Output Style…",
+        "category": "Orbit"
+      },
+      {
+        "command": "orbit.askSelection",
+        "title": "Ask About Selection",
+        "category": "Orbit"
+      },
+      {
+        "command": "orbit.explainSelection",
+        "title": "Explain Selection",
+        "category": "Orbit"
+      },
+      {
+        "command": "orbit.fixDiagnostics",
+        "title": "Fix Problems in This File",
+        "category": "Orbit"
+      },
+      {
+        "command": "orbit.openTerminal",
+        "title": "Open orb in Terminal",
+        "category": "Orbit",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "orbit.runs.refresh",
+        "title": "Refresh Runs",
+        "category": "Orbit",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "orbit.runs.clean",
+        "title": "Clean Up Finished Runs",
+        "category": "Orbit",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "orbit.runs.approve",
+        "title": "Approve",
+        "category": "Orbit",
+        "icon": "$(check)"
+      },
+      {
+        "command": "orbit.runs.reject",
+        "title": "Reject",
+        "category": "Orbit",
+        "icon": "$(close)"
+      },
+      {
+        "command": "orbit.runs.resume",
+        "title": "Resume Run",
+        "category": "Orbit",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "orbit.runs.watch",
+        "title": "Watch Run in Terminal",
+        "category": "Orbit",
+        "icon": "$(eye)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "orbit.newSession",
+          "when": "view == orbit.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "orbit.history",
+          "when": "view == orbit.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "orbit.openTerminal",
+          "when": "view == orbit.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "orbit.runs.refresh",
+          "when": "view =~ /^orbit\\.runs/",
+          "group": "navigation"
+        },
+        {
+          "command": "orbit.runs.clean",
+          "when": "view =~ /^orbit\\.runs/",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "orbit.askSelection",
+          "when": "editorHasSelection",
+          "group": "orbit@1"
+        },
+        {
+          "command": "orbit.explainSelection",
+          "when": "editorHasSelection",
+          "group": "orbit@2"
+        },
+        {
+          "command": "orbit.fixDiagnostics",
+          "group": "orbit@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "orbit.runs.approve",
+          "when": "view =~ /^orbit\\.runs/ && viewItem == gate",
+          "group": "inline@1"
+        },
+        {
+          "command": "orbit.runs.reject",
+          "when": "view =~ /^orbit\\.runs/ && viewItem == gate",
+          "group": "inline@2"
+        },
+        {
+          "command": "orbit.runs.resume",
+          "when": "view =~ /^orbit\\.runs/ && viewItem =~ /^run-(waiting|failed|running)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "orbit.runs.watch",
+          "when": "view =~ /^orbit\\.runs/ && viewItem =~ /^run-/",
+          "group": "inline@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "orbit.runs.approve",
+          "when": "false"
+        },
+        {
+          "command": "orbit.runs.reject",
+          "when": "false"
+        },
+        {
+          "command": "orbit.runs.resume",
+          "when": "false"
+        },
+        {
+          "command": "orbit.runs.watch",
+          "when": "false"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "orbit.newSession",
+          "when": "activeWebviewPanelId == orbit.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "orbit.history",
+          "when": "activeWebviewPanelId == orbit.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "orbit.openTerminal",
+          "when": "activeWebviewPanelId == orbit.chat",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "orbit.askSelection",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape"
+      }
+    ],
+    "configuration": {
+      "title": "Orbit",
+      "properties": {
+        "orbit.executable": {
+          "type": "string",
+          "default": "orb",
+          "description": "Path to the orb executable. The extension starts or reuses its background service."
+        },
+        "orbit.placement": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "sidebar"
+          ],
+          "default": "editor",
+          "enumDescriptions": [
+            "Open the chat as an editor tab, with files and diffs beside it.",
+            "Dock the chat in the Orbit side bar."
+          ],
+          "description": "Where the Orbit chat opens. Reload the window after changing it."
+        }
+      }
+    },
+    "viewsWelcome": [
+      {
+        "view": "orbit.runs",
+        "contents": "No Orbit Flow runs in this folder yet.\nStart one with `orb flow run <workflow file>` or `orb eval <suite>`."
+      },
+      {
+        "view": "orbit.runs.explorer",
+        "contents": "No Orbit Flow runs in this folder yet.\nStart one with `orb flow run <workflow file>` or `orb eval <suite>`."
+      }
+    ]
+  },
+  "scripts": {
+    "build": "bun run script/build.ts",
+    "package": "bun run script/build.ts --package",
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@orbit/client": "workspace:*",
+    "diff": "catalog:"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/vscode": "1.94.0",
+    "@typescript/native-preview": "catalog:",
+    "@vscode/vsce": "4.0.0"
+  }
+}

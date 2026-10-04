@@ -1,0 +1,22 @@
+import { Effect } from "effect"
+import { Model } from "../../model.js"
+import { define } from "@orbit/plugin/effect/plugin"
+
+export const OpenRouterPlugin = define({
+  id: "orbit.provider.openrouter",
+  effect: Effect.fn(function* (ctx) {
+    yield* ctx.model.transform((models) => {
+      for (const item of models.provider.list()) {
+        if (item.provider.package !== "@orbit/ai/providers/openrouter") continue
+        for (const modelID of [Model.ID.make("gpt-5-chat-latest"), Model.ID.make("openai/gpt-5-chat")]) {
+          if (!models.get(item.provider.id, modelID)) continue
+          models.update(item.provider.id, modelID, (model) => {
+            // These are OpenRouter-specific OpenAI chat aliases that do not work
+            // on the generic path. Keep custom providers with matching IDs untouched.
+            model.enabled = false
+          })
+        }
+      }
+    })
+  }),
+})
