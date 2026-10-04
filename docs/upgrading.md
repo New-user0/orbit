@@ -43,6 +43,42 @@ service you implement must provide both.
 **What to do:** Nothing unless you turn it off. Before you do, move skills you keep only in `.agents/skills` or another
 product's directory into `.orbit/skills`, or list their path under `skills`.
 
+### Other products' hook settings and `.mcp.json` are config documents
+
+The `settings.json` and `settings.local.json` files in another product's dot-directory used to be read on the side, on
+every hook event. They now load as config documents, with the other config files, and so does the `.mcp.json` file in
+the project directory. Both follow the compatibility switch, so nothing below applies with it off.
+
+- **Settings files.** Only the `hooks` of each file are used. In your home directory both files rank as user config.
+  In a project the shared file ranks as project config and the local file as local config. Each ranks below Orbit's
+  own documents of the same kind, so an `orbit.json` or `orbit.local.json` outranks them. When several hooks block a
+  tool call, the model is told the reason from the highest-ranked document, so Orbit's own files come before another
+  product's. A hook that cannot be read is reported in the log, with its file and its place in it, and costs only
+  itself, and a file that is not JSON costs only that file.
+- **Hook matchers and names.** A hook matcher in any document also accepts the names other products give a tool:
+  `Bash` for `shell`; `Edit` and `MultiEdit` for `edit`, and `Write` for `write`, and all three also for `patch`,
+  which takes the place of `edit` and `write` on some models; `NotebookEdit`, `Glob`, `Grep`, `WebFetch` and
+  `WebSearch` for the tool of the same name; `Task` and `Agent` for `subagent`; `TodoWrite` for `todo`; and
+  `mcp__<server>__<tool>` for an MCP tool. A hook from another product's settings file is told that name as
+  `tool_name`, and every hook gets that product's project-directory variable beside `ORBIT_PROJECT_DIR`. Hooks in
+  Orbit's own files still get Orbit's names for the tool.
+- **`.mcp.json`.** Its `mcpServers` become project config: servers that run a command become local servers, and those
+  with `"type": "http"` or `"type": "sse"` become remote servers. `${NAME}` and `${NAME:-fallback}` expand from the
+  environment of the Orbit server in commands, arguments, variables, directories, URLs and headers. A server with no
+  command or URL, of another type, or that names a variable that is unset and has no fallback is skipped, with a
+  warning, and the others still load. A server of the same name in `orbit.json` wins.
+- **When edits apply.** Orbit now picks up a change to a settings file or to `.mcp.json` when the config reloads, a
+  moment after the file is saved, and no longer reads the settings files again on every hook event.
+
+**Affects:** people with hooks in another product's settings files, who may see a different block reason or tool name
+than before; repositories that keep a `.mcp.json`, whose servers now start when the project is opened, as those in a
+project's `orbit.json` already do; and code built on `@orbit/core`, where `HookConfig` moved from
+`@orbit/core/hook/config` to `@orbit/schema/config/hook-config` and `McpTool.namespace` and `McpTool.name` are now
+defined in `@orbit/schema/mcp` and re-exported.
+
+**What to do:** Nothing for hooks that keep working. If a repository's `.mcp.json` should not start servers for you,
+turn compatibility off, or move the servers you want into `orbit.json`.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

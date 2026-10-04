@@ -1,8 +1,7 @@
-export * as HookConfig from "./config.js"
+export * as HookConfig from "./hook-config.js"
 
-import { isRecord } from "@orbit/ai/utils/record"
-import { ConfigHooks } from "@orbit/schema/config/hooks"
 import { Option, Schema } from "effect"
+import { ConfigHooks } from "./hooks.js"
 
 /**
  * Decodes the raw `hooks` value of a settings document entry by entry, so one bad hook costs only itself. Survivors
@@ -11,6 +10,9 @@ import { Option, Schema } from "effect"
  * honor it as written. A key that no field of the schema names is dropped from its entry, which survives, and is
  * reported as `unsupported` too, so a misspelled `matcher` or a field written in another format never vanishes
  * unnoticed.
+ *
+ * It lives beside the schema, not in Core, because the compatibility readers decode other products' settings files
+ * the same way and may not depend on Core.
  */
 
 export interface Diagnostic {
@@ -150,6 +152,11 @@ function canonical<S extends Schema.Codec<unknown, unknown, never, never>>(schem
     schema,
     options,
   )(input).pipe(Option.flatMap((decoded) => Schema.encodeUnknownOption(schema, options)(decoded)))
+}
+
+// Excludes arrays, so a JSON array is never read as a bag of keys.
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function isEvent(key: string): key is ConfigHooks.Event {

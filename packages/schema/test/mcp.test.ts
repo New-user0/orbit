@@ -35,3 +35,15 @@ describe("Mcp resources", () => {
     })
   })
 })
+
+describe("Mcp tool names", () => {
+  test("replace every character a tool name cannot carry, in the server and in the tool alike", () => {
+    expect(Mcp.namespace("context 7")).toBe("context_7")
+    expect(Mcp.name("context 7", "resolve.library/id")).toBe("context_7_resolve_library_id")
+  })
+
+  test("keep letters, digits, underscores and hyphens", () => {
+    expect(Mcp.namespace("my-server_2")).toBe("my-server_2")
+    expect(Mcp.name("my-server_2", "get-Item_3")).toBe("my-server_2_get-Item_3")
+  })
+})

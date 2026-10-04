@@ -1,26 +1,31 @@
 export * as LifecycleHooksPlugin from "./lifecycle-hooks.js"
 
-import { CompatNames } from "@orbit/compat/names"
+import { CompatAliases } from "@orbit/compat/aliases"
+import { CompatSettings } from "@orbit/compat/settings"
 import { define } from "@orbit/plugin/effect/plugin"
 import { ConfigHooks } from "@orbit/schema/config/hooks"
 import type { SessionEvent } from "@orbit/schema/session-event"
 import { Tool } from "@orbit/schema/tool"
 import { AppProcess } from "@orbit/util/process"
-import { FSUtil } from "@orbit/util/fs-util"
-import path from "path"
 import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../../config.js"
-import { HookConfig } from "../../hook/config.js"
 import { Location } from "../../location.js"
+import { Mcp } from "../../mcp/index.js"
 import { ShellSelect } from "../../shell/select.js"
 import type { PluginInternal } from "../../plugin/internal.js"
 
 /**
  * Runs the shell commands configured under `hooks` at points in a session's life. Every document's hooks apply, in
- * config order. A command gets the event as JSON on stdin; exit code 2 or `{"decision":"block","reason":...}` on
- * stdout blocks a tool call, and other stdout becomes context for the model. A hook that fails to run is logged and
- * skipped, so a broken script never stops the session.
+ * config order, and hooks come from nowhere else: another product's settings files reach this runner as documents
+ * too, ranked below the native documents of their scope. A command gets the event as JSON on stdin; exit code 2 or
+ * `{"decision":"block","reason":...}` on stdout blocks a tool call, and other stdout becomes context for the model.
+ * When several hooks block, the reason of the one in the highest-ranked document is reported. A hook that fails to
+ * run is logged and skipped, so a broken script never stops the session.
+ *
+ * While compatibility is on, a matcher also accepts the names other products give a tool, so a hook written for
+ * `Bash` fires for `shell`, and a hook that comes from another product's settings file is told that product's name
+ * for the tool, as `tool_name`. Every hook can also read the project directory from that product's variable.
  *
  * This is the interim runner, and it honors less than the hooks schema describes. It warns once for each of these:
  * - Hooks of the other types (prompt, agent, http) are skipped.
@@ -36,6 +41,8 @@ import type { PluginInternal } from "../../plugin/internal.js"
  *   source included.
  * - UserPromptSubmit can add context to a prompt but cannot reject it.
  * - Stop also fires after a failed or interrupted execution.
+ * - A hook from another product's settings file is told that product's tool name but not its tool input, which keeps
+ *   Orbit's shape.
  */
 
 const DEFAULT_TIMEOUT_SECONDS = 60
@@ -49,12 +56,6 @@ const Reply = Schema.Struct({
   additionalContext: Schema.optionalKey(Schema.String),
 })
 const decodeReply = Schema.decodeUnknownOption(Schema.fromJsonString(Reply))
-// Only the hooks key matters here; the file's other settings are ignored. It is decoded entry by entry (see
-// HookConfig), so a hook this version cannot read costs only itself, never the guards beside it.
-const decodeSettings = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ hooks: Schema.optionalKey(Schema.Unknown) })),
-)
-const decodeHooks = Schema.decodeUnknownOption(ConfigHooks.Info)
 
 interface Outcome {
   readonly block?: string
@@ -67,14 +68,12 @@ export const Plugin = define({
   id: "orbit.config.lifecycle-hooks",
   effect: Effect.fn("LifecycleHooksPlugin")(function* (ctx) {
     const config = yield* Config.Service
+    const mcp = yield* Mcp.Service
     const processes = yield* AppProcess.Service
     const shells = yield* ShellSelect.Service
     const location = yield* Location.Service
 
-    const fs = yield* FSUtil.Service
-
-    // Each warning is logged once, not on every event: hooks are matched, and shared settings files read again, every
-    // time an event fires.
+    // Each warning is logged once, not on every event: hooks are matched every time an event fires.
     const warned = new Set<string>()
     const warnOnce = (key: string, message: string, details: Record<string, unknown>) =>
       Effect.suspend(() => {
@@ -83,68 +82,58 @@ export const Plugin = define({
         return Effect.logWarning(message, details)
       })
 
-    // The hooks of one shared settings file. A hook that cannot be used costs only itself, and is reported at its path in
-    // the file, in the shape the configuration loader uses.
-    const fileHooks = Effect.fn("LifecycleHooksPlugin.fileHooks")(function* (file: string, text: string) {
-      const raw = Option.getOrUndefined(decodeSettings(text))?.hooks
-      if (raw === undefined) return undefined
-      const decoded = HookConfig.decode(raw)
-      yield* Effect.forEach(
-        decoded.diagnostics,
-        (diagnostic) => {
-          const where = `$.${diagnostic.path.join(".")}`
-          return warnOnce(`${file}:${diagnostic.kind}:${where}`, "configuration normalization diagnostic", {
-            source: file,
-            path: where,
-            kind: diagnostic.kind,
-            action: diagnostic.message,
-          })
-        },
-        { discard: true },
+    // The names other products give the tool of a tool event, which is none unless compatibility is on. An MCP tool's
+    // name only splits into server and tool once the servers are known.
+    const foreignNames = Effect.fn("LifecycleHooksPlugin.foreignNames")(function* (target: string | undefined) {
+      if (target === undefined || !(yield* config.compatEnabled())) return []
+      const servers = yield* mcp.servers()
+      return CompatAliases.toForeign(
+        target,
+        servers.map((server) => server.name),
       )
-      return Option.getOrUndefined(decodeHooks(decoded.hooks))
     })
 
-    // The reference vendor keeps hooks in settings files in its own directory; read them so existing hooks work here.
-    const vendorHooks = Effect.fn("LifecycleHooksPlugin.vendorHooks")(function* () {
-      const roots = (yield* config.compat()).roots.filter((root) => root.kind === "vendor")
-      const files = roots.flatMap((root) => CompatNames.vendor.settings.map((name) => path.join(root.path, name)))
-      const settings = yield* Effect.forEach(files, (file) =>
-        fs.readFileStringSafe(file).pipe(
-          Effect.flatMap((text) => (text === undefined ? Effect.undefined : fileHooks(file, text))),
-          Effect.orElseSucceed(() => undefined),
-        ),
+    const commands = Effect.fn("LifecycleHooksPlugin.commands")(function* (
+      event: ConfigHooks.Event,
+      target: string | undefined,
+      aliases: readonly string[],
+    ) {
+      // A later document outranks an earlier one, and the position is its rank.
+      const documents = (yield* config.entries()).flatMap((entry) =>
+        entry.type === "document" && entry.info.hooks
+          ? [{ hooks: entry.info.hooks, foreign: CompatSettings.isForeign(entry.path) }]
+          : [],
       )
-      return settings.filter((hooks) => hooks !== undefined)
-    })
-
-    const commands = Effect.fn("LifecycleHooksPlugin.commands")(function* (event: ConfigHooks.Event, target?: string) {
-      const configured = (yield* config.entries()).flatMap((entry) =>
-        entry.type === "document" && entry.info.hooks ? [entry.info.hooks] : [],
-      )
-      const documents = [...(yield* vendorHooks()), ...configured]
       yield* Effect.forEach(
-        documents.flatMap((hooks) => UNENFORCED_POLICIES.filter((policy) => hooks[policy])),
+        documents.flatMap((document) => UNENFORCED_POLICIES.filter((policy) => document.hooks[policy])),
         (policy) =>
           warnOnce(`policy:${policy}`, "hook policy is not enforced yet and is ignored", {
             setting: `hooks.${policy}`,
           }),
         { discard: true },
       )
-      const matched = documents
-        .flatMap((hooks) => hooks[event] ?? [])
-        .filter((matcher) => matches(matcher.matcher, target))
-        .flatMap((matcher) => matcher.hooks)
+      const matched = documents.flatMap((document, rank) =>
+        (document.hooks[event] ?? [])
+          .filter((group) => matches(group.matcher, target, aliases))
+          .flatMap((group) => group.hooks.map((hook) => ({ hook, foreign: document.foreign, rank }))),
+      )
       yield* Effect.forEach(
-        matched.filter((hook) => hook.type !== "command"),
-        (hook) =>
-          warnOnce(`type:${hook.type}`, "hook type is not supported yet and is skipped", { event, type: hook.type }),
+        matched.filter((item) => item.hook.type !== "command"),
+        (item) =>
+          warnOnce(`type:${item.hook.type}`, "hook type is not supported yet and is skipped", {
+            event,
+            type: item.hook.type,
+          }),
         { discard: true },
       )
-      const runnable = matched.filter((hook): hook is ConfigHooks.Command => hook.type === "command")
+      const runnable = matched.flatMap(({ hook, foreign, rank }) =>
+        hook.type === "command" ? [{ hook, foreign, rank }] : [],
+      )
       yield* Effect.forEach(
-        runnable.flatMap((hook) =>
-          IGNORED_COMMAND_SETTINGS.filter((setting) => hook[setting] !== undefined && hook[setting] !== false),
+        runnable.flatMap((item) =>
+          IGNORED_COMMAND_SETTINGS.filter(
+            (setting) => item.hook[setting] !== undefined && item.hook[setting] !== false,
+          ),
         ),
         (setting) =>
           warnOnce(`field:${setting}`, "hook field is not supported yet and is ignored", { event, field: setting }),
@@ -158,33 +147,51 @@ export const Plugin = define({
       payload: Record<string, unknown>,
       target?: string,
     ) {
-      const configured = yield* commands(event, target)
+      const aliases = yield* foreignNames(target)
+      const configured = yield* commands(event, target, aliases)
       if (configured.length === 0) return NOTHING
       const shell = yield* shells.resolve({ priority: "compat" })
-      const stdin = JSON.stringify({ hook_event_name: event, cwd: location.directory, ...payload })
+      const compat = yield* config.compatEnabled()
+      const stdin = (foreign: boolean) =>
+        JSON.stringify({
+          hook_event_name: event,
+          cwd: location.directory,
+          ...payload,
+          // The tool is named the way the hook's own product names it.
+          ...(foreign && aliases.length > 0 ? { tool_name: aliases[0] } : {}),
+        })
       const outcomes = yield* Effect.forEach(
         configured,
-        (hook): Effect.Effect<Outcome> =>
+        (item): Effect.Effect<Outcome> =>
           processes
             .run(
-              ChildProcess.make(shell, ShellSelect.args(shell, hook.command), {
+              ChildProcess.make(shell, ShellSelect.args(shell, item.hook.command), {
                 cwd: location.directory,
                 extendEnv: true,
-                env: { ORBIT_PROJECT_DIR: location.directory },
+                env: {
+                  ORBIT_PROJECT_DIR: location.directory,
+                  ...(compat ? CompatAliases.hookEnv(location.directory) : {}),
+                },
               }),
-              { stdin, timeout: Duration.seconds(hook.timeout ?? DEFAULT_TIMEOUT_SECONDS) },
+              { stdin: stdin(item.foreign), timeout: Duration.seconds(item.hook.timeout ?? DEFAULT_TIMEOUT_SECONDS) },
             )
             .pipe(
               Effect.map((result) => interpret(result.exitCode, result.stdout.toString(), result.stderr.toString())),
               Effect.catch((error) =>
-                Effect.logWarning("hook failed to run", { event, command: hook.command, error: error.message }).pipe(
-                  Effect.as(NOTHING),
-                ),
+                Effect.logWarning("hook failed to run", {
+                  event,
+                  command: item.hook.command,
+                  error: error.message,
+                }).pipe(Effect.as(NOTHING)),
               ),
             ),
       )
+      // The highest-ranked document that blocks gives the reason, and within it the first hook that blocks does.
+      const blocks = outcomes.flatMap((outcome, index) =>
+        outcome.block === undefined ? [] : [{ reason: outcome.block, rank: configured[index].rank }],
+      )
       return {
-        block: outcomes.find((outcome) => outcome.block !== undefined)?.block,
+        block: blocks.toSorted((left, right) => right.rank - left.rank).at(0)?.reason,
         context: outcomes
           .map((outcome) => outcome.context)
           .filter(Boolean)
@@ -286,11 +293,13 @@ function lifecycle(event: Lifecycle) {
   }
 }
 
-function matches(matcher: string | undefined, target: string | undefined) {
+// A tool also answers to the names that `aliases` lists, which are empty unless compatibility is on.
+function matches(matcher: string | undefined, target: string | undefined, aliases: readonly string[]) {
   if (!matcher || matcher === "*" || target === undefined) return true
+  const names = [target, ...aliases]
   return Option.match(Option.liftThrowable(() => new RegExp(`^(?:${matcher})$`))(), {
-    onNone: () => matcher === target,
-    onSome: (pattern) => pattern.test(target),
+    onNone: () => names.includes(matcher),
+    onSome: (pattern) => names.some((name) => pattern.test(name)),
   })
 }
 

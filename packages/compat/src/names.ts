@@ -6,14 +6,39 @@ export * as CompatNames from "./names.js"
  */
 
 /**
- * The reference vendor: the dot-directory that holds its skills, output styles and settings files, and the
- * instruction file it keeps beside the code. The key is neutral so callers outside this package need not name it.
+ * The reference vendor: the dot-directory that holds its skills, output styles and settings files, the instruction
+ * file it keeps beside the code, and the variable its hook commands read the project directory from. The key is
+ * neutral so callers outside this package need not name it.
  */
 export const vendor = {
   directory: ".claude",
-  settings: ["settings.json", "settings.local.json"],
+  /** The settings file a team shares, and the one a person keeps to themselves. */
+  settings: { shared: "settings.json", local: "settings.local.json" },
   instructions: "CLAUDE.md",
+  projectDirVariable: "CLAUDE_PROJECT_DIR",
 } as const
+
+/**
+ * The tool names that hook matchers and permission rules of the reference vendor use, and the Orbit tools each one
+ * stands for. The table is many to many: Orbit swaps its editing tools for `patch` on some models, so an editing name
+ * must reach `patch` as well, and `patch` answers to every editing name. Where a tool answers to several names, such as
+ * the subagent tool to `Task` and `Agent`, the first one listed is the one a hook is told.
+ */
+export const tools = {
+  Bash: ["shell"],
+  Read: ["read"],
+  Edit: ["edit", "patch"],
+  MultiEdit: ["edit", "patch"],
+  Write: ["write", "patch"],
+  NotebookEdit: ["notebook_edit"],
+  Glob: ["glob"],
+  Grep: ["grep"],
+  WebFetch: ["webfetch"],
+  WebSearch: ["websearch"],
+  Task: ["subagent"],
+  Agent: ["subagent"],
+  TodoWrite: ["todo"],
+} as const satisfies Record<string, readonly string[]>
 
 /** The vendor-neutral directory that several agent products keep skills in. */
 export const agents = ".agents"

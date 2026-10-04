@@ -9,7 +9,8 @@ import {
   Server,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server"
-import { Document, Event, Info } from "@orbit/schema/config"
+import { CompatNames } from "@orbit/compat/names"
+import { Document, Event, Info, type Entry } from "@orbit/schema/config"
 import { ConfigMCP } from "@orbit/schema/config/mcp"
 import { McpEvent } from "@orbit/schema/mcp-event"
 import { Config } from "@orbit/core/config"
@@ -23,6 +24,7 @@ import { Form } from "@orbit/core/form"
 import { Integration } from "@orbit/core/integration"
 import { Environment } from "@orbit/core/environment/index"
 import { EnvironmentUnavailable } from "@orbit/core/environment/unavailable"
+import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { McpClient } from "@orbit/core/mcp/client"
@@ -35,6 +37,8 @@ import { McpTool } from "@orbit/core/tool/mcp"
 import { McpResourceTools } from "@orbit/core/tool/plugin/mcp-resource"
 import { Tool } from "@orbit/core/tool"
 import { ToolOutput } from "@orbit/core/tool-output"
+import { WellKnown } from "@orbit/core/wellknown"
+import { Global } from "@orbit/util/global"
 import {
   Context,
   Deferred,
@@ -57,6 +61,7 @@ import { Image } from "@orbit/core/image"
 import { advance, drain } from "./lib/clock"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
+import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { hostEnvironmentLayer, recordingEnvironmentLayer } from "./fixture/environment"
@@ -1699,6 +1704,90 @@ testEffect(Layer.empty).live(
       expect(JSON.stringify(entries)).toBe(original)
     }),
 )
+
+// The entries that the real configuration loader reports for a project in a home of its own, so that nothing the machine
+// running the test keeps ever takes part.
+const projectEntries = (home: string, project: string) =>
+  Config.Service.use((config) => config.entries()).pipe(
+    Effect.provide(
+      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
+        Config.node.replace(Config.configured()),
+        Location.node.replace(
+          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
+        ),
+        Global.node.replace(Global.layerWith({ config: path.join(home, ".config", "orbit"), home })),
+        Credential.node.replace(emptyCredentialNode),
+        WellKnown.node.replace(emptyWellknownNode),
+        Watcher.node.replace(Watcher.testLayer),
+      ]),
+    ),
+  )
+
+describe("MCP servers from .mcp.json", () => {
+  const fixture = path.join(import.meta.dir, "fixture/mcp-output-schema.ts")
+  const files = (home: string, project: string, user: unknown) =>
+    Effect.promise(async () => {
+      const write = async (file: string, contents: unknown) => {
+        await fs.mkdir(path.dirname(file), { recursive: true })
+        await fs.writeFile(file, JSON.stringify(contents))
+      }
+      await write(path.join(project, CompatNames.mcp), {
+        mcpServers: {
+          // Both servers run the stdio fixture, but the second one asks for a program that does not exist.
+          docs: { command: process.execPath, args: [fixture] },
+          shared: { command: path.join(project, "no-such-program") },
+        },
+      })
+      await write(path.join(project, "orbit.json"), {
+        mcp: { servers: { shared: { type: "local", command: [process.execPath, fixture] } } },
+      })
+      await write(path.join(home, ".config", "orbit", "orbit.json"), user)
+    })
+
+  // What the MCP service registers for the entries, once every server has settled.
+  const registered = (entries: Entry[]) =>
+    Effect.gen(function* () {
+      const service = yield* Mcp.Service
+      const names = (yield* service.servers()).map((server) => server.name)
+      return Object.fromEntries(
+        yield* Effect.forEach(names, (name) =>
+          settled(service, name).pipe(Effect.map((status) => [name, status] as const)),
+        ),
+      )
+    }).pipe(
+      Effect.provide(
+        resourceMcpLayer("https://unused.example", undefined, undefined, { entries: () => Effect.succeed(entries) }),
+      ),
+    )
+
+  testEffect(Layer.empty).live(
+    "register through ConfigMcpPlugin.register, and under the same name a native server wins",
+    () =>
+      Effect.gen(function* () {
+        const home = (yield* tmpdirScoped()).path
+        const project = path.join(home, "work", "repo")
+        yield* files(home, project, {})
+
+        const servers = yield* registered(yield* projectEntries(home, project))
+
+        // `docs` only exists in .mcp.json, and connects. `shared` is in both files, and the one in orbit.json is the one
+        // that connects: the .mcp.json server would have failed to start.
+        expect(servers).toEqual({ docs: { status: "connected" }, shared: { status: "connected" } })
+      }),
+  )
+
+  testEffect(Layer.empty).live("are gone once compatibility is off, and the native server stays", () =>
+    Effect.gen(function* () {
+      const home = (yield* tmpdirScoped()).path
+      const project = path.join(home, "work", "repo")
+      yield* files(home, project, { compatibility: { enabled: false } })
+
+      const servers = yield* registered(yield* projectEntries(home, project))
+
+      expect(servers).toEqual({ shared: { status: "connected" } })
+    }),
+  )
+})
 
 testEffect(resourceMcpLayer(new ConfigMCP.Local({ type: "local", command: ["unused"], disabled: true }))).live(
   "manages live MCP servers entirely through scoped transforms",

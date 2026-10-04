@@ -1,6 +1,7 @@
 export * as McpTool from "./mcp.js"
 
 import { ToolFailure } from "@orbit/ai"
+import { name, namespace } from "@orbit/schema/mcp"
 import { McpEvent } from "@orbit/schema/mcp-event"
 import { Context, Effect, Fiber, type JsonSchema, Layer, PubSub, Semaphore, Stream } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
@@ -11,10 +12,10 @@ import { Permission } from "../permission.js"
 import { Tool } from "../tool.js"
 
 /**
- * Registry namespace and permission action names for MCP tools.
+ * Registry namespace and permission action names for MCP tools. The compatibility readers translate other products'
+ * names for the same tools, so the one definition lives in `@orbit/schema/mcp`.
  */
-export const namespace = (server: string) => server.replace(/[^a-zA-Z0-9_-]/g, "_")
-export const name = (server: string, tool: string) => `${namespace(server)}_${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`
+export { name, namespace }
 
 export interface Interface {
   /** Wait for the initial MCP tool registration to settle. */

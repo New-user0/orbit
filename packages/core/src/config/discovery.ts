@@ -2,7 +2,9 @@ export * as ConfigDiscovery from "./discovery.js"
 
 import path from "path"
 import { Effect } from "effect"
+import { CompatNames } from "@orbit/compat/names"
 import { CompatRoots } from "@orbit/compat/roots"
+import { CompatSettings } from "@orbit/compat/settings"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Location } from "../location.js"
@@ -31,6 +33,13 @@ export interface Sources extends Level {
   readonly explicit?: AbsolutePath
   /** Candidate roots of other agent products, whether or not the compatibility switch is on or the roots exist yet. */
   readonly compat: readonly CompatRoots.Root[]
+  /**
+   * The settings files in the compat roots that exist now, whether or not the files do. A root that is missing has no
+   * directory to watch for them, and the watch on its parent sees it appear.
+   */
+  readonly compatSettings: readonly AbsolutePath[]
+  /** The MCP file of other agent products in the project directory, unset when project discovery is off. */
+  readonly compatMcp?: AbsolutePath
 }
 
 export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options?: Options) {
@@ -98,11 +107,19 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
     } satisfies Level
   })
 
+  const compat = yield* CompatRoots.discover({ directories, global: globalEnabled })
+  // The project's MCP file is project discovery like the orbit files are: wherever the walk is skipped, it is too, and
+  // it stays out of reach of a disabled global config directory the same way.
+  const mcp = directories.length === 0 ? [] : yield* probe(location.project.directory, [CompatNames.mcp])
   return {
     global: globalEnabled ? globalDirectory : undefined,
     home: homeVisible ? yield* level(homeVisible) : undefined,
     explicit: options?.file ? AbsolutePath.make(path.resolve(options.file)) : undefined,
     ...(yield* level(visible)),
-    compat: yield* CompatRoots.discover({ directories, global: globalEnabled }),
+    compat,
+    compatSettings: CompatSettings.files(yield* Effect.filter(compat, (root) => fs.isDir(root.path))).map(
+      (file) => file.path,
+    ),
+    compatMcp: mcp.find((candidate) => !reentersGlobal(candidate))?.item,
   } satisfies Sources
 })
