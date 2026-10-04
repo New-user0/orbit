@@ -38,16 +38,25 @@ const addPlugin = Effect.fn(function* (entries: Entry[]) {
   yield* ConfigPolicyPlugin.Plugin.effect(host).pipe(Effect.provide(Config.testLayer(entries)))
 })
 
-const evaluate = Effect.fn(function* (action: string, resources: string[], effect: Permission.Effect = "allow") {
+const evaluate = Effect.fn(function* (
+  action: string,
+  resources: string[],
+  effect: Permission.Effect = "allow",
+  aliases?: string[],
+) {
   const hooks = yield* PluginHooks.Service
   const event = yield* hooks.trigger("permission", "evaluate", {
     sessionID: Session.ID.make("ses_policy"),
     action,
     resources,
+    aliases,
     effect,
   })
   return { effect: event.effect, message: event.message }
 })
+
+// A webfetch evaluation: the host is the resource and the normalized URL is its alias.
+const webfetch = (host: string, url: string) => evaluate("webfetch", [host], "allow", [url])
 
 describe("ConfigPolicyPlugin.Plugin", () => {
   it.effect("filters plugin-provided providers with ordered wildcard policies", () =>
@@ -197,6 +206,59 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       expect((yield* evaluate("question", ["*"])).effect).toBe("deny")
       expect((yield* evaluate("read", ["/tmp/notes.txt"])).effect).toBe("deny")
       expect((yield* evaluate("github_delete_repository", ["*"])).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("blocks a host resource through an organization URL statement", () =>
+    Effect.gen(function* () {
+      const managed = yield* ManagedPolicy.Service
+      yield* managed.set({ statements: [permission("deny", "webfetch:https://pastebin.com/*")] })
+      yield* addPlugin([])
+
+      expect(yield* webfetch("pastebin.com", "https://pastebin.com/raw/abc")).toEqual({
+        effect: "deny",
+        message: "Blocked by your organization's policy",
+      })
+      expect((yield* webfetch("pastebin.com", "https://pastebin.com/")).effect).toBe("deny")
+      expect(yield* webfetch("example.com", "https://example.com/a")).toEqual({ effect: "allow", message: undefined })
+      // A hook that ignores aliases decides on the host alone, which the URL statement does not match.
+      expect((yield* evaluate("webfetch", ["pastebin.com"])).effect).toBe("allow")
+    }),
+  )
+
+  it.effect("blocks a host resource through a host-form statement and a configured URL policy", () =>
+    Effect.gen(function* () {
+      const managed = yield* ManagedPolicy.Service
+      yield* managed.set({ statements: [permission("deny", "webfetch:pastebin.com")], organization: "Acme" })
+      yield* addPlugin([document(permission("deny", "webfetch:https://gist.example.com/*"))])
+
+      expect(yield* webfetch("pastebin.com", "https://pastebin.com/raw/abc")).toEqual({
+        effect: "deny",
+        message: "Blocked by Acme's policy",
+      })
+      expect((yield* evaluate("webfetch", ["pastebin.com"])).effect).toBe("deny")
+      expect(yield* webfetch("gist.example.com", "https://gist.example.com/a")).toEqual({
+        effect: "deny",
+        message: "Blocked by configuration policy",
+      })
+      expect(yield* webfetch("example.com", "https://example.com/a")).toEqual({ effect: "allow", message: undefined })
+    }),
+  )
+
+  it.effect("decides on the last policy matching the host or the URL", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([
+        document(
+          permission("deny", "webfetch:*"),
+          permission("allow", "webfetch:docs.example.com"),
+          permission("deny", "webfetch:https://docs.example.com/private/*"),
+        ),
+      ])
+
+      // The host allow lifts the broad deny; the later URL deny still outranks it for the URLs it matches.
+      expect((yield* webfetch("docs.example.com", "https://docs.example.com/a")).effect).toBe("allow")
+      expect((yield* webfetch("docs.example.com", "https://docs.example.com/private/key")).effect).toBe("deny")
+      expect((yield* webfetch("other.example.com", "https://other.example.com/a")).effect).toBe("deny")
     }),
   )
 
