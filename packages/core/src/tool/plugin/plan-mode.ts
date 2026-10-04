@@ -2,12 +2,13 @@ export * as PlanModeTools from "./plan-mode.js"
 
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { ToolFailure } from "@orbit/ai"
-import { Agent } from "@orbit/schema/agent"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Effect, Schema } from "effect"
 import path from "path"
+import { Agent } from "../../agent.js"
 import { Form } from "../../form.js"
+import { PlanMode } from "../../plan-mode.js"
 import { Session } from "../../session.js"
 
 /**
@@ -15,8 +16,7 @@ import { Session } from "../../session.js"
  * to move back out. Agent switches take effect from the next step, as any other agent switch does.
  */
 
-const plan = Agent.ID.make("plan")
-const fallback = Agent.ID.make("build")
+const plan = PlanMode.agent
 const APPROVE = "Approve the plan and start"
 const KEEP = "Keep planning"
 
@@ -33,12 +33,10 @@ export const Plugin = {
   id: "orbit.tool.plan-mode",
   effect: Effect.fn("PlanModeTools.Plugin")(function* (ctx: Context) {
     const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
     const forms = yield* Form.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
-    const directory = path.join(global.home, ".orbit", "plan")
-    // The agent each session planned from, so approval returns to it. Kept in memory: after a restart it is "build".
-    const previous = new Map<string, Agent.ID>()
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
@@ -52,7 +50,6 @@ export const Plugin = {
           Effect.gen(function* () {
             if (context.agent === plan)
               return { output: { agent: plan }, content: "Already in Plan mode. Call exit_plan_mode with the plan." }
-            previous.set(context.sessionID, Agent.ID.make(context.agent))
             yield* sessions.switchAgent({ sessionID: context.sessionID, agent: plan })
             return {
               output: { agent: plan },
@@ -101,13 +98,18 @@ export const Plugin = {
                     ? "The user wants to keep planning. Ask what to change, or refine the plan."
                     : `The user did not approve the plan yet. Their feedback: ${answer}`,
               }
-            const file = path.join(directory, `${context.sessionID}.md`)
+            const file = path.join(PlanMode.directory(global.home), `${context.sessionID}.md`)
             yield* fs.writeWithDirs(file, input.plan)
+            // The agent the session planned from is in its durable history, so a restart does not lose it. When the
+            // history names none (the session started in Plan mode, or had no agent selected), return to the agent the
+            // runner picks for a session without one: the configured default.
+            const previous = yield* PlanMode.previousAgent(sessions, context.sessionID)
+            const target = previous ?? (yield* agents.select()).id
+            // Approving a plan has to leave Plan mode, which a configured default of Plan mode itself would not do.
             yield* sessions.switchAgent({
               sessionID: context.sessionID,
-              agent: previous.get(context.sessionID) ?? fallback,
+              agent: target === plan ? Agent.defaultID : target,
             })
-            previous.delete(context.sessionID)
             return {
               output: { approved: true },
               content: `The user approved the plan, saved at ${file}. Plan mode has ended; carry out the plan.`,

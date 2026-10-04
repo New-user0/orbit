@@ -3,3 +3,8 @@ packages/core/src/database/migration.gen.ts linguist-generated
 packages/core/src/models-dev/snapshot.txt linguist-generated
 packages/core/src/**/*.txt text eol=lf
 packages/httpapi-codegen/test/generated/*.ts text eol=lf
+# `check:generated` compares generated output byte for byte, so a checkout must not rewrite its line endings.
+packages/protocol/openapi.json text eol=lf
+packages/client/src/promise/generated/** text eol=lf
+packages/client/src/effect/generated/** text eol=lf
+packages/client/src/effect/api/** text eol=lf

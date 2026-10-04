@@ -8,15 +8,9 @@ import { Global } from "@orbit/util/global"
 import { Effect, Stream } from "effect"
 import path from "path"
 import { Permission } from "../permission.js"
+import { PlanMode } from "../plan-mode.js"
 
-export const plan = Agent.ID.make("plan")
-
-/**
- * The subagent types a Plan-mode session may spawn: the ones that cannot change files. `plan` is listed for when its
- * mode lets it run as a subagent; it is a primary agent by default. `SubagentTool` admission enforces this by the
- * caller's identity, not by a permission rule, because a rule such as `* * allow` appended by config would win.
- */
-export const readOnlyAgents: ReadonlySet<Agent.ID> = new Set([Agent.ID.make("explore"), plan])
+const plan = PlanMode.agent
 
 const enter = (directory: string) => `<system-reminder>
 You are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in:
@@ -35,7 +29,7 @@ export const Plugin = define({
   id: "orbit.plan",
   effect: Effect.fn(function* (ctx) {
     const global = yield* Global.Service
-    const directory = path.join(global.home, ".orbit", "plan")
+    const directory = PlanMode.directory(global.home)
     const enterReminder = enter(directory)
     yield* ctx.agent.transform((editor) => {
       editor.update(plan, (item) => {

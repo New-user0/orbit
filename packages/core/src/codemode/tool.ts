@@ -10,7 +10,8 @@ import type {
   Namespace as ToolNamespace,
   Result,
 } from "@orbit/schema/tool"
-import { Effect, Ref, Schema, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Ref, Schema, Semaphore } from "effect"
+import { Permission } from "../permission.js"
 import { definition, normalizedName } from "../tool/runtime.js"
 import { CodeModeCatalog } from "./catalog.js"
 import { CodeModeWeb } from "./web.js"
@@ -82,17 +83,36 @@ export const create = (
         const callIndex = yield* Ref.make(0)
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
+        // A user's plain decline ends the step, as it does for a direct tool, so the program never gets to handle it.
+        // The first one is kept here and stops the whole execution at once: an interrupted call never runs its
+        // handlers, so a program that only finishes through them would wait forever, and a sibling call it still
+        // awaits would run to completion first. A host call that starts before the stop lands is interrupted before
+        // it runs, and the execution then dies with the decline for the step runner to recover. Feedback
+        // (CorrectedError) and policy blocks stay ordinary tool failures the program sees.
+        const declined = yield* Deferred.make<Permission.DeclinedError>()
+        const halted = Effect.flatMap(Deferred.isDone(declined), (done) => (done ? Effect.interrupt : Effect.void))
         const lock = Semaphore.makeUnsafe(1)
         const record = (update: (items: Array<ExecuteCall>) => Array<ExecuteCall>) =>
           lock.withPermit(
             Ref.updateAndGet(calls, update).pipe(Effect.tap((toolCalls) => context.progress({ toolCalls }))),
           )
-        const result = yield* runtime(
+        const progress = progressHooks(record)
+        const codeMode = runtime(
           inventory,
           (name, tool, input) =>
             Effect.gen(function* () {
               const index = yield* Ref.getAndUpdate(callIndex, (index) => index + 1)
-              const executed = yield* executeTool(name, tool, input, context)
+              const executed = yield* executeTool(name, tool, input, context).pipe(
+                Effect.catchCause((cause) => {
+                  const decline = cause.reasons.flatMap((reason) =>
+                    Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError
+                      ? [reason.defect]
+                      : [],
+                  )[0]
+                  if (decline === undefined) return Effect.failCause(cause)
+                  return Deferred.succeed(declined, decline).pipe(Effect.andThen(Effect.interrupt))
+                }),
+              )
               const content =
                 typeof executed.content === "string"
                   ? [{ type: "text" as const, text: executed.content }]
@@ -104,8 +124,19 @@ export const create = (
               const text = content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
               return text === "" ? null : text
             }),
-          progressHooks(record),
-        ).execute(code)
+          {
+            ...progress,
+            "tool.before": (call) => Effect.andThen(halted, progress["tool.before"](call)),
+            "extension.before": (call) => Effect.andThen(halted, progress["extension.before"](call)),
+          },
+        )
+        // The program settles however it likes, but a decline stops it and has the last word, even over a program
+        // that finished first.
+        const settled = yield* Effect.exit(
+          Effect.raceFirst(codeMode.execute(code), Effect.andThen(Deferred.await(declined), Effect.interrupt)),
+        )
+        if (yield* Deferred.isDone(declined)) return yield* Effect.flatMap(Deferred.await(declined), Effect.die)
+        const result = yield* settled
         const toolCalls = yield* Ref.get(calls)
         const collected = (yield* Ref.get(files))
           .toSorted((left, right) => left.index - right.index)

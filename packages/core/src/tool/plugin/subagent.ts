@@ -9,7 +9,7 @@ import { Config } from "../../config.js"
 import { Job } from "../../job.js"
 import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
-import { PlanPlugin } from "../../plugin/plan.js"
+import { PlanMode } from "../../plan-mode.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentCompletion } from "../../session/subagent-completion.js"
@@ -122,12 +122,12 @@ export const spawner = Effect.fn("SubagentTool.spawner")(function* () {
       return yield* new ToolFailure({
         message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
       })
-    // A read-only session may only spawn read-only children. The caller's identity decides this, not a permission
+    // A Plan-mode session may only spawn what Plan mode allows. The caller's identity decides this, not a permission
     // rule: rules are last-match, so a `* * allow` that config appends after the Plan agent's rules would reopen it.
     // Checking before resolution refuses every other agent, including unknown and primary ones.
-    if (context.agent === PlanPlugin.plan && !PlanPlugin.readOnlyAgents.has(Agent.ID.make(agentID))) {
+    if (context.agent === PlanMode.agent && !PlanMode.allowedSubagents.has(agentID)) {
       // Name only agents that can run: `plan` is a primary agent unless config changes its mode.
-      const allowed = (yield* Effect.forEach(PlanPlugin.readOnlyAgents, (id) => agents.resolve(id))).flatMap((item) =>
+      const allowed = (yield* Effect.forEach(PlanMode.allowedSubagents, (id) => agents.resolve(id))).flatMap((item) =>
         item === undefined || item.mode === "primary" ? [] : [item.id],
       )
       const reason = [
