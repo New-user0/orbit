@@ -18,8 +18,9 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   `~/.orbit` is part of your own config: it overrides the shared files beside it but ranks below every project file.
   `ORBIT_CONFIG` used to rank below project files and now outranks them, so a host that sets a key in both places must
   drop it from `ORBIT_CONFIG` for the project file to apply.
-- **Other tools' files:** by default Orbit also reads the skills, output styles, hook settings and instruction files that
-  other agent products keep, such as `.agents/skills`. One switch turns all of it off:
+- **Other tools' files:** by default Orbit also reads the skills, output styles, hook settings, MCP servers
+  (`.mcp.json`) and instruction files that other agent products keep, such as `.agents/skills`. One switch turns all of
+  it off:
   `"compatibility": { "enabled": false }` in your own config or in `ORBIT_CONFIG` or `ORBIT_CONFIG_CONTENT`, or
   `ORBIT_DISABLE_COMPAT=1` (or `true`) in the environment the Orbit server starts in. A project's own `orbit.json` and
   `orbit.local.json` cannot change it, so a repository cannot switch it back on after you turned it off. With it off,
@@ -50,7 +51,7 @@ back with conflict detection, with retries, fallback models and `orb flow resume
 |---|---|
 | `packages/cli` | The `orb` command, terminal UI entry point and background service |
 | `packages/core` | Agent loop, tools, permissions, providers, plugins |
-| `packages/compat` | The one place that names other agent products' files, with the compatibility switch and root discovery |
+| `packages/compat` | The one place that names other agent products' files, with the compatibility switch, root discovery, the readers for their hook settings and MCP file, and their tool names |
 | `packages/server` | Local HTTP API used by the TUI and editor integrations |
 | `packages/tui` | Terminal UI |
 | `packages/ai` | LLM protocol and provider layer |

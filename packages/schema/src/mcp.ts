@@ -70,6 +70,15 @@ export class RemoteConfig extends Schema.Class<RemoteConfig>("Mcp.RemoteConfig")
 export const ServerConfig = Schema.Union([LocalConfig, RemoteConfig]).pipe(Schema.toTaggedUnion("type"))
 export type ServerConfig = typeof ServerConfig.Type
 
+// Tool names and permission actions carry only these characters, so every part of an MCP tool's name is cleaned alike.
+const unsafe = /[^a-zA-Z0-9_-]/g
+
+/** The registry namespace of an MCP server's tools: its name, with every other character replaced by `_`. */
+export const namespace = (server: string) => server.replace(unsafe, "_")
+
+/** The registry and permission action name of an MCP server's tool, `<server>_<tool>`, each part cleaned alike. */
+export const name = (server: string, tool: string) => `${namespace(server)}_${tool.replace(unsafe, "_")}`
+
 const Connected = Schema.Struct({ status: Schema.Literal("connected") }).annotate({
   identifier: "Mcp.Status.Connected",
 })

@@ -983,7 +983,21 @@ describe("Config", () => {
               {
                 type: "entries",
                 path: tmp.path,
-                names: watchedNames(".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"),
+                names: watchedNames(
+                  CompatNames.mcp,
+                  ".orbit",
+                  "orbit.json",
+                  "orbit.jsonc",
+                  "orbit.local.json",
+                  "orbit.local.jsonc",
+                ),
+              },
+              // The vendor root exists, so its settings files are watched for their own edits, and the .agents root,
+              // which has none, is only watched through its parent.
+              {
+                type: "entries",
+                path: path.join(tmp.path, CompatNames.vendor.directory),
+                names: [CompatNames.vendor.settings.shared, CompatNames.vendor.settings.local].toSorted(),
               },
             ])
           }).pipe(Effect.provide(testLayer(tmp.path, undefined, undefined, undefined, Watcher.testLayer)))
@@ -1549,7 +1563,14 @@ describe("Config", () => {
             expect(yield* watcher.subscriptions()).toContainEqual({
               path: tmp.path,
               type: "entries",
-              names: watchedNames(".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"),
+              names: watchedNames(
+                CompatNames.mcp,
+                ".orbit",
+                "orbit.json",
+                "orbit.jsonc",
+                "orbit.local.json",
+                "orbit.local.jsonc",
+              ),
             })
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -2308,6 +2329,307 @@ describe("Config compatibility", () => {
         expect(back.enabled).toBe(true)
         expect(back.roots.filter((item) => inFixture(fixture.root, item.path))).toHaveLength(4)
       }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project)))
+    }),
+  )
+})
+
+describe("Config compatibility documents", () => {
+  const vendor = CompatNames.vendor.directory
+  const shared = CompatNames.vendor.settings.shared
+  const local = CompatNames.vendor.settings.local
+  const hook = (command: string) => ({ PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command }] }] })
+
+  // One label per document inside the fixture: its scope, its file relative to the fixture, and for a vendor settings
+  // file the command of its hook, or for an MCP file the servers it declares.
+  const described = (root: string, entries: readonly Entry[]) =>
+    entries.flatMap((entry) => {
+      if (entry.type !== "document" || entry.path === undefined || !inFixture(root, entry.path)) return []
+      const file = path.relative(root, entry.path).split(path.sep).join("/")
+      const hooks = (entry.info.hooks?.PreToolUse ?? []).flatMap((group) =>
+        group.hooks.flatMap((item) => (item.type === "command" ? [item.command] : [])),
+      )
+      const servers = Object.keys(entry.info.mcp?.servers ?? {})
+      return [[`${entry.scope}:${file}`, ...hooks, ...servers].join(" ")]
+    })
+
+  // A home with its own native config and settings files, and a repository with every kind of file one project keeps,
+  // with the location in a directory of it: the project's directory is the repository's, as when it is a checkout.
+  const repository = Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    const home = path.join(tmp.path, "home")
+    const global = path.join(home, ".config", "orbit")
+    const repo = path.join(home, "work", "repo")
+    const app = path.join(repo, "app")
+    yield* write({
+      [path.join(global, "orbit.json")]: marker("global"),
+      [path.join(home, vendor, shared)]: { hooks: hook("user-shared") },
+      [path.join(home, vendor, local)]: { hooks: hook("user-local") },
+      [path.join(repo, vendor, shared)]: { hooks: hook("repo-shared") },
+      [path.join(repo, vendor, local)]: { hooks: hook("repo-local") },
+      [path.join(app, vendor, shared)]: { hooks: hook("app-shared") },
+      [path.join(repo, CompatNames.mcp)]: { mcpServers: { files: { command: "serve" } } },
+      [path.join(repo, "orbit.json")]: marker("repo"),
+      [path.join(repo, "orbit.local.json")]: marker("repo-local"),
+    })
+    return { root: tmp.path, home, global, repo, app }
+  })
+  const layerFor = (fixture: Effect.Success<typeof repository>, options?: Config.Options) =>
+    testLayer(
+      fixture.app,
+      fixture.global,
+      fixture.repo,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options,
+      fixture.home,
+    )
+
+  it.live("ranks them below the native documents of their own scope, in the block they belong to", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(layerFor(fixture)))
+
+      // The user's settings open the user block, the project's open the project block with the MCP file after them,
+      // and the local settings file opens the local block, so each native document of a scope outranks them.
+      expect(described(fixture.root, entries)).toEqual([
+        `user:home/${vendor}/${shared} user-shared`,
+        `user:home/${vendor}/${local} user-local`,
+        "user:home/.config/orbit/orbit.json",
+        `project:home/work/repo/${vendor}/${shared} repo-shared`,
+        `project:home/work/repo/app/${vendor}/${shared} app-shared`,
+        `project:home/work/repo/${CompatNames.mcp} files`,
+        "project:home/work/repo/orbit.json",
+        `local:home/work/repo/${vendor}/${local} repo-local`,
+        "local:home/work/repo/orbit.local.json",
+      ])
+    }),
+  )
+
+  it.live("loads none of them once compatibility is off, and watches none of them", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+      yield* write({
+        [path.join(fixture.global, "orbit.json")]: { ...marker("global"), compatibility: { enabled: false } },
+      })
+
+      const loaded = yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const watcher = yield* Watcher.Test
+        return { entries: yield* config.entries(), watches: yield* watcher.subscriptions() }
+      }).pipe(Effect.provide(layerFor(fixture)))
+
+      expect(described(fixture.root, loaded.entries)).toEqual([
+        "user:home/.config/orbit/orbit.json",
+        "project:home/work/repo/orbit.json",
+        "local:home/work/repo/orbit.local.json",
+      ])
+      const watched = loaded.watches.flatMap((watch) => (watch.type === "entries" ? watch.names : []))
+      for (const name of [CompatNames.mcp, vendor, shared, local]) expect(watched).not.toContain(name)
+    }),
+  )
+
+  it.live("follows ORBIT_DISABLE_COMPAT, and loads them again once it is unset", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+      const load = (variable: string | undefined) =>
+        withEnv({ ORBIT_DISABLE_COMPAT: variable }, () =>
+          Config.Service.use((config) => config.entries()).pipe(Effect.provide(layerFor(fixture))),
+        ).pipe(Effect.map((entries) => described(fixture.root, entries).length))
+
+      expect(yield* load("1")).toBe(3)
+      expect(yield* load(undefined)).toBe(9)
+    }),
+  )
+
+  it.live("leaves the project's MCP file and the project's settings out when project discovery is off", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(layerFor(fixture, { project: false })),
+      )
+
+      // What is the user's own stays: their settings and their native config.
+      expect(described(fixture.root, entries)).toEqual([
+        `user:home/${vendor}/${shared} user-shared`,
+        `user:home/${vendor}/${local} user-local`,
+        "user:home/.config/orbit/orbit.json",
+      ])
+    }),
+  )
+
+  it.live("leaves the user's settings out when global config is off, and keeps the project's", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(layerFor(fixture, { global: false })),
+      )
+
+      expect(described(fixture.root, entries)).toEqual([
+        `project:home/work/repo/${vendor}/${shared} repo-shared`,
+        `project:home/work/repo/app/${vendor}/${shared} app-shared`,
+        `project:home/work/repo/${CompatNames.mcp} files`,
+        "project:home/work/repo/orbit.json",
+        `local:home/work/repo/${vendor}/${local} repo-local`,
+        "local:home/work/repo/orbit.local.json",
+      ])
+    }),
+  )
+
+  it.live("expands variable references in the MCP file from the environment of the process", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+      yield* write({
+        [path.join(fixture.repo, CompatNames.mcp)]: {
+          mcpServers: {
+            docs: {
+              type: "http",
+              url: "https://${ORBIT_TEST_MCP_HOST}/mcp",
+              headers: { "X-Mode": "${ORBIT_TEST_MODE:-dev}" },
+            },
+            gap: { command: "serve", args: ["${ORBIT_TEST_MCP_MISSING}"] },
+          },
+        },
+      })
+
+      const entries = yield* withEnv({ ORBIT_TEST_MCP_HOST: "mcp.example.com", ORBIT_TEST_MODE: undefined }, () =>
+        Config.Service.use((config) => config.entries()).pipe(Effect.provide(layerFor(fixture))),
+      )
+
+      const servers = Config.latest(entries, "mcp")?.servers
+      expect(Object.keys(servers ?? {})).toEqual(["docs"])
+      expect(servers?.docs).toMatchObject({
+        type: "remote",
+        url: "https://mcp.example.com/mcp",
+        headers: { "X-Mode": "dev" },
+      })
+    }),
+  )
+
+  it.live("reports what cannot be used in a file at its path, in the shape of a native document's own problems", () => {
+    const output: Array<Record<string, unknown>> = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "configuration normalization diagnostic") return
+      const details = entry.message[1]
+      if (typeof details === "object" && details !== null) output.push(details as Record<string, unknown>)
+    })
+    return Effect.gen(function* () {
+      const fixture = yield* repository
+      yield* write({
+        [path.join(fixture.repo, vendor, shared)]: {
+          hooks: { ...hook("guard"), SubagentStop: [{ hooks: [{ type: "prompt", prompt: "Done?", model: "fast" }] }] },
+        },
+        [path.join(fixture.repo, vendor, local)]: { hooks: "off" },
+        [path.join(fixture.repo, CompatNames.mcp)]: {
+          mcpServers: { files: { command: "serve" }, broken: { args: [] } },
+        },
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(layerFor(fixture)))
+
+      // A hook that cannot be read costs only itself, and a server that cannot be mapped costs only itself.
+      expect(described(fixture.root, entries)).toContain(`project:home/work/repo/${vendor}/${shared} guard`)
+      expect(described(fixture.root, entries)).toContain(`project:home/work/repo/${CompatNames.mcp} files`)
+      const reported: Array<Record<string, unknown>> = output
+        .filter((details) => typeof details.source === "string" && inFixture(fixture.repo, details.source))
+        .map((details) => ({ ...details, source: path.relative(fixture.repo, String(details.source)) }))
+      expect(reported).toEqual([
+        {
+          source: path.join(vendor, shared),
+          path: "$.hooks.SubagentStop.0.hooks.0",
+          kind: "invalid",
+          action: "skipped malformed recognized value",
+        },
+        {
+          source: path.join(vendor, local),
+          path: "$.hooks",
+          kind: "invalid",
+          action: "skipped malformed recognized value",
+        },
+        {
+          source: CompatNames.mcp,
+          path: "$.mcpServers.broken",
+          kind: "invalid",
+          action: "skipped server without a command",
+        },
+      ])
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  it.live("reloads when a settings file is edited, and when the MCP file appears", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+      const settings = path.join(fixture.repo, vendor, shared)
+      yield* Effect.promise(() => fs.rm(path.join(fixture.repo, CompatNames.mcp)))
+
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const bus = yield* Bus.Service
+        const watcher = yield* Watcher.Test
+        const changes = Effect.fnUntraced(function* (update: Effect.Effect<void>) {
+          const changed = yield* bus.subscribe(Event.Updated).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+          yield* Effect.sleep("10 millis")
+          yield* update
+          expect(yield* Fiber.join(changed)).toHaveLength(1)
+          return described(fixture.root, yield* config.entries())
+        })
+        const mcp = path.join(fixture.repo, CompatNames.mcp)
+
+        expect(
+          yield* changes(
+            write({ [settings]: { hooks: hook("repo-edited") } }).pipe(
+              Effect.andThen(watcher.emit({ type: "update", path: settings })),
+            ),
+          ),
+        ).toContain(`project:home/work/repo/${vendor}/${shared} repo-edited`)
+        expect(
+          yield* changes(
+            write({ [mcp]: { mcpServers: { files: { command: "serve" } } } }).pipe(
+              Effect.andThen(watcher.emit({ type: "create", path: mcp })),
+            ),
+          ),
+        ).toContain(`project:home/work/repo/${CompatNames.mcp} files`)
+        // Both files are watched by name, in the directory that holds each.
+        expect(yield* watcher.subscriptions()).toContainEqual({
+          type: "entries",
+          path: path.join(fixture.repo, vendor),
+          names: [shared, local].toSorted(),
+        })
+      }).pipe(Effect.provide(layerFor(fixture)))
+    }),
+  )
+
+  it.live("starts watching the settings files of a root that appears after the config loaded", () =>
+    Effect.gen(function* () {
+      const fixture = yield* repository
+      const lateRoot = path.join(fixture.app, vendor)
+      yield* Effect.promise(() => fs.rm(lateRoot, { recursive: true, force: true }))
+
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const bus = yield* Bus.Service
+        const watcher = yield* Watcher.Test
+        const watchesRoot = Effect.map(watcher.subscriptions(), (watches) =>
+          watches.some((watch) => watch.type === "entries" && watch.path === lateRoot),
+        )
+
+        // A root that is missing has nothing to watch for its files, and its parent watch will see it appear.
+        expect(yield* watchesRoot).toBe(false)
+        const changed = yield* bus.subscribe(Event.Updated).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+        yield* Effect.sleep("10 millis")
+        yield* write({ [path.join(lateRoot, shared)]: { hooks: hook("app-late") } })
+        yield* watcher.emit({ type: "create", path: lateRoot })
+        expect(yield* Fiber.join(changed)).toHaveLength(1)
+
+        expect(described(fixture.root, yield* config.entries())).toContain(
+          `project:home/work/repo/app/${vendor}/${shared} app-late`,
+        )
+        expect(yield* watchesRoot).toBe(true)
+      }).pipe(Effect.provide(layerFor(fixture)))
     }),
   )
 })

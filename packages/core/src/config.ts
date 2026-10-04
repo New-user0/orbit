@@ -5,7 +5,9 @@ import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
 import { Context, Effect, FiberMap, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
+import { CompatMcpJson } from "@orbit/compat/mcp-json"
 import type { CompatRoots } from "@orbit/compat/roots"
+import { CompatSettings } from "@orbit/compat/settings"
 import { CompatSwitch } from "@orbit/compat/switch"
 import { Directory, Document, Info, type Patch, type Entry, type Scope, Event } from "@orbit/schema/config"
 import { Credential } from "./credential.js"
@@ -40,7 +42,8 @@ export interface Interface {
   /**
    * Returns location config documents and discovery sources from lowest to highest priority. Entries are grouped by
    * scope in the order remote, user, project, local, flag, then managed, and each entry carries its scope. Within a
-   * scope, outer sources come before inner ones.
+   * scope, outer sources come before inner ones. While compatibility is on, the documents that other products' files
+   * make, such as hook settings and an MCP file, open the scope they belong to, so Orbit's own documents outrank them.
    */
   readonly entries: () => Effect.Effect<Entry[]>
   /**
@@ -236,6 +239,33 @@ export const layer = (options?: Options) =>
         }
       })
 
+      // Reads only the loaded documents and the environment, never the disk, so asking it is cheap.
+      const compatOn = (entries: readonly Entry[]) => CompatSwitch.enabled(entries, process.env)
+
+      // The documents that other products' files make, by the scope they rank in. A file that cannot be used is
+      // reported in the shape of a native document's own problems, and costs nothing else.
+      const loadCompat = Effect.fn("Config.loadCompat")(function* (sources: ConfigDiscovery.Sources) {
+        const settings = yield* CompatSettings.read(sources.compat)
+        const mcp = sources.compatMcp
+          ? yield* CompatMcpJson.read({ file: sources.compatMcp, env: process.env })
+          : { documents: [], diagnostics: [] }
+        yield* Effect.forEach(
+          [...settings.diagnostics, ...mcp.diagnostics],
+          (diagnostic) =>
+            Effect.logWarning("configuration normalization diagnostic", {
+              source: diagnostic.source,
+              path: diagnostic.path[0] === "$" ? "$" : `$.${diagnostic.path.join(".")}`,
+              kind: diagnostic.kind,
+              action: diagnostic.message,
+            }),
+          { discard: true },
+        )
+        // The settings files come first, from the outermost root in, and then the project's MCP file.
+        const documents = [...settings.documents, ...mcp.documents]
+        const inScope = (scope: Scope) => documents.filter((document) => document.scope === scope)
+        return { user: inScope("user"), project: inScope("project"), local: inScope("local") }
+      })
+
       const load = Effect.fn("Config.load")(function* (sources: ConfigDiscovery.Sources) {
         const globalEntries = sources.global
           ? yield* loadDirectory(sources.global, userScopes).pipe(Effect.orDie)
@@ -262,13 +292,34 @@ export const layer = (options?: Options) =>
               )
             : []
 
+        const remote = yield* loadWellknown().pipe(Effect.orDie)
+        const user = [globalEntries, homeEntries].flatMap((entries) =>
+          entries ? [...entries.base, ...entries.local] : [],
+        )
+        // Other products' files load only while compatibility is on, and only the native documents decide that, so
+        // the switch is read before any of them is.
+        const compat = compatOn([
+          ...remote,
+          ...user,
+          ...projectEntries.base,
+          ...projectEntries.local,
+          ...explicit,
+          ...content,
+        ])
+          ? yield* loadCompat(sources)
+          : { user: [], project: [], local: [] }
+
         // Scopes rank remote < user < project < local < flag; the managed scope is reserved to load after all of
         // them. Within a scope, outer sources come first, base documents before their local counterparts, and
-        // ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file.
+        // ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The documents of other products' files open their scope,
+        // so a native document of the same scope outranks them.
         return [
-          ...(yield* loadWellknown().pipe(Effect.orDie)),
-          ...[globalEntries, homeEntries].flatMap((user) => (user ? [...user.base, ...user.local] : [])),
+          ...remote,
+          ...compat.user,
+          ...user,
+          ...compat.project,
           ...projectEntries.base,
+          ...compat.local,
           ...projectEntries.local,
           ...explicit,
           ...content,
@@ -283,11 +334,9 @@ export const layer = (options?: Options) =>
       // Readiness rescans recover writes made before a watch attached.
       const requestReload = PubSub.publish(reloads, undefined).pipe(Effect.asVoid)
       const watched = yield* FiberMap.make<string>()
-      // Reads only the loaded documents and the environment, never the disk, so asking it is cheap.
-      const compatOn = (entries: readonly Entry[]) => CompatSwitch.enabled(entries, process.env)
-      // Compatibility roots count only while the switch is on: switched off, they are neither watched nor reported.
+      // Compatibility sources count only while the switch is on: switched off, they are neither watched nor reported.
       const applicable = (discovered: ConfigDiscovery.Sources, entries: readonly Entry[]) =>
-        compatOn(entries) ? discovered : { ...discovered, compat: [] }
+        compatOn(entries) ? discovered : { ...discovered, compat: [], compatSettings: [], compatMcp: undefined }
       const reconcile = Effect.fn("Config.reconcileWatches")(function* (
         sources: ConfigDiscovery.Sources,
         entries: readonly Entry[],
