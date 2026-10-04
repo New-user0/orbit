@@ -9,6 +9,7 @@ import { Location } from "@orbit/core/location"
 import { Permission } from "@orbit/core/permission"
 import { PermissionTable } from "@orbit/core/permission/sql"
 import { PermissionSaved } from "@orbit/core/permission/saved"
+import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
 import { ProjectTable } from "@orbit/core/project/sql"
 import { AbsolutePath } from "@orbit/core/schema"
@@ -26,7 +27,15 @@ const current = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, Bus.node, SessionStore.node, PermissionSaved.node, Agent.node, Permission.node]),
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionStore.node,
+      PermissionSaved.node,
+      Agent.node,
+      PluginHooks.node,
+      Permission.node,
+    ]),
     [Location.node.replace(current)],
   ),
 )
@@ -383,6 +392,208 @@ describe("Permission", () => {
       }),
     )
   }
+})
+
+describe("Permission resource aliases", () => {
+  // A webfetch request: the host is the resource and the normalized URL is an alias that rules may also be written
+  // against. An "always" reply saves the host only.
+  const webfetch = (input: Partial<Permission.AssertInput> = {}) =>
+    assertion({
+      action: "webfetch",
+      resources: ["docs.example.com"],
+      aliases: ["https://docs.example.com/a"],
+      save: ["docs.example.com"],
+      ...input,
+    })
+  const pastebin = (input: Partial<Permission.AssertInput> = {}) =>
+    webfetch({
+      resources: ["pastebin.com"],
+      aliases: ["https://pastebin.com/raw/abc"],
+      save: ["pastebin.com"],
+      ...input,
+    })
+  const denyPastebinUrls: Permission.Ruleset = [
+    { action: "webfetch", resource: "https://pastebin.com/*", effect: "deny" },
+  ]
+
+  const setSessionRules = (permission: Permission.Ruleset) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ permission })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+  test("picks the last rule matching the resource or any alias", () => {
+    const denyAll: Permission.Rule = { action: "webfetch", resource: "*", effect: "deny" }
+    const allowHost: Permission.Rule = { action: "webfetch", resource: "docs.example.com", effect: "allow" }
+    const denyPrivate: Permission.Rule = {
+      action: "webfetch",
+      resource: "https://docs.example.com/private/*",
+      effect: "deny",
+    }
+    const docs = (rules: Permission.Ruleset, path: string) =>
+      Permission.evaluate("webfetch", "docs.example.com", rules, [`https://docs.example.com/${path}`]).effect
+
+    expect(docs([denyAll, allowHost], "a")).toBe("allow")
+    // A deny that matches an alias outranks an earlier host allow, but only for the URLs it matches.
+    expect(docs([denyAll, allowHost, denyPrivate], "private/key")).toBe("deny")
+    expect(docs([denyAll, allowHost, denyPrivate], "a")).toBe("allow")
+    // Rule order still decides: an allow before a catch-all deny loses.
+    expect(docs([allowHost, denyAll], "a")).toBe("deny")
+    // Without aliases only the resource is matched.
+    expect(Permission.evaluate("webfetch", "docs.example.com", [allowHost, denyPrivate]).effect).toBe("allow")
+    expect(
+      Permission.evaluate("webfetch", "other.example.com", [denyAll, allowHost], ["https://other.example.com/"]).effect,
+    ).toBe("deny")
+  })
+
+  it.effect("lets a host allow cover every URL on that host", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "webfetch", resource: "docs.example.com", effect: "allow" }])
+      const service = yield* Permission.Service
+
+      expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
+      expect(yield* service.ask(webfetch({ aliases: ["https://docs.example.com/b?page=2"] }))).toMatchObject({
+        effect: "allow",
+      })
+      expect(
+        yield* service.ask(webfetch({ resources: ["other.example.com"], aliases: ["https://other.example.com/a"] })),
+      ).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("blocks a session URL deny even though the resource is the host", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+      yield* setSessionRules(denyPastebinUrls)
+      const service = yield* Permission.Service
+
+      // Matched against the host alone, nothing in the deny applies.
+      expect(yield* service.ask(assertion({ action: "webfetch", resources: ["pastebin.com"] }))).toMatchObject({
+        effect: "allow",
+      })
+      expect(yield* service.ask(pastebin())).toMatchObject({ effect: "deny" })
+      expect(yield* service.assert(pastebin()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
+      expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("keeps a path-scoped URL allow to its path", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "webfetch", resource: "https://github.com/org/*", effect: "allow" }])
+      const service = yield* Permission.Service
+      const github = (path: string) =>
+        webfetch({ resources: ["github.com"], aliases: [`https://github.com${path}`], save: ["github.com"] })
+
+      expect(yield* service.ask(github("/org/x"))).toMatchObject({ effect: "allow" })
+      expect(yield* service.ask(github("/other"))).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("lets a host allow lift an earlier deny of everything", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "*", resource: "*", effect: "deny" },
+        { action: "webfetch", resource: "docs.example.com", effect: "allow" },
+      ])
+      const service = yield* Permission.Service
+
+      expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
+      yield* service.assert(webfetch())
+      expect(
+        yield* service.ask(webfetch({ resources: ["other.example.com"], aliases: ["https://other.example.com/a"] })),
+      ).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  it.effect("saves only the host for an always reply and keeps aliases off the request", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const { service, fiber, request } = yield* waitForRequest(webfetch())
+
+      expect(request).toMatchObject({ resources: ["docs.example.com"], save: ["docs.example.com"] })
+      expect(request).not.toHaveProperty("aliases")
+      expect(yield* service.list()).toEqual([request])
+      yield* service.reply({ requestID: request.id, reply: "always" })
+      yield* Fiber.join(fiber)
+
+      const saved = yield* PermissionSaved.Service
+      const rules = yield* saved.list({ projectID: Project.ID.global })
+      expect(rules).toHaveLength(1)
+      expect(rules[0]).toMatchObject({ action: "webfetch", resource: "docs.example.com" })
+      expect(
+        yield* service.ask(webfetch({ id: Permission.ID.create("per_next"), aliases: ["https://docs.example.com/b"] })),
+      ).toMatchObject({ effect: "allow" })
+      expect(yield* service.ask(pastebin())).toMatchObject({ effect: "ask" })
+    }),
+  )
+
+  it.effect("re-evaluates pending requests with their aliases after another always reply", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const selected = yield* waitForRequest(webfetch({ save: ["*"] }))
+      const sibling = yield* waitForRequest(
+        webfetch({
+          id: Permission.ID.create("per_sibling"),
+          resources: ["example.org"],
+          aliases: ["https://example.org/"],
+          save: ["example.org"],
+        }),
+      )
+      const blocked = yield* waitForRequest(pastebin({ id: Permission.ID.create("per_pastebin") }))
+      // The URL deny arrives after the requests were queued, as when a session rule changes mid-turn.
+      yield* setRules(denyPastebinUrls)
+
+      yield* selected.service.reply({ requestID: selected.request.id, reply: "always" })
+      yield* Fiber.join(selected.fiber)
+      yield* Fiber.join(sibling.fiber)
+      expect(yield* selected.service.list()).toEqual([blocked.request])
+      expect(blocked.fiber.pollUnsafe()).toBeUndefined()
+      yield* Fiber.interrupt(blocked.fiber)
+      expect(yield* selected.service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("keeps the aliases of a request queued by ask", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* Permission.Service
+      expect(yield* service.ask(pastebin({ id: Permission.ID.create("per_pastebin") }))).toMatchObject({
+        effect: "ask",
+      })
+      const selected = yield* waitForRequest(webfetch({ save: ["*"] }))
+      yield* setRules(denyPastebinUrls)
+
+      yield* service.reply({ requestID: selected.request.id, reply: "always" })
+      yield* Fiber.join(selected.fiber)
+      expect((yield* service.list()).map((request) => request.id)).toEqual([Permission.ID.create("per_pastebin")])
+    }),
+  )
+
+  it.effect("hands aliases to evaluate hooks", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+      const hooks = yield* PluginHooks.Service
+      const seen: Array<ReadonlyArray<string> | undefined> = []
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => {
+          seen.push(event.aliases)
+          if (event.aliases?.some((alias) => alias.startsWith("https://pastebin.com/"))) event.effect = "deny"
+        }),
+      )
+      const service = yield* Permission.Service
+
+      expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
+      expect(yield* service.ask(pastebin())).toMatchObject({ effect: "deny" })
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+      expect(seen).toEqual([["https://docs.example.com/a"], ["https://pastebin.com/raw/abc"], undefined])
+    }),
+  )
 })
 
 describe("shell scanner permission impact", () => {

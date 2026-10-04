@@ -42,6 +42,9 @@ export type Reply = typeof Reply.Type
 export const AssertInput = Schema.Struct({
   id: ID.pipe(Schema.optional),
   ...RequestFields,
+  // Other spellings of `resources` that rules may be written against. They steer evaluation only: they stay off the
+  // public Request and never widen what an "always" reply saves.
+  aliases: Schema.Array(Schema.String).pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -84,15 +87,20 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Permissi
 
 export type Error = BlockedError | CorrectedError
 
-export function evaluate(action: string, resource: string, ...rulesets: Permission.Ruleset[]): Permission.Rule {
+// The resource and its aliases form one combined subject: the last rule matching any of them decides, so a later
+// allow written against one spelling still lifts an earlier broad deny, exactly as it does without aliases.
+export function evaluate(
+  action: string,
+  resource: string,
+  rules: Permission.Ruleset,
+  aliases: ReadonlyArray<string> = [],
+): Permission.Rule {
+  const subjects = [resource, ...aliases]
   return (
-    rulesets
-      .flat()
-      .findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)) ?? {
-      action,
-      resource: "*",
-      effect: "ask",
-    }
+    rules.findLast(
+      (rule) =>
+        Wildcard.match(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
+    ) ?? { action, resource: "*", effect: "ask" }
   )
 }
 
@@ -115,6 +123,8 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Permi
 interface Pending {
   readonly request: Request
   readonly agent?: Agent.ID
+  // Kept here rather than on the public Request so re-evaluating a pending request after an "always" reply sees them.
+  readonly aliases?: ReadonlyArray<string>
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
 }
 
@@ -162,8 +172,10 @@ const layer = Layer.effect(
       return merge(agent?.permissions ?? missingAgentPermissions, session.permissions ?? [])
     })
 
-    function denied(input: Pick<Request, "action" | "resources">, rules: Permission.Ruleset) {
-      return input.resources.some((resource) => evaluate(input.action, resource, rules).effect === "deny")
+    function denied(input: Pick<AssertInput, "action" | "resources" | "aliases">, rules: Permission.Ruleset) {
+      return input.resources.some(
+        (resource) => evaluate(input.action, resource, rules, input.aliases).effect === "deny",
+      )
     }
 
     function relevant(input: AssertInput, rules: Permission.Ruleset) {
@@ -174,13 +186,14 @@ const layer = Layer.effect(
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return { effect: "deny" as const, rules }
       const all = [...rules, ...(yield* savedRules())]
-      const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
+      const effects = input.resources.map((resource) => evaluate(input.action, resource, all, input.aliases).effect)
       const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
         agent: input.agent,
         action: input.action,
         resources: input.resources,
+        aliases: input.aliases,
         metadata: input.metadata,
         source: input.source,
         effect,
@@ -201,11 +214,11 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: Agent.ID) =>
+    const create = (request: Request, agent?: Agent.ID, aliases?: ReadonlyArray<string>) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
-          const item = { request, agent, deferred }
+          const item = { request, agent, aliases, deferred }
           if (closed) {
             yield* Deferred.fail(deferred, new DeclinedError())
             return item
@@ -224,7 +237,7 @@ const layer = Layer.effect(
       if (closed) return { id: input.id ?? ID.create(), effect: "deny" as const }
       const result = yield* evaluateInput(input)
       const value = request(input, result.message)
-      if (result.effect === "ask") yield* create(value, input.agent)
+      if (result.effect === "ask") yield* create(value, input.agent, input.aliases)
       return { id: value.id, effect: result.effect }
     })
 
@@ -243,7 +256,7 @@ const layer = Layer.effect(
               })
             }
             if (result.effect === "allow") return
-            const item = yield* create(request(input, result.message), input.agent)
+            const item = yield* create(request(input, result.message), input.agent, input.aliases)
             return yield* restore(Deferred.await(item.deferred)).pipe(
               // Deliberate defect tunnel: leaves wrap execution in blanket `mapError`, which
               // must not convert a user's decline into model-facing tool output. The decline
@@ -308,7 +321,7 @@ const layer = Layer.effect(
           if (input.reply !== "always" || !existing.request.save?.length) return
 
           for (const [id, item] of pending) {
-            const result = yield* evaluateInput({ ...item.request, agent: item.agent }).pipe(
+            const result = yield* evaluateInput({ ...item.request, agent: item.agent, aliases: item.aliases }).pipe(
               Effect.catchTag("Session.NotFoundError", () => Effect.undefined),
             )
             if (result?.effect !== "allow") continue

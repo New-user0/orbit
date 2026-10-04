@@ -9,6 +9,11 @@ export interface PermissionEvaluation {
   readonly agent?: Agent.ID
   readonly action: string
   readonly resources: ReadonlyArray<string>
+  /**
+   * Other spellings of `resources` that rules may be written against, such as the full URL behind a host resource.
+   * A hook that only inspects `resources` never sees them and decides on the primary spelling alone.
+   */
+  readonly aliases?: ReadonlyArray<string>
   readonly metadata?: Record<string, unknown>
   readonly source?: Permission.Source
   effect: Permission.Effect

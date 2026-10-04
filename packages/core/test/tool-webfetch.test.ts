@@ -436,7 +436,14 @@ describe("WebFetchTool registration", () => {
         metadata: { contentType: "text/plain" },
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text", timeout: 4 } },
+        {
+          sessionID,
+          action: "webfetch",
+          resources: ["example.com"],
+          aliases: [url],
+          save: ["example.com"],
+          metadata: { url, format: "text", timeout: 4 },
+        },
       ])
       expect(requests).toMatchObject([
         {
@@ -463,11 +470,57 @@ describe("WebFetchTool registration", () => {
         content: [{ type: "text", text: "hello" }],
       })
       expect(assertions).toMatchObject([
-        { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+        {
+          sessionID,
+          action: "webfetch",
+          resources: ["localhost"],
+          aliases: [url],
+          save: ["localhost"],
+          metadata: { url, format: "text" },
+        },
       ])
       expect(requests.map((request) => request.url)).toEqual([url])
     }),
   )
+
+  it.effect("asks about the lowercased host, with the normalized URL as an alias", () =>
+    Effect.gen(function* () {
+      reset()
+      const registry = yield* Tool.Service
+      const url = "https://Example.com/a"
+
+      expect(yield* executeTool(registry, call({ url, format: "text" }))).toMatchObject({ status: "completed" })
+      expect(assertions).toHaveLength(1)
+      expect(assertions[0]).toMatchObject({
+        sessionID,
+        action: "webfetch",
+        resources: ["example.com"],
+        aliases: ["https://example.com/a"],
+        save: ["example.com"],
+        // The model and the TUI keep seeing the URL exactly as requested.
+        metadata: { url, format: "text" },
+      })
+      // The request is sent as written.
+      expect(requests.map((request) => request.url)).toEqual([url])
+    }),
+  )
+
+  // The alias is the URL as rules see it: no credentials, no fragment and no default port. The host never has a port.
+  for (const [url, host, alias] of [
+    ["https://user@Example.com:443/a/b?x=1#section", "example.com", "https://example.com/a/b?x=1"],
+    ["http://Localhost:8080/docs#top", "localhost", "http://localhost:8080/docs"],
+    ["https://example.com", "example.com", "https://example.com/"],
+  ] as const) {
+    it.effect(`normalizes ${url} to the host ${host} and the alias ${alias}`, () =>
+      Effect.gen(function* () {
+        reset()
+        yield* executeTool(yield* Tool.Service, call({ url, format: "text" }))
+
+        expect(assertions).toHaveLength(1)
+        expect(assertions[0]).toMatchObject({ resources: [host], aliases: [alias], save: [host], metadata: { url } })
+      }),
+    )
+  }
 
   live.effect("follows redirects while approving only the requested URL", () => {
     const received: Array<Record<string, string | null>> = []
@@ -498,8 +551,16 @@ describe("WebFetchTool registration", () => {
             status: "completed",
             content: [{ type: "text", text: "redirected" }],
           })
+          const host = new URL(url).hostname
           expect(assertions).toMatchObject([
-            { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+            {
+              sessionID,
+              action: "webfetch",
+              resources: [host],
+              aliases: [url],
+              save: [host],
+              metadata: { url, format: "text" },
+            },
           ])
           expect(received).toEqual(
             Array.from({ length: 2 }, () => ({

@@ -44,13 +44,16 @@ export const Plugin = define({
     yield* ctx.permission.hook("evaluate", (event) =>
       Effect.sync(() => {
         const current = policies()
+        // Like Permission.evaluate, a resource and its aliases are one subject:
+        // the last policy matching any of its spellings decides.
         const denied = event.resources
-          .map((resource) =>
-            current.findLast(
+          .map((resource) => {
+            const subjects = [resource, ...(event.aliases ?? [])].map((spelling) => `${event.action}:${spelling}`)
+            return current.findLast(
               (policy) =>
-                policy.action === "permission" && Wildcard.match(`${event.action}:${resource}`, policy.resource),
-            ),
-          )
+                policy.action === "permission" && subjects.some((subject) => Wildcard.match(subject, policy.resource)),
+            )
+          })
           .find((policy) => policy?.effect === "deny")
         if (!denied) return
         event.effect = "deny"
