@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Fiber, Layer, Logger, Schema, Stream } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@orbit/core/config"
-import { Directory, Document, Event, Info } from "@orbit/schema/config"
+import { Directory, Document, Event, Info, type Entry } from "@orbit/schema/config"
 import { ConfigModel } from "@orbit/schema/config/model"
 import { ConfigProvider } from "@orbit/schema/config/provider"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -25,7 +25,7 @@ import { WellKnown } from "@orbit/core/wellknown"
 import { Integration } from "@orbit/schema/integration"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
 import { location } from "../fixture/location"
-import { tmpdir } from "../fixture/tmpdir"
+import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.empty)
@@ -45,6 +45,7 @@ function testLayer(
   credentialNode = emptyCredentialNode,
   wellknownNode = emptyWellknownNode,
   options?: Config.Options,
+  home = path.join(globalDirectory, "home"),
 ) {
   const locationLayer = Layer.succeed(
     Location.Service,
@@ -58,7 +59,7 @@ function testLayer(
   const built = AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
     Config.node.replace(Config.configured(options)),
     Location.node.replace(locationLayer),
-    Global.node.replace(Global.layerWith({ config: globalDirectory, home: path.join(globalDirectory, "home") })),
+    Global.node.replace(Global.layerWith({ config: globalDirectory, home })),
     Credential.node.replace(credentialNode),
     WellKnown.node.replace(wellknownNode),
     Watcher.node.replace(watcher),
@@ -193,7 +194,7 @@ describe("Config", () => {
     ),
   )
 
-  it.live("loads explicit file and content overrides in priority order", () =>
+  it.live("loads explicit file and content overrides above project files in priority order", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {
         const global = path.join(tmp.path, "global")
@@ -212,7 +213,7 @@ describe("Config", () => {
               const entries = yield* config.entries()
               expect(
                 entries.flatMap((entry) => (entry.type === "document" && entry.info.shell ? [entry.info.shell] : [])),
-              ).toEqual(["global", "explicit", "project", "content"])
+              ).toEqual(["global", "project", "explicit", "content"])
               expect(Config.latest(entries, "shell")).toBe("content")
             }).pipe(
               Effect.provide(
@@ -889,7 +890,7 @@ describe("Config", () => {
           const entries = (yield* config.entries()).filter((entry) => !entry.path || inFixture(tmp.path, entry.path))
 
           expect(entries).toEqual([
-            new Directory({ type: "directory", path: AbsolutePath.make(path.join(tmp.path, "global")) }),
+            new Directory({ type: "directory", path: AbsolutePath.make(path.join(tmp.path, "global")), scope: "user" }),
           ])
         }).pipe(Effect.provide(testLayer(tmp.path))),
       ),
@@ -945,7 +946,15 @@ describe("Config", () => {
               {
                 type: "entries",
                 path: tmp.path,
-                names: [".agents", ".claude", ".orbit", "orbit.json", "orbit.jsonc"],
+                names: [
+                  ".agents",
+                  ".claude",
+                  ".orbit",
+                  "orbit.json",
+                  "orbit.jsonc",
+                  "orbit.local.json",
+                  "orbit.local.jsonc",
+                ],
               },
             ])
           }).pipe(Effect.provide(testLayer(tmp.path, undefined, undefined, undefined, Watcher.testLayer)))
@@ -1511,7 +1520,15 @@ describe("Config", () => {
             expect(yield* watcher.subscriptions()).toContainEqual({
               path: tmp.path,
               type: "entries",
-              names: [".agents", ".claude", ".orbit", "orbit.json", "orbit.jsonc"],
+              names: [
+                ".agents",
+                ".claude",
+                ".orbit",
+                "orbit.json",
+                "orbit.jsonc",
+                "orbit.local.json",
+                "orbit.local.jsonc",
+              ],
             })
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -1607,5 +1624,476 @@ describe("Config", () => {
         })
       }),
     ),
+  )
+})
+
+// Every fixture file carries its name as both $schema and shell: labels() tells documents apart, and
+// Config.latest(entries, "shell") names the document that wins.
+const marker = (name: string) => ({ $schema: name, shell: name })
+
+const write = (files: Record<string, unknown>) =>
+  Effect.promise(() =>
+    Promise.all(
+      Object.entries(files).map(async ([file, contents]) => {
+        await fs.mkdir(path.dirname(file), { recursive: true })
+        await fs.writeFile(file, JSON.stringify(contents))
+      }),
+    ),
+  )
+
+// One label per entry inside root: "scope:name" for a marked document, "scope:dir(relative path)" for a directory.
+const labels = (root: string, entries: readonly Entry[]) =>
+  entries
+    .filter((entry) => !entry.path || inFixture(root, entry.path))
+    .map((entry) =>
+      entry.type === "document"
+        ? `${entry.scope}:${entry.info.$schema}`
+        : `${entry.scope}:dir(${path.relative(root, entry.path).split(path.sep).join("/")})`,
+    )
+
+function remoteNodes(config: WellKnown.Config) {
+  const integrationID = Integration.ID.make("https://example.com")
+  const entry: WellKnown.Entry = {
+    origin: "https://example.com",
+    integrationID,
+    manifest: { auth: { command: ["login"], env: "TOKEN" } },
+  }
+  return {
+    credential: makeGlobalNode({
+      service: Credential.Service,
+      layer: Layer.succeed(
+        Credential.Service,
+        Credential.Service.of({
+          all: () => Effect.die("unused Credential.all"),
+          list: () =>
+            Effect.succeed([
+              new Credential.Info({
+                id: Credential.ID.create(),
+                integrationID,
+                label: "default",
+                value: Credential.Key.make({ type: "key", key: "secret" }),
+              }),
+            ]),
+          get: () => Effect.die("unused Credential.get"),
+          create: () => Effect.die("unused Credential.create"),
+          activate: () => Effect.die("unused Credential.activate"),
+          update: () => Effect.die("unused Credential.update"),
+          remove: () => Effect.die("unused Credential.remove"),
+        }),
+      ),
+      deps: [],
+    }),
+    wellknown: makeGlobalNode({
+      service: WellKnown.Service,
+      layer: Layer.succeed(
+        WellKnown.Service,
+        WellKnown.Service.of({
+          entries: () => Effect.succeed([entry]),
+          snapshot: () => [entry],
+          refresh: () => Effect.succeed(false),
+          add: () => Effect.die("unused Wellknown.add"),
+          remove: () => Effect.die("unused Wellknown.remove"),
+          resolve: () => Effect.succeed([config]),
+        }),
+      ),
+      deps: [],
+    }),
+  }
+}
+
+// The global config directory sits inside home, as it does on a real machine. The default test layer nests home
+// inside the global directory instead, and global: false would then exclude every project under it.
+function scopeLayer(
+  home: string,
+  directory: string,
+  options?: Config.Options,
+  remote?: ReturnType<typeof remoteNodes>,
+) {
+  return testLayer(
+    directory,
+    path.join(home, ".config", "orbit"),
+    directory,
+    undefined,
+    undefined,
+    remote?.credential,
+    remote?.wellknown,
+    options,
+    home,
+  )
+}
+
+describe("Config scopes", () => {
+  it.live("ranks orbit.local.json and orbit.local.jsonc above the shared file beside them", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const project = path.join(tmp.path, "project")
+      yield* write({
+        [path.join(project, "orbit.json")]: { ...marker("shared"), username: "shared-user" },
+        [path.join(project, "orbit.local.json")]: marker("local-json"),
+        [path.join(project, "orbit.local.jsonc")]: marker("local-jsonc"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(path.join(tmp.path, "home"), project)),
+      )
+
+      expect(labels(project, entries)).toEqual(["project:shared", "local:local-json", "local:local-jsonc"])
+      expect(Config.latest(entries, "shell")).toBe("local-jsonc")
+      // A key the local files leave out still comes from the shared file.
+      expect(Config.latest(entries, "username")).toBe("shared-user")
+    }),
+  )
+
+  it.live("loads orbit.local.jsonc from .orbit roots as local, after every project entry", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const repo = path.join(tmp.path, "repo")
+      const app = path.join(repo, "app")
+      yield* write({
+        [path.join(repo, "orbit.json")]: marker("root"),
+        [path.join(app, "orbit.json")]: marker("app"),
+        [path.join(repo, ".orbit", "orbit.json")]: marker("root-dot"),
+        [path.join(app, ".orbit", "orbit.json")]: marker("app-dot"),
+        [path.join(repo, "orbit.local.json")]: marker("root-local"),
+        [path.join(app, "orbit.local.json")]: marker("app-local"),
+        [path.join(repo, ".orbit", "orbit.local.jsonc")]: marker("root-dot-local"),
+        [path.join(app, ".orbit", "orbit.local.jsonc")]: marker("app-dot-local"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(path.join(tmp.path, "home"), app)),
+      )
+
+      // The .orbit directories stay project entries; only their local documents move up to the local scope.
+      expect(labels(repo, entries)).toEqual([
+        "project:root",
+        "project:app",
+        "project:root-dot",
+        "project:dir(.orbit)",
+        "project:app-dot",
+        "project:dir(app/.orbit)",
+        "local:root-local",
+        "local:app-local",
+        "local:root-dot-local",
+        "local:app-dot-local",
+      ])
+    }),
+  )
+
+  it.live("ranks flag entries above local ones, with the content above the explicit file", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const project = path.join(tmp.path, "project")
+      const explicit = path.join(project, "custom.json")
+      yield* write({
+        [path.join(project, "orbit.json")]: marker("project"),
+        [path.join(project, "orbit.local.json")]: marker("local"),
+        [explicit]: marker("explicit"),
+      })
+      const load = (options: Config.Options) =>
+        Config.Service.use((config) => config.entries()).pipe(Effect.provide(scopeLayer(home, project, options)))
+
+      const both = yield* load({ file: explicit, content: JSON.stringify(marker("content")) })
+      expect(labels(project, both)).toEqual(["project:project", "local:local", "flag:explicit", "flag:content"])
+      expect(Config.latest(both, "shell")).toBe("content")
+
+      const fileOnly = yield* load({ file: explicit })
+      expect(labels(project, fileOnly)).toEqual(["project:project", "local:local", "flag:explicit"])
+      expect(Config.latest(fileOnly, "shell")).toBe("explicit")
+    }),
+  )
+
+  it.live("stamps every entry with the scope it was loaded from", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const project = path.join(home, "project")
+      const explicit = path.join(project, "custom.json")
+      yield* write({
+        [path.join(home, ".config", "orbit", "orbit.json")]: marker("global"),
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(home, ".orbit", "orbit.json")]: marker("home-dot"),
+        [path.join(project, "orbit.json")]: marker("project"),
+        [path.join(project, ".orbit", "orbit.json")]: marker("project-dot"),
+        [path.join(project, "orbit.local.json")]: marker("local"),
+        [explicit]: marker("explicit"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(
+          scopeLayer(
+            home,
+            project,
+            { file: explicit, content: JSON.stringify(marker("content")) },
+            remoteNodes(marker("remote")),
+          ),
+        ),
+      )
+
+      // Includes any config the machine running the test keeps above the fixture.
+      expect(entries.filter((entry) => entry.scope === undefined)).toEqual([])
+      expect(labels(tmp.path, entries)).toEqual([
+        "remote:remote",
+        "user:global",
+        "user:dir(home/.config/orbit)",
+        "user:home",
+        "user:home-dot",
+        "user:dir(home/.orbit)",
+        "project:project",
+        "project:project-dot",
+        "project:dir(home/project/.orbit)",
+        "local:local",
+        "flag:explicit",
+        "flag:content",
+      ])
+    }),
+  )
+
+  it.live("treats the home directory's orbit files as user config that ranks below project files", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const project = path.join(home, "project")
+      yield* write({
+        [path.join(home, ".config", "orbit", "orbit.json")]: marker("global"),
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(home, "orbit.local.json")]: marker("home-local"),
+        [path.join(home, ".orbit", "orbit.json")]: marker("home-dot"),
+        [path.join(home, ".orbit", "orbit.local.jsonc")]: marker("home-dot-local"),
+        [path.join(project, "orbit.json")]: marker("project"),
+      })
+
+      const loaded = yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const watcher = yield* Watcher.Test
+        return { entries: yield* config.entries(), watches: yield* watcher.subscriptions() }
+      }).pipe(Effect.provide(scopeLayer(home, project)))
+
+      // Home's own files load once as user config, local files after the shared ones, and every project file
+      // outranks them even though the walk passes through home on the way up.
+      expect(labels(tmp.path, loaded.entries)).toEqual([
+        "user:global",
+        "user:dir(home/.config/orbit)",
+        "user:home",
+        "user:home-dot",
+        "user:dir(home/.orbit)",
+        "user:home-local",
+        "user:home-dot-local",
+        "project:project",
+      ])
+      expect(Config.latest(loaded.entries, "shell")).toBe("project")
+      expect(loaded.watches).toContainEqual({
+        type: "entries",
+        path: home,
+        names: [".agents", ".claude", ".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"],
+      })
+    }),
+  )
+
+  it.live("reloads when an orbit.local.json file appears in the project or in home", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const project = path.join(home, "project")
+      yield* write({ [path.join(project, "orbit.json")]: marker("project") })
+
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const bus = yield* Bus.Service
+        const watcher = yield* Watcher.Test
+        const appear = Effect.fnUntraced(function* (file: string, name: string) {
+          const changed = yield* bus.subscribe(Event.Updated).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+          yield* Effect.sleep("10 millis")
+          yield* write({ [file]: marker(name) })
+          yield* watcher.emit({ type: "create", path: file })
+          expect(yield* Fiber.join(changed)).toHaveLength(1)
+        })
+
+        yield* appear(path.join(project, "orbit.local.json"), "local")
+        expect(labels(tmp.path, yield* config.entries())).toEqual([
+          "user:dir(home/.config/orbit)",
+          "project:project",
+          "local:local",
+        ])
+
+        yield* appear(path.join(home, "orbit.local.json"), "home-local")
+        expect(labels(tmp.path, yield* config.entries())).toEqual([
+          "user:dir(home/.config/orbit)",
+          "user:home-local",
+          "project:project",
+          "local:local",
+        ])
+      }).pipe(Effect.provide(scopeLayer(home, project)))
+    }),
+  )
+
+  it.live("loads orbit.local.json from the global config directory once, as user config", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const global = path.join(home, ".config", "orbit")
+      const nested = path.join(global, "plugins", "demo")
+      yield* write({
+        [path.join(global, "orbit.json")]: marker("global"),
+        [path.join(global, "orbit.local.json")]: marker("global-local"),
+        [path.join(nested, "orbit.json")]: marker("demo"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(home, nested)),
+      )
+
+      // The walk passes through the global directory but must not report its files a second time.
+      expect(labels(tmp.path, entries)).toEqual([
+        "user:global",
+        "user:dir(home/.config/orbit)",
+        "user:global-local",
+        "project:demo",
+      ])
+    }),
+  )
+
+  it.live("loads the home directory's orbit files for a project outside home", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const app = path.join(tmp.path, "outside", "repo", "app")
+      yield* write({
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(tmp.path, "orbit.json")]: marker("above"),
+        [path.join(tmp.path, "outside", "orbit.json")]: marker("outside"),
+        [path.join(tmp.path, "outside", "repo", "orbit.json")]: marker("repo"),
+        [path.join(app, "orbit.json")]: marker("app"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(home, app)),
+      )
+
+      // Ancestors above a repository outside home are project config like any other.
+      expect(labels(tmp.path, entries)).toEqual([
+        "user:dir(home/.config/orbit)",
+        "user:home",
+        "project:above",
+        "project:outside",
+        "project:repo",
+        "project:app",
+      ])
+    }),
+  )
+
+  it.live("keeps ancestors between the home directory and a repository in project scope", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const app = path.join(home, "work", "repo", "packages", "app")
+      yield* write({
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(home, "work", "orbit.json")]: marker("work"),
+        [path.join(home, "work", "repo", "orbit.json")]: marker("repo"),
+        [path.join(app, "orbit.json")]: marker("app"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(home, app)),
+      )
+
+      expect(labels(tmp.path, entries)).toEqual([
+        "user:dir(home/.config/orbit)",
+        "user:home",
+        "project:work",
+        "project:repo",
+        "project:app",
+      ])
+    }),
+  )
+
+  it.live("loads home orbit files once when the location is the home directory", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      yield* write({
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(home, ".orbit", "orbit.json")]: marker("home-dot"),
+      })
+
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(home, home)),
+      )
+
+      expect(labels(tmp.path, entries)).toEqual([
+        "user:dir(home/.config/orbit)",
+        "user:home",
+        "user:home-dot",
+        "user:dir(home/.orbit)",
+      ])
+    }),
+  )
+
+  it.live("recognizes the home directory when the project walk reaches it through a symlink", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const home = path.join(tmp.path, "home")
+      const link = path.join(tmp.path, "link")
+      yield* write({
+        [path.join(home, "orbit.json")]: marker("home"),
+        [path.join(home, "project", "orbit.json")]: marker("project"),
+      })
+      yield* Effect.promise(() => fs.symlink(home, link, process.platform === "win32" ? "junction" : undefined))
+
+      // The walk spells home as the link; its orbit.json must still load once, as user config.
+      const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+        Effect.provide(scopeLayer(home, path.join(link, "project"))),
+      )
+
+      expect(labels(tmp.path, entries)).toEqual(["user:dir(home/.config/orbit)", "user:home", "project:project"])
+    }),
+  )
+
+  it.live(
+    "drops the home directory's orbit files when global is disabled but keeps them when project is disabled",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const home = path.join(tmp.path, "home")
+        const project = path.join(home, "work", "project")
+        yield* write({
+          [path.join(home, ".config", "orbit", "orbit.json")]: marker("global"),
+          [path.join(home, "orbit.json")]: marker("home"),
+          [path.join(home, "orbit.local.json")]: marker("home-local"),
+          [path.join(home, ".orbit", "orbit.json")]: marker("home-dot"),
+          [path.join(home, "work", "orbit.json")]: marker("work"),
+          [path.join(project, "orbit.json")]: marker("project"),
+        })
+        const load = (options: Config.Options) =>
+          Effect.gen(function* () {
+            const config = yield* Config.Service
+            const watcher = yield* Watcher.Test
+            return { entries: yield* config.entries(), watches: yield* watcher.subscriptions() }
+          }).pipe(Effect.provide(scopeLayer(home, project, options)))
+        const user = [
+          "user:global",
+          "user:dir(home/.config/orbit)",
+          "user:home",
+          "user:home-dot",
+          "user:dir(home/.orbit)",
+          "user:home-local",
+        ]
+
+        expect(labels(tmp.path, (yield* load({})).entries)).toEqual([...user, "project:work", "project:project"])
+
+        // --bare skips the project walk but still loads the user's own config, home files included.
+        expect(labels(tmp.path, (yield* load({ project: false })).entries)).toEqual(user)
+
+        // Home's files are skipped exactly like the global config directory, even though the walk passes through home.
+        const withoutGlobal = yield* load({ global: false })
+        expect(labels(tmp.path, withoutGlobal.entries)).toEqual(["project:work", "project:project"])
+        expect(
+          withoutGlobal.watches.filter(
+            (watch) => watch.path === home || inFixture(path.join(home, ".orbit"), watch.path),
+          ),
+        ).toEqual([])
+      }),
   )
 })

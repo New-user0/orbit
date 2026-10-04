@@ -5,7 +5,7 @@ import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
 import { Context, Effect, FiberMap, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
-import { Directory, Document, Info, type Patch, type Entry, Event } from "@orbit/schema/config"
+import { Directory, Document, Info, type Patch, type Entry, type Scope, Event } from "@orbit/schema/config"
 import { Credential } from "./credential.js"
 import { Bus } from "./bus.js"
 import { Watcher } from "./filesystem/watcher.js"
@@ -25,7 +25,11 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
 }
 
 export interface Interface {
-  /** Returns location config documents and discovery sources from lowest to highest priority. */
+  /**
+   * Returns location config documents and discovery sources from lowest to highest priority. Entries are grouped by
+   * scope in the order remote, user, project, local, flag, then managed, and each entry carries its scope. Within a
+   * scope, outer sources come before inner ones.
+   */
   readonly entries: () => Effect.Effect<Entry[]>
   /** Compatibility roots consumed by internal compatibility plugins. */
   readonly compatibility?: () => Effect.Effect<{
@@ -44,7 +48,8 @@ export interface Interface {
 
 export const Options = Schema.Struct({
   project: Schema.optional(Schema.Boolean),
-  // false skips the global config dir, ~/.claude, and ~/.agents; wellknown,
+  // false skips the global config dir, the orbit.json(c), orbit.local.json(c),
+  // and .orbit in the home directory, ~/.claude, and ~/.agents; wellknown,
   // file, and content entries still load.
   global: Schema.optional(Schema.Boolean),
   file: Schema.optional(Schema.String),
@@ -85,6 +90,12 @@ export const testLayer = (
       return Context.empty().pipe(Context.add(Service, service), Context.add(Test, service))
     }),
   )
+
+/** The scopes stamped on a directory's orbit.json(c) documents and on its orbit.local.json(c) documents. */
+type Scopes = { readonly base: Scope; readonly local: Scope }
+// The user's own directories have no outer tier above them, so their local documents stay in the user scope.
+const userScopes: Scopes = { base: "user", local: "user" }
+const projectScopes: Scopes = { base: "project", local: "local" }
 
 export const layer = (options?: Options) =>
   Layer.effect(
@@ -133,13 +144,18 @@ export const layer = (options?: Options) =>
         })
       })
 
-      const loadFile = Effect.fnUntraced(function* (filepath: string) {
+      const loadFile = Effect.fnUntraced(function* (filepath: string, scope: Scope) {
         const text = yield* fs.readFileStringSafe(filepath)
         if (text === undefined) return
         const substituted = yield* ConfigVariable.substitute({ type: "path", path: filepath, text })
         const info = yield* parseInfo(substituted, filepath)
         if (!info) return
-        return new Document({ type: "document", path: AbsolutePath.make(filepath), info })
+        return new Document({ type: "document", path: AbsolutePath.make(filepath), scope, info })
+      })
+
+      const loadFiles = Effect.fnUntraced(function* (filepaths: readonly string[], scope: Scope) {
+        const documents = yield* Effect.forEach(filepaths, (filepath) => loadFile(filepath, scope))
+        return documents.filter((document): document is Document => document !== undefined)
       })
 
       const loadWellknownEntry = Effect.fnUntraced(function* (entry: WellKnown.Entry) {
@@ -166,7 +182,7 @@ export const layer = (options?: Options) =>
             env: variables,
           }).pipe(
             Effect.flatMap((text) => parseInfo(text, entry.origin)),
-            Effect.map((info) => (info ? new Document({ type: "document", info }) : undefined)),
+            Effect.map((info) => (info ? new Document({ type: "document", scope: "remote", info }) : undefined)),
           ),
         ).pipe(Effect.map((documents) => documents.filter((document) => document !== undefined)))
       })
@@ -182,23 +198,37 @@ export const layer = (options?: Options) =>
         return yield* Effect.forEach(entries, loadWellknownEntry).pipe(Effect.map((documents) => documents.flat()))
       })
 
-      const loadDirectory = Effect.fnUntraced(function* (directory: AbsolutePath) {
-        return [
-          ...(yield* Effect.forEach(ConfigDiscovery.names, (file) => loadFile(path.join(directory, file))).pipe(
-            Effect.map((configs) => configs.filter((config): config is Document => config !== undefined)),
-          )),
-          new Directory({ type: "directory", path: directory }),
-        ]
+      // Local documents come back apart from the rest: they outrank every base entry, not only their own directory's.
+      const loadDirectory = Effect.fnUntraced(function* (directory: AbsolutePath, scopes: Scopes) {
+        const inDirectory = (files: readonly string[]) => files.map((file) => path.join(directory, file))
+        return {
+          base: [
+            ...(yield* loadFiles(inDirectory(ConfigDiscovery.names), scopes.base)),
+            new Directory({ type: "directory", path: directory, scope: scopes.base }),
+          ],
+          local: yield* loadFiles(inDirectory(ConfigDiscovery.localNames), scopes.local),
+        }
+      })
+
+      const loadLevel = Effect.fnUntraced(function* (level: ConfigDiscovery.Level, scopes: Scopes) {
+        const roots = yield* Effect.forEach(
+          level.project.filter((root) => root.present),
+          (root) => loadDirectory(root.path, scopes),
+        )
+        return {
+          base: [...(yield* loadFiles(level.direct, scopes.base)), ...roots.flatMap((root) => root.base)],
+          local: [...(yield* loadFiles(level.local, scopes.local)), ...roots.flatMap((root) => root.local)],
+        }
       })
 
       const load = Effect.fn("Config.load")(function* (sources: ConfigDiscovery.Sources) {
-        const direct = yield* Effect.forEach(sources.direct, (filepath) => loadFile(filepath)).pipe(
-          Effect.orDie,
-          Effect.map((entries) => entries.filter((entry): entry is Document => entry !== undefined)),
-        )
-
+        const globalEntries = sources.global
+          ? yield* loadDirectory(sources.global, userScopes).pipe(Effect.orDie)
+          : undefined
+        const homeEntries = sources.home ? yield* loadLevel(sources.home, userScopes).pipe(Effect.orDie) : undefined
+        const projectEntries = yield* loadLevel(sources, projectScopes).pipe(Effect.orDie)
         const explicit = sources.explicit
-          ? yield* loadFile(sources.explicit).pipe(
+          ? yield* loadFile(sources.explicit, "flag").pipe(
               Effect.map((config) => (config ? [config] : [])),
               Effect.orDie,
             )
@@ -212,27 +242,20 @@ export const layer = (options?: Options) =>
                 text: options.content,
               }).pipe(
                 Effect.flatMap((text) => parseInfo(text, "ORBIT_CONFIG_CONTENT")),
-                Effect.map((info) => (info ? [new Document({ type: "document", info })] : [])),
+                Effect.map((info) => (info ? [new Document({ type: "document", scope: "flag", info })] : [])),
                 Effect.orDie,
               )
             : []
 
-        // Global entries sit below explicit and direct files; project
-        // directories rank above them.
-        const globalSupplementary = sources.global ? yield* loadDirectory(sources.global).pipe(Effect.orDie) : []
-        const projectSupplementary = yield* Effect.forEach(
-          sources.project.filter((root) => root.present),
-          (root) => loadDirectory(root.path),
-        ).pipe(
-          Effect.orDie,
-          Effect.map((entries) => entries.flat()),
-        )
+        // Scopes rank remote < user < project < local < flag; the managed scope is reserved to load after all of
+        // them. Within a scope, outer sources come first, base documents before their local counterparts, and
+        // ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file.
         return [
           ...(yield* loadWellknown().pipe(Effect.orDie)),
-          ...globalSupplementary,
+          ...[globalEntries, homeEntries].flatMap((user) => (user ? [...user.base, ...user.local] : [])),
+          ...projectEntries.base,
+          ...projectEntries.local,
           ...explicit,
-          ...direct,
-          ...projectSupplementary,
           ...content,
         ]
       })

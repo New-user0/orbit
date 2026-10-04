@@ -127,15 +127,25 @@ export const Patch = Schema.Struct({
 }).annotate({ identifier: "Config.Patch" })
 export interface Patch extends Schema.Schema.Type<typeof Patch> {}
 
+export type Scope = typeof Scope.Type
+export const Scope = Schema.Literals(["remote", "user", "project", "local", "flag", "managed"]).annotate({
+  identifier: "Config.Scope",
+  description:
+    "Where a configuration entry came from, listed from lowest to highest precedence: remote (well-known), user (global config directory and home directory), project (orbit.json files and .orbit directories up the tree), local (orbit.local.json files), flag (ORBIT_CONFIG and ORBIT_CONFIG_CONTENT), managed (organization-managed settings).",
+})
+
 export class Document extends Schema.Class<Document>("Config.Document")({
   type: Schema.Literal("document"),
   path: AbsolutePath.pipe(optional),
+  // Optional so entries produced before scopes existed still decode; a missing scope is treated as user.
+  scope: Scope.pipe(optional),
   info: Info,
 }) {}
 
 export class Directory extends Schema.Class<Directory>("Config.Directory")({
   type: Schema.Literal("directory"),
   path: AbsolutePath,
+  scope: Scope.pipe(optional),
 }) {}
 
 export const Entry = Schema.Union([Document, Directory]).annotate({
