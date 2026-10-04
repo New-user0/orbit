@@ -66,7 +66,7 @@ const allowlist: readonly Entry[] = [
   },
   {
     allow: "products",
-    paths: ["packages/core/src/models-dev/**"],
+    paths: ["packages/core/src/models-dev/snapshot.txt"],
     reason:
       "A snapshot of a third-party model catalog, refreshed by core/script/update-models-snapshot.ts and never edited by hand. It lists whatever the catalog lists, including model ids and providers named after other products.",
   },
@@ -218,8 +218,11 @@ const products = vendors.flatMap((vendor): Token[] => {
   const product = vendor.product
   return [
     ...(product?.names ?? []).map((words) => token(new RegExp(words.map(escape).join("[ _-]?"), "i"))),
-    // Not followed by `.word`, so `.dir.next` is a property chain and `.dir.json` is left to the files below.
-    ...(product?.directories ?? []).map((value) => token(new RegExp(`${segment}${escape(value)}(?!\\.?\\w)`, "i"))),
+    // Not followed by `.word`, so `.dir.next` is a property chain and `.dir.json` is left to the files below. A line
+    // that starts with the directory after its indentation continues a member chain, unless a path separator follows.
+    ...(product?.directories ?? []).map((value) =>
+      token(new RegExp(String.raw`(?<!^\s+)${segment}${escape(value)}(?!\.?\w)|^\s+${escape(value)}(?=[/\\])`, "i")),
+    ),
     ...(product?.files ?? []).map((value) => token(new RegExp(`${segment}${escape(value)}(?!\\w)`, "i"))),
     // Case sensitive, and a prefix: the variable names under it vary.
     ...(product?.env ?? []).map((value) => token(new RegExp(`(?<![A-Za-z0-9_])${escape(value)}`))),

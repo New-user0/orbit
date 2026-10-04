@@ -21,7 +21,8 @@ const pruned = new Set(["node_modules", "dist", ".turbo", ".git"])
  * is committed is what ships.
  *
  * Without .git, which an exported tree does not have, the tree is walked instead. That cannot tell tracked files from
- * untracked ones, so it skips nothing but what .gitignore excludes. It is a local convenience: CI always has git.
+ * untracked ones, so it skips nothing but what the .gitignore files in the tree exclude. It is a local convenience: CI
+ * always has git.
  */
 export async function listFiles() {
   return hasGit() ? fromGit() : fromTree()
@@ -43,51 +44,60 @@ export async function readText(file: string) {
 
 async function fromGit() {
   const foreign = new Set(directories.map((directory) => directory.toLowerCase()))
-  // -t tags each path: H is tracked, ? is untracked. A trailing slash is a nested repository, which has no text.
-  const listed = (await $`git ls-files -co --exclude-standard -t -z`.cwd(root).text()).split("\0").filter(Boolean)
-  return listed
-    .map((entry) => ({ tracked: entry.startsWith("H"), file: entry.slice(2) }))
+  // -t tags each path: ? is untracked and every other tag is tracked (H, S for skip-worktree, M for unmerged). An
+  // unmerged path is listed once per stage, hence the set. A trailing slash is a nested repository, which has no text.
+  const listed = new Set(
+    (await $`git ls-files -co --exclude-standard -t -z`.cwd(root).text()).split("\0").filter(Boolean),
+  )
+  return [...listed]
+    .map((entry) => ({ tracked: !entry.startsWith("?"), file: entry.slice(2) }))
     .filter((entry) => !entry.file.endsWith("/"))
     .filter((entry) => entry.tracked || !entry.file.split("/").some((segment) => foreign.has(segment.toLowerCase())))
     .map((entry) => entry.file)
 }
 
+type Rule = { readonly base: string; readonly glob: Bun.Glob; readonly negated: boolean; readonly directory: boolean }
+
 async function fromTree() {
-  const ignored = await gitignore()
-  const visit = async (directory: string): Promise<string[]> => {
-    const entries = await readdir(path.join(root, directory), { withFileTypes: true })
+  // `prefix` is the directory being walked: empty at the root, otherwise its path from the root and a slash.
+  const visit = async (prefix: string, inherited: Rule[]): Promise<string[]> => {
+    const rules = [...inherited, ...(await gitignore(prefix))]
+    // The last rule that matches decides, and a deeper .gitignore comes after the ones above it.
+    const ignored = (file: string, isDirectory: boolean) =>
+      rules.reduce(
+        (state, rule) =>
+          (rule.directory && !isDirectory) || !rule.glob.match(file.slice(rule.base.length)) ? state : !rule.negated,
+        false,
+      )
+    const entries = await readdir(path.join(root, prefix), { withFileTypes: true })
     const found = await Promise.all(
       entries.map(async (entry) => {
-        const file = directory === "" ? entry.name : `${directory}/${entry.name}`
-        if (entry.isDirectory()) return pruned.has(entry.name) || ignored(file, true) ? [] : visit(file)
+        const file = `${prefix}${entry.name}`
+        if (entry.isDirectory()) return pruned.has(entry.name) || ignored(file, true) ? [] : visit(`${file}/`, rules)
         // Symlinks are skipped: git lists their target path, not the text behind them.
         return entry.isFile() && !ignored(file, false) ? [file] : []
       }),
     )
     return found.flat()
   }
-  return visit("")
+  return visit("", [])
 }
 
-// The root .gitignore only, which is all the repository uses. Directories that match are never entered, so the
-// rule that a file inside an ignored directory cannot be re-included holds without being tested.
-async function gitignore() {
-  const blob = Bun.file(path.join(root, ".gitignore"))
-  const lines = (await blob.exists()) ? (await blob.text()).split(/\r?\n/) : []
-  const rules = lines.flatMap((line) => {
+// The rules of the .gitignore in one directory, which apply below it. Directories that match are never entered, so the
+// rule that a file inside an ignored directory cannot be re-included holds without being tested. Only .gitignore files
+// count: the walk has no git to read .git/info/exclude or a global excludes file from.
+async function gitignore(prefix: string): Promise<Rule[]> {
+  const blob = Bun.file(path.join(root, prefix, ".gitignore"))
+  if (!(await blob.exists())) return []
+  return (await blob.text()).split(/\r?\n/).flatMap((line) => {
     const pattern = line.trimEnd()
     if (pattern === "" || pattern.startsWith("#")) return []
     const negated = pattern.startsWith("!")
     const body = negated ? pattern.slice(1) : pattern
     const directory = body.endsWith("/")
     const name = directory ? body.slice(0, -1) : body
-    // A pattern with a slash in it is relative to the root; one without matches at any depth.
+    // A pattern with a slash in it is relative to the .gitignore's directory; one without matches at any depth.
     const glob = name.includes("/") ? name.replace(/^\//, "") : `**/${name}`
-    return [{ glob: new Bun.Glob(glob), negated, directory }]
+    return [{ base: prefix, glob: new Bun.Glob(glob), negated, directory }]
   })
-  return (file: string, isDirectory: boolean) =>
-    rules.reduce(
-      (ignored, rule) => ((rule.directory && !isDirectory) || !rule.glob.match(file) ? ignored : !rule.negated),
-      false,
-    )
 }
