@@ -94,6 +94,19 @@ export function isForeign(file: string | undefined) {
 }
 
 /**
+ * The directory that a hook from this document reads as the project directory, where `session` is the directory the
+ * session runs in. A settings folder of a project answers for the directory that holds it. Discovery walks up from the
+ * session, so that can be a directory above it, and a hook that runs a script kept in the folder, as
+ * `"$<variable>/<vendor directory>/hooks/check.sh"`, only finds it from there. The user's own settings folder is not a
+ * project's, and the documents that are not settings files of another product are Orbit's own, so those answer for
+ * `session`.
+ */
+export function projectDirectory(document: { readonly path?: string; readonly scope?: Scope }, session: string) {
+  if (document.path === undefined || (document.scope !== "project" && document.scope !== "local")) return session
+  return isForeign(document.path) ? path.dirname(path.dirname(document.path)) : session
+}
+
+/**
  * Orbit rules for the permission lists of a settings file. Nothing translates them yet, so a file's permissions never
  * reach the configuration; the permissions work fills this in, with the alias table, and the rules then arrive in each
  * file's document.

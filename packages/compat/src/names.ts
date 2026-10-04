@@ -22,7 +22,8 @@ export const vendor = {
  * The tool names that hook matchers and permission rules of the reference vendor use, and the Orbit tools each one
  * stands for. The table is many to many: Orbit swaps its editing tools for `patch` on some models, so an editing name
  * must reach `patch` as well, and `patch` answers to every editing name. Where a tool answers to several names, such as
- * the subagent tool to `Task` and `Agent`, the first one listed is the one a hook is told.
+ * the subagent tool to `Agent` and its older name `Task`, the first one listed is the one a hook is told, unless the
+ * hook's own matcher accepts only a later one.
  */
 export const tools = {
   Bash: ["shell"],
@@ -35,8 +36,10 @@ export const tools = {
   Grep: ["grep"],
   WebFetch: ["webfetch"],
   WebSearch: ["websearch"],
-  Task: ["subagent"],
+  // `Task` is the name this tool had before `Agent`. Matchers and rules written then still name it, so it stays an alias,
+  // but it comes second: a hook is told the current name.
   Agent: ["subagent"],
+  Task: ["subagent"],
   TodoWrite: ["todo"],
 } as const satisfies Record<string, readonly string[]>
 

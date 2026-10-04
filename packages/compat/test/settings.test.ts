@@ -292,6 +292,85 @@ describe("CompatSettings.isForeign", () => {
   })
 })
 
+describe("CompatSettings.projectDirectory", () => {
+  const directory = CompatNames.vendor.directory
+  const session = path.resolve("work", "repo", "app")
+  const settingsFile = (parent: string, name: string) => path.join(parent, directory, name)
+
+  test("is the directory that holds the settings folder of a project, above the session's directory or at it", () => {
+    for (const parent of [path.resolve("work"), path.resolve("work", "repo"), session, path.join(session, "web")]) {
+      expect(CompatSettings.projectDirectory({ path: settingsFile(parent, shared), scope: "project" }, session)).toBe(
+        parent,
+      )
+      // The local file sits in the same folder, so it answers for the same directory.
+      expect(CompatSettings.projectDirectory({ path: settingsFile(parent, local), scope: "local" }, session)).toBe(
+        parent,
+      )
+    }
+  })
+
+  test("is the session's directory for the user's own settings folder, whichever file it is", () => {
+    const home = path.resolve("home", "person")
+
+    expect(CompatSettings.projectDirectory({ path: settingsFile(home, shared), scope: "user" }, session)).toBe(session)
+    expect(CompatSettings.projectDirectory({ path: settingsFile(home, local), scope: "user" }, session)).toBe(session)
+  })
+
+  test("is the session's directory for a document that is not a settings file of another product", () => {
+    const repo = path.resolve("work", "repo")
+    const document = (file: string | undefined, scope?: "project" | "local" | "flag") => ({ path: file, scope })
+
+    // Orbit's own files at the scopes that the vendor's files rank in, and in a directory that is named like it.
+    expect(CompatSettings.projectDirectory(document(path.join(repo, "orbit.json"), "project"), session)).toBe(session)
+    expect(CompatSettings.projectDirectory(document(path.join(repo, "orbit.local.json"), "local"), session)).toBe(
+      session,
+    )
+    expect(
+      CompatSettings.projectDirectory(document(path.join(repo, directory, "orbit.json"), "project"), session),
+    ).toBe(session)
+    // A settings file that a flag names is Orbit's own config, wherever the file lives.
+    expect(CompatSettings.projectDirectory(document(settingsFile(repo, shared), "flag"), session)).toBe(session)
+    // Entries that came without a path or a scope have nothing to tell where they are from.
+    expect(CompatSettings.projectDirectory(document(undefined, "project"), session)).toBe(session)
+    expect(CompatSettings.projectDirectory(document(settingsFile(repo, shared)), session)).toBe(session)
+  })
+
+  live("names the directory above the session for the documents that read makes of a project's files", () =>
+    Effect.gen(function* () {
+      const fixture = yield* tmpdirScoped()
+      const repo = path.join(fixture, "repo")
+      const app = path.join(repo, "app")
+      const home = path.join(fixture, "home")
+      yield* write([
+        [path.join(home, directory, shared), settings({ PreToolUse: [guard("user-shared")] })],
+        [path.join(repo, directory, shared), settings({ PreToolUse: [guard("repo-shared")] })],
+        [path.join(repo, directory, local), settings({ PreToolUse: [guard("repo-local")] })],
+        [path.join(app, directory, shared), settings({ PreToolUse: [guard("app-shared")] })],
+      ])
+
+      const result = yield* read(fixture, [
+        root(path.join(home, directory), "user"),
+        root(path.join(repo, directory), "project"),
+        root(path.join(app, directory), "project"),
+      ])
+
+      // A session in the app directory finds the repository's files above it, by the walk up. The user's own file is not
+      // a project's, so it answers for the session.
+      expect(
+        result.documents.map((document) => [
+          path.relative(fixture, document.path ?? ""),
+          path.relative(fixture, CompatSettings.projectDirectory(document, app)),
+        ]),
+      ).toEqual([
+        [path.join("home", directory, shared), path.join("repo", "app")],
+        [path.join("repo", directory, shared), "repo"],
+        [path.join("repo", directory, local), "repo"],
+        [path.join("repo", "app", directory, shared), path.join("repo", "app")],
+      ])
+    }),
+  )
+})
+
 describe("CompatSettings permissions", () => {
   test("decode typed allow, deny and ask lists, each optional", () => {
     const decode = Schema.decodeUnknownSync(CompatSettings.ForeignPermissions)

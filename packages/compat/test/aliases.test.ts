@@ -67,6 +67,13 @@ describe("CompatAliases.toForeign", () => {
       expect(listed).toEqual(names.filter((name) => listed.includes(name)))
     }
   })
+
+  test("reports the subagent tool as Agent, its current name, and keeps Task as a name after it", () => {
+    expect(CompatAliases.toForeign("subagent")).toEqual(["Agent", "Task"])
+    // A matcher written with either name still reaches the tool.
+    expect(CompatAliases.toOrbit("Agent")).toEqual(["subagent"])
+    expect(CompatAliases.toOrbit("Task")).toEqual(["subagent"])
+  })
 })
 
 describe("CompatAliases MCP names", () => {
@@ -103,22 +110,48 @@ describe("CompatAliases MCP names", () => {
         const registry = Mcp.name(server, tool)
 
         expect(CompatAliases.mcpToOrbit(foreign)).toBe(registry)
-        expect(CompatAliases.toForeign(registry, [server])).toEqual([foreign])
+        expect(CompatAliases.toForeign(registry, [{ server, name: tool }])).toEqual([foreign])
         // A name written with the raw characters reaches the same tool.
         expect(CompatAliases.mcpToOrbit(`mcp__${server}__${tool}`)).toBe(registry)
       }
   })
 
-  test("take only the servers whose namespace begins the name", () => {
-    expect(CompatAliases.toForeign("github_create_issue", ["github", "gitlab"])).toEqual(["mcp__github__create_issue"])
-    expect(CompatAliases.toForeign("github_create_issue", [])).toEqual([])
-    // Nothing follows the namespace, so there is no tool.
-    expect(CompatAliases.toForeign("github_", ["github"])).toEqual([])
-    expect(CompatAliases.toForeign("github", ["github"])).toEqual([])
+  test("name a tool from the server and tool that registered it, not from the prefix of its name", () => {
+    // `github` begins both registry names, and the name alone cannot say where the server ends.
+    const connected = [
+      { server: "github", name: "create_issue" },
+      { server: "github_enterprise", name: "create_issue" },
+    ]
+
+    expect(CompatAliases.toForeign("github_create_issue", connected)).toEqual(["mcp__github__create_issue"])
+    expect(CompatAliases.toForeign("github_enterprise_create_issue", connected)).toEqual([
+      "mcp__github_enterprise__create_issue",
+    ])
+    // A tool of the second server that merely begins like the first server's is still the second's.
+    expect(
+      CompatAliases.toForeign("github_enterprise_audit", [
+        ...connected,
+        { server: "github_enterprise", name: "audit" },
+      ]),
+    ).toEqual(["mcp__github_enterprise__audit"])
   })
 
-  test("name every server that could own an ambiguous name", () => {
-    expect(CompatAliases.toForeign("a_b_c", ["a", "a_b"])).toEqual(["mcp__a__b_c", "mcp__a_b__c"])
+  test("take the split between server and tool from the connected tool when the name leaves it open", () => {
+    // Both give the registry name `a_b_c`, so the name alone fits either split.
+    expect(CompatAliases.toForeign("a_b_c", [{ server: "a", name: "b_c" }])).toEqual(["mcp__a__b_c"])
+    expect(CompatAliases.toForeign("a_b_c", [{ server: "a_b", name: "c" }])).toEqual(["mcp__a_b__c"])
+  })
+
+  test("give no MCP name to a name that no connected MCP tool has", () => {
+    const connected = [{ server: "github", name: "create_issue" }]
+
+    expect(CompatAliases.toForeign("github_delete_issue", connected)).toEqual([])
+    expect(CompatAliases.toForeign("github_create_issue", [])).toEqual([])
+    expect(CompatAliases.toForeign("github", connected)).toEqual([])
+    // A server called `shell` does not make Orbit's own `shell_output` one of the server's tools.
+    expect(CompatAliases.toForeign("shell_output", [{ server: "shell", name: "run" }])).toEqual([])
+    // The shell tool is told as Bash, whichever servers are connected.
+    expect(CompatAliases.toForeign("shell", [{ server: "shell", name: "run" }])).toEqual(["Bash"])
   })
 })
 

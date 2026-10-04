@@ -27,18 +27,20 @@ export function toOrbit(foreign: string): readonly string[] {
 
 /**
  * The names other products give an Orbit tool, in the order the table lists them, so the first is the one to report.
- * An MCP tool can only be told from its name by the servers it could belong to, and `<server>_<tool>` is ambiguous
- * when one server's namespace begins with another's, so every server that fits yields a name.
+ * A tool that an MCP server provides has one more. `<server>_<tool>` does not say where the server's name ends, since
+ * either may hold an underscore, so the name comes from the connected MCP tools `mcpTools`: the one whose registry name
+ * is `tool` gives the server and the tool, and a name that no MCP tool has gets no MCP name.
  */
-export function toForeign(tool: string, servers: readonly string[] = []): readonly string[] {
-  return [
-    ...Object.entries(tools).flatMap(([foreign, names]) => (names.includes(tool) ? [foreign] : [])),
-    ...servers.flatMap((server) => {
-      const namespace = Mcp.namespace(server)
-      const rest = tool.slice(namespace.length + 1)
-      return tool.startsWith(`${namespace}_`) && rest !== "" ? [`${mcpPrefix}${namespace}${mcpSeparator}${rest}`] : []
-    }),
-  ]
+export function toForeign(
+  tool: string,
+  mcpTools: readonly { readonly server: string; readonly name: string }[] = [],
+): readonly string[] {
+  const names = Object.entries(tools).flatMap(([foreign, orbit]) => (orbit.includes(tool) ? [foreign] : []))
+  const owner = mcpTools.find((candidate) => Mcp.name(candidate.server, candidate.name) === tool)
+  if (owner === undefined) return names
+  // The registry name already has the tool's characters replaced, so only the separator after the server changes.
+  const namespace = Mcp.namespace(owner.server)
+  return [...names, `${mcpPrefix}${namespace}${mcpSeparator}${tool.slice(namespace.length + 1)}`]
 }
 
 /**
@@ -55,7 +57,8 @@ export function mcpToOrbit(foreign: string) {
 
 /**
  * The environment a hook's command gets besides Orbit's own `ORBIT_PROJECT_DIR`: the variable that hooks written for
- * another product read the project directory from.
+ * another product read the project directory from. The directory is not always the session's: see
+ * `CompatSettings.projectDirectory`, which names it for the document a hook comes from.
  */
 export function hookEnv(directory: string): Readonly<Record<string, string>> {
   return { [CompatNames.vendor.projectDirVariable]: directory }

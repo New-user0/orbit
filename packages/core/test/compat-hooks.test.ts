@@ -32,7 +32,7 @@ import { WebSearchTool } from "@orbit/core/tool/plugin/websearch"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Effect, Exit, Layer, Schema } from "effect"
-import { tempLocationLayer } from "./fixture/location"
+import { location, tempLocationLayer } from "./fixture/location"
 import { emptyMcp } from "./fixture/mcp"
 import { withEnv } from "./fixture/env"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -66,9 +66,18 @@ const guard = (matcher: string, reason: string) => ({
 const recorder = (matcher: string, file: string) => ({
   PreToolUse: [{ matcher, hooks: [{ type: "command", command: `cat > '${file}'` }] }],
 })
+// A group of hooks for each matcher, which keeps the event in the file that `file` names for its place in the list. A
+// matcher that is left out takes every tool.
+const recorders = (matchers: readonly (string | undefined)[], file: (index: number) => string) => ({
+  PreToolUse: matchers.map((matcher, index) => ({
+    matcher,
+    hooks: [{ type: "command", command: `cat > '${file(index)}'` }],
+  })),
+})
 
-// What the compatibility reader makes of vendor settings files written in a project directory.
-const readVendor = (directory: string, files: Record<string, unknown>) =>
+// What the compatibility reader makes of vendor settings files written in a directory: the settings folder of a
+// project, or of the user's own home.
+const readVendor = (directory: string, files: Record<string, unknown>, scope: "user" | "project" = "project") =>
   Effect.gen(function* () {
     yield* Effect.promise(() =>
       Promise.all(
@@ -80,14 +89,14 @@ const readVendor = (directory: string, files: Record<string, unknown>) =>
       ),
     )
     return yield* CompatSettings.read([
-      { path: AbsolutePath.make(path.join(directory, vendor)), kind: "vendor", scope: "project" },
+      { path: AbsolutePath.make(path.join(directory, vendor)), kind: "vendor", scope },
     ])
   })
 
 // The documents of vendor settings files that are all readable, as the configuration loader reports them.
-const vendorDocuments = (directory: string, files: Record<string, unknown>) =>
+const vendorDocuments = (directory: string, files: Record<string, unknown>, scope: "user" | "project" = "project") =>
   Effect.gen(function* () {
-    const result = yield* readVendor(directory, files)
+    const result = yield* readVendor(directory, files, scope)
     expect(result.diagnostics).toEqual([])
     return result.documents
   })
@@ -99,6 +108,12 @@ const nativeDocument = (file: string, hooks: unknown, scope: Scope = "project") 
 const start = Effect.gen(function* () {
   yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
 })
+
+// The plugin in a session that runs in `directory`, which must exist: the hooks run in it.
+const startIn = (directory: string) =>
+  start.pipe(
+    Effect.provideService(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+  )
 
 const setEntries = (entries: Entry[]) =>
   Effect.gen(function* () {
@@ -119,6 +134,18 @@ const blockedBy = (tool: string) =>
 // The event a hook kept on its standard input.
 const payload = (file: string): Effect.Effect<unknown> =>
   Effect.promise(async () => JSON.parse(await fs.readFile(file, "utf8")))
+
+// The events that hooks from a vendor settings file keep when a call of `tool` reaches them, one hook for each matcher
+// and in the order of the matchers.
+const eventsFor = (tool: string, matchers: readonly (string | undefined)[]) =>
+  Effect.gen(function* () {
+    const directory = (yield* tmpdirScoped()).path
+    const file = (index: number) => path.join(directory, `hook-${index}.json`)
+    yield* setEntries(yield* vendorDocuments(directory, { "settings.json": { hooks: recorders(matchers, file) } }))
+    yield* start
+    yield* blockedBy(tool)
+    return yield* Effect.forEach(matchers, (_, index) => payload(file(index)))
+  })
 
 describe("the compatibility alias table and the built-in tools", () => {
   const builtIn = [
@@ -281,33 +308,56 @@ describe("LifecycleHooksPlugin with another product's settings files", () => {
     }),
   )
 
-  it.live(
-    "reports the first of the vendor's names for a tool that has several, and keeps the name of one without",
-    () =>
-      Effect.gen(function* () {
-        const directory = (yield* tmpdirScoped()).path
-        const files = { patch: path.join(directory, "patch.json"), memory: path.join(directory, "memory.json") }
-        yield* setEntries([
-          ...(yield* vendorDocuments(directory, {
-            "settings.json": { hooks: recorder("Write", files.patch) },
-            "settings.local.json": { hooks: recorder("memory", files.memory) },
-          })),
-        ])
-        yield* start
+  it.live("tells a hook the first of the vendor's names for the tool that its own matcher accepts", () =>
+    Effect.gen(function* () {
+      // patch stands in for edit and write, so the vendor has three names for it: Edit, MultiEdit and Write, in that
+      // order. Each row is a matcher, and the name that a hook with it is told when it runs for patch.
+      const rows = [
+        ["Write", "Write"],
+        ["Edit|Write", "Edit"],
+        ["MultiEdit", "MultiEdit"],
+        ["Multi.*|Write", "MultiEdit"],
+        [".*", "Edit"],
+        [undefined, "Edit"],
+      ] as const
 
-        yield* blockedBy(PatchTool.name)
-        yield* blockedBy("memory")
-
-        // The Write hook ran for patch, and is told about the tool by the first name it answers to.
-        expect(yield* payload(files.patch)).toMatchObject({ tool_name: "Edit" })
-        // A tool the vendor has no name for is named as Orbit names it.
-        expect(yield* payload(files.memory)).toMatchObject({ tool_name: "memory" })
-      }),
+      expect(
+        yield* eventsFor(
+          PatchTool.name,
+          rows.map(([matcher]) => matcher),
+        ),
+      ).toMatchObject(rows.map(([, tool]) => ({ tool_name: tool })))
+    }),
   )
 
-  it.live("sets the vendor's variable for the project directory beside Orbit's, for every hook", () =>
+  it.live("tells a hook the current name of the subagent tool, and the older one to a hook that names only that", () =>
     Effect.gen(function* () {
-      const location = yield* Location.Service
+      const told = yield* eventsFor(SubagentTool.name, ["Agent", "Task", "Agent|Task", "Task|Agent", ".*", undefined])
+
+      expect(told).toMatchObject(
+        ["Agent", "Task", "Agent", "Agent", "Agent", "Agent"].map((tool_name) => ({ tool_name })),
+      )
+    }),
+  )
+
+  it.live("tells a hook the first of the vendor's names when its matcher names the tool only the Orbit way", () =>
+    Effect.gen(function* () {
+      expect(yield* eventsFor(PatchTool.name, ["patch"])).toMatchObject([{ tool_name: "Edit" }])
+    }),
+  )
+
+  it.live("keeps Orbit's name for a tool that the vendor has no name for", () =>
+    Effect.gen(function* () {
+      expect(yield* eventsFor("memory", ["memory", undefined])).toMatchObject([
+        { tool_name: "memory" },
+        { tool_name: "memory" },
+      ])
+    }),
+  )
+
+  it.live("sets the vendor's variable for the project directory beside Orbit's, for a hook in Orbit's own files", () =>
+    Effect.gen(function* () {
+      const session = yield* Location.Service
       const directory = (yield* tmpdirScoped()).path
       const file = path.join(directory, "env.txt")
       const variable = CompatNames.vendor.projectDirVariable
@@ -322,10 +372,75 @@ describe("LifecycleHooksPlugin with another product's settings files", () => {
       yield* withEnv({ [variable]: undefined }, () => blockedBy(ShellTool.name))
 
       expect((yield* Effect.promise(() => fs.readFile(file, "utf8"))).split("\n")).toEqual([
-        location.directory,
-        location.directory,
+        session.directory,
+        session.directory,
       ])
-      expect(CompatAliases.hookEnv(location.directory)).toEqual({ [variable]: location.directory })
+      expect(CompatAliases.hookEnv(session.directory)).toEqual({ [variable]: session.directory })
+    }),
+  )
+
+  it.live("finds the script of a hook in the project's settings folder above the session, through the variable", () =>
+    Effect.gen(function* () {
+      const repo = (yield* tmpdirScoped()).path
+      const app = path.join(repo, "app")
+      const variable = CompatNames.vendor.projectDirVariable
+      const script = path.join(repo, vendor, "hooks", "guard.sh")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(app)
+        await fs.mkdir(path.dirname(script), { recursive: true })
+        await fs.writeFile(script, "echo 'the script guard' >&2\nexit 2\n")
+      })
+      // The settings folder is in the repository, and the session runs in a directory inside it, where discovery finds
+      // the folder by walking up. The hook runs in the session's directory, and is written for a project directory
+      // that holds the folder.
+      const command = `sh "$${variable}/${vendor}/hooks/guard.sh"`
+      yield* setEntries(
+        yield* vendorDocuments(repo, {
+          "settings.json": { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command }] }] } },
+        }),
+      )
+      yield* startIn(app)
+
+      expect(yield* withEnv({ [variable]: undefined }, () => blockedBy(ShellTool.name))).toContain(
+        "Blocked by a PreToolUse hook: the script guard",
+      )
+    }),
+  )
+
+  it.live("gives each hook the project directory of its own document, and the session's when it has none", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const home = path.join(root, "home")
+      const repo = path.join(root, "repo")
+      const app = path.join(repo, "app")
+      const session = path.join(app, "web")
+      yield* Effect.promise(() => fs.mkdir(session, { recursive: true }))
+      const variable = CompatNames.vendor.projectDirVariable
+      const file = (name: string) => path.join(root, `${name}.txt`)
+      // A hook that keeps the directory its variable names.
+      const record = (name: string) => ({
+        PreToolUse: [{ hooks: [{ type: "command", command: `printf '%s' "$${variable}" > '${file(name)}'` }] }],
+      })
+      yield* setEntries([
+        ...(yield* vendorDocuments(home, { "settings.json": { hooks: record("user") } }, "user")),
+        ...(yield* vendorDocuments(repo, {
+          "settings.json": { hooks: record("repo") },
+          "settings.local.json": { hooks: record("repo-local") },
+        })),
+        ...(yield* vendorDocuments(app, { "settings.json": { hooks: record("app") } })),
+        nativeDocument(path.join(app, "orbit.json"), record("native")),
+      ])
+      yield* startIn(session)
+
+      yield* withEnv({ [variable]: undefined }, () => blockedBy(ShellTool.name))
+
+      // The project folders answer for the directories that hold them, at whatever depth the walk found them, and
+      // the user's own folder and Orbit's own files for the directory the session runs in.
+      expect(
+        yield* Effect.forEach(["user", "repo", "repo-local", "app", "native"], (name) =>
+          Effect.promise(() => fs.readFile(file(name), "utf8")),
+        ),
+      ).toEqual([session, repo, repo, app, session])
     }),
   )
 
@@ -380,28 +495,52 @@ describe("LifecycleHooksPlugin with another product's settings files", () => {
     }),
   )
 
-  it.live("matches the foreign name of an MCP tool, from the servers that could own it", () =>
+  it.live("names an MCP tool from the server and tool that registered it, not from the prefix of its name", () =>
     Effect.gen(function* () {
       const directory = (yield* tmpdirScoped()).path
-      const file = path.join(directory, "mcp.json")
+      const files = { github: path.join(directory, "github.json"), enterprise: path.join(directory, "enterprise.json") }
       yield* setEntries([
         ...(yield* vendorDocuments(directory, {
-          "settings.json": { hooks: guard("mcp__github__.*", "github hook") },
-          "settings.local.json": { hooks: recorder("mcp__github__.*", file) },
+          "settings.json": {
+            hooks: {
+              PreToolUse: [
+                ...guard("mcp__github__.*", "github hook").PreToolUse,
+                ...guard("mcp__shell__.*", "shell server hook").PreToolUse,
+              ],
+            },
+          },
+          "settings.local.json": {
+            hooks: recorders(["mcp__github__.*", "mcp__github_enterprise__.*"], (index) =>
+              index === 0 ? files.github : files.enterprise,
+            ),
+          },
         })),
       ])
       yield* start
 
       expect(yield* blockedBy("github_create_issue")).toContain("github hook")
-      expect(yield* payload(file)).toMatchObject({ tool_name: "mcp__github__create_issue" })
-      // The same name under a server that is not configured has nothing to split it by, and is not a match.
+      expect(yield* payload(files.github)).toMatchObject({ tool_name: "mcp__github__create_issue" })
+      // The other server's name begins with this one's, and a tool of it is not a tool of this one.
+      expect(yield* blockedBy("github_enterprise_create_issue")).toBe("")
+      expect(yield* payload(files.enterprise)).toMatchObject({ tool_name: "mcp__github_enterprise__create_issue" })
+      // Nothing splits a name that no connected MCP tool has, so it is no MCP tool's, whichever server it begins with.
       expect(yield* blockedBy("gitlab_create_issue")).toBe("")
+      // Orbit's own tool that begins like the name of a server is not the server's, though a tool of it is.
+      expect(yield* blockedBy("shell_output")).toBe("")
+      expect(yield* blockedBy("shell_run")).toContain("shell server hook")
     }).pipe(
       Effect.provideService(
         Mcp.Service,
         Mcp.Service.of({
           ...emptyMcp,
-          servers: () => Effect.succeed([{ name: "github", status: { status: "connected" } }]),
+          tools: () =>
+            Effect.succeed(
+              [
+                { server: "github", name: "create_issue" },
+                { server: "github_enterprise", name: "create_issue" },
+                { server: "shell", name: "run" },
+              ].map((tool) => ({ ...tool, server: Mcp.ServerName.make(tool.server), inputSchema: { type: "object" } })),
+            ),
         }),
       ),
     ),
@@ -429,7 +568,7 @@ describe("LifecycleHooksPlugin with compatibility off", () => {
 
   itWithout.live("leaves the vendor's variable for the project directory unset", () =>
     Effect.gen(function* () {
-      const location = yield* Location.Service
+      const session = yield* Location.Service
       const directory = (yield* tmpdirScoped()).path
       const file = path.join(directory, "env.txt")
       const variable = CompatNames.vendor.projectDirVariable
@@ -441,7 +580,7 @@ describe("LifecycleHooksPlugin with compatibility off", () => {
 
       yield* withEnv({ [variable]: undefined }, () => blockedBy(ShellTool.name))
 
-      expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(`${location.directory}|`)
+      expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(`${session.directory}|`)
     }),
   )
 })

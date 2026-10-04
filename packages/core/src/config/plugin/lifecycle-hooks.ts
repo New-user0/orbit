@@ -25,7 +25,10 @@ import type { PluginInternal } from "../../plugin/internal.js"
  *
  * While compatibility is on, a matcher also accepts the names other products give a tool, so a hook written for
  * `Bash` fires for `shell`, and a hook that comes from another product's settings file is told that product's name
- * for the tool, as `tool_name`. Every hook can also read the project directory from that product's variable.
+ * for the tool, as `tool_name`: the first of its names that the hook's own matcher accepts. Every hook can also read
+ * the project directory from that product's variable. That is the session's directory, except for a hook from the
+ * settings folder of a project, which gets the directory that holds the folder, where it keeps its scripts. Orbit's
+ * own `ORBIT_PROJECT_DIR` is always the session's directory.
  *
  * This is the interim runner, and it honors less than the hooks schema describes. It warns once for each of these:
  * - Hooks of the other types (prompt, agent, http) are skipped.
@@ -83,14 +86,10 @@ export const Plugin = define({
       })
 
     // The names other products give the tool of a tool event, which is none unless compatibility is on. An MCP tool's
-    // name only splits into server and tool once the servers are known.
+    // name only splits into server and tool by the connected tools, which say which pair registered it.
     const foreignNames = Effect.fn("LifecycleHooksPlugin.foreignNames")(function* (target: string | undefined) {
       if (target === undefined || !(yield* config.compatEnabled())) return []
-      const servers = yield* mcp.servers()
-      return CompatAliases.toForeign(
-        target,
-        servers.map((server) => server.name),
-      )
+      return CompatAliases.toForeign(target, yield* mcp.tools())
     })
 
     const commands = Effect.fn("LifecycleHooksPlugin.commands")(function* (
@@ -101,7 +100,13 @@ export const Plugin = define({
       // A later document outranks an earlier one, and the position is its rank.
       const documents = (yield* config.entries()).flatMap((entry) =>
         entry.type === "document" && entry.info.hooks
-          ? [{ hooks: entry.info.hooks, foreign: CompatSettings.isForeign(entry.path) }]
+          ? [
+              {
+                hooks: entry.info.hooks,
+                foreign: CompatSettings.isForeign(entry.path),
+                directory: CompatSettings.projectDirectory(entry, location.directory),
+              },
+            ]
           : [],
       )
       yield* Effect.forEach(
@@ -115,7 +120,15 @@ export const Plugin = define({
       const matched = documents.flatMap((document, rank) =>
         (document.hooks[event] ?? [])
           .filter((group) => matches(group.matcher, target, aliases))
-          .flatMap((group) => group.hooks.map((hook) => ({ hook, foreign: document.foreign, rank }))),
+          .flatMap((group) => {
+            // A hook from another product's settings file is told that product's name for the tool: the first of the
+            // tool's names that the hook's own matcher accepts, so a hook for `Write` that runs for `patch` is told
+            // `Write`. One whose matcher accepts none of them, as it names the tool the Orbit way, is told the first.
+            const tool = document.foreign
+              ? (aliases.find((alias) => matches(group.matcher, alias, [])) ?? aliases.at(0))
+              : undefined
+            return group.hooks.map((hook) => ({ hook, rank, directory: document.directory, tool }))
+          }),
       )
       yield* Effect.forEach(
         matched.filter((item) => item.hook.type !== "command"),
@@ -126,9 +139,7 @@ export const Plugin = define({
           }),
         { discard: true },
       )
-      const runnable = matched.flatMap(({ hook, foreign, rank }) =>
-        hook.type === "command" ? [{ hook, foreign, rank }] : [],
-      )
+      const runnable = matched.flatMap((item) => (item.hook.type === "command" ? [{ ...item, hook: item.hook }] : []))
       yield* Effect.forEach(
         runnable.flatMap((item) =>
           IGNORED_COMMAND_SETTINGS.filter(
@@ -152,13 +163,13 @@ export const Plugin = define({
       if (configured.length === 0) return NOTHING
       const shell = yield* shells.resolve({ priority: "compat" })
       const compat = yield* config.compatEnabled()
-      const stdin = (foreign: boolean) =>
+      const stdin = (tool: string | undefined) =>
         JSON.stringify({
           hook_event_name: event,
           cwd: location.directory,
           ...payload,
           // The tool is named the way the hook's own product names it.
-          ...(foreign && aliases.length > 0 ? { tool_name: aliases[0] } : {}),
+          ...(tool === undefined ? {} : { tool_name: tool }),
         })
       const outcomes = yield* Effect.forEach(
         configured,
@@ -170,10 +181,10 @@ export const Plugin = define({
                 extendEnv: true,
                 env: {
                   ORBIT_PROJECT_DIR: location.directory,
-                  ...(compat ? CompatAliases.hookEnv(location.directory) : {}),
+                  ...(compat ? CompatAliases.hookEnv(item.directory) : {}),
                 },
               }),
-              { stdin: stdin(item.foreign), timeout: Duration.seconds(item.hook.timeout ?? DEFAULT_TIMEOUT_SECONDS) },
+              { stdin: stdin(item.tool), timeout: Duration.seconds(item.hook.timeout ?? DEFAULT_TIMEOUT_SECONDS) },
             )
             .pipe(
               Effect.map((result) => interpret(result.exitCode, result.stdout.toString(), result.stderr.toString())),

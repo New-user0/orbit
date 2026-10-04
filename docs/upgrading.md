@@ -50,18 +50,29 @@ every hook event. They now load as config documents, with the other config files
 the project directory. Both follow the compatibility switch, so nothing below applies with it off.
 
 - **Settings files.** Only the `hooks` of each file are used. In your home directory both files rank as user config.
-  In a project the shared file ranks as project config and the local file as local config. Each ranks below Orbit's
-  own documents of the same kind, so an `orbit.json` or `orbit.local.json` outranks them. When several hooks block a
-  tool call, the model is told the reason from the highest-ranked document, so Orbit's own files come before another
-  product's. A hook that cannot be read is reported in the log, with its file and its place in it, and costs only
-  itself, and a file that is not JSON costs only that file.
+  In a project the shared file ranks as project config and the local file as local config. Scopes rank as they do for
+  any other config, so within one scope Orbit's own documents outrank these files: an `orbit.json` outranks the
+  project's shared settings file, and an `orbit.local.json` its local one. A higher scope still outranks a lower one,
+  so a project's settings file outranks the `orbit.json` in your own config directory. When several hooks block a
+  tool call, the model is told the reason from the highest-ranked document. A hook that cannot be read is reported in
+  the log, with its file and its place in it, and costs only itself, and a file that is not JSON costs only that file.
 - **Hook matchers and names.** A hook matcher in any document also accepts the names other products give a tool:
   `Bash` for `shell`; `Edit` and `MultiEdit` for `edit`, and `Write` for `write`, and all three also for `patch`,
   which takes the place of `edit` and `write` on some models; `NotebookEdit`, `Glob`, `Grep`, `WebFetch` and
-  `WebSearch` for the tool of the same name; `Task` and `Agent` for `subagent`; `TodoWrite` for `todo`; and
-  `mcp__<server>__<tool>` for an MCP tool. A hook from another product's settings file is told that name as
-  `tool_name`, and every hook gets that product's project-directory variable beside `ORBIT_PROJECT_DIR`. Hooks in
-  Orbit's own files still get Orbit's names for the tool.
+  `WebSearch` for the tool of the same name; `Agent`, and `Task` as its older name, for `subagent`; `TodoWrite` for
+  `todo`; and `mcp__<server>__<tool>` for an MCP tool. A hook from another product's settings file is told that name
+  as `tool_name`: the first of the tool's names that its own matcher accepts, so a `Write` hook that runs for `patch`
+  is told `Write`. Hooks in Orbit's own files still get Orbit's names for the tool.
+- **Hooks that never ran now do.** A hook whose matcher names another product's tools, such as `Bash`, `Edit|Write` or
+  `mcp__github__.*`, never matched an Orbit tool, so it never ran, whether it sat in a settings file or in your own
+  config. With compatibility on, which is the default, these hooks run. They receive Orbit's tool input, not the other
+  product's: `tool_input` keeps Orbit's field names, so the file of an `edit` or `write` call is `path` where the other
+  product says `file_path`, and a `patch` call carries only `patchText`. A hook that reads the other product's field
+  names will not find them. Hooks with no matcher, or `*`, ran before and still do.
+- **Project directory.** Every hook also gets that product's project-directory variable. For a hook in the settings
+  folder of a project it is the directory that holds the folder, which can be above the directory Orbit runs in, so a
+  hook that runs a script kept in the folder finds it. For a hook in your home directory's settings or in Orbit's own
+  files it is the directory Orbit runs in, which `ORBIT_PROJECT_DIR` always is.
 - **`.mcp.json`.** Its `mcpServers` become project config: servers that run a command become local servers, and those
   with `"type": "http"` or `"type": "sse"` become remote servers. `${NAME}` and `${NAME:-fallback}` expand from the
   environment of the Orbit server in commands, arguments, variables, directories, URLs and headers. A server with no
@@ -70,14 +81,18 @@ the project directory. Both follow the compatibility switch, so nothing below ap
 - **When edits apply.** Orbit now picks up a change to a settings file or to `.mcp.json` when the config reloads, a
   moment after the file is saved, and no longer reads the settings files again on every hook event.
 
-**Affects:** people with hooks in another product's settings files, who may see a different block reason or tool name
-than before; repositories that keep a `.mcp.json`, whose servers now start when the project is opened, as those in a
-project's `orbit.json` already do; and code built on `@orbit/core`, where `HookConfig` moved from
-`@orbit/core/hook/config` to `@orbit/schema/config/hook-config` and `McpTool.namespace` and `McpTool.name` are now
-defined in `@orbit/schema/mcp` and re-exported.
+**Affects:** people whose hooks name another product's tools, in its settings files or in their own config: those hooks
+now run for tool calls they never ran for, and read Orbit's tool input; other people with hooks in another product's
+settings files, who may see a different block reason or tool name than before; repositories that keep a `.mcp.json`,
+whose servers now start when the project is opened, as those in a project's `orbit.json` already do; and code built on
+`@orbit/core`, where `HookConfig` moved from `@orbit/core/hook/config` to `@orbit/schema/config/hook-config` and
+`McpTool.namespace` and `McpTool.name` are now defined in `@orbit/schema/mcp` and re-exported.
 
-**What to do:** Nothing for hooks that keep working. If a repository's `.mcp.json` should not start servers for you,
-turn compatibility off, or move the servers you want into `orbit.json`.
+**What to do:** Look through the hooks that name another product's tools. Make each read Orbit's field names, such as
+`path`, `oldString` and `patchText`, or accept both, or remove it. To go back to hooks that match only Orbit's own tool
+names, and to stop Orbit reading that product's settings files and `.mcp.json`, turn compatibility off as described
+above, which also stops it loading that product's skills, output styles and instruction files. If a repository's
+`.mcp.json` should not start servers for you, turn compatibility off, or move the servers you want into `orbit.json`.
 
 ## Clients
 
