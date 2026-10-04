@@ -1,7 +1,9 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { CompatNames } from "@orbit/compat/names"
 import { Command } from "@orbit/core/command"
 import { Bus } from "@orbit/core/bus"
+import { Config } from "@orbit/core/config"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
@@ -25,14 +27,75 @@ const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory }, { projectDirectory: project })),
 )
-const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Command.node, Mcp.node, Bus.node]), [
-    Mcp.node.replace(emptyMcpLayer),
-    Location.node.replace(locationLayer),
-  ]),
-)
+const commandLayer = (compat?: Config.Compat) =>
+  Layer.merge(
+    AppNodeBuilder.build(LayerNode.group([Command.node, Mcp.node, Bus.node]), [
+      Mcp.node.replace(emptyMcpLayer),
+      Location.node.replace(locationLayer),
+    ]),
+    Config.testLayer([], compat),
+  )
+const it = testEffect(commandLayer())
+const compatOff = testEffect(commandLayer({ enabled: false, roots: [] }))
+
+// The instruction files /init is told to read: the ones Orbit loads, then (while compatibility is on) other products'.
+const files = (names: readonly string[]) => names.map((name) => `\`${name}\``).join(", ")
+const everyFile = files([
+  "ORBIT.md",
+  "AGENTS.md",
+  CompatNames.vendor.instructions,
+  ...Object.values(CompatNames.foreign).flat(),
+])
+const initialize = (instructionFiles: string, args: string) =>
+  PROMPT_INITIALIZE.replace("${path}", project)
+    .replace("${instruction_files}", instructionFiles)
+    .replaceAll("$ARGUMENTS", args)
 
 describe("CommandPlugin.Plugin", () => {
+  compatOff.effect("leaves other products' instruction files out of /init when compatibility is off", () =>
+    Effect.gen(function* () {
+      const command = yield* Command.Service
+      const prompts: string[] = []
+      yield* CommandPlugin.Plugin.effect(
+        host({
+          command: {
+            list: () => Effect.die("unused command.list"),
+            transform: command.transform,
+            reload: command.reload,
+          },
+          session: {
+            prompt: (input) =>
+              Effect.sync(() => {
+                prompts.push(input.text)
+                return SessionInbox.User.make({
+                  id: SessionMessage.ID.make("msg_test"),
+                  sessionID: input.sessionID,
+                  time: { created: DateTime.makeUnsafe(0) },
+                  type: "user",
+                  payload: { text: input.text },
+                  delivery: input.delivery ?? "steer",
+                })
+              }),
+          },
+        }),
+      ).pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory }, { projectDirectory: project })),
+        ),
+      )
+
+      yield* command.execute({
+        name: "init",
+        invocation: { sessionID: Session.ID.make("ses_test"), prompt: { text: "" }, delivery: "steer" },
+      })
+
+      expect(prompts).toEqual([initialize(files(["ORBIT.md", "AGENTS.md"]), "")])
+      expect(prompts[0]).not.toContain(CompatNames.vendor.instructions)
+      for (const name of Object.values(CompatNames.foreign).flat()) expect(prompts[0]).not.toContain(name)
+    }),
+  )
+
   it.effect("registers built-in init and review commands", () =>
     Effect.gen(function* () {
       const command = yield* Command.Service
@@ -112,7 +175,7 @@ describe("CommandPlugin.Plugin", () => {
       })
       expect(prompts).toEqual([
         {
-          text: PROMPT_INITIALIZE.replace("${path}", project).replaceAll("$ARGUMENTS", "extra context"),
+          text: initialize(everyFile, "extra context"),
           files: [{ uri: "file:///tmp/context.md" }],
           delivery: "queue",
         },
@@ -122,7 +185,7 @@ describe("CommandPlugin.Plugin", () => {
           delivery: "steer",
         },
         {
-          text: PROMPT_INITIALIZE.replace("${path}", project).replaceAll("$ARGUMENTS", ""),
+          text: initialize(everyFile, ""),
           files: undefined,
           delivery: "steer",
         },

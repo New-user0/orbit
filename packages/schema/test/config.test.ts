@@ -21,6 +21,19 @@ describe("Config.Entry", () => {
     expect(() => decode({ worktree: { directory: " " } })).toThrow()
     expect(() => decode({ worktree: { directory: false } })).toThrow()
   })
+  test("round-trips the compatibility switch and omits it when absent", () => {
+    const decode = Schema.decodeUnknownSync(Config.Info)
+    const encode = Schema.encodeSync(Config.Info)
+    for (const input of [
+      { compatibility: { enabled: false } },
+      { compatibility: { enabled: true } },
+      { compatibility: {} },
+    ])
+      expect(encode(decode(input))).toEqual(input)
+    expect(encode(new Config.Info({}))).not.toHaveProperty("compatibility")
+    expect(() => decode({ compatibility: { enabled: "no" } })).toThrow()
+    expect(() => decode({ compatibility: false })).toThrow()
+  })
   test("round-trips canonical provider IDs without changing config keys", () => {
     const input = { providers: { "console-anthropic": { canonical: "anthropic" } } }
     const decoded = Schema.decodeUnknownSync(Config.Info)(input)

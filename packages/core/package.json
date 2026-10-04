@@ -109,6 +109,7 @@
     "@modelcontextprotocol/core": "2.0.0",
     "@orbit/ai": "workspace:*",
     "@orbit/codemode": "workspace:*",
+    "@orbit/compat": "workspace:*",
     "@orbit/plugin": "workspace:*",
     "@orbit/plugin-browser": "workspace:*",
     "@orbit/schema": "workspace:*",

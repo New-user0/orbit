@@ -57,8 +57,8 @@ jobs:
       fail-fast: false
       matrix:
         # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
-        # theme holds the theme resolution tests.
-        package: [ai, cli, client, codemode, core, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
+        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests.
+        package: [ai, cli, client, codemode, compat, core, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun

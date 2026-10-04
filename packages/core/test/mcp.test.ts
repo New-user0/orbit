@@ -292,6 +292,8 @@ function resourceMcpLayer(
               Config.Service,
               Config.Service.of({
                 entries: overrides.entries,
+                compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
+                compat: () => Effect.succeed(Config.defaultCompat),
                 changes: () => Stream.never,
               }),
             )

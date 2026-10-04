@@ -2,8 +2,9 @@ import fs from "fs/promises"
 import path from "path"
 import { describe, expect, test } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { CompatNames } from "@orbit/compat/names"
 import { Config } from "@orbit/core/config"
-import { Directory, Document, type Entry, Info } from "@orbit/schema/config"
+import { Directory, Document, type Entry, Event, Info } from "@orbit/schema/config"
 import { ConfigSkillPlugin } from "@orbit/core/config/plugin/skill"
 import { ConfigCompatibilityPlugin } from "@orbit/core/config/plugin/compatibility"
 import { SkillFile } from "@orbit/core/config/plugin/skill-file"
@@ -48,10 +49,7 @@ const startEntries = Effect.fnUntraced(function* (
   directory: string,
   home = directory,
   discovery = emptyDiscovery,
-  compatibility: { readonly claude: readonly AbsolutePath[]; readonly agents: readonly AbsolutePath[] } = {
-    claude: [],
-    agents: [],
-  },
+  compat: Config.Compat = Config.defaultCompat,
 ) {
   const service = yield* Skill.Service
   const pluginHost = host({
@@ -61,13 +59,11 @@ const startEntries = Effect.fnUntraced(function* (
       reload: service.reload,
     },
   })
-  yield* ConfigCompatibilityPlugin.Plugin.effect(pluginHost).pipe(
-    Effect.provide(Config.testLayer(entries, compatibility)),
-  )
+  yield* ConfigCompatibilityPlugin.Plugin.effect(pluginHost).pipe(Effect.provide(Config.testLayer(entries, compat)))
   yield* ConfigSkillPlugin.Plugin.effect(
     pluginHost,
   ).pipe(
-    Effect.provide(Config.testLayer(entries, compatibility)),
+    Effect.provide(Config.testLayer(entries, compat)),
     Effect.provideService(SkillDiscovery.Service, discovery),
     Effect.provideService(Global.Service, Global.Service.of({ ...Global.make(), home })),
     Effect.provideService(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
@@ -91,7 +87,7 @@ const start = (skills: string[], directory: string, discovery = emptyDiscovery) 
 const discover = (directory: string, global: string) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
-    return { entries: yield* config.entries(), compatibility: yield* config.compatibility!() }
+    return { entries: yield* config.entries(), compat: yield* config.compat() }
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
@@ -162,18 +158,80 @@ metadata:
   })
 })
 
+describe("ConfigCompatibilityPlugin.Plugin", () => {
+  it.live("reloads its skills when a config update flips the compatibility switch", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const vendor = path.join(tmp.path, "vendor")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(vendor, "skills", "probe"), { recursive: true })
+            await write(path.join(vendor, "skills"), "probe", "Switchable")
+          })
+          // The raw file feed stays silent: only the config.updated event the switch arrives with can reload.
+          const state = { enabled: true }
+          const config = Layer.succeed(
+            Config.Service,
+            Config.Service.of({
+              entries: () => Effect.succeed([]),
+              changes: () => Stream.never,
+              compatEnabled: () => Effect.sync(() => state.enabled),
+              compat: () =>
+                Effect.sync(() =>
+                  state.enabled
+                    ? { enabled: true, roots: [{ path: AbsolutePath.make(vendor), kind: "vendor", scope: "project" }] }
+                    : { enabled: false, roots: [] },
+                ),
+            }),
+          )
+          const bus = yield* Bus.Service
+          const skills = yield* Skill.Service
+          yield* ConfigCompatibilityPlugin.Plugin.effect(
+            host({
+              skill: {
+                list: () => Effect.die("unused skill.list"),
+                transform: skills.transform,
+                reload: skills.reload,
+              },
+              event: { subscribe: () => bus.subscribe(Event.Updated) },
+            }),
+          ).pipe(Effect.provide(config))
+          const turn = (enabled: boolean) =>
+            Effect.gen(function* () {
+              const updated = yield* Deferred.make<void>()
+              const fiber = yield* bus.subscribe(Skill.Event.Updated).pipe(
+                Stream.runForEach(() => Deferred.succeed(updated, undefined).pipe(Effect.asVoid)),
+                Effect.forkScoped,
+              )
+              yield* Effect.yieldNow
+              state.enabled = enabled
+              yield* bus.publish(Event.Updated, {})
+              yield* Deferred.await(updated).pipe(Effect.timeout("2 seconds"))
+              yield* Fiber.interrupt(fiber)
+              return (yield* skills.list()).map((item) => item.id)
+            })
+
+          expect((yield* skills.list()).map((item) => item.id)).toEqual([Skill.ID.make("probe")])
+          expect(yield* turn(false)).toEqual([])
+          expect(yield* turn(true)).toEqual([Skill.ID.make("probe")])
+        }),
+      ),
+    ),
+  )
+})
+
 describe("ConfigSkillPlugin.Plugin", () => {
   it.live("maps config entry types to skill directories", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
-          const claude = path.join(tmp.path, "claude")
+          const vendor = path.join(tmp.path, "vendor")
           const agents = path.join(tmp.path, "agents")
           const orbit = path.join(tmp.path, "orbit")
           const home = path.join(tmp.path, "home")
           const directory = path.join(tmp.path, "project")
           const expected = [
-            path.join(claude, "skills"),
+            path.join(vendor, "skills"),
             path.join(agents, "skills"),
             path.join(orbit, "skill"),
             path.join(orbit, "skills"),
@@ -190,7 +248,13 @@ describe("ConfigSkillPlugin.Plugin", () => {
             directory,
             home,
             emptyDiscovery,
-            { claude: [AbsolutePath.make(claude)], agents: [AbsolutePath.make(agents)] },
+            {
+              enabled: true,
+              roots: [
+                { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project" },
+                { path: AbsolutePath.make(agents), kind: "agents", scope: "project" },
+              ],
+            },
           )
           const watcher = yield* Watcher.Test
           expect(yield* watcher.subscriptions()).toEqual(expected.map((item) => ({ path: item, type: "directory" })))
@@ -243,8 +307,8 @@ describe("ConfigSkillPlugin.Plugin", () => {
         Effect.gen(function* () {
           const checkout = path.join(tmp.path, "repo")
           const worktree = path.join(checkout, ".worktrees", "feature")
-          const parentSkills = path.join(checkout, ".agents", "skills")
-          const worktreeSkills = path.join(worktree, ".agents", "skills")
+          const parentSkills = path.join(checkout, CompatNames.agents, "skills")
+          const worktreeSkills = path.join(worktree, CompatNames.agents, "skills")
           yield* Effect.promise(async () => {
             await fs.mkdir(path.join(checkout, ".git"), { recursive: true })
             await fs.mkdir(path.join(parentSkills, "review"), { recursive: true })
@@ -255,13 +319,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
           })
 
           const discovered = yield* discover(worktree, path.join(tmp.path, "global"))
-          const skill = yield* startEntries(
-            discovered.entries,
-            worktree,
-            worktree,
-            emptyDiscovery,
-            discovered.compatibility,
-          )
+          const skill = yield* startEntries(discovered.entries, worktree, worktree, emptyDiscovery, discovered.compat)
           const review = (yield* skill.list()).find((item) => item.id === "review")
 
           expect(review?.description).toBe("Worktree")

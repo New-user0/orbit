@@ -13877,6 +13877,15 @@
             },
             "additionalProperties": false
           },
+          "compatibility": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
           "skills": {
             "type": "array",
             "items": {

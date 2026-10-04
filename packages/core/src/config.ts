@@ -5,6 +5,8 @@ import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
 import { Context, Effect, FiberMap, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
+import type { CompatRoots } from "@orbit/compat/roots"
+import { CompatSwitch } from "@orbit/compat/switch"
 import { Directory, Document, Info, type Patch, type Entry, type Scope, Event } from "@orbit/schema/config"
 import { Credential } from "./credential.js"
 import { Bus } from "./bus.js"
@@ -24,6 +26,16 @@ export function latest<K extends keyof Info>(entries: readonly Entry[], key: K):
     ?.info[key]
 }
 
+/** Whether Orbit reads other agent products' files, and the roots it reads them from. */
+export interface Compat {
+  readonly enabled: boolean
+  /** The roots that exist now, lowest priority first. None while compatibility is disabled. */
+  readonly roots: readonly CompatRoots.Root[]
+}
+
+/** What a test config service reports unless it is given another state: enabled, with no roots to read. */
+export const defaultCompat: Compat = { enabled: true, roots: [] }
+
 export interface Interface {
   /**
    * Returns location config documents and discovery sources from lowest to highest priority. Entries are grouped by
@@ -31,11 +43,16 @@ export interface Interface {
    * scope, outer sources come before inner ones.
    */
   readonly entries: () => Effect.Effect<Entry[]>
-  /** Compatibility roots consumed by internal compatibility plugins. */
-  readonly compatibility?: () => Effect.Effect<{
-    readonly claude: readonly AbsolutePath[]
-    readonly agents: readonly AbsolutePath[]
-  }>
+  /**
+   * Whether Orbit reads other agent products' files. It checks nothing on disk, so a caller that needs only the switch,
+   * such as the read tool on every read, asks this instead of `compat`.
+   */
+  readonly compatEnabled: () => Effect.Effect<boolean>
+  /**
+   * The compatibility switch and the roots consumed by internal compatibility plugins. Checking that each root exists
+   * costs a stat per candidate, so ask `compatEnabled` when the roots are not needed.
+   */
+  readonly compat: () => Effect.Effect<Compat>
   /**
    * Streams raw filesystem updates under config roots. Config owns root
    * topology and watch reconciliation; domain owners filter this feed for the
@@ -49,8 +66,8 @@ export interface Interface {
 export const Options = Schema.Struct({
   project: Schema.optional(Schema.Boolean),
   // false skips the global config dir, the orbit.json(c), orbit.local.json(c),
-  // and .orbit in the home directory, ~/.claude, and ~/.agents; wellknown,
-  // file, and content entries still load.
+  // and .orbit in the home directory, and the compatibility roots in the home
+  // directory; wellknown, file, and content entries still load.
   global: Schema.optional(Schema.Boolean),
   file: Schema.optional(Schema.String),
   content: Schema.optional(Schema.String),
@@ -68,21 +85,19 @@ export interface TestInterface extends Interface {
 
 export class Test extends Context.Service<Test, TestInterface>()("@orbit/Config/Test") {}
 
-/** In-memory config for tests: static entries with replaceable state and a test-driven change feed. */
-export const testLayer = (
-  initial: Entry[] = [],
-  compatibility: { readonly claude: readonly AbsolutePath[]; readonly agents: readonly AbsolutePath[] } = {
-    claude: [],
-    agents: [],
-  },
-) =>
+/**
+ * In-memory config for tests: static entries with replaceable state and a test-driven change feed. The compatibility
+ * state is reported as given and does not follow the entries; by default it is enabled with no roots.
+ */
+export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat) =>
   Layer.effectContext(
     Effect.gen(function* () {
       const entries = yield* Ref.make(initial)
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const service = Test.of({
         entries: () => Ref.get(entries),
-        compatibility: () => Effect.succeed(compatibility),
+        compatEnabled: () => Effect.succeed(compat.enabled),
+        compat: () => Effect.succeed(compat),
         changes: () => Stream.fromPubSub(updates),
         setEntries: (next) => Ref.set(entries, next),
         emitChange: (update) => PubSub.publish(updates, update).pipe(Effect.asVoid),
@@ -268,8 +283,16 @@ export const layer = (options?: Options) =>
       // Readiness rescans recover writes made before a watch attached.
       const requestReload = PubSub.publish(reloads, undefined).pipe(Effect.asVoid)
       const watched = yield* FiberMap.make<string>()
-      const reconcile = Effect.fn("Config.reconcileWatches")(function* (sources: ConfigDiscovery.Sources) {
-        const plan = ConfigWatch.plan(sources)
+      // Reads only the loaded documents and the environment, never the disk, so asking it is cheap.
+      const compatOn = (entries: readonly Entry[]) => CompatSwitch.enabled(entries, process.env)
+      // Compatibility roots count only while the switch is on: switched off, they are neither watched nor reported.
+      const applicable = (discovered: ConfigDiscovery.Sources, entries: readonly Entry[]) =>
+        compatOn(entries) ? discovered : { ...discovered, compat: [] }
+      const reconcile = Effect.fn("Config.reconcileWatches")(function* (
+        sources: ConfigDiscovery.Sources,
+        entries: readonly Entry[],
+      ) {
+        const plan = ConfigWatch.plan(applicable(sources, entries))
         for (const key of Array.from(watched, ([key]) => key)) {
           if (!plan.has(key)) yield* FiberMap.remove(watched, key)
         }
@@ -289,10 +312,11 @@ export const layer = (options?: Options) =>
         function* () {
           const discovered = yield* ConfigDiscovery.discover(options)
           const next = yield* load(discovered)
-          yield* reconcile(discovered)
-          const compatibilityChanged =
-            !isDeepStrictEqual(sources.claude, discovered.claude) ||
-            !isDeepStrictEqual(sources.agents, discovered.agents)
+          yield* reconcile(discovered, next)
+          const compatibilityChanged = !isDeepStrictEqual(
+            applicable(sources, configs).compat,
+            applicable(discovered, next).compat,
+          )
           if (isDeepStrictEqual(configs, next) && !compatibilityChanged) return
           sources = discovered
           configs = next
@@ -347,7 +371,7 @@ export const layer = (options?: Options) =>
         Effect.forever,
         Effect.forkScoped({ startImmediately: true }),
       )
-      yield* reloadLock.withPermit(reconcile(initial))
+      yield* reloadLock.withPermit(reconcile(initial, configs))
 
       const update = Effect.fn("Config.update")(
         function* (patch: Patch) {
@@ -381,11 +405,11 @@ export const layer = (options?: Options) =>
         entries: Effect.fnUntraced(function* () {
           return configs
         }),
-        compatibility: () =>
-          Effect.all({
-            claude: Effect.filter(sources.claude, fs.isDir),
-            agents: Effect.filter(sources.agents, fs.isDir),
-          }),
+        compatEnabled: () => Effect.sync(() => compatOn(configs)),
+        compat: Effect.fnUntraced(function* () {
+          const enabled = compatOn(configs)
+          return { enabled, roots: enabled ? yield* Effect.filter(sources.compat, (root) => fs.isDir(root.path)) : [] }
+        }),
         changes: () => Stream.fromPubSub(updates),
         update,
       })

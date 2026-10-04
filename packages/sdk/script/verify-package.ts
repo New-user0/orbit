@@ -12,6 +12,7 @@ const names = [
   "codemode",
   "ai",
   "util",
+  "compat",
   "protocol",
   "client",
   "plugin",

@@ -2,13 +2,16 @@ import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import fs from "fs/promises"
 import path from "path"
+import { CompatNames } from "@orbit/compat/names"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
+import { Config } from "@orbit/core/config"
 import { ConfigInstructionPlugin } from "@orbit/core/config/plugin/instruction"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { Location } from "@orbit/core/location"
 import { AbsolutePath } from "@orbit/core/schema"
+import { Event } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -21,15 +24,22 @@ import { host } from "./plugin/host"
 
 const it = testEffect(Layer.empty)
 
+// The names looked for in every directory, in priority order: the native files, then the reference vendor's.
+const nativeNames = ["ORBIT.md", "AGENTS.md"]
+const allNames = [...nativeNames, CompatNames.vendor.instructions]
+
 const instructionLayer = (input: {
   config?: string
   home?: string
   locationServiceLayer: Layer.Layer<Location.Service>
   filesystemLayer?: Layer.Layer<FSUtil.Service>
   project?: boolean
+  // Compatibility is on, with no roots, unless a test supplies its own config.
+  configLayer?: Layer.Layer<Config.Service>
 }) => {
   const watcher = Watcher.testLayer
   return Layer.mergeAll(
+    input.configLayer ?? Config.testLayer(),
     AppNodeBuilder.build(
       LayerNode.group([InstructionDiscovery.node, Bus.node, FSUtil.node, Global.node, Location.node, Watcher.node]),
       [
@@ -51,8 +61,8 @@ const instructionLayer = (input: {
   )
 }
 
-const start = Effect.fnUntraced(function* () {
-  yield* ConfigInstructionPlugin.Plugin.effect(host())
+const start = Effect.fnUntraced(function* (overrides?: Parameters<typeof host>[0]) {
+  yield* ConfigInstructionPlugin.Plugin.effect(host(overrides))
   return yield* InstructionDiscovery.Service
 })
 
@@ -363,46 +373,169 @@ describe("ConfigInstructionPlugin.Plugin", () => {
     ),
   )
 
-  it.live("loads the first of ORBIT.md, AGENTS.md and CLAUDE.md in each directory", () =>
+  // A global directory, a project and a package inside it, each keeping some of the instruction files.
+  const writeEachDirectory = (tmp: { readonly path: string }) => {
+    const global = path.join(tmp.path, "global")
+    const project = path.join(tmp.path, "scratch", "repo")
+    const directory = path.join(project, "packages", "core")
+    return {
+      global,
+      project,
+      directory,
+      write: Effect.promise(async () => {
+        await fs.mkdir(directory, { recursive: true })
+        await fs.mkdir(global, { recursive: true })
+        await fs.writeFile(path.join(global, CompatNames.vendor.instructions), "global vendor")
+        await fs.writeFile(path.join(directory, "ORBIT.md"), "package orbit")
+        await fs.writeFile(path.join(directory, "AGENTS.md"), "package agents")
+        await fs.writeFile(path.join(project, "AGENTS.md"), "project agents")
+        await fs.writeFile(path.join(project, CompatNames.vendor.instructions), "project vendor")
+      }),
+    }
+  }
+
+  it.live("loads the first of the native files and the reference vendor's file in each directory", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ).pipe(
       Effect.flatMap((tmp) => {
-        const global = path.join(tmp.path, "global")
-        const project = path.join(tmp.path, "scratch", "repo")
-        const directory = path.join(project, "packages", "core")
+        const fixture = writeEachDirectory(tmp)
         return Effect.gen(function* () {
-          yield* Effect.promise(async () => {
-            await fs.mkdir(directory, { recursive: true })
-            await fs.mkdir(global, { recursive: true })
-            await fs.writeFile(path.join(global, "CLAUDE.md"), "global claude")
-            await fs.writeFile(path.join(directory, "ORBIT.md"), "package orbit")
-            await fs.writeFile(path.join(directory, "AGENTS.md"), "package agents")
-            await fs.writeFile(path.join(project, "AGENTS.md"), "project agents")
-            await fs.writeFile(path.join(project, "CLAUDE.md"), "project claude")
-          })
+          yield* fixture.write
           const discovery = yield* start()
           expect((yield* readInitial(yield* discovery.load())).text).toBe(
             [
-              `Instructions from: ${path.join(global, "CLAUDE.md")}\nglobal claude`,
-              `Instructions from: ${path.join(directory, "ORBIT.md")}\npackage orbit`,
-              `Instructions from: ${path.join(project, "AGENTS.md")}\nproject agents`,
+              `Instructions from: ${path.join(fixture.global, CompatNames.vendor.instructions)}\nglobal vendor`,
+              `Instructions from: ${path.join(fixture.directory, "ORBIT.md")}\npackage orbit`,
+              `Instructions from: ${path.join(fixture.project, "AGENTS.md")}\nproject agents`,
             ].join("\n\n"),
           )
         }).pipe(
           Effect.provide(
             instructionLayer({
-              config: global,
+              config: fixture.global,
               home: path.join(tmp.path, "home"),
               locationServiceLayer: Layer.succeed(
                 Location.Service,
                 Location.Service.of(
                   location(
-                    { directory: AbsolutePath.make(directory) },
-                    { projectDirectory: AbsolutePath.make(project) },
+                    { directory: AbsolutePath.make(fixture.directory) },
+                    { projectDirectory: AbsolutePath.make(fixture.project) },
                   ),
                 ),
+              ),
+            }),
+          ),
+        )
+      }),
+    ),
+  )
+
+  it.live("skips the reference vendor's file, and does not watch it, when compatibility is off", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const fixture = writeEachDirectory(tmp)
+        return Effect.gen(function* () {
+          yield* fixture.write
+          const discovery = yield* start()
+          const watcher = yield* Watcher.Test
+
+          // The global directory keeps only the vendor's file, so nothing loads from it.
+          expect((yield* readInitial(yield* discovery.load())).text).toBe(
+            [
+              `Instructions from: ${path.join(fixture.directory, "ORBIT.md")}\npackage orbit`,
+              `Instructions from: ${path.join(fixture.project, "AGENTS.md")}\nproject agents`,
+            ].join("\n\n"),
+          )
+          expect(yield* watcher.subscriptions()).toEqual(
+            [fixture.global, fixture.directory, path.join(fixture.project, "packages"), fixture.project].flatMap(
+              watchedNames(nativeNames),
+            ),
+          )
+        }).pipe(
+          Effect.provide(
+            instructionLayer({
+              config: fixture.global,
+              home: path.join(tmp.path, "home"),
+              configLayer: Config.testLayer([], { enabled: false, roots: [] }),
+              locationServiceLayer: Layer.succeed(
+                Location.Service,
+                Location.Service.of(
+                  location(
+                    { directory: AbsolutePath.make(fixture.directory) },
+                    { projectDirectory: AbsolutePath.make(fixture.project) },
+                  ),
+                ),
+              ),
+            }),
+          ),
+        )
+      }),
+    ),
+  )
+
+  it.live("rescans, and starts watching the reference vendor's file, when a config update turns compatibility on", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const project = path.join(tmp.path, "repo")
+        const vendorFile = path.join(project, CompatNames.vendor.instructions)
+        const state = { enabled: false }
+        const config = Layer.succeed(
+          Config.Service,
+          Config.Service.of({
+            entries: () => Effect.succeed([]),
+            changes: () => Stream.never,
+            compatEnabled: () => Effect.sync(() => state.enabled),
+            compat: () => Effect.sync(() => ({ enabled: state.enabled, roots: [] })),
+          }),
+        )
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(project, { recursive: true })
+            await fs.writeFile(vendorFile, "vendor notes")
+          })
+          const bus = yield* Bus.Service
+          const watcher = yield* Watcher.Test
+          const discovery = yield* start({ event: { subscribe: () => bus.subscribe(Event.Updated) } })
+          // Flips the switch and publishes the config update it arrives with, then waits for the rescan it causes.
+          const turn = (enabled: boolean) =>
+            Effect.gen(function* () {
+              const updated = yield* Deferred.make<void>()
+              const fiber = yield* bus.subscribe(InstructionDiscovery.Event.Updated).pipe(
+                Stream.runForEach(() => Deferred.succeed(updated, undefined).pipe(Effect.asVoid)),
+                Effect.forkScoped,
+              )
+              yield* Effect.yieldNow
+              state.enabled = enabled
+              yield* bus.publish(Event.Updated, {})
+              yield* Deferred.await(updated).pipe(Effect.timeout("2 seconds"))
+              yield* Fiber.interrupt(fiber)
+              return yield* discovery.list()
+            })
+
+          expect(yield* discovery.list()).toEqual([])
+          expect(yield* watcher.subscriptions()).not.toContainEqual({ path: vendorFile, type: "file" })
+
+          expect(yield* turn(true)).toEqual([file(vendorFile, "vendor notes")])
+          expect(yield* watcher.subscriptions()).toContainEqual({ path: vendorFile, type: "file" })
+
+          expect(yield* turn(false)).toEqual([])
+        }).pipe(
+          Effect.provide(
+            instructionLayer({
+              config: path.join(tmp.path, "global"),
+              home: path.join(tmp.path, "home"),
+              configLayer: config,
+              locationServiceLayer: Layer.succeed(
+                Location.Service,
+                Location.Service.of(location({ directory: AbsolutePath.make(project) })),
               ),
             }),
           ),
@@ -534,16 +667,16 @@ describe("ConfigInstructionPlugin.Plugin", () => {
       )
 
       const repo = path.resolve("/repo")
-      expect(observed.values).toEqual([
-        { targets: ["ORBIT.md", "AGENTS.md", "CLAUDE.md"], start: repo, stop: repo, type: "file" },
-      ])
+      expect(observed.values).toEqual([{ targets: allNames, start: repo, stop: repo, type: "file" }])
     }),
   )
 })
 
-function watched(directory: string) {
-  return ["ORBIT.md", "AGENTS.md", "CLAUDE.md"].map((name) => ({
-    path: path.join(directory, name),
-    type: "file" as const,
-  }))
+function watchedNames(names: readonly string[]) {
+  return (directory: string) =>
+    names.map((name) => ({
+      path: path.join(directory, name),
+      type: "file" as const,
+    }))
 }
+const watched = watchedNames(allNames)

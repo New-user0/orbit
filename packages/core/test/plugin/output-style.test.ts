@@ -35,7 +35,63 @@ const context = (): SessionHooks["context"] => ({
   options: {},
 })
 
+const writeStyle = (root: string, name: string, body: string) =>
+  Effect.promise(async () => {
+    await fs.mkdir(path.join(root, "output-styles"), { recursive: true })
+    await Bun.write(path.join(root, "output-styles", `${name}.md`), `---\nname: ${name}\n---\n${body}\n`)
+  })
+
+// Activates the plugin over a config that reports the given compatibility state, and returns the system prompt a
+// session would get for the named style.
+const styledPrompt = (name: string, compat: Config.Compat) =>
+  Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service)).pipe(
+      Effect.provide(Config.testLayer([styled(name)], compat)),
+    )
+    const event = context()
+    yield* hooks.trigger("session", "context", event)
+    return event.system[0]?.text
+  })
+
 describe("OutputStylePlugin", () => {
+  it.live("reads styles from the reference vendor's roots while compatibility is enabled", () =>
+    Effect.gen(function* () {
+      const vendor = (yield* tmpdirScoped()).path
+      const agents = (yield* tmpdirScoped()).path
+      yield* writeStyle(vendor, "terse", "Answer in one sentence.")
+      yield* writeStyle(agents, "chatty", "Answer at length.")
+      const roots = [
+        { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project" },
+        { path: AbsolutePath.make(agents), kind: "agents", scope: "project" },
+      ] as const
+
+      expect(yield* styledPrompt("terse", { enabled: true, roots })).toEndWith(
+        "# Output style: terse\nAnswer in one sentence.",
+      )
+    }),
+  )
+
+  it.live("leaves a style unresolved when it is only in a shared .agents root", () =>
+    Effect.gen(function* () {
+      const agents = (yield* tmpdirScoped()).path
+      yield* writeStyle(agents, "chatty", "Answer at length.")
+      const roots = [{ path: AbsolutePath.make(agents), kind: "agents", scope: "project" }] as const
+
+      expect(yield* styledPrompt("chatty", { enabled: true, roots })).toBe(base)
+    }),
+  )
+
+  it.live("stops resolving the vendor's styles when compatibility is disabled", () =>
+    Effect.gen(function* () {
+      const vendor = (yield* tmpdirScoped()).path
+      yield* writeStyle(vendor, "terse", "Answer in one sentence.")
+
+      // A disabled switch reports no roots, so the same style that resolved above is unknown.
+      expect(yield* styledPrompt("terse", { enabled: false, roots: [] })).toBe(base)
+    }),
+  )
+
   it.live("appends a built-in or file style, and drops coding sections when a style asks", () =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service

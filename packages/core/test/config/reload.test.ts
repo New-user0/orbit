@@ -2,6 +2,7 @@ import path from "path"
 import fs from "fs/promises"
 import { writeFileSync } from "node:fs"
 import { describe, expect } from "bun:test"
+import { CompatNames } from "@orbit/compat/names"
 import { Document, Event, Info } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { Command } from "@orbit/core/command"
@@ -43,12 +44,14 @@ const it = testEffect(
 const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "orbit.json")
 
+const probeSkill = (description: string) => `---\nname: probe\ndescription: ${description}\n---\nTest skill`
+
 describe("config plugin reloads", () => {
   for (const input of [
-    { root: ".agents", global: false },
-    { root: "../.claude", global: false },
-    { root: "home/.agents", global: true },
-    { root: "home/.claude", global: true },
+    { root: CompatNames.agents, global: false },
+    { root: `../${CompatNames.vendor.directory}`, global: false },
+    { root: `home/${CompatNames.agents}`, global: true },
+    { root: `home/${CompatNames.vendor.directory}`, global: true },
   ]) {
     it.live(`loads skills when ${input.root} appears after startup`, () =>
       Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
@@ -67,8 +70,10 @@ describe("config plugin reloads", () => {
               const plugins = yield* Plugin.Service
               const skills = yield* Skill.Service
               const host = yield* PluginHost.make(plugins)
+              // The machine running the test may keep skills of its own in roots above the fixture.
+              const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
               yield* ConfigCompatibilityPlugin.Plugin.effect(host)
-              expect(yield* skills.list()).toEqual([])
+              expect(yield* probes).toEqual([])
 
               // Finish startup by observing an ordinary config reload before creating the root.
               yield* Effect.promise(() => Bun.write(file, JSON.stringify({ shell: "ready" })))
@@ -76,21 +81,99 @@ describe("config plugin reloads", () => {
                 config.entries().pipe(Effect.map((entries) => Config.latest(entries, "shell") === "ready")),
               )
               const skill = path.join(root, "skills", "probe", "SKILL.md")
-              yield* Effect.promise(() =>
-                Bun.write(skill, "---\nname: probe\ndescription: Hot reload\n---\nTest skill"),
-              )
-              yield* waitUntil(skills.list().pipe(Effect.map((items) => items.some((item) => item.id === "probe"))))
-              expect((yield* skills.list())[0]?.path).toBe(AbsolutePath.make(skill))
+              yield* Effect.promise(() => Bun.write(skill, probeSkill("Hot reload")))
+              yield* waitUntil(probes.pipe(Effect.map((items) => items.length === 1)))
+              expect((yield* probes)[0]?.path).toBe(AbsolutePath.make(skill))
               yield* Effect.promise(() => fs.rm(root, { recursive: true }))
-              yield* waitUntil(skills.list().pipe(Effect.map((items) => items.length === 0)))
-              yield* Effect.promise(() => Bun.write(skill, "---\nname: probe\ndescription: Recreated\n---\nTest skill"))
-              yield* waitUntil(skills.list().pipe(Effect.map((items) => items[0]?.description === "Recreated")))
+              yield* waitUntil(probes.pipe(Effect.map((items) => items.length === 0)))
+              yield* Effect.promise(() => Bun.write(skill, probeSkill("Recreated")))
+              yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Recreated")))
             }).pipe(Effect.provide(liveConfig(project, undefined, { global: input.global })))
           }),
         ),
       ),
     )
   }
+
+  it.live("loads no compatibility skills and watches no compatibility roots when compatibility is off", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "project")
+          const file = path.join(project, "orbit.json")
+          const skill = path.join(project, CompatNames.agents, "skills", "probe", "SKILL.md")
+          const watched: Parameters<Watcher.NativeInterface["subscribe"]>[0][] = []
+          const native = Watcher.Native.of({
+            subscribe: (input) => Effect.sync(() => (watched.push(input), { unsubscribe: () => Promise.resolve() })),
+          })
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(project, "home"), { recursive: true })
+            await fs.mkdir(path.join(project, "global"))
+            // The root and its skill exist before startup, so only the switch can keep them out.
+            await Bun.write(skill, probeSkill("Switched off"))
+            await Bun.write(file, JSON.stringify({ shell: "initial" }))
+          })
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const plugins = yield* Plugin.Service
+            const skills = yield* Skill.Service
+            yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+
+            // Observe an ordinary reload, then give a rescan time to run, before concluding nothing loads.
+            yield* Effect.promise(() => Bun.write(file, JSON.stringify({ shell: "ready" })))
+            yield* waitUntil(
+              config.entries().pipe(Effect.map((entries) => Config.latest(entries, "shell") === "ready")),
+            )
+            yield* Effect.sleep("300 millis")
+
+            expect((yield* skills.list()).filter((item) => item.id === "probe")).toEqual([])
+            expect(yield* config.compat()).toEqual({ enabled: false, roots: [] })
+            const names = watched.flatMap((input) => (input.type === "entries" ? input.names : []))
+            expect(names).toContain("orbit.json")
+            for (const name of [CompatNames.agents, CompatNames.vendor.directory]) expect(names).not.toContain(name)
+            expect(watched.filter((input) => input.target.includes(`${path.sep}skills`))).toEqual([])
+          }).pipe(
+            Effect.provide(
+              liveConfig(project, native, {
+                global: false,
+                content: JSON.stringify({ compatibility: { enabled: false } }),
+              }),
+            ),
+          )
+        }),
+      ),
+    ),
+  )
+
+  it.live("drops and restores compatibility skills as the switch in user config changes", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "project")
+          const user = path.join(project, "global", "orbit.json")
+          const skill = path.join(project, CompatNames.agents, "skills", "probe", "SKILL.md")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(project, "home"), { recursive: true })
+            await Bun.write(skill, probeSkill("Switch"))
+            await Bun.write(user, JSON.stringify({ shell: "initial" }))
+          })
+          return yield* Effect.gen(function* () {
+            const plugins = yield* Plugin.Service
+            const skills = yield* Skill.Service
+            const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
+            yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+            expect(yield* probes).toHaveLength(1)
+
+            yield* Effect.promise(() => Bun.write(user, JSON.stringify({ compatibility: { enabled: false } })))
+            yield* waitUntil(probes.pipe(Effect.map((items) => items.length === 0)))
+
+            yield* Effect.promise(() => Bun.write(user, JSON.stringify({ compatibility: { enabled: true } })))
+            yield* waitUntil(probes.pipe(Effect.map((items) => items.length === 1)))
+          }).pipe(Effect.provide(liveConfig(project, undefined, { global: true })))
+        }),
+      ),
+    ),
+  )
 
   it.live("retains readiness signalled synchronously during initial config startup", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(

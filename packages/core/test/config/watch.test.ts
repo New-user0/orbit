@@ -1,5 +1,7 @@
 import path from "path"
 import { describe, expect, test } from "bun:test"
+import { CompatNames } from "@orbit/compat/names"
+import type { CompatRoots } from "@orbit/compat/roots"
 import type { ConfigDiscovery } from "@orbit/core/config/discovery"
 import { ConfigWatch } from "@orbit/core/config/watch"
 import { AbsolutePath } from "@orbit/core/schema"
@@ -16,11 +18,12 @@ const level = (directory: string, present: boolean) =>
 
 const project = path.resolve("watch-plan-project")
 const root = AbsolutePath.make(path.join(project, ".orbit"))
-const sources: ConfigDiscovery.Sources = {
-  ...level(project, false),
-  claude: [AbsolutePath.make(path.join(project, ".claude"))],
-  agents: [AbsolutePath.make(path.join(project, ".agents"))],
-}
+// The compatibility roots of other agent products, one of each kind, as discovery lists them.
+const compat = [
+  { path: AbsolutePath.make(path.join(project, CompatNames.vendor.directory)), kind: "vendor", scope: "project" },
+  { path: AbsolutePath.make(path.join(project, CompatNames.agents)), kind: "agents", scope: "project" },
+] satisfies CompatRoots.Root[]
+const sources: ConfigDiscovery.Sources = { ...level(project, false), compat }
 
 describe("ConfigWatch.plan", () => {
   test("groups missing candidates and keeps parent watches when roots appear", () => {
@@ -29,7 +32,15 @@ describe("ConfigWatch.plan", () => {
       {
         path: project,
         type: "entries",
-        names: [".agents", ".claude", ".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"],
+        names: [
+          CompatNames.agents,
+          CompatNames.vendor.directory,
+          ".orbit",
+          "orbit.json",
+          "orbit.jsonc",
+          "orbit.local.json",
+          "orbit.local.jsonc",
+        ],
       },
     ])
     const present = ConfigWatch.plan({ ...sources, project: [{ path: root, present: true }] })
@@ -50,9 +61,35 @@ describe("ConfigWatch.plan", () => {
     ).toContainEqual({ path: directory, type: "entries", names: ["custom.json"] })
   })
 
+  test("watches the compatibility roots beside the config files, and none when there are no roots", () => {
+    expect(Array.from(ConfigWatch.plan({ ...sources, compat: [] }).values())).toEqual([
+      {
+        path: project,
+        type: "entries",
+        names: [".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"],
+      },
+    ])
+    // A root in an outer directory, such as the user's own in home, gets a parent watch of its own.
+    const home = path.resolve("watch-plan-home")
+    const user = {
+      path: AbsolutePath.make(path.join(home, CompatNames.agents)),
+      kind: "agents",
+      scope: "user",
+    } as const
+    expect(Array.from(ConfigWatch.plan({ ...sources, compat: [...compat, user] }).values())).toContainEqual({
+      path: home,
+      type: "entries",
+      names: [CompatNames.agents],
+    })
+  })
+
   test("watches the direct local files beside the shared ones", () => {
     expect(Array.from(ConfigWatch.plan({ ...sources, local: [] }).values())).toEqual([
-      { path: project, type: "entries", names: [".agents", ".claude", ".orbit", "orbit.json", "orbit.jsonc"] },
+      {
+        path: project,
+        type: "entries",
+        names: [CompatNames.agents, CompatNames.vendor.directory, ".orbit", "orbit.json", "orbit.jsonc"],
+      },
     ])
     // A local file in an outer directory gets a parent watch of its own.
     const outer = path.resolve("watch-plan-outer")

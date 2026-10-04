@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { DateTime, Effect, Layer } from "effect"
+import { CompatNames } from "@orbit/compat/names"
 import { Agent } from "@orbit/core/agent"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { Environment } from "@orbit/core/environment/index"
@@ -42,6 +43,7 @@ const readToolNode = makeLocationNode({
   name: "test/read-tool-plugin",
   layer: Layer.effectDiscard(registerToolPlugin(ReadTool.Plugin)),
   deps: [
+    Config.node,
     Environment.node,
     FileLedger.node,
     Tool.node,
@@ -56,38 +58,41 @@ const readToolNode = makeLocationNode({
 })
 
 const permission = permissionLayer({ assert: () => Effect.void })
-const config = Config.testLayer()
-const imageLayer = AppNodeBuilder.build(Image.node, [Config.node.replace(config)])
 
-const testLayer = AppNodeBuilder.build(
-  LayerNode.group([
-    Database.node,
-    Bus.node,
-    SessionProjector.node,
-    SessionStore.node,
-    Session.node,
-    Location.node,
-    FSUtil.node,
-    FileAccess.node,
-    ReadToolFileSystem.node,
-    readToolNode,
-    Tool.node,
-    PluginHooks.node,
-    SessionInstructions.node,
-    Global.node,
-    Image.node,
-  ]),
-  [
-    Project.node.replace(globalProjectNode),
-    SessionExecution.node.replace(SessionExecution.noopLayer),
-    Location.node.replace(tempLocationLayer),
-    Permission.node.replace(permission),
-    Config.node.replace(config),
-    Image.node.replace(imageLayer),
-  ],
-)
+const sessionLayer = (config: ReturnType<typeof Config.testLayer>) => {
+  const imageLayer = AppNodeBuilder.build(Image.node, [Config.node.replace(config)])
+  return AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      Bus.node,
+      SessionProjector.node,
+      SessionStore.node,
+      Session.node,
+      Location.node,
+      FSUtil.node,
+      FileAccess.node,
+      ReadToolFileSystem.node,
+      readToolNode,
+      Tool.node,
+      PluginHooks.node,
+      SessionInstructions.node,
+      Global.node,
+      Image.node,
+    ]),
+    [
+      Project.node.replace(globalProjectNode),
+      SessionExecution.node.replace(SessionExecution.noopLayer),
+      Location.node.replace(tempLocationLayer),
+      Permission.node.replace(permission),
+      Config.node.replace(config),
+      Image.node.replace(imageLayer),
+    ],
+  )
+}
 
-const it = testEffect(testLayer)
+// Compatibility is on by default; the second harness switches it off.
+const it = testEffect(sessionLayer(Config.testLayer()))
+const compatOff = testEffect(sessionLayer(Config.testLayer([], { enabled: false, roots: [] })))
 
 const identity = {
   agent: Agent.ID.make("build"),
@@ -126,7 +131,53 @@ const seedSynthetic = (sessionID: Session.ID, paths: string[]) =>
     })
   })
 
+// A package with the reference vendor's instruction file, and one with a native file beside it.
+const nestedVendorFixture = Effect.gen(function* () {
+  const location = yield* Location.Service
+  const dir = location.directory
+  const vendorPath = path.resolve(dir, "vendor", CompatNames.vendor.instructions)
+  const nativePath = path.resolve(dir, "native", "AGENTS.md")
+  yield* mkdir(path.resolve(dir, "vendor"))
+  yield* mkdir(path.resolve(dir, "native"))
+  yield* writeAgents(vendorPath, "vendor-instructions")
+  yield* writeAgents(nativePath, "native-instructions")
+  yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "vendor", "file.txt"), "content"))
+  yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "native", "file.txt"), "content"))
+  const session = yield* Session.Service
+  const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+  return { dir, sessionID, vendorPath, nativePath }
+})
+
 describe("SessionInstructions", () => {
+  it.live("injects the reference vendor's instruction file above a read while compatibility is on", () =>
+    Effect.gen(function* () {
+      const fixture = yield* nestedVendorFixture
+      const registry = yield* Tool.Service
+
+      yield* executeTool(registry, readCall(fixture.sessionID, "call-vendor", "vendor/file.txt"))
+
+      const injected = yield* synthetics(fixture.sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${fixture.vendorPath}\nvendor-instructions`)
+    }),
+  )
+
+  compatOff.live("ignores the reference vendor's instruction file above a read when compatibility is off", () =>
+    Effect.gen(function* () {
+      const fixture = yield* nestedVendorFixture
+      const registry = yield* Tool.Service
+
+      yield* executeTool(registry, readCall(fixture.sessionID, "call-vendor", "vendor/file.txt"))
+      expect(yield* synthetics(fixture.sessionID)).toHaveLength(0)
+
+      // The native files still load.
+      yield* executeTool(registry, readCall(fixture.sessionID, "call-native", "native/file.txt"))
+      const injected = yield* synthetics(fixture.sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${fixture.nativePath}\nnative-instructions`)
+    }),
+  )
+
   it.live("injects AGENTS.md files above a read, excludes the Location root, and dedups across reads", () =>
     Effect.gen(function* () {
       const location = yield* Location.Service

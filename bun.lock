@@ -157,6 +157,21 @@
         "@typescript/native-preview": "catalog:",
       },
     },
+    "packages/compat": {
+      "name": "@orbit/compat",
+      "version": "2.0.22",
+      "dependencies": {
+        "@orbit/schema": "workspace:*",
+        "@orbit/util": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/core": {
       "name": "@orbit/core",
       "version": "2.0.22",
@@ -174,6 +189,7 @@
         "@modelcontextprotocol/core": "2.0.0",
         "@orbit/ai": "workspace:*",
         "@orbit/codemode": "workspace:*",
+        "@orbit/compat": "workspace:*",
         "@orbit/plugin": "workspace:*",
         "@orbit/plugin-browser": "workspace:*",
         "@orbit/schema": "workspace:*",
@@ -1169,6 +1185,8 @@
     "@orbit/client": ["@orbit/client@workspace:packages/client"],
 
     "@orbit/codemode": ["@orbit/codemode@workspace:packages/codemode"],
+
+    "@orbit/compat": ["@orbit/compat@workspace:packages/compat"],
 
     "@orbit/core": ["@orbit/core@workspace:packages/core"],
 

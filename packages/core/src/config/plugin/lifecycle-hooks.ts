@@ -1,5 +1,6 @@
 export * as LifecycleHooksPlugin from "./lifecycle-hooks.js"
 
+import { CompatNames } from "@orbit/compat/names"
 import { define } from "@orbit/plugin/effect/plugin"
 import { ConfigHooks } from "@orbit/schema/config/hooks"
 import type { SessionEvent } from "@orbit/schema/session-event"
@@ -104,11 +105,10 @@ export const Plugin = define({
       return Option.getOrUndefined(decodeHooks(decoded.hooks))
     })
 
-    // Settings directories shared with other tools keep hooks in settings.json and settings.local.json; read them so
-    // existing hooks work here.
-    const claudeHooks = Effect.fn("LifecycleHooksPlugin.claudeHooks")(function* () {
-      const roots = config.compatibility ? (yield* config.compatibility()).claude : []
-      const files = roots.flatMap((root) => [path.join(root, "settings.json"), path.join(root, "settings.local.json")])
+    // The reference vendor keeps hooks in settings files in its own directory; read them so existing hooks work here.
+    const vendorHooks = Effect.fn("LifecycleHooksPlugin.vendorHooks")(function* () {
+      const roots = (yield* config.compat()).roots.filter((root) => root.kind === "vendor")
+      const files = roots.flatMap((root) => CompatNames.vendor.settings.map((name) => path.join(root.path, name)))
       const settings = yield* Effect.forEach(files, (file) =>
         fs.readFileStringSafe(file).pipe(
           Effect.flatMap((text) => (text === undefined ? Effect.undefined : fileHooks(file, text))),
@@ -122,7 +122,7 @@ export const Plugin = define({
       const configured = (yield* config.entries()).flatMap((entry) =>
         entry.type === "document" && entry.info.hooks ? [entry.info.hooks] : [],
       )
-      const documents = [...(yield* claudeHooks()), ...configured]
+      const documents = [...(yield* vendorHooks()), ...configured]
       yield* Effect.forEach(
         documents.flatMap((hooks) => UNENFORCED_POLICIES.filter((policy) => hooks[policy])),
         (policy) =>

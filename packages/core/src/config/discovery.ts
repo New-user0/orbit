@@ -2,6 +2,7 @@ export * as ConfigDiscovery from "./discovery.js"
 
 import path from "path"
 import { Effect } from "effect"
+import { CompatRoots } from "@orbit/compat/roots"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Location } from "../location.js"
@@ -28,8 +29,8 @@ export interface Sources extends Level {
    */
   readonly home?: Level
   readonly explicit?: AbsolutePath
-  readonly claude: readonly AbsolutePath[]
-  readonly agents: readonly AbsolutePath[]
+  /** Candidate roots of other agent products, whether or not the compatibility switch is on or the roots exist yet. */
+  readonly compat: readonly CompatRoots.Root[]
 }
 
 export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options?: Options) {
@@ -37,14 +38,10 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
   const global = yield* Global.Service
   const location = yield* Location.Service
   const globalDirectory = AbsolutePath.make(global.config)
-  const globalAgentsDirectory = AbsolutePath.make(path.join(global.home, ".agents"))
-  const globalClaudeDirectory = AbsolutePath.make(path.join(global.home, ".claude"))
-  const globalRoots = yield* Effect.forEach([globalDirectory, globalClaudeDirectory, globalAgentsDirectory], (item) =>
-    fs.resolve(item),
-  )
+  const globalRoot = yield* fs.resolve(globalDirectory)
   const homeDirectory = yield* fs.resolve(global.home)
   const directories =
-    (yield* fs.resolve(location.directory)) === globalRoots[0] || options?.project === false
+    (yield* fs.resolve(location.directory)) === globalRoot || options?.project === false
       ? []
       : yield* fs.up({ targets: ["."], start: location.directory }).pipe(Effect.orDie)
 
@@ -59,7 +56,7 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
       )
     })
   const discovered = yield* Effect.forEach(directories, (directory) =>
-    probe(directory, [".claude", ".agents", ".orbit", ...names.toReversed(), ...localNames.toReversed()]),
+    probe(directory, [".orbit", ...names.toReversed(), ...localNames.toReversed()]),
   ).pipe(
     Effect.map((items) => items.flat()),
     Effect.orDie,
@@ -71,8 +68,8 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
   )
   const reentersGlobal = ({ resolved }: { readonly resolved: string }) =>
     globalEnabled
-      ? globalRoots.includes(resolved) || globalFiles.includes(resolved)
-      : globalRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep))
+      ? resolved === globalRoot || globalFiles.includes(resolved)
+      : resolved === globalRoot || resolved.startsWith(globalRoot + path.sep)
   // Global sources must not re-enter through the project walk. The home directory is the user's own config, not a
   // project's, so the walk leaves its Orbit files to the home source below. realpath keeps the spelling it is given
   // while Windows ignores case, and a lowercase cwd then names home differently from Global.home: path.relative
@@ -106,17 +103,6 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
     home: homeVisible ? yield* level(homeVisible) : undefined,
     explicit: options?.file ? AbsolutePath.make(path.resolve(options.file)) : undefined,
     ...(yield* level(visible)),
-    claude: [
-      ...new Set([
-        ...(globalEnabled ? [globalClaudeDirectory] : []),
-        ...visible.filter((item) => path.basename(item) === ".claude").toReversed(),
-      ]),
-    ],
-    agents: [
-      ...new Set([
-        ...(globalEnabled ? [globalAgentsDirectory] : []),
-        ...visible.filter((item) => path.basename(item) === ".agents").toReversed(),
-      ]),
-    ],
+    compat: yield* CompatRoots.discover({ directories, global: globalEnabled }),
   } satisfies Sources
 })
