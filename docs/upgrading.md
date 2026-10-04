@@ -3,8 +3,8 @@
 What changes for people moving to a newer Orbit build: behavior that is different, who notices and what to do about it.
 
 Orbit does not use Changesets, so a pull request that changes behavior someone can see adds its note to this file in the
-same pull request, under the section for the area it touches. Refactors, and fixes that only restore documented
-behavior, need no note.
+same pull request, under the section for the area it touches. If no section fits, add a `##` section named after the
+area. Refactors, and fixes that only restore documented behavior, need no note.
 
 Add a note at the end of its section. Each note is a short heading and three parts:
 

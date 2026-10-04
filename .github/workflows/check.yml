@@ -30,16 +30,23 @@ jobs:
       # Both checks fail when the committed output differs from what the current Protocol generates. The fix is
       # `bun run generate` in packages/protocol and then in packages/client, committing what they change.
       - name: OpenAPI document
+        id: openapi
         working-directory: packages/protocol
-        run: bun run check:generated
+        run: |
+          bun run check:generated || {
+            echo "::error title=Generated OpenAPI document check failed::Run 'bun run generate' in packages/protocol and commit what it changes. If the log shows the generator crashing, fix that first."
+            exit 1
+          }
       # The client check regenerates in place and diffs against the checkout. It runs even when the OpenAPI check
-      # failed, because a stale Protocol change is usually stale in both places and one run should say so.
+      # failed, because a stale Protocol change is usually stale in both places and one run should say so. It is
+      # skipped when checkout or setup failed: the check could not run then, so its failure would say nothing about
+      # the committed output.
       - name: Generated client
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.openapi.outcome != 'skipped' }}
         working-directory: packages/client
         run: |
           bun run check:generated || {
-            echo "::error title=Generated client is out of date::Run 'bun run generate' in packages/client and commit what it changes."
+            echo "::error title=Generated client check failed::Run 'bun run generate' in packages/client and commit what it changes. If the log shows the generator crashing, fix that first."
             exit 1
           }
 
