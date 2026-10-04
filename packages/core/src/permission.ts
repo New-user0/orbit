@@ -42,10 +42,11 @@ export type Reply = typeof Reply.Type
 export const AssertInput = Schema.Struct({
   id: ID.pipe(Schema.optional),
   ...RequestFields,
-  // Other spellings of `resources` that rules may be written against. They steer evaluation only: they stay off the
-  // public Request and never widen what an "always" reply saves. Every alias applies to every resource, so send them
-  // only with a single resource: with several, an alias that matches an allow lets all of the resources through.
-  aliases: Schema.Array(Schema.String).pipe(Schema.optional),
+  // Other spellings of a resource that rules may be written against, keyed by that resource. They steer evaluation
+  // only: they stay off the public Request and never widen what an "always" reply saves. An alias belongs to its own
+  // resource and no other, so a resource without aliases is never lifted by a rule that only an alias of another
+  // resource matches.
+  aliases: Schema.Record(Schema.String, Schema.Array(Schema.String)).pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -88,7 +89,7 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Permissi
 
 export type Error = BlockedError | CorrectedError
 
-// The resource and its aliases form one combined subject: the last rule matching any of them decides, so a later
+// The resource and its own aliases form one combined subject: the last rule matching any of them decides, so a later
 // allow written against one spelling still lifts an earlier broad deny, exactly as it does without aliases. A pattern
 // is matched against every spelling alike, so one that starts with a wildcard (*.example.com) can also match text
 // inside an alias, such as a query string that ends with it.
@@ -127,7 +128,7 @@ interface Pending {
   readonly request: Request
   readonly agent?: Agent.ID
   // Kept here rather than on the public Request so re-evaluating a pending request after an "always" reply sees them.
-  readonly aliases?: ReadonlyArray<string>
+  readonly aliases?: AssertInput["aliases"]
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
 }
 
@@ -177,7 +178,7 @@ const layer = Layer.effect(
 
     function denied(input: Pick<AssertInput, "action" | "resources" | "aliases">, rules: Permission.Ruleset) {
       return input.resources.some(
-        (resource) => evaluate(input.action, resource, rules, input.aliases).effect === "deny",
+        (resource) => evaluate(input.action, resource, rules, input.aliases?.[resource]).effect === "deny",
       )
     }
 
@@ -189,7 +190,9 @@ const layer = Layer.effect(
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return { effect: "deny" as const, rules }
       const all = [...rules, ...(yield* savedRules())]
-      const effects = input.resources.map((resource) => evaluate(input.action, resource, all, input.aliases).effect)
+      const effects = input.resources.map(
+        (resource) => evaluate(input.action, resource, all, input.aliases?.[resource]).effect,
+      )
       const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
@@ -217,7 +220,7 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: Agent.ID, aliases?: ReadonlyArray<string>) =>
+    const create = (request: Request, agent?: Agent.ID, aliases?: AssertInput["aliases"]) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()

@@ -4,6 +4,7 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
@@ -11,6 +12,7 @@ import { WorktreeTools } from "@orbit/core/tool/plugin/worktree"
 import { Worktree } from "@orbit/core/worktree"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { allowAllPermission } from "./lib/permission"
 import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
 
 const moves: string[] = []
@@ -26,6 +28,7 @@ const it = testEffect(
     Location.node.replace(
       Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make("/repo") }))),
     ),
+    Permission.node.replace(allowAllPermission),
     Worktree.node.replace(
       Layer.mock(Worktree.Service, {
         create: (input) => Effect.succeed({ directory: AbsolutePath.make(`/worktrees/${input.name ?? "auto"}`) }),

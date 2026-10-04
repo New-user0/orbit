@@ -439,9 +439,9 @@ describe("WebFetchTool registration", () => {
         {
           sessionID,
           action: "webfetch",
-          resources: ["example.com"],
-          aliases: [url],
-          save: ["example.com"],
+          resources: [url],
+          aliases: { [url]: ["example.com"] },
+          save: ["http://example.com/*"],
           metadata: { url, format: "text", timeout: 4 },
         },
       ])
@@ -473,9 +473,9 @@ describe("WebFetchTool registration", () => {
         {
           sessionID,
           action: "webfetch",
-          resources: ["localhost"],
-          aliases: [url],
-          save: ["localhost"],
+          resources: [url],
+          aliases: { [url]: ["localhost"] },
+          save: ["http://localhost/*"],
           metadata: { url, format: "text" },
         },
       ])
@@ -483,7 +483,7 @@ describe("WebFetchTool registration", () => {
     }),
   )
 
-  it.effect("asks about the lowercased host, with the normalized URL as an alias", () =>
+  it.effect("asks about the normalized URL, with its host as an alias and its origin as the save", () =>
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
@@ -494,9 +494,9 @@ describe("WebFetchTool registration", () => {
       expect(assertions[0]).toMatchObject({
         sessionID,
         action: "webfetch",
-        resources: ["example.com"],
-        aliases: ["https://example.com/a"],
-        save: ["example.com"],
+        resources: ["https://example.com/a"],
+        aliases: { "https://example.com/a": ["example.com"] },
+        save: ["https://example.com/*"],
         // The model and the TUI keep seeing the URL exactly as requested.
         metadata: { url, format: "text" },
       })
@@ -505,31 +505,51 @@ describe("WebFetchTool registration", () => {
     }),
   )
 
-  // The alias is the URL as rules see it: no credentials, no fragment, no default port, no trailing dot on the host and
-  // an ASCII host. The host never has a port. A bare origin is also an alias without the root slash the parser adds.
-  for (const [url, host, aliases] of [
-    ["https://user@Example.com:443/a/b?x=1#section", "example.com", ["https://example.com/a/b?x=1"]],
-    ["http://Localhost:8080/docs#top", "localhost", ["http://localhost:8080/docs"]],
-    ["https://pastebin.com./raw/x", "pastebin.com", ["https://pastebin.com/raw/x"]],
-    ["https://pastebin.com../raw/x", "pastebin.com", ["https://pastebin.com/raw/x"]],
-    ["https://bücher.example/a", "xn--bcher-kva.example", ["https://xn--bcher-kva.example/a"]],
-    ["https://example.com", "example.com", ["https://example.com/", "https://example.com"]],
-    ["http://example.com:8080/?#top", "example.com", ["http://example.com:8080/", "http://example.com:8080"]],
-    ["https://example.com/?page=2", "example.com", ["https://example.com/?page=2"]],
+  // The resource is the URL as rules see it: no credentials, no fragment, no default port, no trailing dot on the host
+  // and an ASCII host. The host never has a port. A bare origin is also an alias without the root slash the parser adds.
+  for (const [url, resource, aliases, save] of [
+    [
+      "https://user@Example.com:443/a/b?x=1#section",
+      "https://example.com/a/b?x=1",
+      ["example.com"],
+      "https://example.com/*",
+    ],
+    ["http://Localhost:8080/docs#top", "http://localhost:8080/docs", ["localhost"], "http://localhost:8080/*"],
+    ["https://pastebin.com./raw/x", "https://pastebin.com/raw/x", ["pastebin.com"], "https://pastebin.com/*"],
+    ["https://pastebin.com../raw/x", "https://pastebin.com/raw/x", ["pastebin.com"], "https://pastebin.com/*"],
+    [
+      "https://bücher.example/a",
+      "https://xn--bcher-kva.example/a",
+      ["xn--bcher-kva.example"],
+      "https://xn--bcher-kva.example/*",
+    ],
+    ["https://example.com", "https://example.com/", ["example.com", "https://example.com"], "https://example.com/*"],
+    [
+      "http://example.com:8080/?#top",
+      "http://example.com:8080/",
+      ["example.com", "http://example.com:8080"],
+      "http://example.com:8080/*",
+    ],
+    ["https://example.com/?page=2", "https://example.com/?page=2", ["example.com"], "https://example.com/*"],
   ] as const) {
-    it.effect(`normalizes ${url} to the host ${host} and the aliases ${aliases.join(" and ")}`, () =>
+    it.effect(`normalizes ${url} to ${resource} with the aliases ${aliases.join(" and ")}`, () =>
       Effect.gen(function* () {
         reset()
         const registry = yield* Tool.Service
         yield* executeTool(registry, call({ url, format: "text" }))
 
         expect(assertions).toHaveLength(1)
-        expect(assertions[0]).toMatchObject({ resources: [host], aliases, save: [host], metadata: { url } })
+        expect(assertions[0]).toMatchObject({
+          resources: [resource],
+          aliases: { [resource]: aliases },
+          save: [save],
+          metadata: { url },
+        })
       }),
     )
   }
 
-  // "Always" saves the host as a rule pattern, so a host that spells * must never reach permission.
+  // "Always" saves the origin as a rule pattern, so a host that spells * must never reach permission.
   for (const url of [
     "https://docs.example.com*/x",
     "https://docs%2A.example.com/",
@@ -580,14 +600,13 @@ describe("WebFetchTool registration", () => {
             status: "completed",
             content: [{ type: "text", text: "redirected" }],
           })
-          const host = new URL(url).hostname
           expect(assertions).toMatchObject([
             {
               sessionID,
               action: "webfetch",
-              resources: [host],
-              aliases: [url],
-              save: [host],
+              resources: [url],
+              aliases: { [url]: [new URL(url).hostname] },
+              save: [`${new URL(url).origin}/*`],
               metadata: { url, format: "text" },
             },
           ])

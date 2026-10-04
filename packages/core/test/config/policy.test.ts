@@ -7,6 +7,7 @@ import { ConfigPolicyPlugin } from "@orbit/core/config/plugin/policy"
 import { Bus } from "@orbit/core/bus"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Plugin } from "@orbit/core/plugin"
+import { PermissionWeb } from "@orbit/core/permission/web"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { Provider } from "@orbit/core/provider"
@@ -42,7 +43,7 @@ const evaluate = Effect.fn(function* (
   action: string,
   resources: string[],
   effect: Permission.Effect = "allow",
-  aliases?: string[],
+  aliases?: Record<string, string[]>,
 ) {
   const hooks = yield* PluginHooks.Service
   const event = yield* hooks.trigger("permission", "evaluate", {
@@ -55,8 +56,12 @@ const evaluate = Effect.fn(function* (
   return { effect: event.effect, message: event.message }
 })
 
-// A webfetch evaluation: the host is the resource and the normalized URL is its alias.
-const webfetch = (host: string, url: string) => evaluate("webfetch", [host], "allow", [url])
+// A webfetch evaluation as the tools ask it: the URL is the resource and its host an alias, and a write also asks
+// about `METHOD url`, which has none.
+const webfetch = (url: string, method = "GET") => {
+  const web = PermissionWeb.request(url, method)
+  return evaluate("webfetch", web.resources, "allow", web.aliases)
+}
 
 describe("ConfigPolicyPlugin.Plugin", () => {
   it.effect("filters plugin-provided providers with ordered wildcard policies", () =>
@@ -209,39 +214,38 @@ describe("ConfigPolicyPlugin.Plugin", () => {
     }),
   )
 
-  it.effect("blocks a host resource through an organization URL statement", () =>
+  it.effect("blocks a URL through an organization URL statement", () =>
     Effect.gen(function* () {
       const managed = yield* ManagedPolicy.Service
       yield* managed.set({ statements: [permission("deny", "webfetch:https://pastebin.com/*")] })
       yield* addPlugin([])
 
-      expect(yield* webfetch("pastebin.com", "https://pastebin.com/raw/abc")).toEqual({
+      expect(yield* webfetch("https://pastebin.com/raw/abc")).toEqual({
         effect: "deny",
         message: "Blocked by your organization's policy",
       })
-      expect((yield* webfetch("pastebin.com", "https://pastebin.com/")).effect).toBe("deny")
-      expect(yield* webfetch("example.com", "https://example.com/a")).toEqual({ effect: "allow", message: undefined })
-      // A hook that ignores aliases decides on the host alone, which the URL statement does not match.
-      expect((yield* evaluate("webfetch", ["pastebin.com"])).effect).toBe("allow")
+      expect((yield* webfetch("https://pastebin.com/")).effect).toBe("deny")
+      expect(yield* webfetch("https://example.com/a")).toEqual({ effect: "allow", message: undefined })
     }),
   )
 
-  it.effect("blocks a host resource through a host-form statement and a configured URL policy", () =>
+  it.effect("blocks a URL through a host-form statement and a configured URL policy", () =>
     Effect.gen(function* () {
       const managed = yield* ManagedPolicy.Service
       yield* managed.set({ statements: [permission("deny", "webfetch:pastebin.com")], organization: "Acme" })
       yield* addPlugin([document(permission("deny", "webfetch:https://gist.example.com/*"))])
 
-      expect(yield* webfetch("pastebin.com", "https://pastebin.com/raw/abc")).toEqual({
+      expect(yield* webfetch("https://pastebin.com/raw/abc")).toEqual({
         effect: "deny",
         message: "Blocked by Acme's policy",
       })
-      expect((yield* evaluate("webfetch", ["pastebin.com"])).effect).toBe("deny")
-      expect(yield* webfetch("gist.example.com", "https://gist.example.com/a")).toEqual({
+      // A hook that ignores aliases decides on the URL alone, which the host statement does not match.
+      expect((yield* evaluate("webfetch", ["https://pastebin.com/raw/abc"])).effect).toBe("allow")
+      expect(yield* webfetch("https://gist.example.com/a")).toEqual({
         effect: "deny",
         message: "Blocked by configuration policy",
       })
-      expect(yield* webfetch("example.com", "https://example.com/a")).toEqual({ effect: "allow", message: undefined })
+      expect(yield* webfetch("https://example.com/a")).toEqual({ effect: "allow", message: undefined })
     }),
   )
 
@@ -256,9 +260,30 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       ])
 
       // The host allow lifts the broad deny; the later URL deny still outranks it for the URLs it matches.
-      expect((yield* webfetch("docs.example.com", "https://docs.example.com/a")).effect).toBe("allow")
-      expect((yield* webfetch("docs.example.com", "https://docs.example.com/private/key")).effect).toBe("deny")
-      expect((yield* webfetch("other.example.com", "https://other.example.com/a")).effect).toBe("deny")
+      expect((yield* webfetch("https://docs.example.com/a")).effect).toBe("allow")
+      expect((yield* webfetch("https://docs.example.com/private/key")).effect).toBe("deny")
+      expect((yield* webfetch("https://other.example.com/a")).effect).toBe("deny")
+      // The host is an alias of the URL only, so it never lifts the broad deny for the `POST url` resource.
+      expect((yield* webfetch("https://docs.example.com/a", "POST")).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("blocks a write through a statement that matches the URL, its host or the method form", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([
+        document(
+          permission("deny", "webfetch:https://urls.example.com/*"),
+          permission("deny", "webfetch:hosts.example.com"),
+          permission("deny", "webfetch:POST https://writes.example.com/*"),
+        ),
+      ])
+
+      for (const url of ["https://urls.example.com/a", "https://hosts.example.com/a", "https://writes.example.com/a"])
+        expect(yield* webfetch(url, "POST")).toEqual({ effect: "deny", message: "Blocked by configuration policy" })
+      // The method form blocks only that method, and the other statements block reads as well.
+      expect((yield* webfetch("https://writes.example.com/a")).effect).toBe("allow")
+      expect((yield* webfetch("https://hosts.example.com/a")).effect).toBe("deny")
+      expect((yield* webfetch("https://elsewhere.example.com/a", "POST")).effect).toBe("allow")
     }),
   )
 

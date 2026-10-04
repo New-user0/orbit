@@ -12,6 +12,7 @@ import { Database } from "@orbit/core/database/database"
 import { Form } from "@orbit/core/form"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
+import { Permission } from "@orbit/core/permission"
 import { PlanMode } from "@orbit/core/plan-mode"
 import { Project } from "@orbit/core/project"
 import { AbsolutePath } from "@orbit/core/schema"
@@ -24,6 +25,7 @@ import { promptLocationNode } from "./fixture/prompt-location"
 import { tempLocationLayer } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
+import { allowAllPermission } from "./lib/permission"
 import { globalProjectNode } from "./lib/project"
 import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
 
@@ -55,6 +57,7 @@ const server = (input: { home: string; database: string; decisions: string[] }) 
     Project.node.replace(globalProjectNode),
     LocationServiceMap.node.replace(promptLocationNode),
     SessionExecution.node.replace(SessionExecution.noopLayer),
+    Permission.node.replace(allowAllPermission),
     Form.node.replace(
       Layer.mock(Form.Service, {
         ask: (form) =>

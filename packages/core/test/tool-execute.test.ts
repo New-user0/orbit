@@ -7,7 +7,7 @@ import { Agent } from "@orbit/schema/agent"
 import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import type { Info } from "@orbit/schema/tool"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Schema } from "effect"
 
 const context = {
   sessionID: Session.ID.make("ses_execute"),
@@ -17,8 +17,8 @@ const context = {
   progress: () => Effect.void,
 }
 
-const createCodeMode = (tools: ReadonlyMap<string, Info>) =>
-  CodeModeTool.create({ tools }, (_, tool, input, context) => execute(tool, input, context))
+const createCodeMode = (tools: ReadonlyMap<string, Info>, authorize: CodeModeTool.Authorize = () => Effect.void) =>
+  CodeModeTool.create({ tools }, (_, tool, input, context) => execute(tool, input, context), authorize)
 
 test("execute describes invariant Code Mode behavior", () => {
   expect(createCodeMode(new Map()).description).toBe(
@@ -341,4 +341,151 @@ test("feedback and policy blocks stay tool failures the program can catch", asyn
   expect(JSON.parse(result.output.output)).toEqual(["Use the staging bucket", "Permission denied: blocked", "ran"])
   expect(result.output.error).toBeUndefined()
   expect(ran).toEqual(["later"])
+})
+
+// A local server records what reaches the network, so a refused fetch can be shown to send nothing.
+const serving = <A, E>(use: (origin: string, hits: Array<string>) => Effect.Effect<A, E>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const hits: Array<string> = []
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: (request) => {
+              hits.push(`${request.method} ${new URL(request.url).pathname}`)
+              return new Response("served")
+            },
+          }),
+        ),
+        (server) => Effect.promise(() => server.stop(true)),
+      )
+      return yield* use(`http://127.0.0.1:${server.port}`, hits)
+    }),
+  )
+
+test("authorizes a fetch with its call and the execute context before anything is sent", async () => {
+  const seen: Array<{ call: unknown; context: unknown; sent: number }> = []
+  await Effect.runPromise(
+    serving((origin, hits) =>
+      Effect.gen(function* () {
+        const codeMode = createCodeMode(new Map(), (call, ctx) =>
+          Effect.sync(() => void seen.push({ call, context: ctx, sent: hits.length })),
+        )
+
+        const result = yield* codeMode.execute(
+          { code: `return (await fetch("${origin}/a", { method: "post", body: "x" })).status` },
+          context,
+        )
+
+        expect(result.output.output).toBe("200")
+        expect(hits).toEqual(["POST /a"])
+        expect(seen).toEqual([
+          {
+            call: { extension: "web", name: "fetch", args: [`${origin}/a`, { method: "post", body: "x" }] },
+            context,
+            sent: 0,
+          },
+        ])
+      }),
+    ),
+  )
+})
+
+test("a fetch that fails authorization is never made, and the program can catch the failure", async () => {
+  await Effect.runPromise(
+    serving((origin, hits) =>
+      Effect.gen(function* () {
+        const codeMode = createCodeMode(new Map(), () => Effect.fail(new Tool.Error({ message: "Not for this host" })))
+
+        const result = yield* codeMode.execute(
+          { code: `try { await fetch("${origin}/a") } catch (e) { return e.message }; return "unreachable"` },
+          context,
+        )
+
+        expect(result.output.output).toBe("Not for this host")
+        expect(result.output.error).toBeUndefined()
+        expect(hits).toEqual([])
+      }),
+    ),
+  )
+})
+
+test("a declined fetch ends the execution like a declined tool call", async () => {
+  const decline = new Permission.DeclinedError()
+  await Effect.runPromise(
+    serving((origin, hits) =>
+      Effect.gen(function* () {
+        const codeMode = createCodeMode(new Map(), () => Effect.die(decline))
+
+        // The program cannot catch its way past it, leave the call un-awaited, or run another call first.
+        for (const code of [
+          `try { await fetch("${origin}/a") } catch (e) { return "caught" }; return "unreachable"`,
+          `fetch("${origin}/a"); return "done"`,
+          `return await Promise.all([fetch("${origin}/a"), fetch("${origin}/b")])`,
+          `return await new Promise((resolve) => { fetch("${origin}/a").then(resolve, resolve) })`,
+        ]) {
+          const exit = yield* Effect.exit(bounded(codeMode.execute({ code }, context)))
+          expect(defects(exit)).toEqual([decline])
+        }
+        expect(hits).toEqual([])
+      }),
+    ),
+  )
+})
+
+test("holds a fetch until its authorization settles", async () => {
+  await Effect.runPromise(
+    serving((origin, hits) =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>()
+        const codeMode = createCodeMode(new Map(), () => Deferred.await(gate))
+
+        const fiber = yield* codeMode
+          .execute({ code: `return (await fetch("${origin}/a")).status` }, context)
+          .pipe(Effect.forkChild)
+        yield* Effect.sleep("100 millis")
+        expect(hits).toEqual([])
+
+        yield* Deferred.succeed(gate, undefined)
+        expect((yield* Fiber.join(fiber)).output.output).toBe("200")
+        expect(hits).toEqual(["GET /a"])
+      }),
+    ),
+  )
+})
+
+test("shows a fetch as running only once it may go ahead, and a refused one as an error", async () => {
+  const updates: Array<unknown> = []
+  const tracked = {
+    ...context,
+    progress: (update: { toolCalls?: unknown }) => Effect.sync(() => void updates.push(update.toolCalls)),
+  }
+  await Effect.runPromise(
+    serving((origin) =>
+      Effect.gen(function* () {
+        const codeMode = createCodeMode(new Map(), (call) =>
+          String(call.args[0]).endsWith("/ok") ? Effect.void : Effect.fail(new Tool.Error({ message: "Not here" })),
+        )
+
+        yield* codeMode.execute(
+          {
+            code: `await fetch("${origin}/ok"); try { await fetch("${origin}/no", { method: "POST" }) } catch (e) {}; return "done"`,
+          },
+          tracked,
+        )
+
+        const ok = { tool: "fetch", input: { method: "GET", url: `${origin}/ok` } }
+        expect(updates).toEqual([
+          [{ ...ok, status: "running" }],
+          [{ ...ok, status: "completed" }],
+          [
+            { ...ok, status: "completed" },
+            { tool: "fetch", status: "error", input: { method: "POST", url: `${origin}/no` } },
+          ],
+        ])
+      }),
+    ),
+  )
 })

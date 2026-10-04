@@ -4,12 +4,14 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
 import { Session } from "@orbit/core/session"
 import { Shell } from "@orbit/core/shell"
 import { Tool } from "@orbit/core/tool"
 import { ShellControlTools } from "@orbit/core/tool/plugin/shell-control"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { allowAllPermission } from "./lib/permission"
 import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
 
 const controlNode = makeLocationNode({
@@ -20,6 +22,7 @@ const controlNode = makeLocationNode({
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Tool.node, Shell.node, controlNode]), [
     Location.node.replace(tempLocationLayer),
+    Permission.node.replace(allowAllPermission),
   ]),
 )
 const sessionID = Session.ID.make("ses_shell_control_test")

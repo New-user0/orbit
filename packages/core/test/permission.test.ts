@@ -395,20 +395,20 @@ describe("Permission", () => {
 })
 
 describe("Permission resource aliases", () => {
-  // A webfetch request: the host is the resource and the normalized URL is an alias that rules may also be written
-  // against. An "always" reply saves the host only.
+  // A request whose resource is a host and whose alias is the normalized URL that rules may also be written against.
+  // An "always" reply saves the host only.
   const webfetch = (input: Partial<Permission.AssertInput> = {}) =>
     assertion({
       action: "webfetch",
       resources: ["docs.example.com"],
-      aliases: ["https://docs.example.com/a"],
+      aliases: { "docs.example.com": ["https://docs.example.com/a"] },
       save: ["docs.example.com"],
       ...input,
     })
   const pastebin = (input: Partial<Permission.AssertInput> = {}) =>
     webfetch({
       resources: ["pastebin.com"],
-      aliases: ["https://pastebin.com/raw/abc"],
+      aliases: { "pastebin.com": ["https://pastebin.com/raw/abc"] },
       save: ["pastebin.com"],
       ...input,
     })
@@ -446,11 +446,16 @@ describe("Permission resource aliases", () => {
       const service = yield* Permission.Service
 
       expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
-      expect(yield* service.ask(webfetch({ aliases: ["https://docs.example.com/b?page=2"] }))).toMatchObject({
-        effect: "allow",
-      })
       expect(
-        yield* service.ask(webfetch({ resources: ["other.example.com"], aliases: ["https://other.example.com/a"] })),
+        yield* service.ask(webfetch({ aliases: { "docs.example.com": ["https://docs.example.com/b?page=2"] } })),
+      ).toMatchObject({ effect: "allow" })
+      expect(
+        yield* service.ask(
+          webfetch({
+            resources: ["other.example.com"],
+            aliases: { "other.example.com": ["https://other.example.com/a"] },
+          }),
+        ),
       ).toMatchObject({ effect: "ask" })
     }),
   )
@@ -483,7 +488,11 @@ describe("Permission resource aliases", () => {
       yield* setup([{ action: "webfetch", resource: "https://github.com/org/*", effect: "allow" }])
       const service = yield* Permission.Service
       const github = (path: string) =>
-        webfetch({ resources: ["github.com"], aliases: [`https://github.com${path}`], save: ["github.com"] })
+        webfetch({
+          resources: ["github.com"],
+          aliases: { "github.com": [`https://github.com${path}`] },
+          save: ["github.com"],
+        })
 
       expect(yield* service.ask(github("/org/x"))).toMatchObject({ effect: "allow" })
       expect(yield* service.ask(github("/other"))).toMatchObject({ effect: "ask" })
@@ -501,7 +510,12 @@ describe("Permission resource aliases", () => {
       expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
       yield* service.assert(webfetch())
       expect(
-        yield* service.ask(webfetch({ resources: ["other.example.com"], aliases: ["https://other.example.com/a"] })),
+        yield* service.ask(
+          webfetch({
+            resources: ["other.example.com"],
+            aliases: { "other.example.com": ["https://other.example.com/a"] },
+          }),
+        ),
       ).toMatchObject({ effect: "deny" })
     }),
   )
@@ -522,7 +536,12 @@ describe("Permission resource aliases", () => {
       expect(rules).toHaveLength(1)
       expect(rules[0]).toMatchObject({ action: "webfetch", resource: "docs.example.com" })
       expect(
-        yield* service.ask(webfetch({ id: Permission.ID.create("per_next"), aliases: ["https://docs.example.com/b"] })),
+        yield* service.ask(
+          webfetch({
+            id: Permission.ID.create("per_next"),
+            aliases: { "docs.example.com": ["https://docs.example.com/b"] },
+          }),
+        ),
       ).toMatchObject({ effect: "allow" })
       expect(yield* service.ask(pastebin())).toMatchObject({ effect: "ask" })
     }),
@@ -536,7 +555,7 @@ describe("Permission resource aliases", () => {
         webfetch({
           id: Permission.ID.create("per_sibling"),
           resources: ["example.org"],
-          aliases: ["https://example.org/"],
+          aliases: { "example.org": ["https://example.org/"] },
           save: ["example.org"],
         }),
       )
@@ -574,11 +593,16 @@ describe("Permission resource aliases", () => {
     Effect.gen(function* () {
       yield* setup([{ action: "*", resource: "*", effect: "allow" }])
       const hooks = yield* PluginHooks.Service
-      const seen: Array<ReadonlyArray<string> | undefined> = []
+      const seen: Array<Readonly<Record<string, ReadonlyArray<string>>> | undefined> = []
       yield* hooks.register("permission", "evaluate", (event) =>
         Effect.sync(() => {
           seen.push(event.aliases)
-          if (event.aliases?.some((alias) => alias.startsWith("https://pastebin.com/"))) event.effect = "deny"
+          if (
+            Object.values(event.aliases ?? {}).some((aliases) =>
+              aliases.some((alias) => alias.startsWith("https://pastebin.com/")),
+            )
+          )
+            event.effect = "deny"
         }),
       )
       const service = yield* Permission.Service
@@ -586,9 +610,117 @@ describe("Permission resource aliases", () => {
       expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
       expect(yield* service.ask(pastebin())).toMatchObject({ effect: "deny" })
       expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
-      expect(seen).toEqual([["https://docs.example.com/a"], ["https://pastebin.com/raw/abc"], undefined])
+      expect(seen).toEqual([
+        { "docs.example.com": ["https://docs.example.com/a"] },
+        { "pastebin.com": ["https://pastebin.com/raw/abc"] },
+        undefined,
+      ])
     }),
   )
+
+  describe("per resource", () => {
+    // A write: the URL has the host as an alias, and `POST url` has none.
+    const url = "https://docs.example.com/a"
+    const write = (input: Partial<Permission.AssertInput> = {}) =>
+      assertion({
+        action: "webfetch",
+        resources: [url, `POST ${url}`],
+        aliases: { [url]: ["docs.example.com"] },
+        save: ["https://docs.example.com/*", "POST https://docs.example.com/*"],
+        ...input,
+      })
+    const read = (input: Partial<Permission.AssertInput> = {}) => write({ resources: [url], ...input })
+
+    it.effect("never lets the alias of one resource allow another resource", () =>
+      Effect.gen(function* () {
+        yield* setup([{ action: "webfetch", resource: "docs.example.com", effect: "allow" }])
+        const service = yield* Permission.Service
+
+        expect(yield* service.ask(read())).toMatchObject({ effect: "allow" })
+        // The host allow matches the URL through its alias. `POST url` has none, so the write still asks.
+        expect(yield* service.ask(write())).toMatchObject({ effect: "ask" })
+      }),
+    )
+
+    it.effect("blocks a write through a deny that only the URL's alias matches", () =>
+      Effect.gen(function* () {
+        yield* setup([
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "webfetch", resource: "docs.example.com", effect: "deny" },
+        ])
+        const service = yield* Permission.Service
+
+        expect(yield* service.ask(write())).toMatchObject({ effect: "deny" })
+        expect(yield* service.assert(write()).pipe(Effect.flip)).toBeInstanceOf(Permission.BlockedError)
+        expect(yield* service.list()).toEqual([])
+      }),
+    )
+
+    it.effect("allows a write once the URL and the method form are both allowed", () =>
+      Effect.gen(function* () {
+        yield* setup([
+          { action: "webfetch", resource: "https://docs.example.com/*", effect: "allow" },
+          { action: "webfetch", resource: "POST https://docs.example.com/*", effect: "allow" },
+        ])
+        const service = yield* Permission.Service
+
+        expect(yield* service.ask(write())).toMatchObject({ effect: "allow" })
+        expect(yield* service.ask(write({ resources: [url, `PUT ${url}`] }))).toMatchObject({ effect: "ask" })
+      }),
+    )
+
+    it.effect("keeps a pending write waiting after a host always reply", () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const selected = yield* waitForRequest(webfetch({ save: ["docs.example.com"] }))
+        const pending = yield* waitForRequest(write({ id: Permission.ID.create("per_write") }))
+
+        yield* selected.service.reply({ requestID: selected.request.id, reply: "always" })
+        yield* Fiber.join(selected.fiber)
+        // The saved host allow covers the write's URL through its alias but never `POST url`.
+        expect(yield* selected.service.list()).toEqual([pending.request])
+        expect(pending.fiber.pollUnsafe()).toBeUndefined()
+        expect(yield* selected.service.ask(read({ id: Permission.ID.create("per_read") }))).toMatchObject({
+          effect: "allow",
+        })
+        yield* Fiber.interrupt(pending.fiber)
+        expect(yield* selected.service.list()).toEqual([])
+      }),
+    )
+
+    it.effect("approves a pending write once an always reply saves its origin and its method form", () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const selected = yield* waitForRequest(write({ id: Permission.ID.create("per_first") }))
+        const other = "https://docs.example.com/b"
+        const pending = yield* waitForRequest(
+          write({
+            id: Permission.ID.create("per_second"),
+            resources: [other, `POST ${other}`],
+            aliases: { [other]: ["docs.example.com"] },
+          }),
+        )
+
+        yield* selected.service.reply({ requestID: selected.request.id, reply: "always" })
+        yield* Fiber.join(selected.fiber)
+        yield* Fiber.join(pending.fiber)
+        expect(yield* selected.service.list()).toEqual([])
+      }),
+    )
+
+    it.effect("hands each resource's own aliases to evaluate hooks", () =>
+      Effect.gen(function* () {
+        yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+        const hooks = yield* PluginHooks.Service
+        const seen: Array<Readonly<Record<string, ReadonlyArray<string>>> | undefined> = []
+        yield* hooks.register("permission", "evaluate", (event) => Effect.sync(() => void seen.push(event.aliases)))
+        const service = yield* Permission.Service
+
+        expect(yield* service.ask(write())).toMatchObject({ effect: "allow" })
+        expect(seen).toEqual([{ [url]: ["docs.example.com"] }])
+      }),
+    )
+  })
 })
 
 describe("shell scanner permission impact", () => {

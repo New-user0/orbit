@@ -10,11 +10,11 @@ export interface PermissionEvaluation {
   readonly action: string
   readonly resources: ReadonlyArray<string>
   /**
-   * Other spellings of `resources` that rules may be written against, such as the full URL behind a host resource.
-   * Every alias applies to every resource, so a request that has aliases has a single resource. A hook that only
-   * inspects `resources` never sees them and decides on the primary spelling alone.
+   * Other spellings of a resource that rules may be written against, keyed by that resource, such as the host behind
+   * a URL. A resource with no entry has none, so an alias never speaks for another resource of the same request. A
+   * hook that only inspects `resources` never sees them and decides on the primary spelling alone.
    */
-  readonly aliases?: ReadonlyArray<string>
+  readonly aliases?: Readonly<Record<string, ReadonlyArray<string>>>
   readonly metadata?: Record<string, unknown>
   readonly source?: Permission.Source
   effect: Permission.Effect
