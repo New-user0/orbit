@@ -416,17 +416,6 @@ describe("Permission resource aliases", () => {
     { action: "webfetch", resource: "https://pastebin.com/*", effect: "deny" },
   ]
 
-  const setSessionRules = (permission: Permission.Ruleset) =>
-    Effect.gen(function* () {
-      const { db } = yield* Database.Service
-      yield* db
-        .update(SessionTable)
-        .set({ permission })
-        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
-        .run()
-        .pipe(Effect.orDie)
-    })
-
   test("picks the last rule matching the resource or any alias", () => {
     const denyAll: Permission.Rule = { action: "webfetch", resource: "*", effect: "deny" }
     const allowHost: Permission.Rule = { action: "webfetch", resource: "docs.example.com", effect: "allow" }
@@ -469,7 +458,13 @@ describe("Permission resource aliases", () => {
   it.effect("blocks a session URL deny even though the resource is the host", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "*", resource: "*", effect: "allow" }])
-      yield* setSessionRules(denyPastebinUrls)
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ permission: denyPastebinUrls })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
       const service = yield* Permission.Service
 
       // Matched against the host alone, nothing in the deny applies.
