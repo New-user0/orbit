@@ -21,13 +21,37 @@ jobs:
       - name: Lint and typecheck
         run: bun run check
 
+  generated:
+    name: generated OpenAPI document and client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: ./.github/actions/setup-bun
+      # Both checks fail when the committed output differs from what the current Protocol generates. The fix is
+      # `bun run generate` in packages/protocol and then in packages/client, committing what they change.
+      - name: OpenAPI document
+        working-directory: packages/protocol
+        run: bun run check:generated
+      # The client check regenerates in place and diffs against the checkout. It runs even when the OpenAPI check
+      # failed, because a stale Protocol change is usually stale in both places and one run should say so.
+      - name: Generated client
+        if: ${{ !cancelled() }}
+        working-directory: packages/client
+        run: |
+          bun run check:generated || {
+            echo "::error title=Generated client is out of date::Run 'bun run generate' in packages/client and commit what it changes."
+            exit 1
+          }
+
   test:
     name: test (${{ matrix.package }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [ai, cli, client, codemode, core, flow, plugin, protocol, schema, server, tui, util, vscode]
+        # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
+        # theme holds the theme resolution tests.
+        package: [ai, cli, client, codemode, core, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
