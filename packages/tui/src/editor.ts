@@ -1,11 +1,10 @@
 import type { CliRenderer } from "@opentui/core"
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import type { Stream } from "node:stream"
-import { resolveZedDbPath, resolveZedSelection } from "./editor-zed"
 
 export { normalizePromptContent } from "./prompt/content"
 
@@ -41,49 +40,23 @@ export async function openEditor(input: { value: string; renderer: CliRenderer; 
   }
 }
 
-export function discoverEditorConnection(directory: string) {
-  const root = path.join(os.homedir(), ".claude", "ide")
-  const contains = (parent: string) => {
-    const resolved = path.resolve(parent)
-    const relative = path.relative(resolved, path.resolve(directory))
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)) ? resolved.length : 0
-  }
-  try {
-    return readdirSync(root)
-      .filter((entry) => entry.endsWith(".lock"))
-      .flatMap((entry) => {
-        const file = path.join(root, entry)
-        const port = Number.parseInt(path.basename(file, ".lock"), 10)
-        if (!Number.isInteger(port) || port <= 0 || port > 65535) return []
-        try {
-          const value = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
-          if (value.transport !== undefined && value.transport !== "ws") return []
-          const folders = Array.isArray(value.workspaceFolders)
-            ? value.workspaceFolders.filter((item): item is string => typeof item === "string")
-            : []
-          const score = Math.max(0, ...folders.map(contains))
-          if (!score) return []
-          return [
-            {
-              url: `ws://127.0.0.1:${port}`,
-              authToken: typeof value.authToken === "string" ? value.authToken : undefined,
-              source: `lock:${port}`,
-              score,
-              mtime: statSync(file).mtimeMs,
-            },
-          ]
-        } catch {
-          return []
-        }
-      })
-      .sort((left, right) => right.score - left.score || right.mtime - left.mtime)
-      .map(({ url, authToken, source }) => ({ url, authToken, source }))[0]
-  } catch {
-    return undefined
-  }
+/**
+ * The port of an editor's local WebSocket server, read from ORBIT_EDITOR_SSE_PORT. Until Orbit's own IDE bridge can find
+ * an editor by itself, this is the only way to point Orbit at one.
+ */
+export function editorPort(env: Readonly<Record<string, string | undefined>>) {
+  const port = Number.parseInt(env.ORBIT_EDITOR_SSE_PORT ?? "", 10)
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : undefined
 }
 
+/**
+ * What the TUI can ask the editor it runs beside. Nothing here finds a WebSocket editor, so one is reached only through
+ * `editorPort`. Zed's selection comes out of Zed's own database, which is another tool's file: callers ask only while
+ * compatibility is enabled.
+ */
 export const editorIntegration = {
-  connection: discoverEditorConnection,
-  selection: (directory: string) => resolveZedSelection(resolveZedDbPath() ?? "", directory),
+  selection: async (directory: string) => {
+    const { CompatZed } = await import("@orbit/compat/zed")
+    return CompatZed.activeSelection(CompatZed.databasePath(), directory)
+  },
 }

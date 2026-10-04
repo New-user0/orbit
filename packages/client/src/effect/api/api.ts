@@ -2371,6 +2371,12 @@ export type ConfigGetInput = { readonly location?: { readonly directory?: string
 export type ConfigGetOutput = ReadonlyArray<Config.Entry>
 export type ConfigGetOperation<E = never> = (input?: ConfigGetInput) => Effect.Effect<ConfigGetOutput, E>
 
+export type ConfigEffectiveInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
+export type ConfigEffectiveOutput = Config.Effective
+export type ConfigEffectiveOperation<E = never> = (
+  input?: ConfigEffectiveInput,
+) => Effect.Effect<ConfigEffectiveOutput, E>
+
 export type ConfigShellsOutput = ReadonlyArray<{
   readonly path: string
   readonly name: string
@@ -2384,6 +2390,7 @@ export type ConfigUpdateOperation<E = never> = (input?: ConfigUpdateInput) => Ef
 
 export interface ConfigApi<E = never> {
   readonly get: ConfigGetOperation<E>
+  readonly effective: ConfigEffectiveOperation<E>
   readonly shells: ConfigShellsOperation<E>
   readonly update: ConfigUpdateOperation<E>
 }

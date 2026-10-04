@@ -12814,6 +12814,79 @@
         "summary": "Get configuration"
       }
     },
+    "/api/config/effective": {
+      "get": {
+        "tags": ["config"],
+        "operationId": "config.effective",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The settings that took effect for a location, as the server resolved them from every scope and its own environment. Clients read these instead of working them out from the documents, which do not show what the server's environment changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Config.Effective"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Return the settings that took effect for the requested location, as the server resolved them from every scope and its own environment.",
+        "summary": "Get effective configuration"
+      }
+    },
     "/api/config/shell": {
       "get": {
         "tags": ["config"],
@@ -13177,6 +13250,18 @@
         },
         "required": ["type", "info"],
         "additionalProperties": false
+      },
+      "Config.Effective": {
+        "type": "object",
+        "properties": {
+          "compatibility": {
+            "type": "boolean",
+            "description": "Whether Orbit reads other agent products' settings, skills, output styles and instruction files. Only your own config, ORBIT_CONFIG or ORBIT_CONFIG_CONTENT, organization-managed settings and ORBIT_DISABLE_COMPAT in the server's environment decide this; a repository's files cannot."
+          }
+        },
+        "required": ["compatibility"],
+        "additionalProperties": false,
+        "description": "The settings that took effect for a location, as the server resolved them from every scope and its own environment. Clients read these instead of working them out from the documents, which do not show what the server's environment changed."
       },
       "Config.Entry": {
         "anyOf": [

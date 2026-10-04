@@ -8,6 +8,13 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
   handlers
     .handle("config.get", () => Config.Service.use((config) => config.entries()))
     .handle(
+      "config.effective",
+      Effect.fn(function* () {
+        const config = yield* Config.Service
+        return { compatibility: yield* config.compatEnabled() }
+      }),
+    )
+    .handle(
       "config.update",
       Effect.fn(function* (ctx) {
         const config = yield* Config.Service

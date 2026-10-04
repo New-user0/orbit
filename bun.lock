@@ -494,6 +494,7 @@
         "@opentui/keymap": "catalog:",
         "@opentui/solid": "catalog:",
         "@orbit/client": "workspace:*",
+        "@orbit/compat": "workspace:*",
         "@orbit/core": "workspace:*",
         "@orbit/flow": "workspace:*",
         "@orbit/latex": "workspace:*",

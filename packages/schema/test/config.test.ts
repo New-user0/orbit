@@ -182,6 +182,26 @@ describe("Config.Entry", () => {
   })
 })
 
+describe("Config.Effective", () => {
+  test("round-trips the compatibility switch the server resolved", () => {
+    const decode = Schema.decodeUnknownSync(Config.Effective)
+    for (const compatibility of [true, false])
+      expect(Schema.encodeSync(Config.Effective)(decode({ compatibility }))).toEqual({ compatibility })
+  })
+
+  test("requires the switch to be present and a boolean", () => {
+    const decode = Schema.decodeUnknownSync(Config.Effective)
+    expect(() => decode({})).toThrow()
+    expect(() => decode({ compatibility: "yes" })).toThrow()
+    expect(() => decode({ compatibility: undefined })).toThrow()
+    expect(() => decode(undefined)).toThrow()
+  })
+
+  test("has a stable public identifier", () => {
+    expect(Config.Effective.ast.annotations?.identifier).toBe("Config.Effective")
+  })
+})
+
 describe("ConfigHooks", () => {
   const decode = Schema.decodeUnknownSync(Config.Info)
   const model = { providerID: "acme", model: "fast-model" }

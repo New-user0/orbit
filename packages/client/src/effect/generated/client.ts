@@ -264,6 +264,8 @@ import type {
   WebsearchQueryOutput,
   ConfigGetInput,
   ConfigGetOutput,
+  ConfigEffectiveInput,
+  ConfigEffectiveOutput,
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
@@ -1568,6 +1570,11 @@ const EndpointConfigGet = (raw: RawClient["server.config"]) => (input?: ConfigGe
     raw["config.get"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
   )
 
+const EndpointConfigEffective = (raw: RawClient["server.config"]) => (input?: ConfigEffectiveInput) =>
+  preserveEffect<ConfigEffectiveOutput>()(
+    raw["config.effective"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
 const EndpointConfigShells = (raw: RawClient["server.config"]) => () =>
   preserveEffect<ConfigShellsOutput>()(raw["config.shells"]({}).pipe(Effect.mapError(mapClientError)))
 
@@ -1580,6 +1587,7 @@ const EndpointConfigUpdate = (raw: RawClient["server.config"]) => (input?: Confi
 
 const adaptGroupConfig = (raw: RawClient["server.config"]) => ({
   get: EndpointConfigGet(raw),
+  effective: EndpointConfigEffective(raw),
   shells: EndpointConfigShells(raw),
   update: EndpointConfigUpdate(raw),
 })

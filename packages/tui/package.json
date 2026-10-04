@@ -29,7 +29,6 @@
     "./context/clipboard": "./src/context/clipboard.tsx",
     "./attention": "./src/attention.ts",
     "./editor": "./src/editor.ts",
-    "./editor-zed": "./src/editor-zed.ts",
     "./mini": "./src/mini/index.ts",
     "./mini/tool": "./src/mini/tool.public.ts",
     "./model-preference": "./src/model-preference.ts",
@@ -65,11 +64,6 @@
       "node": "./src/util/string-width.node.ts",
       "default": "./src/util/string-width.bun.ts"
     },
-    "#zed-sqlite": {
-      "bun": "./src/editor-zed-sqlite.bun.ts",
-      "node": "./src/editor-zed-sqlite.node.ts",
-      "default": "./src/editor-zed-sqlite.bun.ts"
-    },
     "#runtime-plugin-support": {
       "bun": "./src/plugin/runtime-plugin-support.bun.ts",
       "node": "./src/plugin/runtime-plugin-support.node.ts",
@@ -78,6 +72,7 @@
   },
   "dependencies": {
     "@orbit/client": "workspace:*",
+    "@orbit/compat": "workspace:*",
     "@orbit/core": "workspace:*",
     "@orbit/flow": "workspace:*",
     "@orbit/latex": "workspace:*",

@@ -21,6 +21,21 @@ export const ConfigGroup = HttpApiGroup.make("server.config")
       ),
   )
   .add(
+    HttpApiEndpoint.get("config.effective", "/api/config/effective", {
+      query: LocationQuery,
+      success: Config.Effective,
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "config.effective",
+          summary: "Get effective configuration",
+          description:
+            "Return the settings that took effect for the requested location, as the server resolved them from every scope and its own environment.",
+        }),
+      ),
+  )
+  .add(
     HttpApiEndpoint.get("config.shells", "/api/config/shell", {
       success: Schema.Array(ConfigShell.Option),
     }).annotateMerge(
