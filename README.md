@@ -48,7 +48,7 @@ back with conflict detection, with retries, fallback models and `orb flow resume
 | `packages/client`, `packages/sdk` | Client and SDK for the local API |
 | `packages/flow` | Orbit Flow: multi-agent workflows, run store, worktrees, resume |
 | `packages/vscode` | VS Code extension: sidebar chat, diffs and approvals, on the same local service |
-| `docs/` | Design (`DESIGN.md`), fork map, Tachyon wire protocol |
+| `docs/` | Design (`DESIGN.md`), fork map, Tachyon wire protocol, upgrade notes (`docs/upgrading.md`) |
 | `tools/` | Tachyon discovery probe, brand gate |
 
 ## Development
