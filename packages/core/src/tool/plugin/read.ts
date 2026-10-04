@@ -3,8 +3,10 @@ export * as ReadTool from "./read.js"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { basename, dirname, join } from "path"
 import { ToolFailure } from "@orbit/ai"
+import { CompatInstructions } from "@orbit/compat/instructions"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Config } from "../../config.js"
 import { Location } from "../../location.js"
 import { FileAccess } from "../../file-access.js"
 import { SessionInstructions } from "../../session/instructions.js"
@@ -14,7 +16,6 @@ import { Notebook } from "../notebook.js"
 import { AbsolutePath, PositiveInt } from "../../schema.js"
 import { ReadToolFileSystem } from "../read-filesystem.js"
 import { Environment } from "../../environment/index.js"
-import { ConfigInstructionPlugin } from "../../config/plugin/instruction.js"
 
 export const name = "read"
 const LocationInput = Schema.Struct({
@@ -32,6 +33,7 @@ const Output = Schema.Union([ReadToolFileSystem.FileContent, ReadToolFileSystem.
 export const Plugin = {
   id: "orbit.tool.read",
   effect: Effect.fn("ReadTool.Plugin")(function* (ctx: Context) {
+    const config = yield* Config.Service
     const reader = yield* ReadToolFileSystem.Service
     const access = yield* FileAccess.Service
     const sessionInstructions = yield* SessionInstructions.Service
@@ -84,7 +86,7 @@ export const Plugin = {
                     }),
                 ),
               )
-              // After a successful read, discover nearby instruction files (ORBIT.md, AGENTS.md, CLAUDE.md) walking up to the Location
+              // After a successful read, discover nearby instruction files walking up to the Location
               // root exclusive and inject them as durable synthetic instructions. For a
               // directory listing the walk starts at the directory itself (so its own AGENTS.md
               // is discovered); for a file it starts at the file's dirname. External reads are
@@ -96,7 +98,7 @@ export const Plugin = {
                 // The Location and its ancestors are already supplied by initial instructions,
                 // even when an upward walk from elsewhere in the project cannot reach root.
                 const discovered = yield* fs.up({
-                  targets: ConfigInstructionPlugin.FILENAMES,
+                  targets: [...CompatInstructions.filenames((yield* Config.compatOf(config)).enabled)],
                   start: result.content.type === "list-page" ? resolved : dirname(resolved),
                   stop: root,
                   type: "file",

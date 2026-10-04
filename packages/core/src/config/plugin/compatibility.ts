@@ -6,7 +6,6 @@ import path from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
-import { AbsolutePath } from "../../schema.js"
 import { Skill } from "../../skill.js"
 import { SkillFile } from "./skill-file.js"
 
@@ -37,8 +36,8 @@ export const Plugin = define({
     const refresh = Effect.fn("ConfigCompatibilityPlugin.refresh")(
       function* () {
         yield* FiberMap.clear(watches)
-        const roots = config.compatibility ? yield* config.compatibility() : { claude: [], agents: [] }
-        const directories = [...roots.claude, ...roots.agents].map((root) => path.join(root, "skills"))
+        // Switched off, there are no roots: nothing is watched and no skill loads.
+        const directories = (yield* Config.compatOf(config)).roots.map((root) => path.join(root.path, "skills"))
         const loaded = new Map<Skill.ID, Skill.Info>()
         for (const directory of directories) {
           const resolved = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))
@@ -67,6 +66,12 @@ export const Plugin = define({
       Effect.forkScoped({ startImmediately: true }),
     )
     yield* config.changes().pipe(
+      Stream.runForEach(() => reload),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    // Turning compatibility on or off arrives as a config update, not as a file change.
+    yield* ctx.event.subscribe().pipe(
+      Stream.filter((event) => event.type === "config.updated"),
       Stream.runForEach(() => reload),
       Effect.forkScoped({ startImmediately: true }),
     )

@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import { describe, expect, test } from "bun:test"
 import { Effect, Fiber, Layer, Logger, Schema, Stream } from "effect"
 import { FastCheck } from "effect/testing"
+import { CompatNames } from "@orbit/compat/names"
 import { Config } from "@orbit/core/config"
 import { Directory, Document, Event, Info, type Entry } from "@orbit/schema/config"
 import { ConfigModel } from "@orbit/schema/config/model"
@@ -35,6 +36,17 @@ function inFixture(root: string, target: string) {
   const relative = path.relative(root, target)
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
 }
+
+// The directory names that other agent products keep config roots under, and the names a directory watch lists for
+// them beside Orbit's own, in the sorted order a watch plan reports.
+const compatNames = [CompatNames.vendor.directory, CompatNames.agents]
+const watchedNames = (...names: string[]) => [...compatNames, ...names].toSorted()
+
+// The compatibility roots inside the fixture, which the machine running the test may also keep roots above.
+const compatRoots = (root: string) =>
+  Config.Service.use((config) => Config.compatOf(config)).pipe(
+    Effect.map((compat) => compat.roots.filter((item) => inFixture(root, item.path))),
+  )
 
 function testLayer(
   directory: string,
@@ -78,7 +90,7 @@ const provider = {
 }
 
 describe("Config", () => {
-  it.live("excludes home-level claude and agents directories when global is disabled", () =>
+  it.live("excludes the home directory's compatibility roots when global is disabled", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {
         const global = path.join(tmp.path, "global")
@@ -87,16 +99,13 @@ describe("Config", () => {
         return Effect.promise(() =>
           Promise.all([
             fs.mkdir(project, { recursive: true }),
-            fs.mkdir(path.join(home, ".claude"), { recursive: true }),
-            fs.mkdir(path.join(home, ".agents"), { recursive: true }),
+            ...compatNames.map((name) => fs.mkdir(path.join(home, name), { recursive: true })),
           ]),
         ).pipe(
           Effect.andThen(
             Effect.gen(function* () {
               // The fixture is real: with global enabled the walk finds both.
-              const config = yield* Config.Service
-              const compatibility = yield* config.compatibility!()
-              expect([...compatibility.claude, ...compatibility.agents]).toHaveLength(2)
+              expect(yield* compatRoots(tmp.path)).toHaveLength(2)
             }).pipe(Effect.provide(testLayer(project, global))),
           ),
           Effect.andThen(
@@ -104,8 +113,7 @@ describe("Config", () => {
             // reaches them, so global: false excludes them even with the
             // project walk enabled.
             Effect.gen(function* () {
-              const config = yield* Config.Service
-              expect(yield* config.compatibility!()).toEqual({ claude: [], agents: [] })
+              expect(yield* compatRoots(tmp.path)).toEqual([])
               const watcher = yield* Watcher.Test
               expect(
                 (yield* watcher.subscriptions()).filter((watch) => watch.type === "entries" && watch.path === home),
@@ -950,39 +958,14 @@ describe("Config", () => {
     ),
   )
 
-  it.live("deduplicates global ecosystem directories found during upward discovery", () =>
-    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
-      Effect.flatMap((tmp) =>
-        Effect.gen(function* () {
-          const global = path.join(tmp.path, "global")
-          const home = path.join(global, "home")
-          const project = path.join(home, "project")
-          yield* Effect.promise(() =>
-            Promise.all([
-              fs.mkdir(path.join(home, ".claude"), { recursive: true }),
-              fs.mkdir(path.join(home, ".agents"), { recursive: true }),
-              fs.mkdir(project, { recursive: true }),
-            ]),
-          )
-          const compatibility = yield* Config.Service.use((config) => config.compatibility!()).pipe(
-            Effect.provide(testLayer(project, global)),
-          )
-
-          expect(compatibility.claude).toEqual([AbsolutePath.make(path.join(home, ".claude"))])
-          expect(compatibility.agents).toEqual([AbsolutePath.make(path.join(home, ".agents"))])
-        }),
-      ),
-    ),
-  )
-
   it.live("does not recursively watch ecosystem config roots", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
           yield* Effect.promise(() =>
             Promise.all([
-              fs.mkdir(path.join(tmp.path, ".claude", "skills"), { recursive: true }),
-              fs.mkdir(path.join(tmp.path, ".agents"), { recursive: true }),
+              fs.mkdir(path.join(tmp.path, CompatNames.vendor.directory, "skills"), { recursive: true }),
+              fs.mkdir(path.join(tmp.path, CompatNames.agents), { recursive: true }),
             ]),
           )
           return yield* Effect.gen(function* () {
@@ -999,15 +982,7 @@ describe("Config", () => {
               {
                 type: "entries",
                 path: tmp.path,
-                names: [
-                  ".agents",
-                  ".claude",
-                  ".orbit",
-                  "orbit.json",
-                  "orbit.jsonc",
-                  "orbit.local.json",
-                  "orbit.local.jsonc",
-                ],
+                names: watchedNames(".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"),
               },
             ])
           }).pipe(Effect.provide(testLayer(tmp.path, undefined, undefined, undefined, Watcher.testLayer)))
@@ -1573,15 +1548,7 @@ describe("Config", () => {
             expect(yield* watcher.subscriptions()).toContainEqual({
               path: tmp.path,
               type: "entries",
-              names: [
-                ".agents",
-                ".claude",
-                ".orbit",
-                "orbit.json",
-                "orbit.jsonc",
-                "orbit.local.json",
-                "orbit.local.jsonc",
-              ],
+              names: watchedNames(".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"),
             })
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -1596,20 +1563,26 @@ describe("Config", () => {
         const root = path.join(tmp.path, "repo")
         const parent = path.join(root, "packages")
         const directory = path.join(parent, "app")
-        const globalAgents = path.join(global, "home", ".agents")
-        const globalClaude = path.join(global, "home", ".claude")
+        const home = path.join(global, "home")
+        // Every compatibility root this fixture creates, lowest priority first: vendor roots before .agents roots,
+        // and within a kind the user's own, then the outermost project root.
+        const expectedRoots = (
+          [
+            { kind: "vendor", name: CompatNames.vendor.directory },
+            { kind: "agents", name: CompatNames.agents },
+          ] as const
+        ).flatMap(({ kind, name }) => [
+          { path: AbsolutePath.make(path.join(home, name)), kind, scope: "user" as const },
+          { path: AbsolutePath.make(path.join(root, name)), kind, scope: "project" as const },
+          { path: AbsolutePath.make(path.join(directory, name)), kind, scope: "project" as const },
+        ])
         return Effect.gen(function* () {
           yield* Effect.promise(async () => {
             await fs.mkdir(global, { recursive: true })
-            await fs.mkdir(globalAgents, { recursive: true })
-            await fs.mkdir(globalClaude, { recursive: true })
             await fs.mkdir(directory, { recursive: true })
-            await fs.mkdir(path.join(root, ".agents"), { recursive: true })
-            await fs.mkdir(path.join(root, ".claude"), { recursive: true })
             await fs.mkdir(path.join(root, ".orbit"), { recursive: true })
-            await fs.mkdir(path.join(directory, ".agents"), { recursive: true })
-            await fs.mkdir(path.join(directory, ".claude"), { recursive: true })
             await fs.mkdir(path.join(directory, ".orbit"), { recursive: true })
+            await Promise.all(expectedRoots.map((expected) => fs.mkdir(expected.path, { recursive: true })))
             await Promise.all([
               fs.writeFile(path.join(tmp.path, "orbit.json"), JSON.stringify({ $schema: "outside" })),
               fs.writeFile(path.join(global, "orbit.json"), JSON.stringify({ $schema: "global" })),
@@ -1628,23 +1601,13 @@ describe("Config", () => {
             const config = yield* Config.Service
             const entries = (yield* config.entries()).filter((entry) => !entry.path || inFixture(tmp.path, entry.path))
             const documents = entries.filter((entry) => entry.type === "document")
-            const compatibility = yield* config.compatibility!()
 
             expect(entries.filter((entry) => entry.type === "directory").map((entry) => entry.path)).toEqual([
               AbsolutePath.make(global),
               AbsolutePath.make(path.join(root, ".orbit")),
               AbsolutePath.make(path.join(directory, ".orbit")),
             ])
-            expect(compatibility.agents.filter((path) => inFixture(tmp.path, path))).toEqual([
-              AbsolutePath.make(globalAgents),
-              AbsolutePath.make(path.join(root, ".agents")),
-              AbsolutePath.make(path.join(directory, ".agents")),
-            ])
-            expect(compatibility.claude.filter((path) => inFixture(tmp.path, path))).toEqual([
-              AbsolutePath.make(globalClaude),
-              AbsolutePath.make(path.join(root, ".claude")),
-              AbsolutePath.make(path.join(directory, ".claude")),
-            ])
+            expect(yield* compatRoots(tmp.path)).toEqual(expectedRoots)
             expect(documents.map((document) => document.info.$schema)).toEqual([
               "global",
               "outside",
@@ -1940,7 +1903,7 @@ describe("Config scopes", () => {
       expect(loaded.watches).toContainEqual({
         type: "entries",
         path: home,
-        names: [".agents", ".claude", ".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"],
+        names: watchedNames(".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"),
       })
     }),
   )
@@ -2180,6 +2143,127 @@ describe("Config scopes", () => {
   )
 })
 
+describe("Config compatibility", () => {
+  // A project below home, with a root of every kind in home and in the project.
+  const writeRoots = Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    const home = path.join(tmp.path, "home")
+    const project = path.join(home, "work", "project")
+    yield* Effect.promise(() =>
+      Promise.all(
+        compatNames.flatMap((name) =>
+          [home, project].map((directory) => fs.mkdir(path.join(directory, name), { recursive: true })),
+        ),
+      ),
+    )
+    return { root: tmp.path, home, project, user: path.join(home, ".config", "orbit", "orbit.json") }
+  })
+  // The roots that exist, lowest priority first: each kind's root in home, then its root in the project.
+  const reportedRoots = (fixture: { readonly home: string; readonly project: string }) =>
+    compatNames.flatMap((name) => [path.join(fixture.home, name), path.join(fixture.project, name)])
+
+  // Every name the directory watches list for entries, whatever directory they are in.
+  const watchedEntryNames = Effect.gen(function* () {
+    const watcher = yield* Watcher.Test
+    return (yield* watcher.subscriptions()).flatMap((watch) => (watch.type === "entries" ? watch.names : []))
+  })
+
+  it.live("reports compatibility as on, with the roots that exist", () =>
+    Effect.gen(function* () {
+      const fixture = yield* writeRoots
+
+      const loaded = yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        return { enabled: (yield* Config.compatOf(config)).enabled, roots: yield* compatRoots(fixture.root) }
+      }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project)))
+
+      expect(loaded.enabled).toBe(true)
+      expect(loaded.roots.map((item) => item.path.toString())).toEqual(reportedRoots(fixture))
+      expect(loaded.roots.map((item) => [item.kind, item.scope])).toEqual([
+        ["vendor", "user"],
+        ["vendor", "project"],
+        ["agents", "user"],
+        ["agents", "project"],
+      ])
+    }),
+  )
+
+  it.live("reports no roots, and watches none, once user config turns compatibility off", () =>
+    Effect.gen(function* () {
+      const fixture = yield* writeRoots
+      yield* write({ [fixture.user]: { compatibility: { enabled: false } } })
+
+      const loaded = yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        return { compat: yield* Config.compatOf(config), names: yield* watchedEntryNames }
+      }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project)))
+
+      expect(loaded.compat).toEqual({ enabled: false, roots: [] })
+      expect(loaded.names).toContain("orbit.json")
+      for (const name of compatNames) expect(loaded.names).not.toContain(name)
+    }),
+  )
+
+  it.live("takes the switch from flag content, not from project files", () =>
+    Effect.gen(function* () {
+      const fixture = yield* writeRoots
+      const off = { compatibility: { enabled: false } }
+      const on = { compatibility: { enabled: true } }
+      const enabled = (options: Config.Options) =>
+        Config.Service.use((config) => Config.compatOf(config)).pipe(
+          Effect.map((compat) => compat.enabled),
+          Effect.provide(scopeLayer(fixture.home, fixture.project, options)),
+        )
+
+      // A repository's own files, shared or local, cannot turn it off...
+      yield* write({
+        [path.join(fixture.project, "orbit.json")]: off,
+        [path.join(fixture.project, "orbit.local.json")]: off,
+      })
+      expect(yield* enabled({})).toBe(true)
+
+      // ...and cannot turn it back on after the user did.
+      yield* write({
+        [path.join(fixture.project, "orbit.json")]: on,
+        [path.join(fixture.project, "orbit.local.json")]: on,
+        [fixture.user]: off,
+      })
+      expect(yield* enabled({})).toBe(false)
+
+      // ORBIT_CONFIG_CONTENT is flag scope, which ranks above the user's own config.
+      expect(yield* enabled({ content: JSON.stringify(on) })).toBe(true)
+      yield* write({ [fixture.user]: on })
+      expect(yield* enabled({ content: JSON.stringify(off) })).toBe(false)
+    }),
+  )
+
+  it.live("follows the switch when user config changes, and reports the change", () =>
+    Effect.gen(function* () {
+      const fixture = yield* writeRoots
+
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const bus = yield* Bus.Service
+        const watcher = yield* Watcher.Test
+        const turn = Effect.fnUntraced(function* (enabled: boolean) {
+          const changed = yield* bus.subscribe(Event.Updated).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+          yield* Effect.sleep("10 millis")
+          yield* write({ [fixture.user]: { compatibility: { enabled } } })
+          yield* watcher.emit({ type: "create", path: fixture.user })
+          expect(yield* Fiber.join(changed)).toHaveLength(1)
+          return yield* Config.compatOf(config)
+        })
+
+        expect((yield* Config.compatOf(config)).roots.length).toBeGreaterThan(0)
+        expect(yield* turn(false)).toEqual({ enabled: false, roots: [] })
+        const back = yield* turn(true)
+        expect(back.enabled).toBe(true)
+        expect(back.roots.filter((item) => inFixture(fixture.root, item.path))).toHaveLength(4)
+      }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project)))
+    }),
+  )
+})
+
 // Windows ignores path case, but realpath keeps the spelling it is given: a child started with a lowercase cwd walks
 // c:\users\om while Global.home says C:\Users\Om. Both spellings must still be recognized as the same home directory.
 describe.skipIf(process.platform !== "win32")("Config scopes with differently cased paths", () => {
@@ -2188,25 +2272,20 @@ describe.skipIf(process.platform !== "win32")("Config scopes with differently ca
     yield* write({
       [path.join(tmp.path, "home", "orbit.json")]: marker("home"),
       [path.join(tmp.path, "home", ".orbit", "orbit.json")]: marker("home-dot"),
-      [path.join(tmp.path, "home", ".claude", "settings.json")]: {},
-      [path.join(tmp.path, "home", ".agents", "settings.json")]: {},
+      ...Object.fromEntries(compatNames.map((name) => [path.join(tmp.path, "home", name, "settings.json"), {}])),
       [path.join(tmp.path, "home", "project", "orbit.json")]: marker("project"),
     })
     return tmp.path
   })
 
-  // The entries and the claude and agents compatibility roots inside the fixture; the machine running the test may keep
-  // its own ~/.claude above it.
+  // The entries and the compatibility root paths inside the fixture; the machine running the test may keep its own
+  // roots above it.
   const load = (root: string, home: string, location: string, options: Config.Options) =>
     Effect.gen(function* () {
       const config = yield* Config.Service
-      const compatibility = yield* config.compatibility!()
-      const inRoot = (directories: readonly AbsolutePath[]) =>
-        directories.filter((directory) => inFixture(root, directory))
       return {
         entries: labels(root, yield* config.entries()),
-        claude: inRoot(compatibility.claude),
-        agents: inRoot(compatibility.agents),
+        compat: (yield* compatRoots(root)).map((item) => item.path),
       }
     }).pipe(Effect.provide(scopeLayer(home, location, options)))
 
@@ -2225,13 +2304,11 @@ describe.skipIf(process.platform !== "win32")("Config scopes with differently ca
           "user:dir(home/.orbit)",
           "project:project",
         ],
-        claude: [AbsolutePath.make(path.join(home, ".claude"))],
-        agents: [AbsolutePath.make(path.join(home, ".agents"))],
+        compat: compatNames.map((name) => AbsolutePath.make(path.join(home, name))),
       })
       expect(yield* load(root, home, location, { global: false })).toEqual({
         entries: ["project:project"],
-        claude: [],
-        agents: [],
+        compat: [],
       })
     }),
   )
@@ -2250,13 +2327,11 @@ describe.skipIf(process.platform !== "win32")("Config scopes with differently ca
           "user:dir(HOME/.orbit)",
           "project:project",
         ],
-        claude: [AbsolutePath.make(path.join(home, ".claude"))],
-        agents: [AbsolutePath.make(path.join(home, ".agents"))],
+        compat: compatNames.map((name) => AbsolutePath.make(path.join(home, name))),
       })
       expect(yield* load(root, home, location, { global: false })).toEqual({
         entries: ["project:project"],
-        claude: [],
-        agents: [],
+        compat: [],
       })
     }),
   )

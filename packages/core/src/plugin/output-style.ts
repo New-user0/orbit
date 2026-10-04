@@ -11,9 +11,10 @@ import type { PluginInternal } from "./internal.js"
 
 /**
  * Output styles change how the agent talks, not what it can do. The `output_style` config names a built-in style or a
- * Markdown file in an `output-styles` directory of any Orbit config directory or `.claude` root; the file's body is
- * appended to the system prompt. Frontmatter `keep-coding-instructions: false` also drops the coding sections of
- * Orbit's default prompt, for styles meant for work other than writing code.
+ * Markdown file in an `output-styles` directory of any Orbit config directory or, while compatibility is enabled, of
+ * another agent product's root; the file's body is appended to the system prompt. Frontmatter
+ * `keep-coding-instructions: false` also drops the coding sections of Orbit's default prompt, for styles meant for
+ * work other than writing code.
  */
 
 interface Style {
@@ -59,11 +60,11 @@ export const Plugin = define({
       const builtIn = BUILT_IN[name.toLowerCase()]
       if (builtIn) return builtIn
       const entries = yield* config.entries()
-      const roots = config.compatibility ? yield* config.compatibility() : { claude: [], agents: [] }
+      const roots = (yield* Config.compatOf(config)).roots.filter((root) => root.kind === "vendor")
       // Highest-priority config directories first, then the compatibility roots.
       const directories = [
         ...entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : [])).toReversed(),
-        ...roots.claude,
+        ...roots.map((root) => root.path),
       ]
       for (const directory of directories) {
         const content = yield* fs.readFileStringSafe(path.join(directory, "output-styles", `${name}.md`))

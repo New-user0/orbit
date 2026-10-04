@@ -127,24 +127,50 @@ writeFileSync(
     },
   }),
 )
-const sharedIt = testEffect(
-  Layer.mergeAll(
-    PluginTestLayer,
-    Config.testLayer([], { claude: [AbsolutePath.make(sharedRoot)], agents: [] }),
-    AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
-  ),
-)
+// A root of the reference vendor's kind, as the compatibility switch reports it while it is on.
+const vendorRoot = (directory: string) =>
+  ({
+    enabled: true,
+    roots: [{ path: AbsolutePath.make(directory), kind: "vendor", scope: "project" }],
+  }) satisfies Config.Compat
+const sharedIt = (compat: Config.Compat) =>
+  testEffect(
+    Layer.mergeAll(
+      PluginTestLayer,
+      Config.testLayer([], compat),
+      AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
+    ),
+  )
+// What a PreToolUse call to the shell tool fails with, or nothing when no hook blocks it.
+const blockedShell = Effect.gen(function* () {
+  const registry = yield* PluginHooks.Service
+  yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+  const shell = yield* registry
+    .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+    .pipe(Effect.exit)
+  return Exit.isFailure(shell) ? String(shell.cause) : ""
+})
 
 describe("LifecycleHooksPlugin with shared settings files", () => {
   if (process.platform === "win32") return
-  sharedIt.live("runs hooks from .claude/settings.json", () =>
+  sharedIt(vendorRoot(sharedRoot)).live("runs hooks from the settings file in a vendor root", () =>
     Effect.gen(function* () {
-      const registry = yield* PluginHooks.Service
-      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
-      const shell = yield* registry
-        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
-        .pipe(Effect.exit)
-      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("from shared settings")
+      expect(yield* blockedShell).toContain("from shared settings")
+    }),
+  )
+
+  // Only the vendor's own roots hold its settings: a shared .agents root with the same file is not read.
+  sharedIt({ enabled: true, roots: [{ ...vendorRoot(sharedRoot).roots[0], kind: "agents" }] }).live(
+    "ignores the settings file in other kinds of root",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* blockedShell).toBe("")
+      }),
+  )
+
+  sharedIt({ enabled: false, roots: [] }).live("runs no hooks from settings files when compatibility is off", () =>
+    Effect.gen(function* () {
+      expect(yield* blockedShell).toBe("")
     }),
   )
 })
@@ -165,7 +191,7 @@ writeFileSync(path.join(partialRoot, "settings.local.json"), JSON.stringify({ ho
 const partialIt = testEffect(
   Layer.mergeAll(
     PluginTestLayer,
-    Config.testLayer([], { claude: [AbsolutePath.make(partialRoot)], agents: [] }),
+    Config.testLayer([], vendorRoot(partialRoot)),
     AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
   ),
 )

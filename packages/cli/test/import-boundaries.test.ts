@@ -54,6 +54,26 @@ describe("CLI frontend import boundaries", () => {
     expect(mini).not.toContain("packages/tui/src/runtime.tsx")
   })
 
+  test("keeps compat independent from Core, Server, and Client", async () => {
+    // Core, the TUI and the CLI all import compat, so it may depend on Schema and Util only.
+    const glob = new Bun.Glob("{src,test}/**/*.{ts,tsx}")
+    const imports: string[] = []
+    for await (const file of glob.scan({ cwd: path.join(root, "packages/compat") })) {
+      const source = await Bun.file(path.join(root, "packages/compat", file)).text()
+      if (/["']@orbit\/(?:core|server|client)(?:\/[^"']*)?["']/.test(source)) imports.push(file)
+    }
+    expect(imports).toEqual([])
+
+    const manifest = await Bun.file(path.join(root, "packages/compat/package.json")).json()
+    const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
+    expect(declared.filter((name) => /^@orbit\/(?:core|server|client)$/.test(name))).toEqual([])
+
+    for (const entrypoint of ["names", "switch", "roots", "instructions"]) {
+      const graph = await bundleInputs(`packages/compat/src/${entrypoint}.ts`)
+      expect(graph.filter((file) => /^packages\/(?:core|server|client|cli|tui)\//.test(file))).toEqual([])
+    }
+  })
+
   test("keeps TUI Mini independent from Core, Server, and CLI", async () => {
     const glob = new Bun.Glob("**/*.{ts,tsx}")
     const imports: string[] = []

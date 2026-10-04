@@ -1,19 +1,17 @@
 export * as ConfigInstructionPlugin from "./instruction.js"
 
+import { CompatInstructions } from "@orbit/compat/instructions"
 import { define } from "@orbit/plugin/effect/plugin"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { dirname, join, relative } from "path"
 import { Effect, PubSub, Semaphore, Stream } from "effect"
+import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
 import { InstructionDiscovery } from "../../instruction-discovery.js"
 import { Instructions } from "../../instructions/index.js"
 import { Location } from "../../location.js"
 import { AbsolutePath } from "../../schema.js"
-
-// Checked in this order in each directory; only the first that exists loads, so a project keeping the
-// same notes under several names is not instructed twice.
-export const FILENAMES = ["ORBIT.md", "AGENTS.md", "CLAUDE.md"]
 
 type Loaded =
   | { readonly type: "available"; readonly files: InstructionDiscovery.File[] }
@@ -21,12 +19,13 @@ type Loaded =
 
 export const Plugin = define({
   id: "orbit.config.instruction",
-  effect: Effect.fn(function* () {
+  effect: Effect.fn(function* (ctx) {
     const discovery = yield* InstructionDiscovery.Service
     // Nothing this plugin watches or loads can contribute when both scopes
     // are disabled; skip the resolves, the watcher fiber, and the transform.
     if (!discovery.project && !discovery.global) return
     yield* Effect.gen(function* () {
+      const config = yield* Config.Service
       const fs = yield* FSUtil.Service
       const global = yield* Global.Service
       const location = yield* Location.Service
@@ -38,24 +37,33 @@ export const Plugin = define({
       const home = yield* fs.resolve(global.home)
       const project = discovery.project && FSUtil.contains(root, start)
       const stop = FSUtil.contains(home, start) ? home : root
-      const globalFiles = yield* Effect.forEach(FILENAMES, (name) => fs.resolve(join(global.config, name)))
       const loaded: { current: Loaded } = { current: { type: "available", files: [] } }
+      const watched = new Set<string>()
 
       const publish = (update: Watcher.Update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)
-      // The ancestor walk can reach the global file when the location sits
-      // beneath the global config dir; global: false excludes it there too.
-      const candidates = [
-        ...(discovery.global ? globalFiles : []),
-        ...(project
-          ? ancestorDirectories(start, stop)
-              .flatMap((directory) => FILENAMES.map((name) => join(directory, name)))
-              .filter((file) => discovery.global || !globalFiles.includes(file))
-          : []),
-      ]
-      for (const path of new Set(candidates)) {
-        const updates = yield* watcher.subscribe({ path, type: "file" })
-        yield* updates.pipe(Stream.runForEach(publish), Effect.forkScoped({ startImmediately: true }))
-      }
+      // Which names to look for follows the compatibility switch, so every refresh resolves it again and watches any
+      // name it has newly enabled. Names that were switched off are left watched, and ignored when loading.
+      const watch = Effect.fn("ConfigInstructionPlugin.watch")(function* (
+        names: readonly string[],
+        globalFiles: readonly string[],
+      ) {
+        // The ancestor walk can reach the global file when the location sits
+        // beneath the global config dir; global: false excludes it there too.
+        const candidates = [
+          ...(discovery.global ? globalFiles : []),
+          ...(project
+            ? ancestorDirectories(start, stop)
+                .flatMap((directory) => names.map((name) => join(directory, name)))
+                .filter((file) => discovery.global || !globalFiles.includes(file))
+            : []),
+        ]
+        for (const path of new Set(candidates)) {
+          if (watched.has(path)) continue
+          watched.add(path)
+          const updates = yield* watcher.subscribe({ path, type: "file" })
+          yield* updates.pipe(Stream.runForEach(publish), Effect.forkScoped({ startImmediately: true }))
+        }
+      })
 
       const read = Effect.fn("ConfigInstructionPlugin.read")(function* (path: string) {
         const content = yield* fs.readFileStringSafe(path)
@@ -63,7 +71,9 @@ export const Plugin = define({
         yield* Effect.logDebug("instruction file skipped", { path, reason: "unavailable" })
       })
 
-      const globalSource = Effect.fn("ConfigInstructionPlugin.globalSource")(function* () {
+      const globalSource = Effect.fn("ConfigInstructionPlugin.globalSource")(function* (
+        globalFiles: readonly string[],
+      ) {
         if (!discovery.global) return []
         const existing = yield* Effect.filter(globalFiles, (file) => fs.isFile(file))
         if (!existing[0]) return []
@@ -71,10 +81,13 @@ export const Plugin = define({
         return file ? [file] : []
       })
 
-      const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* () {
+      const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* (
+        names: readonly string[],
+        globalFiles: readonly string[],
+      ) {
         if (!project) return []
         const walked = yield* Effect.forEach(
-          yield* fs.up({ targets: FILENAMES, start, stop, type: "file" }),
+          yield* fs.up({ targets: [...names], start, stop, type: "file" }),
           fs.resolve,
         )
         const discovered = new Set(
@@ -98,9 +111,12 @@ export const Plugin = define({
 
       const refresh = Effect.fn("ConfigInstructionPlugin.refresh")(
         function* (file?: string) {
+          const names = CompatInstructions.filenames((yield* Config.compatOf(config)).enabled)
+          const globalFiles = yield* Effect.forEach(names, (name) => fs.resolve(join(global.config, name)))
+          yield* watch(names, globalFiles)
           const sources = yield* Effect.all({
-            global: isolate("global", globalSource()),
-            project: isolate("project", projectSource()),
+            global: isolate("global", globalSource(globalFiles)),
+            project: isolate("project", projectSource(names, globalFiles)),
           })
           loaded.current =
             Array.isArray(sources.global) && Array.isArray(sources.project)
@@ -122,6 +138,12 @@ export const Plugin = define({
       yield* Stream.fromSubscription(updates).pipe(
         Stream.debounce("100 millis"),
         Stream.runForEach((file) => refresh(file).pipe(Effect.andThen(discovery.reload()))),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      // Turning compatibility on or off arrives as a config update, not as a file change.
+      yield* ctx.event.subscribe().pipe(
+        Stream.filter((event) => event.type === "config.updated"),
+        Stream.runForEach(() => refresh().pipe(Effect.andThen(discovery.reload()))),
         Effect.forkScoped({ startImmediately: true }),
       )
       yield* refresh()

@@ -1,8 +1,10 @@
 export * as CommandPlugin from "./command.js"
 
+import { CompatInstructions } from "@orbit/compat/instructions"
 import { define } from "@orbit/plugin/effect/plugin"
 import { Effect, Stream } from "effect"
 import { Bus } from "../bus.js"
+import { Config } from "../config.js"
 import { Location } from "../location.js"
 import { Mcp } from "../mcp/index.js"
 import PROMPT_INITIALIZE from "./command/initialize.txt"
@@ -11,6 +13,7 @@ import PROMPT_REVIEW from "./command/review.txt"
 export const Plugin = define({
   id: "orbit.command",
   effect: Effect.fn(function* (ctx) {
+    const config = yield* Config.Service
     const location = yield* Location.Service
     const mcp = yield* Mcp.Service
     const bus = yield* Bus.Service
@@ -30,14 +33,25 @@ export const Plugin = define({
         name: "init",
         description: "guided AGENTS.md setup",
         execute: (input) =>
-          ctx.session
-            .prompt({
+          Effect.gen(function* () {
+            // The files to read follow the compatibility switch as it stands when the command runs.
+            const enabled = (yield* Config.compatOf(config)).enabled
+            const instructionFiles = [...CompatInstructions.filenames(enabled), ...CompatInstructions.rules(enabled)]
+              .map((file) => `\`${file}\``)
+              .join(", ")
+            yield* ctx.session.prompt({
               ...input.prompt,
               sessionID: input.sessionID,
-              text: append(PROMPT_INITIALIZE.replace("${path}", location.project.directory), input.prompt.text),
+              text: append(
+                PROMPT_INITIALIZE.replace("${path}", location.project.directory).replace(
+                  "${instruction_files}",
+                  instructionFiles,
+                ),
+                input.prompt.text,
+              ),
               delivery: input.delivery,
             })
-            .pipe(Effect.asVoid),
+          }),
       })
       editor.add({
         name: "review",

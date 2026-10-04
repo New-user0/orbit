@@ -108,6 +108,20 @@ describe("ConfigNormalize", () => {
     expect(Duration.toMillis(info.warming.duration ?? Duration.zero)).toBe(1_800_000)
   })
 
+  test("keeps the compatibility switch as one native value", () => {
+    expect(normalized({ compatibility: { enabled: false } }).encoded.compatibility).toEqual({ enabled: false })
+    expect(decoded({ compatibility: { enabled: true } }).compatibility?.enabled).toBe(true)
+    // The legacy shape of every other key is untouched by it.
+    expect(decoded({ snapshot: false, compatibility: { enabled: false } })).toMatchObject({
+      snapshots: false,
+      compatibility: { enabled: false },
+    })
+    // A value that is not a switch is reported and dropped, so it never reaches the decoded config.
+    const invalid = normalized({ compatibility: { enabled: "no" } })
+    expect(invalid.encoded.compatibility).toBeUndefined()
+    expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+  })
+
   test("preserves arbitrary JSON-round-tripped native configuration", () => {
     FastCheck.assert(
       FastCheck.property(Schema.toArbitrary(Info)(FastCheck), (info) => {

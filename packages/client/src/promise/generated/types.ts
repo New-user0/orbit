@@ -2264,6 +2264,7 @@ export type ConfigEntry =
           }
         }
         compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        compatibility?: { enabled?: boolean }
         skills?: Array<string>
         commands?: {
           [x: string]: {
