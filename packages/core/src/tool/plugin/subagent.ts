@@ -9,6 +9,7 @@ import { Config } from "../../config.js"
 import { Job } from "../../job.js"
 import { Model } from "../../model.js"
 import { Permission } from "../../permission.js"
+import { PlanPlugin } from "../../plugin/plan.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentCompletion } from "../../session/subagent-completion.js"
@@ -95,7 +96,7 @@ export const spawner = Effect.fn("SubagentTool.spawner")(function* () {
     return ref
   })
 
-  /** Check the nesting depth, resolve the agent and assert the subagent permission for it. */
+  /** Check the nesting depth and the Plan-mode limit, resolve the agent and assert the subagent permission for it. */
   const admit = Effect.fn("SubagentTool.admit")(function* (context: Tool.Context, agentID: string) {
     const parent = yield* sessions
       .get(context.sessionID)
@@ -121,6 +122,25 @@ export const spawner = Effect.fn("SubagentTool.spawner")(function* () {
       return yield* new ToolFailure({
         message: `Subagent depth limit reached (${limit}). Increase "experimental.subagent_depth" to allow nested subagents.`,
       })
+    // A read-only session may only spawn read-only children. The caller's identity decides this, not a permission
+    // rule: rules are last-match, so a `* * allow` that config appends after the Plan agent's rules would reopen it.
+    // Checking before resolution refuses every other agent, including unknown and primary ones.
+    if (context.agent === PlanPlugin.plan && !PlanPlugin.readOnlyAgents.has(Agent.ID.make(agentID))) {
+      // Name only agents that can run: `plan` is a primary agent unless config changes its mode.
+      const allowed = (yield* Effect.forEach(PlanPlugin.readOnlyAgents, (id) => agents.resolve(id))).flatMap((item) =>
+        item === undefined || item.mode === "primary" ? [] : [item.id],
+      )
+      const reason = [
+        allowed.length === 0
+          ? "Plan mode does not allow subagents."
+          : `Plan mode only allows read-only subagents: ${allowed.join(", ")}.`,
+        `Agent ${agentID} cannot be spawned until Plan mode ends.`,
+      ].join(" ")
+      return yield* new ToolFailure({
+        message: reason,
+        error: new Permission.BlockedError({ rules: [], permission: name, resources: [agentID], reason }),
+      })
+    }
     const agent = yield* agents.resolve(agentID)
     if (agent === undefined) return yield* new ToolFailure({ message: `Unknown agent: ${agentID}` })
     if (agent.mode === "primary")

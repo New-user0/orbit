@@ -814,3 +814,149 @@ describe("SubagentTool", () => {
     ),
   )
 })
+
+describe("SubagentTool in Plan mode", () => {
+  const plan = Agent.ID.make("plan")
+
+  /** A project whose orbit.json holds `config`, opened as a Location. */
+  const inProject = <A, E, R>(config: unknown, body: (location: Location.Ref) => Effect.Effect<A, E, R>) =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.promise(() => Bun.write(path.join(dir.path, "orbit.json"), JSON.stringify(config))).pipe(
+          Effect.andThen(body(Location.Ref.make({ directory: AbsolutePath.make(dir.path) }))),
+        ),
+      ),
+    )
+
+  /** Waits for the built-in plugins, so the real agents and tools exist, and returns the Location's tool registry. */
+  const activate = (location: Location.Ref) =>
+    Effect.gen(function* () {
+      const locations = yield* LocationServiceMap.Service
+      yield* Plugin.Service.use((plugins) => plugins.awaitActivation).pipe(Effect.provide(locations.get(location)))
+      return yield* Tool.Service.pipe(Effect.provide(locations.get(location)))
+    })
+
+  const call = (registry: Tool.Interface, sessionID: Session.ID, caller: Agent.ID, name: string, input: unknown) =>
+    executeTool(registry, {
+      sessionID,
+      ...toolIdentity,
+      agent: caller,
+      call: { type: "tool-call", id: `call-${caller}-${name}`, name, input },
+    })
+
+  const spawn = (registry: Tool.Interface, sessionID: Session.ID, caller: Agent.ID, agent: string) =>
+    call(registry, sessionID, caller, SubagentTool.name, { agent, description: `${agent} task`, prompt: "do the task" })
+
+  const refusal = (allowed: string, agent: string) => ({
+    status: "error" as const,
+    error: {
+      type: "permission.rejected",
+      message: `Plan mode only allows read-only subagents: ${allowed}. Agent ${agent} cannot be spawned until Plan mode ends.`,
+    },
+  })
+
+  productionIt.live("admits only read-only subagents", () =>
+    inProject({}, (location) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location, model: parentModel, agent: plan })
+        const registry = yield* activate(parent.location)
+
+        expect(yield* spawn(registry, parent.id, plan, "general")).toEqual(refusal("explore", "general"))
+        // Primary and unknown agents get the same answer, which tells the model what it may use instead.
+        expect(yield* spawn(registry, parent.id, plan, "build")).toEqual(refusal("explore", "build"))
+        expect(yield* spawn(registry, parent.id, plan, "missing")).toEqual(refusal("explore", "missing"))
+        expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(0)
+
+        const explored = yield* spawn(registry, parent.id, plan, "explore")
+        expect(explored).toMatchObject({ status: "completed", metadata: { status: "completed" } })
+        expect(yield* sessions.get(outputSessionID(explored.metadata))).toMatchObject({
+          parentID: parent.id,
+          agent: "explore",
+        })
+      }),
+    ),
+  )
+
+  productionIt.live("keeps the limit when config grants every permission", () =>
+    inProject({ permissions: [{ action: "*", resource: "*", effect: "allow" }] }, (location) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location, model: parentModel, agent: plan })
+        const registry = yield* activate(parent.location)
+        const locations = yield* LocationServiceMap.Service
+        const agents = yield* Agent.Service.pipe(Effect.provide(locations.get(parent.location)))
+        const planAgent = yield* agents.get(plan)
+
+        // The config rule lands after the Plan agent's own rules, so rules alone cannot hold the limit.
+        expect(Permission.evaluate("edit", "src/index.ts", planAgent?.permissions ?? []).effect).toBe("allow")
+        expect(yield* spawn(registry, parent.id, plan, "general")).toEqual(refusal("explore", "general"))
+        expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(0)
+        expect(yield* spawn(registry, parent.id, plan, "explore")).toMatchObject({ status: "completed" })
+      }),
+    ),
+  )
+
+  productionIt.live("changes nothing outside Plan mode", () =>
+    inProject({ permissions: [{ action: "*", resource: "*", effect: "allow" }] }, (location) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location, model: parentModel })
+        const registry = yield* activate(parent.location)
+
+        yield* Effect.forEach(["general", "explore"], (agent) =>
+          Effect.gen(function* () {
+            const spawned = yield* spawn(registry, parent.id, toolIdentity.agent, agent)
+            expect(spawned).toMatchObject({ status: "completed", metadata: { status: "completed" } })
+            expect(yield* sessions.get(outputSessionID(spawned.metadata))).toMatchObject({ agent })
+          }),
+        )
+      }),
+    ),
+  )
+
+  productionIt.live("also admits plan when its mode lets it run as a subagent", () =>
+    inProject({ agents: { plan: { mode: "all" } } }, (location) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location, model: parentModel, agent: plan })
+        const registry = yield* activate(parent.location)
+
+        expect(yield* spawn(registry, parent.id, plan, "general")).toEqual(refusal("explore, plan", "general"))
+        const planned = yield* spawn(registry, parent.id, plan, "plan")
+        expect(planned).toMatchObject({ status: "completed", metadata: { status: "completed" } })
+        expect(yield* sessions.get(outputSessionID(planned.metadata))).toMatchObject({ agent: "plan" })
+      }),
+    ),
+  )
+
+  productionIt.live("applies the same limit to workflow agents", () =>
+    inProject({}, (location) =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const parent = yield* sessions.create({ location, model: parentModel, agent: plan })
+        const registry = yield* activate(parent.location)
+        const run = (agent?: string) =>
+          call(registry, parent.id, plan, "workflow", {
+            description: "plan workflow",
+            script: `return await tools.agent({ description: "scan", prompt: "scan it"${agent ? `, agent: "${agent}"` : ""} })`,
+          })
+
+        // A workflow agent defaults to general, which Plan mode refuses.
+        expect(yield* run()).toMatchObject({
+          status: "error",
+          error: { message: expect.stringContaining("Plan mode only allows read-only subagents: explore.") },
+        })
+        expect((yield* sessions.list({ parentID: parent.id })).data).toHaveLength(0)
+
+        expect(yield* run("explore")).toMatchObject({
+          status: "completed",
+          content: [{ type: "text", text: expect.stringContaining(childText) }],
+        })
+      }),
+    ),
+  )
+})
