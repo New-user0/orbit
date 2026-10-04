@@ -17,7 +17,7 @@ import { PluginHost } from "@orbit/core/plugin/host"
 import { Session } from "@orbit/core/session"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionMessage } from "@orbit/schema/session-message"
-import { Effect, Exit, Layer, Schema } from "effect"
+import { Effect, Exit, Layer, Logger, Schema } from "effect"
 import { tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -107,36 +107,116 @@ describe("LifecycleHooksPlugin", () => {
   )
 })
 
-const claudeRoot = mkdtempSync(path.join(tmpdir(), "orbit-claude-hooks-"))
+const sharedRoot = mkdtempSync(path.join(tmpdir(), "orbit-shared-hooks-"))
 writeFileSync(
-  path.join(claudeRoot, "settings.json"),
+  path.join(sharedRoot, "settings.json"),
   JSON.stringify({
     permissions: { allow: ["Bash(ls:*)"] },
     hooks: {
       PreToolUse: [
-        { matcher: "shell", hooks: [{ type: "command", command: "echo 'from claude settings' >&2; exit 2" }] },
+        { matcher: "shell", hooks: [{ type: "command", command: "echo 'from shared settings' >&2; exit 2" }] },
       ],
     },
   }),
 )
-const claudeIt = testEffect(
+const sharedIt = testEffect(
   Layer.mergeAll(
     PluginTestLayer,
-    Config.testLayer([], { claude: [AbsolutePath.make(claudeRoot)], agents: [] }),
+    Config.testLayer([], { claude: [AbsolutePath.make(sharedRoot)], agents: [] }),
     AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
   ),
 )
 
-describe("LifecycleHooksPlugin with Claude Code settings", () => {
+describe("LifecycleHooksPlugin with shared settings files", () => {
   if (process.platform === "win32") return
-  claudeIt.live("runs hooks from .claude/settings.json", () =>
+  sharedIt.live("runs hooks from .claude/settings.json", () =>
     Effect.gen(function* () {
       const registry = yield* PluginHooks.Service
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
       const shell = yield* registry
         .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
         .pipe(Effect.exit)
-      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("from claude settings")
+      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("from shared settings")
+    }),
+  )
+})
+
+describe("LifecycleHooksPlugin with hooks of other types", () => {
+  const unsupported = "hook type is not supported yet and is skipped"
+
+  it.live("skips prompt, agent and http hooks and logs each type once", () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (Array.isArray(entry.message) && entry.message[0] === unsupported) output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([
+        hooks({
+          PreToolUse: [
+            {
+              hooks: [
+                { type: "prompt", prompt: "Is this safe?" },
+                { type: "agent", prompt: "Verify the change" },
+                { type: "http", url: "https://hooks.example.com/event" },
+                { type: "prompt", prompt: "Is it still safe?" },
+              ],
+            },
+          ],
+          PostToolUse: [{ hooks: [{ type: "agent", prompt: "Verify the result" }] }],
+        }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+      const after = {
+        ...base,
+        tool: "read",
+        input: {},
+        status: "completed" as const,
+        result: { output: "x" } as Tool.Result,
+      }
+      const fire = Effect.gen(function* () {
+        const before = yield* registry
+          .trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+          .pipe(Effect.exit)
+        expect(Exit.isSuccess(before)).toBe(true)
+        yield* registry.trigger("tool", "execute.after", after)
+      })
+      yield* fire
+      yield* fire
+
+      expect(output).toEqual([
+        [unsupported, { event: "PreToolUse", type: "prompt" }],
+        [unsupported, { event: "PreToolUse", type: "agent" }],
+        [unsupported, { event: "PreToolUse", type: "http" }],
+      ])
+      expect(after.result).toEqual({ output: "x" })
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  if (process.platform === "win32") return
+  it.live("still runs the command hooks that sit next to them", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([
+        hooks({
+          PreToolUse: [
+            {
+              hooks: [
+                { type: "prompt", prompt: "Is this safe?" },
+                { type: "command", command: "echo 'no shell today' >&2; exit 2" },
+              ],
+            },
+          ],
+        }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const exit = yield* registry
+        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit) ? String(exit.cause) : "").toContain("Blocked by a PreToolUse hook: no shell today")
     }),
   )
 })

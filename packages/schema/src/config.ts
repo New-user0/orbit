@@ -70,7 +70,8 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description: "Filesystem watcher configuration",
   }),
   hooks: ConfigHooks.Info.pipe(optional).annotate({
-    description: "Shell commands run before and after tool calls and at other points in a session",
+    description:
+      "Hooks that run at points in a session's life: shell commands, model prompts, verifier agents and HTTP requests",
   }),
   formatter: ConfigFormatter.Info.pipe(optional).annotate({
     description: "Enable built-in formatters or configure formatter overrides",

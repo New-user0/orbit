@@ -18,7 +18,8 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * Runs the shell commands configured under `hooks` at points in a session's life. Every document's hooks apply, in
  * config order. A command gets the event as JSON on stdin; exit code 2 or `{"decision":"block","reason":...}` on
  * stdout blocks a tool call, and other stdout becomes context for the model. A hook that fails to run is logged and
- * skipped, so a broken script never stops the session.
+ * skipped, so a broken script never stops the session. Hooks of the other types (prompt, agent, http) are skipped,
+ * and logged once per type, until their runners exist.
  */
 
 const DEFAULT_TIMEOUT_SECONDS = 60
@@ -28,7 +29,7 @@ const Reply = Schema.Struct({
   additionalContext: Schema.optionalKey(Schema.String),
 })
 const decodeReply = Schema.decodeUnknownOption(Schema.fromJsonString(Reply))
-// Only the hooks key matters here; Claude Code's other settings are ignored.
+// Only the hooks key matters here; the file's other settings are ignored.
 const decodeSettings = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ hooks: Schema.optionalKey(ConfigHooks.Info) })),
 )
@@ -50,7 +51,8 @@ export const Plugin = define({
 
     const fs = yield* FSUtil.Service
 
-    // Claude Code keeps hooks in .claude/settings.json and settings.local.json; read them so existing hooks work here.
+    // Settings directories shared with other tools keep hooks in settings.json and settings.local.json; read them so
+    // existing hooks work here.
     const claudeHooks = Effect.fn("LifecycleHooksPlugin.claudeHooks")(function* () {
       const roots = config.compatibility ? (yield* config.compatibility()).claude : []
       const files = roots.flatMap((root) => [path.join(root, "settings.json"), path.join(root, "settings.local.json")])
@@ -63,14 +65,27 @@ export const Plugin = define({
       return settings.filter((hooks) => hooks !== undefined)
     })
 
+    // Hook types skipped so far; each is logged once, not on every event.
+    const skipped = new Set<ConfigHooks.Hook["type"]>()
+
     const commands = Effect.fn("LifecycleHooksPlugin.commands")(function* (event: ConfigHooks.Event, target?: string) {
       const configured = (yield* config.entries()).flatMap((entry) =>
         entry.type === "document" && entry.info.hooks ? [entry.info.hooks] : [],
       )
-      return [...(yield* claudeHooks()), ...configured]
+      const matched = [...(yield* claudeHooks()), ...configured]
         .flatMap((hooks) => hooks[event] ?? [])
         .filter((matcher) => matches(matcher.matcher, target))
         .flatMap((matcher) => matcher.hooks)
+      const unsupported = new Set(
+        matched.flatMap((hook) => (hook.type === "command" || skipped.has(hook.type) ? [] : [hook.type])),
+      )
+      unsupported.forEach((type) => skipped.add(type))
+      yield* Effect.forEach(
+        unsupported,
+        (type) => Effect.logWarning("hook type is not supported yet and is skipped", { event, type }),
+        { discard: true },
+      )
+      return matched.filter((hook): hook is ConfigHooks.Command => hook.type === "command")
     })
 
     const run = Effect.fn("LifecycleHooksPlugin.run")(function* (

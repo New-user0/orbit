@@ -631,6 +631,59 @@ describe("Config", () => {
     ).pipe(Effect.provide(Logger.layer([logger])))
   })
 
+  it.live("keeps the valid hooks of a document and logs each skipped one at its exact path", () => {
+    const output: Array<Record<string, unknown>> = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "configuration normalization diagnostic") return
+      const details = entry.message[1]
+      if (typeof details === "object" && details !== null) output.push(details as Record<string, unknown>)
+    })
+    return Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        const project = path.join(tmp.path, "project")
+        return Effect.promise(async () => {
+          await fs.mkdir(project, { recursive: true })
+          await fs.writeFile(
+            path.join(project, "orbit.json"),
+            JSON.stringify({
+              hooks: {
+                PreToolUse: [
+                  {
+                    matcher: "shell",
+                    hooks: [
+                      { type: "command", command: "./guard.sh" },
+                      { type: "http", url: 42 },
+                    ],
+                  },
+                ],
+                SessionStart: [{ hooks: [{ type: "prompt", prompt: "Is this safe?" }] }],
+                OnEveryThing: [],
+              },
+            }),
+          )
+        }).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              const config = yield* Config.Service
+              const hooks = Config.latest(yield* config.entries(), "hooks")
+              expect(hooks?.PreToolUse).toEqual([
+                { matcher: "shell", hooks: [{ type: "command", command: "./guard.sh" }] },
+              ])
+              expect(hooks?.SessionStart).toEqual([{ hooks: [] }])
+              expect(output.map((item) => `${item.kind}:${item.path}`)).toEqual([
+                "invalid:$.hooks.PreToolUse.0.hooks.1",
+                "unsupported:$.hooks.SessionStart.0.hooks.0",
+                "unsupported:$.hooks.OnEveryThing",
+              ])
+            }).pipe(Effect.provide(testLayer(project))),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
   test("migrates arbitrary v1 configuration into valid v2 configuration", () => {
     FastCheck.assert(
       FastCheck.property(Schema.toArbitrary(ConfigV1.Info)(FastCheck), (info) => {

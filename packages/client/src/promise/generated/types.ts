@@ -433,7 +433,50 @@ export type WebSearchProvider = { id: string; name: string }
 
 export type WebSearchResult = { url: string; title?: string; content?: string; time: { published?: number } }
 
-export type ConfigHooksCommand = { type: "command"; command: string; timeout?: number }
+export type ConfigHooksCommand = {
+  type: "command"
+  command: string
+  shell?: "bash" | "powershell"
+  async?: boolean
+  async_rewake?: boolean
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksPrompt = {
+  type: "prompt"
+  prompt: string
+  model?: string | { providerID: string; model: string; variant?: string }
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksAgent = {
+  type: "agent"
+  prompt: string
+  model?: string | { providerID: string; model: string; variant?: string }
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksHttp = {
+  type: "http"
+  url: string
+  headers?: { [x: string]: string }
+  allowed_env_vars?: Array<string>
+  timeout?: number
+  status_message?: string
+  once?: boolean
+  if?: string
+}
+
+export type ConfigHooksHttpPolicy = { allowed_urls?: Array<string>; allowed_env_vars?: Array<string> }
 
 export type McpProtocol = "legacy" | "auto" | "2026-07-28"
 
@@ -1689,7 +1732,7 @@ export type WorktreeList = Array<WorktreeDirectory>
 
 export type VcsInfo = { provider?: string; branch: VcsBranch }
 
-export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksCommand> }
+export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
 
 export type SessionInboxMove = {
   id: string
@@ -1945,6 +1988,8 @@ export type ReferenceInfo = {
   source: ReferenceSource
 }
 
+export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
+
 export type ModelInfo = {
   id: string
   modelID: string
@@ -2032,6 +2077,62 @@ export type SessionCreated = {
   }
 }
 
+export type SessionInboxUser = {
+  id: string
+  sessionID: string
+  time: { created: number }
+  type: "user"
+  payload: SessionInboxUserPayload
+  delivery: SessionInboxDelivery
+}
+
+export type SessionInboxItem =
+  | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
+  | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
+  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
+  | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
+
+export type SessionMessageAssistantTool = {
+  type: "tool"
+  id: string
+  name: string
+  executed?: boolean
+  providerState?: SessionMessageProviderState
+  providerResultState?: SessionMessageProviderState
+  state:
+    | SessionMessageToolStateStreaming
+    | SessionMessageToolStateRunning
+    | SessionMessageToolStateCompleted
+    | SessionMessageToolStateError
+  time: { created: number; ran?: number; completed?: number }
+}
+
+export type SessionMessageCompaction =
+  | SessionMessageCompactionRunning
+  | SessionMessageCompactionCompleted
+  | SessionMessageCompactionFailed
+
+export type SessionMessageAssistantTool1 = {
+  type: "tool"
+  id: string
+  name: string
+  executed?: boolean
+  providerState?: SessionMessageProviderState1
+  providerResultState?: SessionMessageProviderState1
+  state:
+    | SessionMessageToolStateStreaming
+    | SessionMessageToolStateRunning1
+    | SessionMessageToolStateCompleted1
+    | SessionMessageToolStateError1
+  time: { created: number; ran?: number; completed?: number }
+}
+
+export type FormFields = [FormField, ...Array<FormField>]
+
+export type CredentialValue = CredentialOAuth | CredentialKey
+
+export type FormFields2 = [FormField1, ...Array<FormField1>]
+
 export type ConfigEntry =
   | {
       type: "document"
@@ -2064,12 +2165,36 @@ export type ConfigEntry =
         snapshots?: boolean
         watcher?: { ignore?: Array<string> }
         hooks?: {
+          SessionStart?: Array<ConfigHooksMatcher>
+          SessionEnd?: Array<ConfigHooksMatcher>
+          Setup?: Array<ConfigHooksMatcher>
+          UserPromptSubmit?: Array<ConfigHooksMatcher>
           PreToolUse?: Array<ConfigHooksMatcher>
           PostToolUse?: Array<ConfigHooksMatcher>
-          UserPromptSubmit?: Array<ConfigHooksMatcher>
-          SessionStart?: Array<ConfigHooksMatcher>
+          PostToolUseFailure?: Array<ConfigHooksMatcher>
+          PermissionRequest?: Array<ConfigHooksMatcher>
+          PermissionDenied?: Array<ConfigHooksMatcher>
           Stop?: Array<ConfigHooksMatcher>
+          StopFailure?: Array<ConfigHooksMatcher>
+          SubagentStart?: Array<ConfigHooksMatcher>
+          SubagentStop?: Array<ConfigHooksMatcher>
+          TaskCreated?: Array<ConfigHooksMatcher>
+          TaskCompleted?: Array<ConfigHooksMatcher>
+          TeammateIdle?: Array<ConfigHooksMatcher>
+          Notification?: Array<ConfigHooksMatcher>
           PreCompact?: Array<ConfigHooksMatcher>
+          PostCompact?: Array<ConfigHooksMatcher>
+          Elicitation?: Array<ConfigHooksMatcher>
+          ElicitationResult?: Array<ConfigHooksMatcher>
+          ConfigChange?: Array<ConfigHooksMatcher>
+          InstructionsLoaded?: Array<ConfigHooksMatcher>
+          CwdChanged?: Array<ConfigHooksMatcher>
+          FileChanged?: Array<ConfigHooksMatcher>
+          WorktreeCreate?: Array<ConfigHooksMatcher>
+          WorktreeRemove?: Array<ConfigHooksMatcher>
+          disabled?: boolean
+          managed_only?: boolean
+          http?: ConfigHooksHttpPolicy
         }
         formatter?:
           | boolean
@@ -2211,62 +2336,6 @@ export type ConfigEntry =
       }
     }
   | { type: "directory"; path: string }
-
-export type SessionInboxUser = {
-  id: string
-  sessionID: string
-  time: { created: number }
-  type: "user"
-  payload: SessionInboxUserPayload
-  delivery: SessionInboxDelivery
-}
-
-export type SessionInboxItem =
-  | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
-  | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
-  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
-  | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
-
-export type SessionMessageAssistantTool = {
-  type: "tool"
-  id: string
-  name: string
-  executed?: boolean
-  providerState?: SessionMessageProviderState
-  providerResultState?: SessionMessageProviderState
-  state:
-    | SessionMessageToolStateStreaming
-    | SessionMessageToolStateRunning
-    | SessionMessageToolStateCompleted
-    | SessionMessageToolStateError
-  time: { created: number; ran?: number; completed?: number }
-}
-
-export type SessionMessageCompaction =
-  | SessionMessageCompactionRunning
-  | SessionMessageCompactionCompleted
-  | SessionMessageCompactionFailed
-
-export type SessionMessageAssistantTool1 = {
-  type: "tool"
-  id: string
-  name: string
-  executed?: boolean
-  providerState?: SessionMessageProviderState1
-  providerResultState?: SessionMessageProviderState1
-  state:
-    | SessionMessageToolStateStreaming
-    | SessionMessageToolStateRunning1
-    | SessionMessageToolStateCompleted1
-    | SessionMessageToolStateError1
-  time: { created: number; ran?: number; completed?: number }
-}
-
-export type FormFields = [FormField, ...Array<FormField>]
-
-export type CredentialValue = CredentialOAuth | CredentialKey
-
-export type FormFields2 = [FormField1, ...Array<FormField1>]
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
 
