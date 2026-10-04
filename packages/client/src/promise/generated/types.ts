@@ -433,6 +433,8 @@ export type WebSearchProvider = { id: string; name: string }
 
 export type WebSearchResult = { url: string; title?: string; content?: string; time: { published?: number } }
 
+export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
+
 export type ConfigHooksCommand = { type: "command"; command: string; timeout?: number }
 
 export type McpProtocol = "legacy" | "auto" | "2026-07-28"
@@ -2036,6 +2038,7 @@ export type ConfigEntry =
   | {
       type: "document"
       path?: string
+      scope?: ConfigScope
       info: {
         $schema?: string
         shell?: string
@@ -2210,7 +2213,7 @@ export type ConfigEntry =
         }
       }
     }
-  | { type: "directory"; path: string }
+  | { type: "directory"; path: string; scope?: ConfigScope }
 
 export type SessionInboxUser = {
   id: string

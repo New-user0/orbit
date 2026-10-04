@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Document, Event, Info, type Entry } from "@orbit/schema/config"
+import { Document, Event, Info, type Entry, type Scope } from "@orbit/schema/config"
 import { ConfigPolicy } from "@orbit/schema/config/policy"
 import { Permission } from "@orbit/schema/permission"
 import { Config } from "@orbit/core/config"
@@ -18,8 +18,9 @@ import { PluginTestLayer } from "../plugin/fixture"
 const it = testEffect(PluginTestLayer)
 const decode = Schema.decodeUnknownSync(Info)
 
-const document = (...policies: ConfigPolicy.Info[]) =>
-  new Document({ type: "document", info: decode({ experimental: { policies } }) })
+const scoped = (scope: Scope | undefined, ...policies: ConfigPolicy.Info[]) =>
+  new Document({ type: "document", scope, info: decode({ experimental: { policies } }) })
+const document = (...policies: ConfigPolicy.Info[]) => scoped(undefined, ...policies)
 const provider = (effect: ConfigPolicy.Effect, resource: string): ConfigPolicy.Info => ({
   action: "provider.use",
   resource,
@@ -74,6 +75,64 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       yield* addPlugin([document(provider("deny", "openai")), document(provider("allow", "openai"))])
 
       expect(yield* catalog.get(Provider.ID.openai)).toBeUndefined()
+    }),
+  )
+
+  // Authority runs project < local < flag < user < remote < managed. Entries are listed in arbitrary order because
+  // the scope decides the winner, not the position.
+  const deny = provider("deny", "openai")
+  const allow = provider("allow", "openai")
+  for (const [name, entries, available] of [
+    [
+      "lets user policy outrank project and local policy",
+      [scoped("user", deny), scoped("project", allow), scoped("local", allow)],
+      false,
+    ],
+    [
+      "lets user policy outrank project and local policy listed before it",
+      [scoped("local", allow), scoped("project", allow), scoped("user", deny)],
+      false,
+    ],
+    ["lets remote policy outrank user policy", [scoped("remote", allow), scoped("user", deny)], true],
+    ["lets remote policy outrank user policy listed before it", [scoped("user", deny), scoped("remote", allow)], true],
+    ["lets flag policy outrank project policy", [scoped("project", deny), scoped("flag", allow)], true],
+    ["lets flag policy outrank local policy", [scoped("local", deny), scoped("flag", allow)], true],
+    ["lets user policy outrank flag policy", [scoped("user", deny), scoped("flag", allow)], false],
+    [
+      "lets a managed-scope document outrank every other scope",
+      [scoped("managed", deny), scoped("remote", allow)],
+      false,
+    ],
+    ["counts a document without a scope as user policy", [document(deny), scoped("project", allow)], false],
+    ["ranks a document without a scope below remote policy", [document(deny), scoped("remote", allow)], true],
+    [
+      "keeps the earlier of two documents in one scope in charge",
+      [scoped("project", deny), scoped("project", allow)],
+      false,
+    ],
+  ] as const) {
+    it.effect(name, () =>
+      Effect.gen(function* () {
+        const catalog = yield* Provider.Service
+        yield* catalog.transform((catalog) => catalog.update(Provider.ID.openai, () => {}))
+        yield* addPlugin([...entries])
+
+        expect((yield* catalog.get(Provider.ID.openai)) !== undefined).toBe(available)
+      }),
+    )
+  }
+
+  it.effect("ranks permission statements by scope too", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([
+        scoped("project", permission("allow", "shell:*")),
+        scoped("user", permission("deny", "shell:rm *")),
+        scoped("local", permission("allow", "shell:*")),
+      ])
+
+      // A later allow lifts an earlier broad deny, so only the scope ranking keeps the user's deny in force.
+      expect((yield* evaluate("shell", ["rm -rf /"])).effect).toBe("deny")
+      expect((yield* evaluate("shell", ["ls"])).effect).toBe("allow")
     }),
   )
 
@@ -156,6 +215,18 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       expect(yield* catalog.get(Provider.ID.anthropic)).toBeUndefined()
       expect(yield* catalog.get(Provider.ID.openai)).toBeUndefined()
       expect(yield* catalog.get(Provider.ID.orbit)).toBeDefined()
+    }),
+  )
+
+  it.effect("evaluates organization statements after documents from every scope", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Provider.Service
+      const managed = yield* ManagedPolicy.Service
+      yield* catalog.transform((catalog) => catalog.update(Provider.ID.openai, () => {}))
+      yield* managed.set({ statements: [provider("allow", "openai")] })
+      yield* addPlugin([scoped("remote", provider("deny", "openai")), scoped("managed", provider("deny", "openai"))])
+
+      expect(yield* catalog.get(Provider.ID.openai)).toBeDefined()
     }),
   )
 
