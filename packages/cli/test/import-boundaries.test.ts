@@ -68,7 +68,7 @@ describe("CLI frontend import boundaries", () => {
     const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
     expect(declared.filter((name) => /^@orbit\/(?:core|server|client)$/.test(name))).toEqual([])
 
-    for (const entrypoint of ["names", "switch", "roots", "instructions"]) {
+    for (const entrypoint of ["names", "switch", "roots", "instructions", "aliases", "settings", "mcp-json"]) {
       const graph = await bundleInputs(`packages/compat/src/${entrypoint}.ts`)
       expect(graph.filter((file) => /^packages\/(?:core|server|client|cli|tui)\//.test(file))).toEqual([])
     }

@@ -14,6 +14,8 @@ export function plan(sources: ConfigDiscovery.Sources) {
   const files = [
     ...levels.flatMap((level) => [...level.direct, ...level.local, ...level.project.map((root) => root.path)]),
     ...sources.compat.map((root) => root.path),
+    ...sources.compatSettings,
+    ...(sources.compatMcp ? [sources.compatMcp] : []),
     ...(sources.explicit ? [sources.explicit] : []),
   ]
   // Keep a parent watch for each root so deletion/recreation is observable.

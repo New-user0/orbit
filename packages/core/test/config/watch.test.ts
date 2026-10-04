@@ -23,7 +23,8 @@ const compat = [
   { path: AbsolutePath.make(path.join(project, CompatNames.vendor.directory)), kind: "vendor", scope: "project" },
   { path: AbsolutePath.make(path.join(project, CompatNames.agents)), kind: "agents", scope: "project" },
 ] satisfies CompatRoots.Root[]
-const sources: ConfigDiscovery.Sources = { ...level(project, false), compat }
+// No settings file is watched until its root exists, and no MCP file until discovery lists one.
+const sources: ConfigDiscovery.Sources = { ...level(project, false), compat, compatSettings: [] }
 
 describe("ConfigWatch.plan", () => {
   test("groups missing candidates and keeps parent watches when roots appear", () => {
@@ -121,5 +122,47 @@ describe("ConfigWatch.plan", () => {
     const global = AbsolutePath.make(path.resolve("watch-plan-global"))
     const home = level(path.join(global, "home"), false)
     expect(ConfigWatch.plan({ ...sources, global, home })).toEqual(ConfigWatch.plan({ ...sources, global }))
+  })
+
+  test("watches the settings files that other products keep, in the root that holds them", () => {
+    const vendor = path.join(project, CompatNames.vendor.directory)
+    const settings = [CompatNames.vendor.settings.shared, CompatNames.vendor.settings.local].map((name) =>
+      AbsolutePath.make(path.join(vendor, name)),
+    )
+    const planned = Array.from(ConfigWatch.plan({ ...sources, compatSettings: settings }).values())
+
+    // The project's own watch still sees the root come and go, and the root gets one for the files inside it.
+    expect(planned).toEqual([
+      ...ConfigWatch.plan(sources).values(),
+      {
+        path: vendor,
+        type: "entries",
+        names: [CompatNames.vendor.settings.shared, CompatNames.vendor.settings.local].toSorted(),
+      },
+    ])
+    // A root of the user's own, in home, is watched where it is.
+    const home = path.resolve("watch-plan-home", CompatNames.vendor.directory)
+    expect(
+      Array.from(
+        ConfigWatch.plan({
+          ...sources,
+          compatSettings: [AbsolutePath.make(path.join(home, CompatNames.vendor.settings.local))],
+        }).values(),
+      ),
+    ).toContainEqual({ path: home, type: "entries", names: [CompatNames.vendor.settings.local] })
+  })
+
+  test("watches the MCP file beside the project's config files", () => {
+    const mcp = AbsolutePath.make(path.join(project, CompatNames.mcp))
+
+    expect(Array.from(ConfigWatch.plan({ ...sources, compat: [], compatMcp: mcp }).values())).toEqual([
+      {
+        path: project,
+        type: "entries",
+        names: [CompatNames.mcp, ".orbit", "orbit.json", "orbit.jsonc", "orbit.local.json", "orbit.local.jsonc"],
+      },
+    ])
+    // Left out of discovery, it is not watched.
+    expect(ConfigWatch.plan({ ...sources, compatMcp: undefined })).toEqual(ConfigWatch.plan(sources))
   })
 })

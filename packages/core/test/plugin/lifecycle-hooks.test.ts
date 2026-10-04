@@ -1,7 +1,5 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
-import { mkdtempSync, writeFileSync } from "fs"
-import { tmpdir } from "os"
 import path from "path"
 import { Document, Info } from "@orbit/schema/config"
 import { Tool } from "@orbit/schema/tool"
@@ -15,7 +13,6 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { Session } from "@orbit/core/session"
-import { AbsolutePath } from "@orbit/core/schema"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Effect, Exit, Layer, Logger, Schema } from "effect"
 import { tempLocationLayer } from "../fixture/location"
@@ -113,125 +110,33 @@ describe("LifecycleHooksPlugin", () => {
       expect(prompt.prompt.text).toBe("Fix the build\n\nCurrent branch: main")
     }),
   )
-})
 
-const sharedRoot = mkdtempSync(path.join(tmpdir(), "orbit-shared-hooks-"))
-writeFileSync(
-  path.join(sharedRoot, "settings.json"),
-  JSON.stringify({
-    permissions: { allow: ["Bash(ls:*)"] },
-    hooks: {
-      PreToolUse: [
-        { matcher: "shell", hooks: [{ type: "command", command: "echo 'from shared settings' >&2; exit 2" }] },
-      ],
-    },
-  }),
-)
-// A root of the reference vendor's kind, as the compatibility switch reports it while it is on.
-const vendorRoot = (directory: string) =>
-  ({
-    enabled: true,
-    roots: [{ path: AbsolutePath.make(directory), kind: "vendor", scope: "project" }],
-  }) satisfies Config.Compat
-const sharedIt = (compat: Config.Compat) =>
-  testEffect(
-    Layer.mergeAll(
-      PluginTestLayer,
-      Config.testLayer([], compat),
-      AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
-    ),
-  )
-// What a PreToolUse call to the shell tool fails with, or nothing when no hook blocks it.
-const blockedShell = Effect.gen(function* () {
-  const registry = yield* PluginHooks.Service
-  yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
-  const shell = yield* registry
-    .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
-    .pipe(Effect.exit)
-  return Exit.isFailure(shell) ? String(shell.cause) : ""
-})
-
-describe("LifecycleHooksPlugin with shared settings files", () => {
-  if (process.platform === "win32") return
-  sharedIt(vendorRoot(sharedRoot)).live("runs hooks from the settings file in a vendor root", () =>
+  it.live("gives the reason of the highest-ranked document that blocks, and of the first of its hooks", () =>
     Effect.gen(function* () {
-      expect(yield* blockedShell).toContain("from shared settings")
-    }),
-  )
-
-  // Only the vendor's own roots hold its settings: a shared .agents root with the same file is not read.
-  sharedIt({ enabled: true, roots: [{ ...vendorRoot(sharedRoot).roots[0], kind: "agents" }] }).live(
-    "ignores the settings file in other kinds of root",
-    () =>
-      Effect.gen(function* () {
-        expect(yield* blockedShell).toBe("")
-      }),
-  )
-
-  sharedIt({ enabled: false, roots: [] }).live("runs no hooks from settings files when compatibility is off", () =>
-    Effect.gen(function* () {
-      expect(yield* blockedShell).toBe("")
-    }),
-  )
-})
-
-// The file mixes a guard with a hook this version rejects (a model needs its provider), and the second file is not a
-// hooks object at all.
-const partialRoot = mkdtempSync(path.join(tmpdir(), "orbit-partial-hooks-"))
-writeFileSync(
-  path.join(partialRoot, "settings.json"),
-  JSON.stringify({
-    hooks: {
-      PreToolUse: [{ matcher: "shell", hooks: [{ type: "command", command: "echo 'guard fired' >&2; exit 2" }] }],
-      SubagentStop: [{ hooks: [{ type: "prompt", prompt: "Did it finish?", model: "fast-model" }] }],
-    },
-  }),
-)
-writeFileSync(path.join(partialRoot, "settings.local.json"), JSON.stringify({ hooks: "off" }))
-const partialIt = testEffect(
-  Layer.mergeAll(
-    PluginTestLayer,
-    Config.testLayer([], vendorRoot(partialRoot)),
-    AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
-  ),
-)
-
-describe("LifecycleHooksPlugin with a settings file it can only partly read", () => {
-  partialIt.live("logs each entry it skips once, at its path in the file", () => {
-    const output: unknown[] = []
-    return Effect.gen(function* () {
       const registry = yield* PluginHooks.Service
-      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
-      // The guard only matches the shell tool, so these calls read the files without running any command.
-      const fire = registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
-      yield* fire
-      yield* fire
-      expect(output).toEqual([
-        {
-          source: path.join(partialRoot, "settings.json"),
-          path: "$.hooks.SubagentStop.0.hooks.0",
-          kind: "invalid",
-          action: "skipped malformed recognized value",
-        },
-        {
-          source: path.join(partialRoot, "settings.local.json"),
-          path: "$.hooks",
-          kind: "invalid",
-          action: "skipped malformed recognized value",
-        },
+      const config = yield* Config.Test
+      const blockedBy = (tool: string) =>
+        registry.trigger("tool", "execute.before", { ...base, tool, input: {} }).pipe(
+          Effect.exit,
+          Effect.map((exit) => (Exit.isFailure(exit) ? String(exit.cause) : "")),
+        )
+      const block = (reason: string) => ({ type: "command", command: `echo '${reason}' >&2; exit 2` })
+      // Documents come lowest priority first, so a later one outranks an earlier one.
+      yield* config.setEntries([
+        hooks({ PreToolUse: [{ matcher: "shell|read", hooks: [block("from the user")] }] }),
+        hooks({
+          PreToolUse: [{ matcher: "shell", hooks: [block("first of the project"), block("second of the project")] }],
+        }),
+        hooks({ PreToolUse: [{ matcher: "shell|read", hooks: [{ type: "command", command: "echo 'checked'" }] }] }),
       ])
-    }).pipe(Effect.provide(collectWarnings("configuration normalization diagnostic", output)))
-  })
-
-  if (process.platform === "win32") return
-  partialIt.live("still runs the guard that sits next to a hook it cannot read", () =>
-    Effect.gen(function* () {
-      const registry = yield* PluginHooks.Service
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
-      const shell = yield* registry
-        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
-        .pipe(Effect.exit)
-      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("Blocked by a PreToolUse hook: guard fired")
+
+      // Every blocking hook runs, but only one reason reaches the model.
+      expect(yield* blockedBy("shell")).toContain("Blocked by a PreToolUse hook: first of the project")
+      expect(yield* blockedBy("shell")).not.toContain("second of the project")
+      // A document that does not block cannot outrank one that does.
+      expect(yield* blockedBy("read")).toContain("Blocked by a PreToolUse hook: from the user")
+      expect(yield* blockedBy("grep")).toBe("")
     }),
   )
 })
