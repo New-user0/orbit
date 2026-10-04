@@ -11,13 +11,23 @@ import type { SessionStore } from "./session/store.js"
 export const agent = Agent.ID.make("plan")
 
 /**
- * The subagents Plan mode is meant to be limited to: they search and read. Nothing enforces this yet, so Plan mode can
- * still start any subagent its permissions allow, `general` (which can edit) included.
+ * The subagents Plan mode is limited to: they search and read. `allowedSubagents` is built from this list.
  *
- * "Read-only" is a property of these agents' built-in permissions, which user config can widen. Whatever enforces this
- * list should check an agent's effective permissions rather than trust its id alone.
+ * "Read-only" is a property of these agents' built-in permissions, which user config can widen. Enforcement trusts the
+ * id rather than an agent's effective permissions, so a config that widens one of these agents also widens what Plan
+ * mode can do through it.
  */
 export const readOnlyAgents: ReadonlySet<string> = new Set([Agent.ID.make("explore")])
+
+/**
+ * What a session running as the Plan agent may start as a subagent: the read-only agents, and Plan itself when config
+ * lets it run as a subagent (it is a primary agent by default). `SubagentTool` admission refuses every other agent,
+ * `general` (which can edit) included. It decides by the caller's identity, not by a permission rule: rules are
+ * last-match, so a `* * allow` that config appends after the Plan agent's rules would reopen every agent.
+ *
+ * A Plan subagent runs under the Plan agent's own rules, so allowing it opens nothing the Plan agent cannot already do.
+ */
+export const allowedSubagents: ReadonlySet<string> = new Set([...readOnlyAgents, agent])
 
 /** Where Plan mode saves plans. It is the only place the plan agent may edit. */
 export const directory = (home: string) => path.join(home, ".orbit", "plan")
