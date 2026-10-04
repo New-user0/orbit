@@ -21,7 +21,7 @@ project. Values accept `{env:VAR}` and `{file:path}`.
 - **Other tools' files:** by default Orbit also reads the skills, output styles, hook settings and instruction files that
   other agent products keep, such as `.agents/skills`. One switch turns all of it off:
   `"compatibility": { "enabled": false }` in your own config or in `ORBIT_CONFIG` or `ORBIT_CONFIG_CONTENT`, or
-  `ORBIT_DISABLE_COMPAT=1` in the environment the Orbit server starts in. A project's own `orbit.json` and
+  `ORBIT_DISABLE_COMPAT=1` (or `true`) in the environment the Orbit server starts in. A project's own `orbit.json` and
   `orbit.local.json` cannot change it, so a repository cannot switch it back on after you turned it off. With it off,
   skills that live only in `.agents/skills` or another product's directory no longer load: move them to
   `.orbit/skills` first.

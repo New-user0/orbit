@@ -11,13 +11,14 @@ const authoritative: readonly Scope[] = ["user", "flag", "managed"]
  *
  * Only `compatibility.enabled` in native documents of the user, flag and managed scopes counts, and the latest wins,
  * so a repository cannot switch compatibility back on after the user turned it off. An entry without a scope counts
- * as user, as everywhere else. `ORBIT_DISABLE_COMPAT=1` forces compatibility off whatever the documents say.
+ * as user, as everywhere else. `ORBIT_DISABLE_COMPAT` set to `1` or `true` (any case, the spellings the server's other
+ * ORBIT_DISABLE_* flags take) forces compatibility off whatever the documents say.
  *
  * Callers load the native user documents first and only then discover compatibility roots, so the switch never
  * depends on anything it controls.
  */
 export function enabled(entries: readonly Entry[], env: Readonly<Record<string, string | undefined>>) {
-  if (env.ORBIT_DISABLE_COMPAT === "1") return false
+  if (env.ORBIT_DISABLE_COMPAT === "1" || env.ORBIT_DISABLE_COMPAT?.toLowerCase() === "true") return false
   const decided = entries.findLast(
     (entry): entry is Document =>
       entry.type === "document" &&

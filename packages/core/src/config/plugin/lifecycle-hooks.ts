@@ -107,7 +107,7 @@ export const Plugin = define({
 
     // The reference vendor keeps hooks in settings files in its own directory; read them so existing hooks work here.
     const vendorHooks = Effect.fn("LifecycleHooksPlugin.vendorHooks")(function* () {
-      const roots = (yield* Config.compatOf(config)).roots.filter((root) => root.kind === "vendor")
+      const roots = (yield* config.compat()).roots.filter((root) => root.kind === "vendor")
       const files = roots.flatMap((root) => CompatNames.vendor.settings.map((name) => path.join(root.path, name)))
       const settings = yield* Effect.forEach(files, (file) =>
         fs.readFileStringSafe(file).pipe(

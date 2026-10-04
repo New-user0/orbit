@@ -111,7 +111,7 @@ export const Plugin = define({
 
       const refresh = Effect.fn("ConfigInstructionPlugin.refresh")(
         function* (file?: string) {
-          const names = CompatInstructions.filenames((yield* Config.compatOf(config)).enabled)
+          const names = CompatInstructions.filenames(yield* config.compatEnabled())
           const globalFiles = yield* Effect.forEach(names, (name) => fs.resolve(join(global.config, name)))
           yield* watch(names, globalFiles)
           const sources = yield* Effect.all({

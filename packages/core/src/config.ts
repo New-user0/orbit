@@ -33,7 +33,7 @@ export interface Compat {
   readonly roots: readonly CompatRoots.Root[]
 }
 
-/** What a config service that leaves `compat` unimplemented reports: enabled, with no roots to read. */
+/** What a test config service reports unless it is given another state: enabled, with no roots to read. */
 export const defaultCompat: Compat = { enabled: true, roots: [] }
 
 export interface Interface {
@@ -43,8 +43,16 @@ export interface Interface {
    * scope, outer sources come before inner ones.
    */
   readonly entries: () => Effect.Effect<Entry[]>
-  /** The compatibility switch and the roots consumed by internal compatibility plugins. Read it with `compatOf`. */
-  readonly compat?: () => Effect.Effect<Compat>
+  /**
+   * Whether Orbit reads other agent products' files. It checks nothing on disk, so a caller that needs only the switch,
+   * such as the read tool on every read, asks this instead of `compat`.
+   */
+  readonly compatEnabled: () => Effect.Effect<boolean>
+  /**
+   * The compatibility switch and the roots consumed by internal compatibility plugins. Checking that each root exists
+   * costs a stat per candidate, so ask `compatEnabled` when the roots are not needed.
+   */
+  readonly compat: () => Effect.Effect<Compat>
   /**
    * Streams raw filesystem updates under config roots. Config owns root
    * topology and watch reconciliation; domain owners filter this feed for the
@@ -54,9 +62,6 @@ export interface Interface {
   /** Updates supported global config fields while preserving unrelated JSONC content. */
   readonly update?: (patch: Patch) => Effect.Effect<void, FSUtil.Error>
 }
-
-/** The compatibility state of a config service, which a minimal service may leave unimplemented. */
-export const compatOf = (config: Interface) => (config.compat ? config.compat() : Effect.succeed(defaultCompat))
 
 export const Options = Schema.Struct({
   project: Schema.optional(Schema.Boolean),
@@ -91,6 +96,7 @@ export const testLayer = (initial: Entry[] = [], compat: Compat = defaultCompat)
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const service = Test.of({
         entries: () => Ref.get(entries),
+        compatEnabled: () => Effect.succeed(compat.enabled),
         compat: () => Effect.succeed(compat),
         changes: () => Stream.fromPubSub(updates),
         setEntries: (next) => Ref.set(entries, next),
@@ -277,9 +283,11 @@ export const layer = (options?: Options) =>
       // Readiness rescans recover writes made before a watch attached.
       const requestReload = PubSub.publish(reloads, undefined).pipe(Effect.asVoid)
       const watched = yield* FiberMap.make<string>()
+      // Reads only the loaded documents and the environment, never the disk, so asking it is cheap.
+      const compatOn = (entries: readonly Entry[]) => CompatSwitch.enabled(entries, process.env)
       // Compatibility roots count only while the switch is on: switched off, they are neither watched nor reported.
       const applicable = (discovered: ConfigDiscovery.Sources, entries: readonly Entry[]) =>
-        CompatSwitch.enabled(entries, process.env) ? discovered : { ...discovered, compat: [] }
+        compatOn(entries) ? discovered : { ...discovered, compat: [] }
       const reconcile = Effect.fn("Config.reconcileWatches")(function* (
         sources: ConfigDiscovery.Sources,
         entries: readonly Entry[],
@@ -397,8 +405,9 @@ export const layer = (options?: Options) =>
         entries: Effect.fnUntraced(function* () {
           return configs
         }),
+        compatEnabled: () => Effect.sync(() => compatOn(configs)),
         compat: Effect.fnUntraced(function* () {
-          const enabled = CompatSwitch.enabled(configs, process.env)
+          const enabled = compatOn(configs)
           return { enabled, roots: enabled ? yield* Effect.filter(sources.compat, (root) => fs.isDir(root.path)) : [] }
         }),
         changes: () => Stream.fromPubSub(updates),

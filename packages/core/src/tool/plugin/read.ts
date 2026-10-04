@@ -98,7 +98,7 @@ export const Plugin = {
                 // The Location and its ancestors are already supplied by initial instructions,
                 // even when an upward walk from elsewhere in the project cannot reach root.
                 const discovered = yield* fs.up({
-                  targets: [...CompatInstructions.filenames((yield* Config.compatOf(config)).enabled)],
+                  targets: [...CompatInstructions.filenames(yield* config.compatEnabled())],
                   start: result.content.type === "list-page" ? resolved : dirname(resolved),
                   stop: root,
                   type: "file",

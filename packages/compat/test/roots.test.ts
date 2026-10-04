@@ -183,7 +183,8 @@ describe("CompatRoots.discover", () => {
       yield* write([path.join(home, ".claude"), path.join(home, ".agents"), project])
 
       const roots = yield* Effect.gen(function* () {
-        const directories = yield* (yield* FSUtil.Service).up({ targets: ["."], start: project }).pipe(Effect.orDie)
+        const filesystem = yield* FSUtil.Service
+        const directories = yield* filesystem.up({ targets: ["."], start: project }).pipe(Effect.orDie)
         return yield* CompatRoots.discover({ directories, global: true })
       }).pipe(Effect.provide(services(fixture, home)))
 

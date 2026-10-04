@@ -127,7 +127,7 @@ describe("config plugin reloads", () => {
             yield* Effect.sleep("300 millis")
 
             expect((yield* skills.list()).filter((item) => item.id === "probe")).toEqual([])
-            expect(yield* Config.compatOf(config)).toEqual({ enabled: false, roots: [] })
+            expect(yield* config.compat()).toEqual({ enabled: false, roots: [] })
             const names = watched.flatMap((input) => (input.type === "entries" ? input.names : []))
             expect(names).toContain("orbit.json")
             for (const name of [CompatNames.agents, CompatNames.vendor.directory]) expect(names).not.toContain(name)

@@ -25,6 +25,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { WellKnown } from "@orbit/core/wellknown"
 import { Integration } from "@orbit/schema/integration"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
+import { withEnv } from "../fixture/env"
 import { location } from "../fixture/location"
 import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -44,7 +45,7 @@ const watchedNames = (...names: string[]) => [...compatNames, ...names].toSorted
 
 // The compatibility roots inside the fixture, which the machine running the test may also keep roots above.
 const compatRoots = (root: string) =>
-  Config.Service.use((config) => Config.compatOf(config)).pipe(
+  Config.Service.use((config) => config.compat()).pipe(
     Effect.map((compat) => compat.roots.filter((item) => inFixture(root, item.path))),
   )
 
@@ -2174,10 +2175,15 @@ describe("Config compatibility", () => {
 
       const loaded = yield* Effect.gen(function* () {
         const config = yield* Config.Service
-        return { enabled: (yield* Config.compatOf(config)).enabled, roots: yield* compatRoots(fixture.root) }
+        return {
+          enabled: yield* config.compatEnabled(),
+          reported: (yield* config.compat()).enabled,
+          roots: yield* compatRoots(fixture.root),
+        }
       }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project)))
 
-      expect(loaded.enabled).toBe(true)
+      // Both ways of asking agree.
+      expect([loaded.enabled, loaded.reported]).toEqual([true, true])
       expect(loaded.roots.map((item) => item.path.toString())).toEqual(reportedRoots(fixture))
       expect(loaded.roots.map((item) => [item.kind, item.scope])).toEqual([
         ["vendor", "user"],
@@ -2195,9 +2201,14 @@ describe("Config compatibility", () => {
 
       const loaded = yield* Effect.gen(function* () {
         const config = yield* Config.Service
-        return { compat: yield* Config.compatOf(config), names: yield* watchedEntryNames }
+        return {
+          enabled: yield* config.compatEnabled(),
+          compat: yield* config.compat(),
+          names: yield* watchedEntryNames,
+        }
       }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project)))
 
+      expect(loaded.enabled).toBe(false)
       expect(loaded.compat).toEqual({ enabled: false, roots: [] })
       expect(loaded.names).toContain("orbit.json")
       for (const name of compatNames) expect(loaded.names).not.toContain(name)
@@ -2210,8 +2221,7 @@ describe("Config compatibility", () => {
       const off = { compatibility: { enabled: false } }
       const on = { compatibility: { enabled: true } }
       const enabled = (options: Config.Options) =>
-        Config.Service.use((config) => Config.compatOf(config)).pipe(
-          Effect.map((compat) => compat.enabled),
+        Config.Service.use((config) => config.compatEnabled()).pipe(
           Effect.provide(scopeLayer(fixture.home, fixture.project, options)),
         )
 
@@ -2237,6 +2247,43 @@ describe("Config compatibility", () => {
     }),
   )
 
+  // The switch reads the environment of the process that hosts Config, so this goes through a real Config rather
+  // than the CompatSwitch unit tests: it fails if either place that asks the switch stops passing the environment.
+  it.live("is forced off by ORBIT_DISABLE_COMPAT whatever the documents say, and watches no roots", () =>
+    Effect.gen(function* () {
+      const fixture = yield* writeRoots
+      const on = { compatibility: { enabled: true } }
+      // The user's config and the flag content both ask for compatibility, so only the environment can turn it off.
+      yield* write({ [fixture.user]: on })
+      const load = (variable: string | undefined) =>
+        withEnv({ ORBIT_DISABLE_COMPAT: variable }, () =>
+          Effect.gen(function* () {
+            const config = yield* Config.Service
+            return {
+              enabled: yield* config.compatEnabled(),
+              compat: yield* config.compat(),
+              names: yield* watchedEntryNames,
+            }
+          }).pipe(Effect.provide(scopeLayer(fixture.home, fixture.project, { content: JSON.stringify(on) }))),
+        )
+
+      for (const variable of ["1", "true", "TRUE"]) {
+        const forced = yield* load(variable)
+        expect(forced.enabled).toBe(false)
+        expect(forced.compat).toEqual({ enabled: false, roots: [] })
+        for (const name of compatNames) expect(forced.names).not.toContain(name)
+      }
+
+      // Anything else leaves the documents in charge.
+      for (const variable of [undefined, "0", "false"]) {
+        const loaded = yield* load(variable)
+        expect(loaded.enabled).toBe(true)
+        expect(loaded.compat.roots.length).toBeGreaterThan(0)
+        for (const name of compatNames) expect(loaded.names).toContain(name)
+      }
+    }),
+  )
+
   it.live("follows the switch when user config changes, and reports the change", () =>
     Effect.gen(function* () {
       const fixture = yield* writeRoots
@@ -2251,10 +2298,11 @@ describe("Config compatibility", () => {
           yield* write({ [fixture.user]: { compatibility: { enabled } } })
           yield* watcher.emit({ type: "create", path: fixture.user })
           expect(yield* Fiber.join(changed)).toHaveLength(1)
-          return yield* Config.compatOf(config)
+          expect(yield* config.compatEnabled()).toBe(enabled)
+          return yield* config.compat()
         })
 
-        expect((yield* Config.compatOf(config)).roots.length).toBeGreaterThan(0)
+        expect((yield* config.compat()).roots.length).toBeGreaterThan(0)
         expect(yield* turn(false)).toEqual({ enabled: false, roots: [] })
         const back = yield* turn(true)
         expect(back.enabled).toBe(true)

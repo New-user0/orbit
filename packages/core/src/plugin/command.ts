@@ -35,7 +35,7 @@ export const Plugin = define({
         execute: (input) =>
           Effect.gen(function* () {
             // The files to read follow the compatibility switch as it stands when the command runs.
-            const enabled = (yield* Config.compatOf(config)).enabled
+            const enabled = yield* config.compatEnabled()
             const instructionFiles = [...CompatInstructions.filenames(enabled), ...CompatInstructions.rules(enabled)]
               .map((file) => `\`${file}\``)
               .join(", ")

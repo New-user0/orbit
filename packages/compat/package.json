@@ -5,11 +5,22 @@
   "description": "Every name, root and switch that lets Orbit read other agent products' files",
   "type": "module",
   "license": "MIT",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://orbit.invalid",
+    "directory": "packages/compat"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
   "exports": {
     "./*": "./src/*.ts"
   },
   "scripts": {
+    "build": "bun run script/build.ts",
     "typecheck": "tsgo --noEmit",
     "test": "bun test"
   },
@@ -21,6 +32,7 @@
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "@typescript/native-preview": "catalog:",
+    "typescript": "catalog:"
   }
 }

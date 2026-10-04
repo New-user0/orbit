@@ -169,6 +169,7 @@
         "@tsconfig/bun": "catalog:",
         "@types/bun": "catalog:",
         "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
       },
     },
     "packages/core": {

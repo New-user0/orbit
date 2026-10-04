@@ -37,7 +37,7 @@ export const Plugin = define({
       function* () {
         yield* FiberMap.clear(watches)
         // Switched off, there are no roots: nothing is watched and no skill loads.
-        const directories = (yield* Config.compatOf(config)).roots.map((root) => path.join(root.path, "skills"))
+        const directories = (yield* config.compat()).roots.map((root) => path.join(root.path, "skills"))
         const loaded = new Map<Skill.ID, Skill.Info>()
         for (const directory of directories) {
           const resolved = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))

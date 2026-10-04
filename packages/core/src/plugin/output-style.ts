@@ -60,7 +60,7 @@ export const Plugin = define({
       const builtIn = BUILT_IN[name.toLowerCase()]
       if (builtIn) return builtIn
       const entries = yield* config.entries()
-      const roots = (yield* Config.compatOf(config)).roots.filter((root) => root.kind === "vendor")
+      const roots = (yield* config.compat()).roots.filter((root) => root.kind === "vendor")
       // Highest-priority config directories first, then the compatibility roots.
       const directories = [
         ...entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : [])).toReversed(),

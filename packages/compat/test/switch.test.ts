@@ -57,11 +57,16 @@ describe("CompatSwitch.enabled", () => {
     expect(enabled([off("user"), document("flag"), directory])).toBe(false)
   })
 
-  test("is forced off by ORBIT_DISABLE_COMPAT=1 whatever the documents say", () => {
+  // The spellings the other ORBIT_DISABLE_* flags accept.
+  for (const value of ["1", "true", "TRUE", "True"])
+    test(`is forced off by ORBIT_DISABLE_COMPAT=${value} whatever the documents say`, () => {
+      expect(enabled([on("user"), on("flag"), on("managed")], { ORBIT_DISABLE_COMPAT: value })).toBe(false)
+      expect(enabled([], { ORBIT_DISABLE_COMPAT: value })).toBe(false)
+    })
+
+  test("stays on for any other ORBIT_DISABLE_COMPAT value", () => {
     const everywhere = [on("user"), on("flag"), on("managed")]
-    expect(enabled(everywhere, { ORBIT_DISABLE_COMPAT: "1" })).toBe(false)
-    expect(enabled([], { ORBIT_DISABLE_COMPAT: "1" })).toBe(false)
-    for (const value of [undefined, "", "0", "false"])
+    for (const value of [undefined, "", "0", "false", "FALSE", "yes", "2"])
       expect(enabled(everywhere, { ORBIT_DISABLE_COMPAT: value })).toBe(true)
   })
 })

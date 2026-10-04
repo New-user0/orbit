@@ -87,7 +87,7 @@ const start = (skills: string[], directory: string, discovery = emptyDiscovery) 
 const discover = (directory: string, global: string) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
-    return { entries: yield* config.entries(), compat: yield* Config.compatOf(config) }
+    return { entries: yield* config.entries(), compat: yield* config.compat() }
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
@@ -175,6 +175,7 @@ describe("ConfigCompatibilityPlugin.Plugin", () => {
             Config.Service.of({
               entries: () => Effect.succeed([]),
               changes: () => Stream.never,
+              compatEnabled: () => Effect.sync(() => state.enabled),
               compat: () =>
                 Effect.sync(() =>
                   state.enabled
