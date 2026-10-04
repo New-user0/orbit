@@ -6,15 +6,21 @@ import { ConfigCommand } from "@orbit/schema/config/command"
 import { Model } from "@orbit/schema/model"
 import { Provider } from "@orbit/schema/provider"
 import { AppProcess } from "@orbit/util/process"
+import { tmpdir } from "node:os"
 import path from "path"
 import { Effect, Option, PubSub, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
 import { Location } from "../../location.js"
+import { Permission } from "../../permission.js"
 import { Session } from "../../session.js"
+import { SessionSchema } from "../../session/schema.js"
 import { SubagentJob } from "../../session/subagent-job.js"
+import { ShellParse } from "../../shell/parse.js"
+import { ShellSandbox } from "../../shell/sandbox.js"
 import { ShellSelect } from "../../shell/select.js"
+import { which } from "../../util/which.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { ConfigMarkdown } from "../markdown.js"
 
@@ -34,6 +40,7 @@ export const Plugin = define({
     const location = yield* Location.Service
     const processes = yield* AppProcess.Service
     const shell = yield* ShellSelect.Service
+    const permission = yield* Permission.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const subagents = yield* SubagentJob.make
@@ -90,8 +97,10 @@ export const Plugin = define({
                           ? {}
                           : { variant: Model.VariantID.make(command.model.variant) }),
                       }
-                const text = yield* evaluateTemplate(command.template, input.prompt.text, {
+                const text = yield* evaluateTemplate(command.template, input.prompt.text, input.sessionID, {
+                  config,
                   location,
+                  permission,
                   processes,
                   shell,
                 })
@@ -186,58 +195,107 @@ function decode(directory: string, filepath: string, content: string) {
   }
 }
 
-function evaluateTemplate(
-  template: string,
-  input: string,
-  services: {
-    readonly location: Location.Info
-    readonly processes: AppProcess.Interface
-    readonly shell: ShellSelect.Interface
-  },
-) {
+type Services = {
+  readonly config: Config.Interface
+  readonly location: Location.Info
+  readonly permission: Permission.Interface
+  readonly processes: AppProcess.Interface
+  readonly shell: ShellSelect.Interface
+}
+
+function evaluateTemplate(template: string, input: string, sessionID: SessionSchema.ID, services: Services) {
   return Effect.gen(function* () {
+    // Spans are read from the authored template alone and run exactly as written, so a placeholder inside one reaches
+    // the shell untouched. Argument text is expanded into the prose around them afterwards and is never scanned, so
+    // it cannot start a command, even when a model supplied it.
+    const parts = template.split(shellRegex)
+    const prose = parts.filter((_, index) => index % 2 === 0)
+    const outputs = yield* runSpans(
+      parts.filter((_, index) => index % 2 === 1),
+      sessionID,
+      services,
+    )
     const args = parseArguments(input)
-    const placeholders = template.match(placeholderRegex) ?? []
+    const placeholders = prose.flatMap((text) => text.match(placeholderRegex) ?? [])
     const last = Math.max(0, ...placeholders.map((item) => Number(item.slice(1))))
-    const expanded = template.replaceAll(placeholderRegex, (_, index) => {
-      const position = Number(index)
-      const argIndex = position - 1
-      if (argIndex >= args.length) return ""
-      if (position === last) return args.slice(argIndex).join(" ")
-      return args[argIndex]
+    const append =
+      placeholders.length === 0 && !prose.some((text) => text.includes("$ARGUMENTS")) && input.trim() !== ""
+    const end = prose.length - 1
+    const pieces = prose.map((text, part) => {
+      const expanded = text
+        .replaceAll(placeholderRegex, (_, index) => {
+          const position = Number(index)
+          const argIndex = position - 1
+          if (argIndex >= args.length) return ""
+          if (position === last) return args.slice(argIndex).join(" ")
+          return args[argIndex]
+        })
+        .replaceAll("$ARGUMENTS", () => input)
+      const piece = part === end && append ? `${expanded}\n\n${input}` : expanded
+      // Trim only the template's own edges: span output goes in exactly as the command printed it.
+      const head = part === 0 ? piece.trimStart() : piece
+      return part === end ? head.trimEnd() : head
     })
-    const withArguments = expanded.replaceAll("$ARGUMENTS", () => input)
-    const text =
-      placeholders.length === 0 && !template.includes("$ARGUMENTS") && input.trim()
-        ? `${withArguments}\n\n${input}`.trim()
-        : withArguments.trim()
-    const matches = Array.from(text.matchAll(shellRegex))
-    if (matches.length === 0) return text
+    return pieces.flatMap((piece, part) => [piece, outputs[part] ?? ""]).join("")
+  })
+}
+
+// Every span is checked and sandbox-wrapped before any of them starts, so a denial leaves nothing half-run.
+function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, services: Services) {
+  return Effect.gen(function* () {
+    if (sources.length === 0) return []
     const shell = yield* services.shell.resolve({ priority: "config" })
-    const outputs = yield* Effect.forEach(
-      matches,
-      (match) => {
-        const source = match[1] ?? ""
-        return services.processes
-          .run(
-            ChildProcess.make(shell, ShellSelect.args(shell, source), {
-              cwd: services.location.directory,
-              stdin: "ignore",
-            }),
-            { combineOutput: true },
-          )
-          .pipe(
-            Effect.map((result) => (result.output ?? Buffer.concat([result.stdout, result.stderr])).toString("utf8")),
-            Effect.mapError(
-              (error) => new Error(`Shell interpolation failed for ${JSON.stringify(source)}: ${error.message}`),
-            ),
-          )
-      },
+    const entries = yield* services.config.entries()
+    const sandbox = Config.latest(entries, "sandbox")
+    const sandboxTool = ShellSandbox.TOOL[process.platform]
+    const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
+    const cwd = services.location.directory
+    const commands = yield* Effect.forEach(sources, (source) =>
+      Effect.gen(function* () {
+        const parsed = yield* ShellParse.scan(source, shell, cwd, { portable })
+        yield* services.permission.assert({
+          action: "shell",
+          // A span the scanner finds no command in, such as a bare redirect, is still asked about as written.
+          resources: parsed.commands.length > 0 ? parsed.commands.map((command) => command.resource) : [source],
+          save: parsed.commands.map((command) => command.save),
+          sessionID,
+          // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
+        })
+        const args = ShellSelect.args(shell, source)
+        const sandboxed = ShellSandbox.wrap({
+          platform: process.platform,
+          settings: sandbox ?? {},
+          shell,
+          args,
+          cwd,
+          writable: [services.location.project.directory, cwd, tmpdir()],
+          tool: sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined,
+        })
+        // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
+        if (sandboxed.type === "missing")
+          return yield* Effect.fail(new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`))
+        const launch = sandboxed.type === "wrapped" ? sandboxed : { command: shell, args }
+        return ChildProcess.make(launch.command, launch.args, { cwd, stdin: "ignore" })
+      }).pipe(
+        Effect.mapError((error) =>
+          interpolationError(source, error instanceof Permission.CorrectedError ? error.feedback : error.message),
+        ),
+      ),
+    )
+    return yield* Effect.forEach(
+      commands,
+      (command, index) =>
+        services.processes.run(command, { combineOutput: true }).pipe(
+          Effect.map((result) => (result.output ?? Buffer.concat([result.stdout, result.stderr])).toString("utf8")),
+          Effect.mapError((error) => interpolationError(sources[index], error.message)),
+        ),
       { concurrency: 2 },
     )
-    const iterator = outputs[Symbol.iterator]()
-    return text.replace(shellRegex, () => iterator.next().value ?? "")
   })
+}
+
+function interpolationError(source: string, reason: string) {
+  return new Error(`Shell interpolation failed for ${JSON.stringify(source)}: ${reason}`)
 }
 
 function parseArguments(input: string) {
