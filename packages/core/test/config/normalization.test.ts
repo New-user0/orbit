@@ -3,6 +3,7 @@ import { Duration, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { ConfigNormalize } from "@orbit/core/config/normalize"
 import { Info } from "@orbit/schema/config"
+import { ConfigHooks } from "@orbit/schema/config/hooks"
 
 const options = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
 
@@ -15,6 +16,34 @@ function normalized(input: unknown) {
 
 function decoded(input: unknown) {
   return Schema.decodeUnknownSync(Info, options)(normalized(input).encoded)
+}
+
+type EncodedHooks = (typeof ConfigHooks.Info)["Encoded"]
+
+/**
+ * The hooks that must come through normalization untouched: all but the ones it reported as skipped. The reported
+ * paths are the decoder's own, so this restates none of its rules.
+ */
+function withoutReportedHooks(hooks: EncodedHooks, diagnostics: ReturnType<typeof normalized>["diagnostics"]) {
+  const reported = new Set(diagnostics.map((item) => item.path.join(".")))
+  return {
+    ...hooks,
+    ...Object.fromEntries(
+      ConfigHooks.Events.flatMap((event) => {
+        const groups = hooks[event]
+        if (groups === undefined) return []
+        const kept = groups.map((group, groupIndex) => ({
+          ...group,
+          hooks: group.hooks.filter((_, index) => !reported.has(`hooks.${event}.${groupIndex}.hooks.${index}`)),
+        }))
+        return [[event, kept]]
+      }),
+    ),
+  }
+}
+
+function countHooks(hooks: EncodedHooks) {
+  return ConfigHooks.Events.flatMap((event) => hooks[event]?.flatMap((group) => group.hooks) ?? []).length
 }
 
 function withoutEmptyCompatibilityContainers(input: Record<string, unknown>) {
@@ -84,8 +113,13 @@ describe("ConfigNormalize", () => {
       FastCheck.property(Schema.toArbitrary(Info)(FastCheck), (info) => {
         const source = JSON.parse(JSON.stringify(Schema.encodeSync(Info)(info)))
         const result = normalized(source)
+        // Normalizing hooks drops the entries their event or hook type cannot honor, and reports each one.
+        const expected =
+          source.hooks === undefined
+            ? source
+            : { ...source, hooks: withoutReportedHooks(source.hooks, result.diagnostics) }
         expect(Schema.decodeUnknownSync(Info)(result.encoded)).toEqual(
-          Schema.decodeUnknownSync(Info)(withoutEmptyCompatibilityContainers(source)),
+          Schema.decodeUnknownSync(Info)(withoutEmptyCompatibilityContainers(expected)),
         )
       }),
       { numRuns: 100 },
@@ -531,5 +565,292 @@ describe("ConfigNormalize", () => {
       experimental: { subagent_depth: 0 },
     })
     expect(result.encoded.share).toBeUndefined()
+  })
+
+  describe("hooks", () => {
+    const command = (text: string) => ({ type: "command", command: text })
+    const reported = (result: ReturnType<typeof normalized>) =>
+      result.diagnostics.map((item) => [item.kind, item.path.join(".")])
+
+    test("keeps hooks written for the original six events unchanged", () => {
+      const hooks = {
+        PreToolUse: [{ matcher: "edit|write", hooks: [{ type: "command", command: "./lint.sh", timeout: 30 }] }],
+        PostToolUse: [{ matcher: "read", hooks: [command("./audit.sh")] }],
+        UserPromptSubmit: [{ hooks: [command("./context.sh")] }],
+        SessionStart: [{ hooks: [command("./warm.sh")] }],
+        Stop: [{ hooks: [command("./notify.sh")] }],
+        PreCompact: [{ hooks: [command("./save.sh")] }],
+      }
+      const result = normalized({ hooks })
+      expect(result.encoded.hooks).toEqual(hooks)
+      expect(result.diagnostics).toEqual([])
+    })
+
+    test("keeps a valid command next to a malformed http entry and reports the exact path", () => {
+      const secret = "do-not-log-this-value"
+      const result = normalized({
+        hooks: {
+          PreToolUse: [{ matcher: "shell", hooks: [command("./guard.sh"), { type: "http", url: { secret } }] }],
+        },
+      })
+      expect(result.encoded.hooks).toEqual({ PreToolUse: [{ matcher: "shell", hooks: [command("./guard.sh")] }] })
+      expect(result.diagnostics).toEqual([
+        {
+          kind: "invalid",
+          path: ["hooks", "PreToolUse", "0", "hooks", "1"],
+          message: "skipped malformed recognized value",
+        },
+      ])
+      expect(JSON.stringify(result.diagnostics)).not.toContain(secret)
+      expect<unknown>(decoded({ hooks: result.encoded.hooks }).hooks?.PreToolUse?.[0]?.hooks).toEqual([
+        command("./guard.sh"),
+      ])
+    })
+
+    test("reports an unknown event as unsupported and keeps the known ones", () => {
+      const result = normalized({
+        hooks: { SessionStart: [{ hooks: [command("echo ready")] }], BeforeEverything: [{ hooks: [command("x")] }] },
+      })
+      expect(result.encoded.hooks).toEqual({ SessionStart: [{ hooks: [command("echo ready")] }] })
+      expect(reported(result)).toEqual([["unsupported", "hooks.BeforeEverything"]])
+    })
+
+    test("reports a prompt or agent hook on an event that cannot judge as unsupported", () => {
+      const prompt = { type: "prompt", prompt: "Is this safe?" }
+      const agent = { type: "agent", prompt: "Verify the change" }
+      const result = normalized({
+        hooks: {
+          SessionStart: [{ hooks: [prompt, agent, command("echo ready")] }],
+          PreToolUse: [{ hooks: [prompt, agent] }],
+        },
+      })
+      expect(result.encoded.hooks).toEqual({
+        SessionStart: [{ hooks: [command("echo ready")] }],
+        PreToolUse: [{ hooks: [prompt, agent] }],
+      })
+      expect(reported(result)).toEqual([
+        ["unsupported", "hooks.SessionStart.0.hooks.0"],
+        ["unsupported", "hooks.SessionStart.0.hooks.1"],
+      ])
+    })
+
+    test("reports async on a hook that is not a command, or on WorktreeCreate, as unsupported", () => {
+      const http = { type: "http", url: "https://hooks.example.com/event" }
+      const result = normalized({
+        hooks: {
+          PreToolUse: [
+            {
+              hooks: [
+                { ...http, async: true },
+                { type: "agent", prompt: "Verify the change", async_rewake: true },
+                // Anything but an explicit false asks for a background hook, so it is not quietly run in the foreground.
+                { ...http, async: "yes" },
+                { ...command("./background.sh"), async: true },
+                { ...http, async: false },
+              ],
+            },
+          ],
+          WorktreeCreate: [
+            {
+              hooks: [
+                { ...command("./create.sh"), async: true },
+                { ...command("./rewake.sh"), async_rewake: true },
+              ],
+            },
+            { hooks: [command("./create.sh")] },
+          ],
+        },
+      })
+      // An http hook that asks not to be async is still a plain http hook. The schema has no field for the setting, so
+      // only the setting is reported, like any other key without a field.
+      expect(result.encoded.hooks).toEqual({
+        PreToolUse: [{ hooks: [{ ...command("./background.sh"), async: true }, http] }],
+        WorktreeCreate: [{ hooks: [] }, { hooks: [command("./create.sh")] }],
+      })
+      expect(reported(result)).toEqual([
+        ["unsupported", "hooks.PreToolUse.0.hooks.0"],
+        ["unsupported", "hooks.PreToolUse.0.hooks.1"],
+        ["unsupported", "hooks.PreToolUse.0.hooks.2"],
+        ["unsupported", "hooks.PreToolUse.0.hooks.4.async"],
+        ["unsupported", "hooks.WorktreeCreate.0.hooks.0"],
+        ["unsupported", "hooks.WorktreeCreate.0.hooks.1"],
+      ])
+    })
+
+    test("reports keys that no field names and keeps the entries that carried them", () => {
+      const result = normalized({
+        hooks: {
+          PreToolUse: [
+            // A misspelled matcher leaves a group that matches everything, so the author is told.
+            { matchers: "shell", hooks: [command("./guard.sh")] },
+            {
+              hooks: [
+                // Fields written in camelCase, as other tools spell them, have no field here either.
+                { ...command("./audit.sh"), statusMessage: "Auditing", asyncRewake: true },
+                { type: "http", url: "https://hooks.example.com/event", allowedEnvVars: ["TOKEN"] },
+                // A field that only another hook type has is unknown on this one.
+                { type: "prompt", prompt: "Is this safe?", command: "./nope.sh" },
+              ],
+            },
+          ],
+          http: { allowed_url: ["https://hooks.example.com/*"], allowed_env_vars: ["TOKEN"] },
+        },
+      })
+      expect(result.encoded.hooks).toEqual({
+        PreToolUse: [
+          { hooks: [command("./guard.sh")] },
+          {
+            hooks: [
+              command("./audit.sh"),
+              { type: "http", url: "https://hooks.example.com/event" },
+              { type: "prompt", prompt: "Is this safe?" },
+            ],
+          },
+        ],
+        http: { allowed_env_vars: ["TOKEN"] },
+      })
+      expect(reported(result)).toEqual([
+        ["unsupported", "hooks.PreToolUse.0.matchers"],
+        ["unsupported", "hooks.PreToolUse.1.hooks.0.statusMessage"],
+        ["unsupported", "hooks.PreToolUse.1.hooks.0.asyncRewake"],
+        ["unsupported", "hooks.PreToolUse.1.hooks.1.allowedEnvVars"],
+        ["unsupported", "hooks.PreToolUse.1.hooks.2.command"],
+        ["unsupported", "hooks.http.allowed_url"],
+      ])
+    })
+
+    test("keeps every field of every hook type", () => {
+      const model = { providerID: "acme", model: "fast-model", variant: "high" }
+      const shared = { timeout: 45, status_message: "Checking the change", once: true, if: "shell(git *)" }
+      const written = [
+        {
+          type: "command",
+          command: "./check.sh",
+          shell: "powershell",
+          async: true,
+          async_rewake: false,
+          ...shared,
+        },
+        { type: "prompt", prompt: "Is this safe?", model, ...shared },
+        { type: "agent", prompt: "Verify the change", model, ...shared },
+        {
+          type: "http",
+          url: "https://hooks.example.com/pre",
+          headers: { Authorization: "Bearer $TOKEN" },
+          allowed_env_vars: ["TOKEN"],
+          ...shared,
+        },
+      ]
+      // The example has to keep naming every field, including the ones that later changes add.
+      ConfigHooks.Hook.members.forEach((member) => {
+        const hook = written.find((item) => item.type === member.fields.type.literal)
+        expect(Object.keys(hook ?? {}).toSorted()).toEqual(Object.keys(member.fields).toSorted())
+      })
+      const hooks = {
+        PreToolUse: [{ matcher: "shell|edit", hooks: written }],
+        disabled: false,
+        managed_only: true,
+        http: { allowed_urls: ["https://hooks.example.com/*"], allowed_env_vars: ["TOKEN"] },
+      }
+      const result = normalized({ hooks })
+      expect(result.diagnostics).toEqual([])
+      expect(result.encoded.hooks).toEqual(hooks)
+      expect(decoded({ hooks }).hooks).toMatchObject(hooks)
+    })
+
+    test("round-trips disabled, managed_only and http limits", () => {
+      const hooks = {
+        disabled: true,
+        managed_only: false,
+        http: { allowed_urls: ["https://hooks.example.com/*"], allowed_env_vars: ["TOKEN"] },
+      }
+      const result = normalized({ hooks })
+      expect(result.encoded.hooks).toEqual(hooks)
+      expect(result.diagnostics).toEqual([])
+      expect(decoded({ hooks }).hooks).toMatchObject(hooks)
+    })
+
+    test("recovers each malformed policy value on its own", () => {
+      const result = normalized({
+        hooks: {
+          disabled: "yes",
+          managed_only: true,
+          http: { allowed_urls: "https://hooks.example.com/*", allowed_env_vars: ["TOKEN"] },
+        },
+      })
+      expect(result.encoded.hooks).toEqual({ managed_only: true, http: { allowed_env_vars: ["TOKEN"] } })
+      expect(reported(result)).toEqual([
+        ["invalid", "hooks.disabled"],
+        ["invalid", "hooks.http.allowed_urls"],
+      ])
+    })
+
+    test("skips malformed containers without touching their siblings", () => {
+      const result = normalized({
+        hooks: {
+          PreToolUse: "oops",
+          PostToolUse: [
+            "oops",
+            // A group with a malformed matcher is dropped whole, never widened into one that matches everything.
+            { matcher: 7, hooks: [command("dropped")] },
+            { hooks: "oops" },
+            { matcher: "read", hooks: [command("kept")] },
+          ],
+        },
+      })
+      expect(result.encoded.hooks).toEqual({ PostToolUse: [{ matcher: "read", hooks: [command("kept")] }] })
+      expect(reported(result)).toEqual([
+        ["invalid", "hooks.PreToolUse"],
+        ["invalid", "hooks.PostToolUse.0"],
+        ["invalid", "hooks.PostToolUse.1"],
+        ["invalid", "hooks.PostToolUse.2"],
+      ])
+    })
+
+    test("omits a hooks value that is not an object and keeps explicit empty ones", () => {
+      const invalid = normalized({ hooks: [] })
+      expect(invalid.encoded).not.toHaveProperty("hooks")
+      expect(reported(invalid)).toEqual([["invalid", "hooks"]])
+
+      const empty = normalized({ hooks: { Stop: [], PreToolUse: [{ hooks: [] }] } })
+      expect(empty.encoded.hooks).toEqual({ Stop: [], PreToolUse: [{ hooks: [] }] })
+      expect(empty.diagnostics).toEqual([])
+      expect(normalized({ hooks: {} }).encoded.hooks).toEqual({})
+    })
+
+    test("canonicalizes the model of prompt and agent hooks and skips a malformed one", () => {
+      const result = normalized({
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: "prompt", prompt: "Done?", model: "acme/fast-model" },
+                { type: "agent", prompt: "Check", model: "no-provider" },
+              ],
+            },
+          ],
+        },
+      })
+      expect(result.encoded.hooks).toEqual({
+        Stop: [{ hooks: [{ type: "prompt", prompt: "Done?", model: { providerID: "acme", model: "fast-model" } }] }],
+      })
+      expect(reported(result)).toEqual([["invalid", "hooks.Stop.0.hooks.1"]])
+    })
+
+    test("keeps every hook it does not report, field for field, in arbitrary schema-valid hooks", () => {
+      FastCheck.assert(
+        FastCheck.property(Schema.toArbitrary(ConfigHooks.Info)(FastCheck), (hooks) => {
+          const encoded = Schema.encodeSync(ConfigHooks.Info)(hooks)
+          const result = normalized({ hooks: encoded })
+          // Valid hooks are never malformed, so a skipped one is one that its event or type cannot honor.
+          expect(result.diagnostics.every((item) => item.kind === "unsupported")).toBe(true)
+          // Everything else comes through unchanged, and every report names a hook that was there.
+          const kept = withoutReportedHooks(encoded, result.diagnostics)
+          expect(result.encoded.hooks).toEqual(kept)
+          expect(countHooks(kept) + result.diagnostics.length).toBe(countHooks(encoded))
+        }),
+        { numRuns: 100 },
+      )
+    })
   })
 })

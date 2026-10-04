@@ -10,6 +10,7 @@ import path from "path"
 import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../../config.js"
+import { HookConfig } from "../../hook/config.js"
 import { Location } from "../../location.js"
 import { ShellSelect } from "../../shell/select.js"
 import type { PluginInternal } from "../../plugin/internal.js"
@@ -19,19 +20,40 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * config order. A command gets the event as JSON on stdin; exit code 2 or `{"decision":"block","reason":...}` on
  * stdout blocks a tool call, and other stdout becomes context for the model. A hook that fails to run is logged and
  * skipped, so a broken script never stops the session.
+ *
+ * This is the interim runner, and it honors less than the hooks schema describes. It warns once for each of these:
+ * - Hooks of the other types (prompt, agent, http) are skipped.
+ * - The `shell`, `async`, `async_rewake`, `once`, `if` and `status_message` settings of a command are ignored.
+ * - The `disabled`, `managed_only` and `http` policies are not enforced.
+ *
+ * No warning covers these differences from the schema's descriptions:
+ * - Only PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop and PreCompact fire; hooks under the other
+ *   events are accepted and never run.
+ * - Every command gets a 60 second timeout unless it sets one, whatever its event.
+ * - A matcher is always an anchored regular expression, where the schema describes exact lists and unanchored
+ *   expressions. It is compared only with the tool name of a tool event; the other events ignore it, SessionStart's
+ *   source included.
+ * - UserPromptSubmit can add context to a prompt but cannot reject it.
+ * - Stop also fires after a failed or interrupted execution.
  */
 
 const DEFAULT_TIMEOUT_SECONDS = 60
+// Settings of a command hook that this runner does not act on.
+const IGNORED_COMMAND_SETTINGS = ["shell", "async", "async_rewake", "once", "if", "status_message"] as const
+// Policies that would change which hooks run, and are not enforced yet.
+const UNENFORCED_POLICIES = ["disabled", "managed_only", "http"] as const
 const Reply = Schema.Struct({
   decision: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
   additionalContext: Schema.optionalKey(Schema.String),
 })
 const decodeReply = Schema.decodeUnknownOption(Schema.fromJsonString(Reply))
-// Only the hooks key matters here; Claude Code's other settings are ignored.
+// Only the hooks key matters here; the file's other settings are ignored. It is decoded entry by entry (see
+// HookConfig), so a hook this version cannot read costs only itself, never the guards beside it.
 const decodeSettings = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ hooks: Schema.optionalKey(ConfigHooks.Info) })),
+  Schema.fromJsonString(Schema.Struct({ hooks: Schema.optionalKey(Schema.Unknown) })),
 )
+const decodeHooks = Schema.decodeUnknownOption(ConfigHooks.Info)
 
 interface Outcome {
   readonly block?: string
@@ -50,13 +72,46 @@ export const Plugin = define({
 
     const fs = yield* FSUtil.Service
 
-    // Claude Code keeps hooks in .claude/settings.json and settings.local.json; read them so existing hooks work here.
+    // Each warning is logged once, not on every event: hooks are matched, and shared settings files read again, every
+    // time an event fires.
+    const warned = new Set<string>()
+    const warnOnce = (key: string, message: string, details: Record<string, unknown>) =>
+      Effect.suspend(() => {
+        if (warned.has(key)) return Effect.void
+        warned.add(key)
+        return Effect.logWarning(message, details)
+      })
+
+    // The hooks of one shared settings file. A hook that cannot be used costs only itself, and is reported at its path in
+    // the file, in the shape the configuration loader uses.
+    const fileHooks = Effect.fn("LifecycleHooksPlugin.fileHooks")(function* (file: string, text: string) {
+      const raw = Option.getOrUndefined(decodeSettings(text))?.hooks
+      if (raw === undefined) return undefined
+      const decoded = HookConfig.decode(raw)
+      yield* Effect.forEach(
+        decoded.diagnostics,
+        (diagnostic) => {
+          const where = `$.${diagnostic.path.join(".")}`
+          return warnOnce(`${file}:${diagnostic.kind}:${where}`, "configuration normalization diagnostic", {
+            source: file,
+            path: where,
+            kind: diagnostic.kind,
+            action: diagnostic.message,
+          })
+        },
+        { discard: true },
+      )
+      return Option.getOrUndefined(decodeHooks(decoded.hooks))
+    })
+
+    // Settings directories shared with other tools keep hooks in settings.json and settings.local.json; read them so
+    // existing hooks work here.
     const claudeHooks = Effect.fn("LifecycleHooksPlugin.claudeHooks")(function* () {
       const roots = config.compatibility ? (yield* config.compatibility()).claude : []
       const files = roots.flatMap((root) => [path.join(root, "settings.json"), path.join(root, "settings.local.json")])
       const settings = yield* Effect.forEach(files, (file) =>
         fs.readFileStringSafe(file).pipe(
-          Effect.map((text) => (text === undefined ? undefined : Option.getOrUndefined(decodeSettings(text))?.hooks)),
+          Effect.flatMap((text) => (text === undefined ? Effect.undefined : fileHooks(file, text))),
           Effect.orElseSucceed(() => undefined),
         ),
       )
@@ -67,10 +122,35 @@ export const Plugin = define({
       const configured = (yield* config.entries()).flatMap((entry) =>
         entry.type === "document" && entry.info.hooks ? [entry.info.hooks] : [],
       )
-      return [...(yield* claudeHooks()), ...configured]
+      const documents = [...(yield* claudeHooks()), ...configured]
+      yield* Effect.forEach(
+        documents.flatMap((hooks) => UNENFORCED_POLICIES.filter((policy) => hooks[policy])),
+        (policy) =>
+          warnOnce(`policy:${policy}`, "hook policy is not enforced yet and is ignored", {
+            setting: `hooks.${policy}`,
+          }),
+        { discard: true },
+      )
+      const matched = documents
         .flatMap((hooks) => hooks[event] ?? [])
         .filter((matcher) => matches(matcher.matcher, target))
         .flatMap((matcher) => matcher.hooks)
+      yield* Effect.forEach(
+        matched.filter((hook) => hook.type !== "command"),
+        (hook) =>
+          warnOnce(`type:${hook.type}`, "hook type is not supported yet and is skipped", { event, type: hook.type }),
+        { discard: true },
+      )
+      const runnable = matched.filter((hook): hook is ConfigHooks.Command => hook.type === "command")
+      yield* Effect.forEach(
+        runnable.flatMap((hook) =>
+          IGNORED_COMMAND_SETTINGS.filter((setting) => hook[setting] !== undefined && hook[setting] !== false),
+        ),
+        (setting) =>
+          warnOnce(`field:${setting}`, "hook field is not supported yet and is ignored", { event, field: setting }),
+        { discard: true },
+      )
+      return runnable
     })
 
     const run = Effect.fn("LifecycleHooksPlugin.run")(function* (

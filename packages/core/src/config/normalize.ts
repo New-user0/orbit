@@ -17,6 +17,7 @@ import { ConfigProvider } from "@orbit/schema/config/provider"
 import { ConfigReference } from "@orbit/schema/config/reference"
 import { ConfigExperimental } from "@orbit/schema/config/experimental"
 import { Permission } from "@orbit/schema/permission"
+import { HookConfig } from "../hook/config.js"
 import { ConfigAgentV1 } from "../v1/config/agent.js"
 import { ConfigAttachmentV1 } from "../v1/config/attachment.js"
 import { ConfigCommandV1 } from "../v1/config/command.js"
@@ -196,6 +197,7 @@ export function normalize(input: unknown): Result {
   normalizeWatcher(input, encoded, diagnostics)
   normalizeFormatter(input, encoded, diagnostics)
   normalizeLsp(input, encoded, diagnostics)
+  normalizeHooks(input, encoded, diagnostics)
 
   const nativeAtomic = {
     $schema: Info.fields.$schema,
@@ -203,7 +205,6 @@ export function normalize(input: unknown): Result {
     model: Info.fields.model,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
-    hooks: Info.fields.hooks,
     sandbox: Info.fields.sandbox,
     share: Info.fields.share,
     enterprise: Info.fields.enterprise,
@@ -481,6 +482,13 @@ function normalizeLsp(input: Record<string, unknown>, encoded: Record<string, un
   }
   const entries = decodeMap(input.lsp, ConfigLSP.Entry, ["lsp"], diagnostics, decodeEncoded)
   if (isRecord(input.lsp) && (!Object.keys(input.lsp).length || Object.keys(entries).length)) encoded.lsp = entries
+}
+
+function normalizeHooks(input: Record<string, unknown>, encoded: Record<string, unknown>, diagnostics: Diagnostic[]) {
+  if (!own(input, "hooks")) return
+  const result = HookConfig.decode(input.hooks)
+  diagnostics.push(...result.diagnostics)
+  if (result.hooks !== undefined) encoded.hooks = result.hooks
 }
 
 function migrateTools(value: unknown, diagnostics: Diagnostic[]) {

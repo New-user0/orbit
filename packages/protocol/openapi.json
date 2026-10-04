@@ -13215,6 +13215,61 @@
         },
         "additionalProperties": false
       },
+      "Config.Hooks.Agent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["agent"]
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Instruction for a read-only verifier agent that may inspect the project, up to 50 steps, before it gives a verdict that allows or blocks. Decision events only."
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string",
+                    "pattern": "^[^/#]+$"
+                  },
+                  "model": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  }
+                },
+                "required": ["providerID", "model"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "timeout": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "status_message": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "if": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "prompt"],
+        "additionalProperties": false
+      },
       "Config.Hooks.Command": {
         "type": "object",
         "properties": {
@@ -13223,14 +13278,108 @@
             "enum": ["command"]
           },
           "command": {
-            "type": "string"
+            "type": "string",
+            "description": "Shell command line. The event arrives as JSON on standard input."
+          },
+          "shell": {
+            "type": "string",
+            "enum": ["bash", "powershell"]
+          },
+          "async": {
+            "type": "boolean"
+          },
+          "async_rewake": {
+            "type": "boolean"
           },
           "timeout": {
             "type": "integer",
             "exclusiveMinimum": 0
+          },
+          "status_message": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "if": {
+            "type": "string"
           }
         },
         "required": ["type", "command"],
+        "additionalProperties": false
+      },
+      "Config.Hooks.Hook": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Config.Hooks.Command"
+          },
+          {
+            "$ref": "#/components/schemas/Config.Hooks.Prompt"
+          },
+          {
+            "$ref": "#/components/schemas/Config.Hooks.Agent"
+          },
+          {
+            "$ref": "#/components/schemas/Config.Hooks.Http"
+          }
+        ]
+      },
+      "Config.Hooks.Http": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["http"]
+          },
+          "url": {
+            "type": "string",
+            "description": "URL that receives the event as a JSON POST body. Redirects are not followed."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "allowed_env_vars": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeout": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "status_message": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "if": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "url"],
+        "additionalProperties": false
+      },
+      "Config.Hooks.HttpPolicy": {
+        "type": "object",
+        "properties": {
+          "allowed_urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowed_env_vars": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
         "additionalProperties": false
       },
       "Config.Hooks.Matcher": {
@@ -13242,11 +13391,67 @@
           "hooks": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Config.Hooks.Command"
-            }
+              "$ref": "#/components/schemas/Config.Hooks.Hook"
+            },
+            "description": "Hooks that run together when the group matches"
           }
         },
         "required": ["hooks"],
+        "additionalProperties": false
+      },
+      "Config.Hooks.Prompt": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["prompt"]
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Instruction for a model that judges the event. The event JSON is supplied with it, and the model's verdict allows or blocks. Decision events only."
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[^/#]+\\/[^#]+(?:#[^#]+)?$"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "providerID": {
+                    "type": "string",
+                    "pattern": "^[^/#]+$"
+                  },
+                  "model": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  },
+                  "variant": {
+                    "type": "string",
+                    "pattern": "^[^#]+$"
+                  }
+                },
+                "required": ["providerID", "model"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "timeout": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "status_message": {
+            "type": "string"
+          },
+          "once": {
+            "type": "boolean"
+          },
+          "if": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "prompt"],
         "additionalProperties": false
       },
       "Config.InfoEncoded": {
@@ -13338,6 +13543,30 @@
           "hooks": {
             "type": "object",
             "properties": {
+              "SessionStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SessionEnd": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Setup": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "UserPromptSubmit": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
               "PreToolUse": {
                 "type": "array",
                 "items": {
@@ -13350,13 +13579,19 @@
                   "$ref": "#/components/schemas/Config.Hooks.Matcher"
                 }
               },
-              "UserPromptSubmit": {
+              "PostToolUseFailure": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Config.Hooks.Matcher"
                 }
               },
-              "SessionStart": {
+              "PermissionRequest": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "PermissionDenied": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Config.Hooks.Matcher"
@@ -13368,11 +13603,116 @@
                   "$ref": "#/components/schemas/Config.Hooks.Matcher"
                 }
               },
+              "StopFailure": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStart": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "SubagentStop": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCreated": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TaskCompleted": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "TeammateIdle": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Notification": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
               "PreCompact": {
                 "type": "array",
                 "items": {
                   "$ref": "#/components/schemas/Config.Hooks.Matcher"
                 }
+              },
+              "PostCompact": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "Elicitation": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ElicitationResult": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "ConfigChange": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "InstructionsLoaded": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "CwdChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "FileChanged": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeCreate": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "WorktreeRemove": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Config.Hooks.Matcher"
+                }
+              },
+              "disabled": {
+                "type": "boolean"
+              },
+              "managed_only": {
+                "type": "boolean"
+              },
+              "http": {
+                "$ref": "#/components/schemas/Config.Hooks.HttpPolicy"
               }
             },
             "additionalProperties": false

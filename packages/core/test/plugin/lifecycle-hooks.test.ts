@@ -17,7 +17,7 @@ import { PluginHost } from "@orbit/core/plugin/host"
 import { Session } from "@orbit/core/session"
 import { AbsolutePath } from "@orbit/core/schema"
 import { SessionMessage } from "@orbit/schema/session-message"
-import { Effect, Exit, Layer, Schema } from "effect"
+import { Effect, Exit, Layer, Logger, Schema } from "effect"
 import { tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -34,6 +34,14 @@ const it = testEffect(
 const decode = Schema.decodeUnknownSync(Info)
 const hooks = (value: unknown) => new Document({ type: "document", info: decode({ hooks: value }) })
 const command = (text: string) => ({ hooks: [{ type: "command", command: text }] })
+
+/** A logger layer that collects the details of every warning logged with `message`. */
+const collectWarnings = (message: string, details: unknown[]) =>
+  Logger.layer([
+    Logger.map(Logger.formatStructured, (entry) => {
+      if (Array.isArray(entry.message) && entry.message[0] === message) details.push(entry.message[1])
+    }),
+  ])
 
 const base = {
   sessionID: Session.ID.make("ses_hooks_test"),
@@ -107,36 +115,259 @@ describe("LifecycleHooksPlugin", () => {
   )
 })
 
-const claudeRoot = mkdtempSync(path.join(tmpdir(), "orbit-claude-hooks-"))
+const sharedRoot = mkdtempSync(path.join(tmpdir(), "orbit-shared-hooks-"))
 writeFileSync(
-  path.join(claudeRoot, "settings.json"),
+  path.join(sharedRoot, "settings.json"),
   JSON.stringify({
     permissions: { allow: ["Bash(ls:*)"] },
     hooks: {
       PreToolUse: [
-        { matcher: "shell", hooks: [{ type: "command", command: "echo 'from claude settings' >&2; exit 2" }] },
+        { matcher: "shell", hooks: [{ type: "command", command: "echo 'from shared settings' >&2; exit 2" }] },
       ],
     },
   }),
 )
-const claudeIt = testEffect(
+const sharedIt = testEffect(
   Layer.mergeAll(
     PluginTestLayer,
-    Config.testLayer([], { claude: [AbsolutePath.make(claudeRoot)], agents: [] }),
+    Config.testLayer([], { claude: [AbsolutePath.make(sharedRoot)], agents: [] }),
     AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
   ),
 )
 
-describe("LifecycleHooksPlugin with Claude Code settings", () => {
+describe("LifecycleHooksPlugin with shared settings files", () => {
   if (process.platform === "win32") return
-  claudeIt.live("runs hooks from .claude/settings.json", () =>
+  sharedIt.live("runs hooks from .claude/settings.json", () =>
     Effect.gen(function* () {
       const registry = yield* PluginHooks.Service
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
       const shell = yield* registry
         .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
         .pipe(Effect.exit)
-      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("from claude settings")
+      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("from shared settings")
+    }),
+  )
+})
+
+// The file mixes a guard with a hook this version rejects (a model needs its provider), and the second file is not a
+// hooks object at all.
+const partialRoot = mkdtempSync(path.join(tmpdir(), "orbit-partial-hooks-"))
+writeFileSync(
+  path.join(partialRoot, "settings.json"),
+  JSON.stringify({
+    hooks: {
+      PreToolUse: [{ matcher: "shell", hooks: [{ type: "command", command: "echo 'guard fired' >&2; exit 2" }] }],
+      SubagentStop: [{ hooks: [{ type: "prompt", prompt: "Did it finish?", model: "fast-model" }] }],
+    },
+  }),
+)
+writeFileSync(path.join(partialRoot, "settings.local.json"), JSON.stringify({ hooks: "off" }))
+const partialIt = testEffect(
+  Layer.mergeAll(
+    PluginTestLayer,
+    Config.testLayer([], { claude: [AbsolutePath.make(partialRoot)], agents: [] }),
+    AppNodeBuilder.build(ShellSelect.node, [Location.node.replace(tempLocationLayer)]),
+  ),
+)
+
+describe("LifecycleHooksPlugin with a settings file it can only partly read", () => {
+  partialIt.live("logs each entry it skips once, at its path in the file", () => {
+    const output: unknown[] = []
+    return Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      // The guard only matches the shell tool, so these calls read the files without running any command.
+      const fire = registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+      yield* fire
+      yield* fire
+      expect(output).toEqual([
+        {
+          source: path.join(partialRoot, "settings.json"),
+          path: "$.hooks.SubagentStop.0.hooks.0",
+          kind: "invalid",
+          action: "skipped malformed recognized value",
+        },
+        {
+          source: path.join(partialRoot, "settings.local.json"),
+          path: "$.hooks",
+          kind: "invalid",
+          action: "skipped malformed recognized value",
+        },
+      ])
+    }).pipe(Effect.provide(collectWarnings("configuration normalization diagnostic", output)))
+  })
+
+  if (process.platform === "win32") return
+  partialIt.live("still runs the guard that sits next to a hook it cannot read", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const shell = yield* registry
+        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("Blocked by a PreToolUse hook: guard fired")
+    }),
+  )
+})
+
+describe("LifecycleHooksPlugin with settings it does not honor yet", () => {
+  const unenforced = "hook policy is not enforced yet and is ignored"
+
+  it.live("warns once for each policy that is set and would change what runs", () => {
+    const output: unknown[] = []
+    return Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([
+        hooks({ disabled: true, managed_only: false, http: { allowed_urls: [] } }),
+        hooks({ disabled: true, managed_only: true }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const fire = registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+      yield* fire
+      yield* fire
+      expect(output).toEqual([
+        { setting: "hooks.disabled" },
+        { setting: "hooks.http" },
+        { setting: "hooks.managed_only" },
+      ])
+    }).pipe(Effect.provide(collectWarnings(unenforced, output)))
+  })
+
+  it.live("stays quiet about policies that are off", () => {
+    const output: unknown[] = []
+    return Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([hooks({ disabled: false, managed_only: false })])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      yield* registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+      expect(output).toEqual([])
+    }).pipe(Effect.provide(collectWarnings(unenforced, output)))
+  })
+
+  if (process.platform === "win32") return
+  it.live("warns once for each command setting it ignores, and still runs the command", () => {
+    const output: unknown[] = []
+    return Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([
+        hooks({
+          PreToolUse: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "echo 'no shell today' >&2; exit 2",
+                  shell: "bash",
+                  async: true,
+                  async_rewake: true,
+                  once: true,
+                  if: "shell(git *)",
+                  status_message: "Checking",
+                },
+                // Settings that are off ask for nothing, so they are not reported.
+                { type: "command", command: "true", async: false, async_rewake: false, once: false },
+                // timeout is honored.
+                { type: "command", command: "true", timeout: 5 },
+              ],
+            },
+          ],
+        }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const fire = registry
+        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .pipe(Effect.exit)
+      const exit = yield* fire
+      yield* fire
+      expect(Exit.isFailure(exit) ? String(exit.cause) : "").toContain("Blocked by a PreToolUse hook: no shell today")
+      expect(output).toEqual([
+        { event: "PreToolUse", field: "shell" },
+        { event: "PreToolUse", field: "async" },
+        { event: "PreToolUse", field: "async_rewake" },
+        { event: "PreToolUse", field: "once" },
+        { event: "PreToolUse", field: "if" },
+        { event: "PreToolUse", field: "status_message" },
+      ])
+    }).pipe(Effect.provide(collectWarnings("hook field is not supported yet and is ignored", output)))
+  })
+})
+
+describe("LifecycleHooksPlugin with hooks of other types", () => {
+  const unsupported = "hook type is not supported yet and is skipped"
+
+  it.live("skips prompt, agent and http hooks and logs each type once", () => {
+    const output: unknown[] = []
+    return Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([
+        hooks({
+          PreToolUse: [
+            {
+              hooks: [
+                { type: "prompt", prompt: "Is this safe?" },
+                { type: "agent", prompt: "Verify the change" },
+                { type: "http", url: "https://hooks.example.com/event" },
+                { type: "prompt", prompt: "Is it still safe?" },
+              ],
+            },
+          ],
+          PostToolUse: [{ hooks: [{ type: "agent", prompt: "Verify the result" }] }],
+        }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+      const after = {
+        ...base,
+        tool: "read",
+        input: {},
+        status: "completed" as const,
+        result: { output: "x" } as Tool.Result,
+      }
+      const fire = Effect.gen(function* () {
+        const before = yield* registry
+          .trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+          .pipe(Effect.exit)
+        expect(Exit.isSuccess(before)).toBe(true)
+        yield* registry.trigger("tool", "execute.after", after)
+      })
+      yield* fire
+      yield* fire
+
+      expect(output).toEqual([
+        { event: "PreToolUse", type: "prompt" },
+        { event: "PreToolUse", type: "agent" },
+        { event: "PreToolUse", type: "http" },
+      ])
+      expect(after.result).toEqual({ output: "x" })
+    }).pipe(Effect.provide(collectWarnings(unsupported, output)))
+  })
+
+  if (process.platform === "win32") return
+  it.live("still runs the command hooks that sit next to them", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      yield* config.setEntries([
+        hooks({
+          PreToolUse: [
+            {
+              hooks: [
+                { type: "prompt", prompt: "Is this safe?" },
+                { type: "command", command: "echo 'no shell today' >&2; exit 2" },
+              ],
+            },
+          ],
+        }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const exit = yield* registry
+        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit) ? String(exit.cause) : "").toContain("Blocked by a PreToolUse hook: no shell today")
     }),
   )
 })
