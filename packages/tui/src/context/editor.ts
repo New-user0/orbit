@@ -4,7 +4,10 @@ import { Option, Schema, SchemaGetter } from "effect"
 import { isRecord } from "../util/record"
 import { useTuiPaths } from "./runtime"
 import { createSimpleContext } from "./helper"
-import { editorIntegration } from "../editor"
+import { useClient } from "./client"
+import { createCompat } from "./compat"
+import { useData } from "./data"
+import { editorIntegration, editorPort } from "../editor"
 
 const MCP_PROTOCOL_VERSION = "2025-11-25"
 
@@ -100,7 +103,6 @@ type EditorServerInfo = Schema.Schema.Type<typeof EditorServerInfoSchema>
 
 type EditorConnection = {
   url: string
-  authToken?: string
   source: string
 }
 
@@ -111,13 +113,19 @@ export type EditorIntegration = Readonly<{
 
 export const { use: useEditorContext, provider: EditorContextProvider } = createSimpleContext({
   name: "EditorContext",
-  init: (props: { integration?: EditorIntegration; WebSocketImpl?: typeof WebSocket }) => {
+  init: (props: {
+    integration?: EditorIntegration
+    WebSocketImpl?: typeof WebSocket
+    /** Whether other agent products' files may be read. Defaults to what the server reports. */
+    compat?: () => boolean
+  }) => {
     const paths = useTuiPaths()
-    const editor = props.integration ?? editorIntegration
-    const value = process.env.CLAUDE_CODE_SSE_PORT || process.env.ORBIT_EDITOR_SSE_PORT
-    const parsedPort = value ? Number.parseInt(value, 10) : undefined
-    const port =
-      parsedPort && Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535 ? parsedPort : undefined
+    const editor: EditorIntegration = props.integration ?? editorIntegration
+    // The server may be on another machine, where this process's own directory does not exist: ask about the location
+    // the app resolved there.
+    const compat =
+      props.compat ?? createCompat({ client: useClient(), directory: useData().location.default().directory })
+    const port = editorPort(process.env)
     const zedTerminal = process.env.ZED_TERM === "true" || process.env.TERM_PROGRAM?.toLowerCase() === "zed"
     const mentionListeners = new Set<(mention: EditorMention) => void>()
     const WebSocketImpl = props.WebSocketImpl ?? WebSocket
@@ -185,11 +193,20 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
           scheduleReconnect()
           return
         }
+        // Zed's database is another tool's file, so it is read only while compatibility is on. The poll keeps running
+        // either way, which is how a change to the switch takes effect.
+        if (!compat()) {
+          lastZedSelectionKey = undefined
+          if (store.selection?.source === "zed") setSelection(undefined)
+          setStore("status", "disabled")
+          scheduleZedPoll()
+          return
+        }
 
         zedSelection ??= editor
           .selection(directory)
           .then((result) => {
-            if (closed || socket) return
+            if (closed || socket || !compat()) return
             if (!isRecord(result) || result.type === "unavailable") return
             const decoded = result.type === "selection" ? decodeEditorSelection(result.selection) : Option.none()
             const selection = Option.getOrUndefined(decoded)
@@ -211,7 +228,7 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       }
 
       setStore("status", "connecting")
-      const current = openEditorSocket(connection, WebSocketImpl)
+      const current = new WebSocketImpl(connection.url)
       socket = current
 
       current.addEventListener("open", () => {
@@ -320,7 +337,9 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
 
     return {
       enabled() {
-        return Boolean(resolveEditorConnection(directory, port, editor.connection) || (zedTerminal && editor.selection))
+        return Boolean(
+          resolveEditorConnection(directory, port, editor.connection) || (zedTerminal && compat() && editor.selection),
+        )
       },
       connected() {
         return store.status === "connected"
@@ -385,16 +404,6 @@ export function editorSelectionKey(selection: EditorSelection | undefined) {
       range.text,
     ]),
   ].join("\0")
-}
-
-function openEditorSocket(connection: EditorConnection, WebSocketImpl: typeof WebSocket) {
-  if (!connection.authToken) return new WebSocketImpl(connection.url)
-
-  return new WebSocketImpl(connection.url, {
-    headers: {
-      "x-claude-code-ide-authorization": connection.authToken,
-    },
-  } as any)
 }
 
 function parseMessage(value: unknown) {

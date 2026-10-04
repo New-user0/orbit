@@ -3,7 +3,7 @@ import path from "node:path"
 import { expect } from "bun:test"
 import { Config } from "@orbit/schema/config"
 import { Effect, Schema } from "effect"
-import { tmpdir } from "../../core/test/fixture/tmpdir"
+import { tmpdir, tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
 import { AbsolutePath } from "@orbit/schema/schema"
@@ -121,6 +121,91 @@ it.live("updates the global shell without replacing unrelated JSONC", () =>
     )
     expect(shells.status).toBe(200)
     expect(Array.isArray(yield* Effect.promise(() => shells.json()))).toBe(true)
+  }),
+)
+
+// Sets environment variables for the rest of the test's scope, where undefined removes one.
+const environment = (values: Record<string, string | undefined>) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      const previous = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
+      assign(values)
+      return previous
+    }),
+    (previous) => Effect.sync(() => assign(previous)),
+  )
+
+function assign(values: Record<string, string | undefined>) {
+  for (const [name, value] of Object.entries(values)) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+}
+
+// What the server reports as the effective configuration of a project, given the config files each scope holds. The
+// home directory is a fresh one, so the developer's own ~/.orbit cannot decide the outcome.
+const effective = (
+  files: { user?: unknown; project?: unknown; local?: unknown } = {},
+  env: Record<string, string | undefined> = {},
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped("orbit-config-effective-")
+      const home = path.join(tmp.path, "home")
+      const global = path.join(tmp.path, "global")
+      const project = path.join(tmp.path, "project")
+      yield* Effect.promise(() =>
+        Promise.all([home, global, project].map((directory) => fs.mkdir(directory, { recursive: true }))),
+      )
+      const write = (file: string, value: unknown) =>
+        value === undefined ? Effect.void : Effect.promise(() => fs.writeFile(file, JSON.stringify(value)))
+      yield* Effect.all([
+        write(path.join(global, "orbit.json"), files.user),
+        write(path.join(project, "orbit.json"), files.project),
+        write(path.join(project, "orbit.local.json"), files.local),
+      ])
+      yield* environment({ ORBIT_TEST_HOME: home, ORBIT_DISABLE_COMPAT: undefined, ...env })
+      const server = yield* startServer(global)
+      const url = new URL("/api/config/effective", server.base)
+      url.searchParams.set("location[directory]", project)
+      const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
+      expect(response.status).toBe(200)
+      const body: unknown = yield* Effect.promise(() => response.json())
+      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility"])
+      return Schema.decodeUnknownSync(Config.Effective)(body)
+    }),
+  )
+
+const off = { compatibility: { enabled: false } }
+const on = { compatibility: { enabled: true } }
+
+it.live("reports compatibility as on unless something that may turn it off says so", () =>
+  Effect.gen(function* () {
+    expect(yield* effective()).toEqual({ compatibility: true })
+    expect(yield* effective({ user: on })).toEqual({ compatibility: true })
+  }),
+)
+
+it.live("reports the compatibility switch the user's config sets, whatever the project says", () =>
+  Effect.gen(function* () {
+    expect(yield* effective({ user: off })).toEqual({ compatibility: false })
+    expect(yield* effective({ user: off, project: on, local: on })).toEqual({ compatibility: false })
+  }),
+)
+
+it.live("ignores a compatibility switch in the project's own files", () =>
+  Effect.gen(function* () {
+    expect(yield* effective({ project: off })).toEqual({ compatibility: true })
+    expect(yield* effective({ local: off })).toEqual({ compatibility: true })
+    expect(yield* effective({ user: on, project: off, local: off })).toEqual({ compatibility: true })
+  }),
+)
+
+it.live("reports compatibility as off when the server's environment disables it", () =>
+  Effect.gen(function* () {
+    expect(yield* effective({}, { ORBIT_DISABLE_COMPAT: "1" })).toEqual({ compatibility: false })
+    // The environment outranks a user config that turns it on.
+    expect(yield* effective({ user: on }, { ORBIT_DISABLE_COMPAT: "true" })).toEqual({ compatibility: false })
   }),
 )
 

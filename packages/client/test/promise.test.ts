@@ -83,6 +83,21 @@ test("config.get returns ordered config entries for a location", async () => {
   expect(request?.url).toBe("http://localhost:3000/api/config?location%5Bdirectory%5D=%2Ftmp%2Fproject")
 })
 
+test("config.effective returns the settings the server resolved for a location", async () => {
+  let request: Request | undefined
+  const client = Orbit.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input) => {
+      request = input instanceof Request ? input : new Request(input)
+      return Response.json({ compatibility: false })
+    },
+  })
+
+  expect(await client.config.effective({ location: { directory: "/tmp/project" } })).toEqual({ compatibility: false })
+  expect(request?.method).toBe("GET")
+  expect(request?.url).toBe("http://localhost:3000/api/config/effective?location%5Bdirectory%5D=%2Ftmp%2Fproject")
+})
+
 test("requests keep a path prefix on baseUrl", async () => {
   let request: Request | undefined
   const client = Orbit.make({

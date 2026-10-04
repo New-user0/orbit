@@ -68,10 +68,21 @@ describe("CLI frontend import boundaries", () => {
     const declared = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
     expect(declared.filter((name) => /^@orbit\/(?:core|server|client)$/.test(name))).toEqual([])
 
-    for (const entrypoint of ["names", "switch", "roots", "instructions", "aliases", "settings", "mcp-json"]) {
+    for (const entrypoint of ["names", "switch", "roots", "instructions", "aliases", "settings", "mcp-json", "zed"]) {
       const graph = await bundleInputs(`packages/compat/src/${entrypoint}.ts`)
       expect(graph.filter((file) => /^packages\/(?:core|server|client|cli|tui)\//.test(file))).toEqual([])
     }
+  })
+
+  test("resolves Zed's SQLite binding to the variant of each build target", async () => {
+    // The TUI imports the reader from compat, and Bun and Node builds must each reach their own binding.
+    const bun = await bundleInputs("packages/compat/src/zed.ts")
+    expect(bun).toContain("packages/compat/src/zed-sqlite.bun.ts")
+    expect(bun).not.toContain("packages/compat/src/zed-sqlite.node.ts")
+
+    const node = await bundleInputs("packages/compat/src/zed.ts", "node")
+    expect(node).toContain("packages/compat/src/zed-sqlite.node.ts")
+    expect(node).not.toContain("packages/compat/src/zed-sqlite.bun.ts")
   })
 
   test("keeps TUI Mini independent from Core, Server, and CLI", async () => {
@@ -89,7 +100,7 @@ describe("CLI frontend import boundaries", () => {
   })
 })
 
-async function bundleInputs(entrypoint: string) {
+async function bundleInputs(entrypoint: string, target: "bun" | "node" = "bun") {
   const temporary = await mkdtemp(path.join(import.meta.dir, ".import-boundary-"))
   const metafile = path.join(temporary, "meta.json")
   try {
@@ -98,7 +109,7 @@ async function bundleInputs(entrypoint: string) {
         process.execPath,
         "build",
         entrypoint,
-        "--target=bun",
+        `--target=${target}`,
         "--format=esm",
         "--packages=bundle",
         "--external=@opentui/core-*",

@@ -19,6 +19,13 @@
   "exports": {
     "./*": "./src/*.ts"
   },
+  "imports": {
+    "#zed-sqlite": {
+      "bun": "./src/zed-sqlite.bun.ts",
+      "node": "./src/zed-sqlite.node.ts",
+      "default": "./src/zed-sqlite.bun.ts"
+    }
+  },
   "scripts": {
     "build": "bun run script/build.ts",
     "typecheck": "tsgo --noEmit",

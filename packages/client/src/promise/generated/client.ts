@@ -262,6 +262,8 @@ import type {
   WebsearchQueryOutput,
   ConfigGetInput,
   ConfigGetOutput,
+  ConfigEffectiveInput,
+  ConfigEffectiveOutput,
   ConfigShellsOutput,
   ConfigUpdateInput,
   ConfigUpdateOutput,
@@ -2192,6 +2194,18 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/config`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      effective: (input?: ConfigEffectiveInput, requestOptions?: RequestOptions) =>
+        request<ConfigEffectiveOutput>(
+          {
+            method: "GET",
+            path: `/api/config/effective`,
             query: { location: input?.["location"] },
             successStatus: 200,
             declaredStatuses: [400, 401],

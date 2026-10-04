@@ -98,6 +98,28 @@ above, which also stops it loading that product's skills, output styles and inst
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
 
+### The TUI no longer finds another product's IDE extension, and reads Zed only with compatibility on
+
+The TUI used to look for the lock files that another agent product's IDE extension writes under the home directory, and
+to read the port of that product's editor server from that product's environment variable. It connected to the editor
+it found and showed the editor's selection and `@` mentions in the prompt. Orbit no longer reads those lock files or
+that variable, and no longer sends that extension's authorization header. Until Orbit has an IDE bridge of its own, the
+only way to connect the TUI to an editor's local WebSocket server is `ORBIT_EDITOR_SSE_PORT`.
+
+Inside a Zed terminal the TUI still reads the selection of Zed's focused editor from Zed's own database, which
+`ORBIT_ZED_DB` can point at, but now only while compatibility is enabled (see "One switch for reading other agent
+products' files" above). With `compatibility.enabled` set to `false`, or `ORBIT_DISABLE_COMPAT` set in the TUI's or the
+server's environment, Zed's database is not opened. The TUI asks the server whether compatibility is on, when it starts,
+after it reconnects and whenever the configuration changes, through the new `GET /api/config/effective`
+(`client.config.effective()`), which returns `{ compatibility: boolean }`. Until the server answers, or when it cannot,
+as an older server cannot, Zed is not read.
+
+**Affects:** TUI users who relied on an IDE extension of another agent product for selection context and `@` mentions,
+who lose them until Orbit's IDE bridge ships, and people who turn compatibility off and use Zed.
+
+**What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
+not. Leave compatibility on if you want Zed's selection in the TUI.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

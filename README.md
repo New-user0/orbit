@@ -25,7 +25,8 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   `ORBIT_DISABLE_COMPAT=1` (or `true`) in the environment the Orbit server starts in. A project's own `orbit.json` and
   `orbit.local.json` cannot change it, so a repository cannot switch it back on after you turned it off. With it off,
   skills that live only in `.agents/skills` or another product's directory no longer load: move them to
-  `.orbit/skills` first.
+  `.orbit/skills` first. The same switch decides whether the TUI reads Zed's own editor database for the selection in
+  a Zed terminal.
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and
   OS roots. `ORBIT_CLIENT_CERT`, `ORBIT_CLIENT_KEY` and `ORBIT_CLIENT_KEY_PASSPHRASE` add a client certificate.

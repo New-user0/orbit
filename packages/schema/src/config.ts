@@ -132,6 +132,18 @@ export const Patch = Schema.Struct({
 }).annotate({ identifier: "Config.Patch" })
 export interface Patch extends Schema.Schema.Type<typeof Patch> {}
 
+export const Effective = Schema.Struct({
+  compatibility: Schema.Boolean.annotate({
+    description:
+      "Whether Orbit reads other agent products' settings, skills, output styles and instruction files. Only your own config, ORBIT_CONFIG or ORBIT_CONFIG_CONTENT, organization-managed settings and ORBIT_DISABLE_COMPAT in the server's environment decide this; a repository's files cannot.",
+  }),
+}).annotate({
+  identifier: "Config.Effective",
+  description:
+    "The settings that took effect for a location, as the server resolved them from every scope and its own environment. Clients read these instead of working them out from the documents, which do not show what the server's environment changed.",
+})
+export interface Effective extends Schema.Schema.Type<typeof Effective> {}
+
 export type Scope = typeof Scope.Type
 export const Scope = Schema.Literals(["remote", "user", "project", "local", "flag", "managed"]).annotate({
   identifier: "Config.Scope",

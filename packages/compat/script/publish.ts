@@ -12,8 +12,12 @@ const pkg = JSON.parse(originalText) as {
   name: string
   version: string
   exports: Record<string, string | { import: string; types: string }>
+  imports: Record<string, Record<string, string>>
 }
 const tarball = `${pkg.name.replace("@", "").replace("/", "-")}-${pkg.version}.tgz`
+
+const output = (value: string, extension: ".js" | ".d.ts") =>
+  value.replace("./src/", "./dist/").replace(/\.ts$/, extension)
 
 if ((await $`npm view ${pkg.name}@${pkg.version} version`.nothrow()).exitCode === 0) {
   console.log(`already published ${pkg.name}@${pkg.version}`)
@@ -26,14 +30,15 @@ try {
   pkg.exports = Object.fromEntries(
     Object.entries(pkg.exports).map(([key, value]) => {
       if (typeof value !== "string") return [key, value]
-      return [
-        key,
-        {
-          import: value.replace("./src/", "./dist/").replace(/\.ts$/, ".js"),
-          types: value.replace("./src/", "./dist/").replace(/\.ts$/, ".d.ts"),
-        },
-      ]
+      return [key, { import: output(value, ".js"), types: output(value, ".d.ts") }]
     }),
+  )
+  // The runtime variants of an internal import point at the compiled files, since only dist is published.
+  pkg.imports = Object.fromEntries(
+    Object.entries(pkg.imports).map(([key, conditions]) => [
+      key,
+      Object.fromEntries(Object.entries(conditions).map(([condition, value]) => [condition, output(value, ".js")])),
+    ]),
   )
   await Bun.write("package.json", JSON.stringify(pkg, null, 2) + "\n")
   await rm(tarball, { force: true })

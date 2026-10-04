@@ -1,10 +1,14 @@
+export * as CompatZed from "./zed.js"
+
 import { Database } from "#zed-sqlite"
 import { statSync } from "node:fs"
-import { readFile as readFileAsync } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Option, Schema } from "effect"
-import type { EditorSelection } from "./context/editor"
+
+// Zed keeps the editors it has open in a SQLite database of its own. Reading it is reading another tool's file, so it
+// belongs here with the other readers behind the compatibility switch, and callers consult that switch before asking.
 
 const ZedEditorRowSchema = Schema.Struct({
   item_kind: Schema.String,
@@ -27,18 +31,41 @@ const ZedEditorContentsSchema = Schema.Struct({
 const decodeZedEditorRow = Schema.decodeUnknownOption(ZedEditorRowSchema)
 const decodeZedSelectionRow = Schema.decodeUnknownOption(ZedSelectionRowSchema)
 const decodeZedEditorContents = Schema.decodeUnknownOption(ZedEditorContentsSchema)
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 
 const utf8 = new TextEncoder()
 
 type ZedEditorRow = Schema.Schema.Type<typeof ZedEditorRowSchema>
 type ZedActiveEditorRow = ZedEditorRow & { item_kind: "Editor"; editor_id: number }
 
-export type ZedSelectionResult =
-  | { type: "selection"; selection: EditorSelection }
-  | { type: "empty" }
-  | { type: "unavailable" }
+/** A position in a file: lines and characters both count from 1. */
+export interface Position {
+  readonly line: number
+  readonly character: number
+}
 
-export async function resolveZedSelection(dbPath: string, cwd = process.cwd()): Promise<ZedSelectionResult> {
+/** What is selected in the file Zed has focused: one range for each of its cursors. */
+export interface Selection {
+  readonly filePath: string
+  readonly source: "zed"
+  readonly ranges: readonly {
+    readonly text: string
+    readonly selection: { readonly start: Position; readonly end: Position }
+  }[]
+}
+
+/**
+ * `empty` when Zed has no file focused in a workspace containing the directory, and `unavailable` when its database
+ * cannot be read or does not look the way this reader expects.
+ */
+export type Result = { type: "selection"; selection: Selection } | { type: "empty" } | { type: "unavailable" }
+
+/**
+ * The active editor's selection in the Zed workspace that best contains `cwd`, read from the database at `dbPath`. A
+ * machine with no database, which is what `databasePath` finds when Zed is not installed, has nothing to read.
+ */
+export async function activeSelection(dbPath: string | undefined, cwd = process.cwd()): Promise<Result> {
+  if (!dbPath) return { type: "unavailable" }
   const active = queryZedActiveEditor(dbPath, cwd)
   if (active.type !== "row") return active
 
@@ -64,7 +91,7 @@ export async function resolveZedSelection(dbPath: string, cwd = process.cwd()): 
   const text =
     contents.type === "contents" && contents.contents != null
       ? contents.contents
-      : await readFileAsync(row.buffer_path, "utf8").catch(() => undefined)
+      : await readFile(row.buffer_path, "utf8").catch(() => undefined)
   if (text == null) return { type: "unavailable" }
 
   const ranges = byteRanges.map((range) => {
@@ -184,11 +211,15 @@ function isZedActiveEditorRow(row: ZedEditorRow): row is ZedActiveEditorRow {
   return row.item_kind === "Editor" && row.editor_id != null
 }
 
-export function resolveZedDbPath() {
+/**
+ * Where Zed's database is: the file ORBIT_ZED_DB names, else the first of its default locations on macOS and Linux that
+ * exists. Nothing is returned when there is none, which is how a machine without Zed looks.
+ */
+export function databasePath(env: Readonly<Record<string, string | undefined>> = process.env, home = os.homedir()) {
   const candidates = [
-    process.env.ORBIT_ZED_DB,
-    path.join(os.homedir(), "Library", "Application Support", "Zed", "db", "0-stable", "db.sqlite"),
-    path.join(os.homedir(), ".local", "share", "zed", "db", "0-stable", "db.sqlite"),
+    env.ORBIT_ZED_DB,
+    path.join(home, "Library", "Application Support", "Zed", "db", "0-stable", "db.sqlite"),
+    path.join(home, ".local", "share", "zed", "db", "0-stable", "db.sqlite"),
   ].filter((item): item is string => Boolean(item))
 
   return candidates.find((item) => isFile(item))
@@ -211,7 +242,7 @@ function scoreZedWorkspace(workspacePaths: string | null, cwd: string) {
 
 function zedWorkspacePaths(value: string | null) {
   if (!value) return []
-  const parsed = parseJson(value)
+  const parsed = Option.getOrUndefined(decodeJson(value))
   if (Array.isArray(parsed)) return parsed.filter((item): item is string => typeof item === "string")
   return value.split(/\r?\n/).filter(Boolean)
 }
@@ -266,12 +297,4 @@ function position(line: number, lineStart: number, offset: number) {
 function pathContains(parent: string, child: string) {
   const relative = path.relative(path.resolve(parent), path.resolve(child))
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
-}
-
-function parseJson(value: string) {
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return
-  }
 }
