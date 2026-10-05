@@ -125,7 +125,9 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
   entries: readonly Entry[],
 ) {
   const discovered = yield* Effect.forEach(
-    entries.filter((entry): entry is Directory => entry.type === "directory"),
+    // A plugin runs in this process, so the plugins a folder keeps wait for the folder to be trusted. Trusting it
+    // reloads the config, which makes the supervisor activate again.
+    entries.filter((entry): entry is Directory => entry.type === "directory" && entry.trusted !== false),
     (entry) =>
       PluginSourceDirectory.discover(fs, entry.path).pipe(
         Effect.map((targets) => targets.map((target): Operation => ({ type: "add", target, options: {} }))),

@@ -123,6 +123,21 @@ Orbit starts no language server and runs no formatter in a folder that is not tr
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
 working as soon as the folder is trusted.
 
+The files in a project's `.orbit` directory are held to the same decision, because some of them run code:
+
+- **Plugins:** the plugins in `.orbit/plugins` (or `.orbit/plugin`) are not loaded, and they are not reported as failed.
+  They start when the folder is trusted, without a restart, and stop again when the trust is taken away.
+- **Commands:** a command from `.orbit/commands`, or from a `commands` setting of the project, is still listed, and one
+  whose template has no shell snippet works as before. One that runs a shell snippet (an exclamation mark and a command
+  in backticks) fails with a message that names the command and says its folder is not trusted. Nothing is asked about
+  or started first.
+- **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt, model and description, and loses
+  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, and `disabled`, so a file
+  cannot remove one of the agents that are already there.
+
+Skills and output styles in a project are text, so they stay available. The list of what a folder holds back also names
+each `.orbit` directory with the plugins, commands with shell snippets, and agents with requests or approvals it holds.
+
 Your own config, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT` and the server's remote sources are never held back, and neither
 are the Orbit files in your home directory. Trust belongs to the project's root folder, so a repository and its linked
 git worktrees share it. Config that Orbit finds in the folders above the project, such as an `orbit.json` in a folder
@@ -140,12 +155,15 @@ ignores the variable, because it serves every client and project.
 
 **Affects:** anyone who opens a repository whose config sets `hooks`, `mcp`, `plugins`, `providers`, `sandbox`,
 `formatter`, `default_agent`, `warming` or `allow` and `ask` permission rules, through the background service (the
-terminal UI, VS Code and the desktop app): those settings now stay off. So do language servers and formatters, in every
-folder that is not trusted, which until the trust prompt arrives is every folder. The same goes for SDK hosts and
-servers that leave `trust.implicit` unset, and for tests that write project config and start a server. Code built on
-`@orbit/core`: `Config.Document` and `Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots
-that `Config.compat` lists can carry `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need
-`ProjectTrust`, `ProjectTrust.allows` says whether a file may run the code it carries, and a global `trust.updated`
+terminal UI, VS Code and the desktop app): those settings now stay off. So do the plugins in `.orbit/plugins`, the shell
+snippets in the commands of `.orbit/commands`, the `request` overrides and `allow` rules of agents in `.orbit/agents`,
+and language servers and formatters, in every folder that is not trusted, which until the trust prompt arrives is every
+folder. The same goes for SDK hosts and servers that leave `trust.implicit` unset, and for tests that write project config
+and start a server. Code built on `@orbit/core`: `Config.Document` and `Config.Directory` gain `trusted`,
+`Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry `trusted`, `Config` now needs
+`WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs `FSUtil`, `ProjectTrust.status`
+also lists `.orbit` directories, `ProjectTrust.allows` says whether a file may run the code it carries (ask it before
+running anything a file carries, such as the hooks in a skill's or an agent's front matter), and a global `trust.updated`
 event reports each change.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run with `--standalone` and

@@ -1,7 +1,7 @@
 import path from "path"
 import { beforeEach, describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect"
-import { Document, Info } from "@orbit/schema/config"
+import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Agent } from "@orbit/core/agent"
@@ -9,6 +9,7 @@ import { Bus } from "@orbit/core/bus"
 import { Command } from "@orbit/core/command"
 import { Config } from "@orbit/core/config"
 import { ConfigCommandPlugin } from "@orbit/core/config/plugin/command"
+import { ConfigTrust } from "@orbit/core/config/trust"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Instance } from "@orbit/core/instance/service"
@@ -372,6 +373,106 @@ describe("command template shell spans", () => {
   )
 })
 
+// A folder that is not trusted may define commands, but nothing it defines may start a process. Config stamps the
+// entries of such a folder, and these tests use the stamps it would put on them.
+describe("command template shell spans from a folder that is not trusted", () => {
+  const refusal =
+    'The "probe" command runs shell commands, and the folder it comes from is not trusted. Trust the folder, then run it again.'
+
+  // A directory that holds the command `probe` as a Markdown file, as `.orbit/commands/probe.md` would.
+  const directory = (template: string, trusted: boolean) =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, "commands", "probe.md"), template))
+      const entry = new Directory({ type: "directory", path: AbsolutePath.make(tmp.path), scope: "project" })
+      return trusted ? entry : ConfigTrust.stamp(entry, { roots: [tmp.path], directory: tmp.path })
+    })
+
+  // A document of orbit.json, which defines the commands `probe` and `other` inline.
+  const document = (templates: Record<string, string>, trusted: boolean) => {
+    const commands = Object.fromEntries(Object.entries(templates).map(([name, template]) => [name, { template }]))
+    const entry = new Document({ type: "document", scope: "project", info: decode({ commands }) })
+    return trusted ? entry : ConfigTrust.stamp(entry, { roots: [process.cwd()], directory: process.cwd() })
+  }
+
+  // Nothing was scanned, asked about or started, and no prompt was submitted.
+  const refused = (entries: Entry[], text = "") =>
+    Effect.gen(function* () {
+      const probe = yield* installEntries(entries)
+      const error = yield* probe.execute(text).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(Command.ExecutionError)
+      expect(error.message).toBe(refusal)
+      expect(asserted).toEqual([])
+      expect(spawned).toEqual([])
+      expect(probe.prompts).toEqual([])
+    })
+
+  for (const template of [
+    "Status: !`git status`",
+    "Review $ARGUMENTS\n\nBranch: !`git branch --show-current`",
+    "!`one` and !`two`",
+  ]) {
+    it.live(`refuses ${JSON.stringify(template)} from a document, before it asks or starts anything`, () =>
+      refused([document({ probe: template }, false)], "src"),
+    )
+
+    it.live(`refuses ${JSON.stringify(template)} from a directory, before it asks or starts anything`, () =>
+      Effect.gen(function* () {
+        yield* refused([yield* directory(template, false)], "src")
+      }),
+    )
+  }
+
+  it.live("runs the same span once its folder is trusted", () =>
+    Effect.gen(function* () {
+      for (const entry of [
+        document({ probe: "Status: !`git status`" }, true),
+        yield* directory("Status: !`git status`", true),
+      ]) {
+        spawned.length = 0
+        asserted.length = 0
+        const probe = yield* installEntries([entry])
+        yield* probe.execute("")
+        expect(spawned.map((spawn) => spawn.args.at(-1))).toEqual(["git status"])
+        expect(asserted.map((input) => input.resources)).toEqual([["git status"]])
+        expect(probe.prompts).toEqual(["Status: <git status>"])
+      }
+    }),
+  )
+
+  it.live("still runs a template that holds no span, whatever its folder", () =>
+    Effect.gen(function* () {
+      const templates = ["Explain $ARGUMENTS.", "Say `hello` and !not-a-span for $1"]
+      for (const entry of [
+        ...templates.map((template) => document({ probe: template }, false)),
+        ...(yield* Effect.forEach(templates, (template) => directory(template, false))),
+      ]) {
+        const probe = yield* installEntries([entry])
+        // Argument text that looks like a span is only text, in an untrusted folder as in any other.
+        yield* probe.execute("!`touch pwned`")
+        expect(probe.prompts.at(-1)).toContain("!`touch pwned`")
+      }
+      expect(asserted).toEqual([])
+      expect(spawned).toEqual([])
+    }),
+  )
+
+  it.live("decides for each entry, so a command from a trusted folder still runs its span", () =>
+    Effect.gen(function* () {
+      const probe = yield* installEntries([
+        document({ other: "Status: !`git status`" }, true),
+        document({ probe: "Log: !`git log`" }, false),
+      ])
+      yield* probe.execute("", "other")
+      expect(spawned.map((spawn) => spawn.args.at(-1))).toEqual(["git status"])
+      const error = yield* probe.execute("").pipe(Effect.flip)
+      expect(error.message).toBe(refusal)
+      expect(spawned.map((spawn) => spawn.args.at(-1))).toEqual(["git status"])
+      expect(probe.prompts).toEqual(["Status: <git status>"])
+    }),
+  )
+})
+
 describe("command template shell spans with the permission service", () => {
   real.live("asks once per uncovered span, in template order, and runs only after the last answer", () =>
     Effect.gen(function* () {
@@ -545,6 +646,14 @@ const requests = Effect.gen(function* () {
 })
 
 function install(template: string, settings: Record<string, unknown> = {}, session: Session.ID = sessionID) {
+  return installEntries(
+    [new Document({ type: "document", info: decode({ commands: { probe: { template } }, ...settings }) })],
+    session,
+  )
+}
+
+// The command plugin over the given config entries, which may define `probe` in a document or in a directory.
+function installEntries(entries: Entry[], session: Session.ID = sessionID) {
   return Effect.gen(function* () {
     const command = yield* Command.Service
     const prompts: string[] = []
@@ -570,17 +679,11 @@ function install(template: string, settings: Record<string, unknown> = {}, sessi
             }),
         },
       }),
-    ).pipe(
-      Effect.provide(
-        Config.testLayer([
-          new Document({ type: "document", info: decode({ commands: { probe: { template } }, ...settings }) }),
-        ]),
-      ),
-    )
+    ).pipe(Effect.provide(Config.testLayer(entries)))
     return {
       prompts,
-      execute: (text: string) =>
-        command.execute({ name: "probe", invocation: { sessionID: session, prompt: { text }, delivery: "queue" } }),
+      execute: (text: string, name = "probe") =>
+        command.execute({ name, invocation: { sessionID: session, prompt: { text }, delivery: "queue" } }),
     }
   })
 }

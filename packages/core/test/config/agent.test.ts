@@ -5,9 +5,10 @@ import { Effect, Fiber, Schema, Stream } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
-import { Directory, Document, Event, Info } from "@orbit/schema/config"
+import { Directory, Document, Event, Info, type Entry } from "@orbit/schema/config"
 import { Model } from "@orbit/schema/model"
 import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
+import { ConfigTrust } from "@orbit/core/config/trust"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -631,7 +632,105 @@ Use native v2 fields.`,
   )
 })
 
-function loadMarkdownAgent(frontmatter: string) {
+// A folder that is not trusted may define agents, but not widen what an agent is allowed to do, change where its
+// requests go, or remove one of the agents that are already there.
+describe("ConfigAgentPlugin.Plugin under workspace trust", () => {
+  const native = `description: Reviews changes
+mode: subagent
+request:
+  headers:
+    x-agent: native
+  body:
+    effort: high
+permissions:
+  - action: shell
+    resource: "*"
+    effect: allow
+  - action: edit
+    resource: "*"
+    effect: deny`
+
+  it.live("keeps the prompt of an agent file from an untrusted folder and drops its request and allow rules", () =>
+    Effect.gen(function* () {
+      const global = yield* Global.Service
+      const agent = yield* loadMarkdownAgent(native, untrustedDirectoryEntry)
+      expect(agent).toMatchObject({ system: "Review carefully.", description: "Reviews changes", mode: "subagent" })
+      expect(agent.request).toEqual({ settings: {}, headers: {}, body: {} })
+      expect(agent.permissions).toEqual([
+        ...defaultPermissions(global),
+        { action: "edit", resource: "*", effect: "deny" },
+      ])
+    }),
+  )
+
+  it.live("applies the same file in full once its folder is trusted", () =>
+    Effect.gen(function* () {
+      const global = yield* Global.Service
+      const agent = yield* loadMarkdownAgent(native)
+      expect(agent.request).toEqual({ settings: {}, headers: { "x-agent": "native" }, body: { effort: "high" } })
+      expect(agent.permissions).toEqual([
+        ...defaultPermissions(global),
+        { action: "shell", resource: "*", effect: "allow" },
+        { action: "edit", resource: "*", effect: "deny" },
+      ])
+    }),
+  )
+
+  const legacy = "temperature: 0.5\npermission:\n  bash: allow\n  edit: deny"
+
+  it.live("cuts a legacy agent file down the same way", () =>
+    Effect.gen(function* () {
+      const global = yield* Global.Service
+      const agent = yield* loadMarkdownAgent(legacy, untrustedDirectoryEntry)
+      expect(agent.request).toEqual({ settings: {}, headers: {}, body: {} })
+      expect(agent.permissions).toEqual([
+        ...defaultPermissions(global),
+        { action: "edit", resource: "*", effect: "deny" },
+      ])
+    }),
+  )
+
+  it.live("applies a legacy agent file in full once its folder is trusted", () =>
+    Effect.gen(function* () {
+      const global = yield* Global.Service
+      const agent = yield* loadMarkdownAgent(legacy)
+      expect(agent.request).toEqual({ settings: {}, headers: {}, body: { temperature: 0.5 } })
+      expect(agent.permissions).toEqual([
+        ...defaultPermissions(global),
+        { action: "shell", resource: "*", effect: "allow" },
+        { action: "edit", resource: "*", effect: "deny" },
+      ])
+    }),
+  )
+
+  for (const item of [
+    { folder: "untrusted", entry: untrustedDirectoryEntry, removed: false },
+    { folder: "trusted", entry: directoryEntry, removed: true },
+  ]) {
+    it.live(
+      `${item.removed ? "lets" : "does not let"} an agent file remove a built-in agent when its folder is ${item.folder}`,
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          const fs = yield* FSUtil.Service
+          yield* fs.makeDirectory(path.join(tmp.path, "agents"))
+          yield* fs.writeFileString(
+            path.join(tmp.path, "agents", "build.md"),
+            "---\ndisabled: true\n---\nNever applied.",
+          )
+          const agents = yield* Agent.Service
+          const build = Agent.ID.make("build")
+          yield* agents.transform((editor) => editor.update(build, () => {}))
+          yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+            Effect.provide(Config.testLayer([item.entry(tmp.path)])),
+          )
+          expect((yield* agents.get(build)) === undefined).toBe(item.removed)
+        }),
+    )
+  }
+})
+
+function loadMarkdownAgent(frontmatter: string, entry: (directory: string) => Entry = directoryEntry) {
   return Effect.gen(function* () {
     const tmp = yield* tmpdirScoped()
     const fs = yield* FSUtil.Service
@@ -642,7 +741,7 @@ function loadMarkdownAgent(frontmatter: string) {
     )
     const agents = yield* Agent.Service
     yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
-      Effect.provide(Config.testLayer([directoryEntry(tmp.path)])),
+      Effect.provide(Config.testLayer([entry(tmp.path)])),
     )
     const agent = yield* agents.get(Agent.ID.make("reviewer"))
     if (!agent) throw new Error("expected configured Markdown agent")
@@ -653,6 +752,14 @@ function loadMarkdownAgent(frontmatter: string) {
 
 function directoryEntry(directory: string) {
   return new Directory({ type: "directory", path: AbsolutePath.make(directory) })
+}
+
+// The directory as config reports it while the folder that holds it is not trusted.
+function untrustedDirectoryEntry(directory: string) {
+  return ConfigTrust.stamp(new Directory({ type: "directory", path: AbsolutePath.make(directory), scope: "project" }), {
+    roots: [directory],
+    directory,
+  })
 }
 
 function sourceCases() {

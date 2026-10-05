@@ -15,6 +15,12 @@ import { FSUtil } from "@orbit/util/fs-util"
 // documents outrank the user's, so a partial value from a repository could replace one the user set. Whatever a
 // repository could use to run code, spend money or reach the network is therefore withheld whole, and a field that
 // cannot do any of that is kept as written. A few fields are kept in part: a deny rule only tightens what is allowed.
+//
+// The files in a config directory are held to the same decision, each where it is read. The config stamps the directory
+// `trusted: false`, and then a plugin file is not loaded (`ConfigPluginSource`), a command runs no shell snippet
+// (`ConfigCommandPlugin`), and an agent file is cut down with `sanitize` (`ConfigAgentPlugin`). Skills and output styles
+// are text, so they stay available. Anything else that would run what a file carries, such as the hooks in the front
+// matter of a skill or an agent, must ask `allows` first.
 
 /** What is left of a value once what an untrusted folder may not supply is taken out, and the kinds of what went. */
 interface Outcome<V> {

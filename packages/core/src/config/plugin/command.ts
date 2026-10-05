@@ -2,13 +2,12 @@ export * as ConfigCommandPlugin from "./command.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { Info, type Entry } from "@orbit/schema/config"
-import { ConfigCommand } from "@orbit/schema/config/command"
 import { Model } from "@orbit/schema/model"
 import { Provider } from "@orbit/schema/provider"
 import { AppProcess } from "@orbit/util/process"
 import { tmpdir } from "node:os"
 import path from "path"
-import { Effect, Option, PubSub, Schema, Stream } from "effect"
+import { Effect, PubSub, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
@@ -22,21 +21,28 @@ import { ShellSandbox } from "../../shell/sandbox.js"
 import { ShellSelect } from "../../shell/select.js"
 import { which } from "../../util/which.js"
 import { FSUtil } from "@orbit/util/fs-util"
-import { ConfigMarkdown } from "../markdown.js"
 import { ConfigTrust } from "../trust.js"
+import { CommandFile } from "./command-file.js"
 
-const decodeCommand = Schema.decodeUnknownOption(ConfigCommand.Info)
+/** A command from a folder that is not trusted runs a shell snippet, which nothing may run until the folder is. */
+export class UntrustedError extends Schema.TaggedError<UntrustedError>()("ConfigCommand.UntrustedError", {
+  command: Schema.String,
+  message: Schema.String,
+}) {}
 
 export const Plugin = define({
   id: "orbit.config.command",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
+    // The commands of an entry, and whether its folder lets them run shell snippets: only a project or local entry that
+    // config stamped untrusted does not. Plain templates are only text, so they run either way.
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
-      if (entry.type === "document") return [{ commands: entry.info.commands }]
+      const trusted = entry.trusted !== false
+      if (entry.type === "document") return [{ commands: entry.info.commands, trusted }]
       if (entry.type !== "directory") return []
-      const commands = yield* loadDirectory(fs, entry.path)
-      return [{ commands: Object.fromEntries(commands.map((command) => [command.name, command.info])) }]
+      const commands = yield* CommandFile.load(fs, entry.path)
+      return [{ commands: Object.fromEntries(commands.map((command) => [command.name, command.info])), trusted }]
     })
     const location = yield* Location.Service
     const processes = yield* AppProcess.Service
@@ -48,7 +54,7 @@ export const Plugin = define({
     const load = Effect.fn("ConfigCommandPlugin.load")(function* () {
       return yield* Effect.forEach(yield* config.entries(), loadEntry).pipe(Effect.map((documents) => documents.flat()))
     })
-    const loaded = { documents: [] as { commands: Info["commands"] }[] }
+    const loaded = { documents: [] as { commands: Info["commands"]; trusted: boolean }[] }
     const reload = load().pipe(
       Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),
       Effect.andThen(ctx.command.reload()),
@@ -98,13 +104,13 @@ export const Plugin = define({
                           ? {}
                           : { variant: Model.VariantID.make(command.model.variant) }),
                       }
-                const text = yield* evaluateTemplate(command.template, input.prompt.text, input.sessionID, {
-                  config,
-                  location,
-                  permission,
-                  processes,
-                  shell,
-                })
+                const text = yield* evaluateTemplate(
+                  command.template,
+                  input.prompt.text,
+                  input.sessionID,
+                  { config, location, permission, processes, shell },
+                  { name, trusted: document.trusted },
+                )
                 if (subagent ?? commandAgent?.mode === "subagent") {
                   const parent = yield* sessions.get(input.sessionID)
                   const selected = yield* agents.select(agent ?? parent.agent)
@@ -150,7 +156,7 @@ export const Plugin = define({
   }),
 })
 
-// Keep in sync with the loadDirectory scan pattern and the name-strip regex in decode.
+// Keep in sync with the scan pattern and the name-strip regex in command-file.ts.
 const sourceDirectories = ["command", "commands"] as const
 
 // Matches anything at or under <root>/{command,commands}. No file-suffix check:
@@ -163,39 +169,6 @@ function isCommandSource(entries: Entry[], file: string) {
   )
 }
 
-function loadDirectory(fs: FSUtil.Interface, directory: string) {
-  return Effect.gen(function* () {
-    const files = yield* fs
-      .scan("{command,commands}/**/*.md", { cwd: directory, absolute: true, dot: true, symlink: true })
-      .pipe(Effect.orElseSucceed(() => [] as string[]))
-    return yield* Effect.forEach(files.toSorted(), (filepath) =>
-      fs.readFileStringSafe(filepath).pipe(
-        Effect.map((content) => (content === undefined ? undefined : decode(directory, filepath, content))),
-        Effect.orElseSucceed(() => undefined),
-      ),
-    ).pipe(
-      Effect.map((commands) =>
-        commands.filter((command): command is { name: string; info: ConfigCommand.Info } => command !== undefined),
-      ),
-    )
-  })
-}
-
-function decode(directory: string, filepath: string, content: string) {
-  const markdown = ConfigMarkdown.parseOption(content)
-  if (!markdown) return
-  const info = Option.getOrUndefined(decodeCommand({ ...markdown.data, template: markdown.content.trim() }))
-  if (!info) return
-  return {
-    name: path
-      .relative(directory, filepath)
-      .replaceAll("\\", "/")
-      .replace(/^(command|commands)\//, "")
-      .replace(/\.md$/, ""),
-    info,
-  }
-}
-
 type Services = {
   readonly config: Config.Interface
   readonly location: Location.Info
@@ -204,8 +177,22 @@ type Services = {
   readonly shell: ShellSelect.Interface
 }
 
-function evaluateTemplate(template: string, input: string, sessionID: SessionSchema.ID, services: Services) {
+function evaluateTemplate(
+  template: string,
+  input: string,
+  sessionID: SessionSchema.ID,
+  services: Services,
+  source: { readonly name: string; readonly trusted: boolean },
+) {
   return Effect.gen(function* () {
+    // A folder that is not trusted may define commands but not start anything: its template is only text. Refusing
+    // before the spans are read means nothing is scanned, asked about or run for it.
+    if (!source.trusted && ConfigTrust.hasShellSnippet(template)) {
+      return yield* new UntrustedError({
+        command: source.name,
+        message: `The "${source.name}" command runs shell commands, and the folder it comes from is not trusted. Trust the folder, then run it again.`,
+      })
+    }
     // Spans are read from the authored template alone and run exactly as written, so a placeholder inside one reaches
     // the shell untouched. Argument text is expanded into the prose around them afterwards and is never scanned, so
     // it cannot start a command, even when a model supplied it.

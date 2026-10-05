@@ -221,6 +221,39 @@ describe("ConfigCompatibilityPlugin.Plugin", () => {
 })
 
 describe("ConfigSkillPlugin.Plugin", () => {
+  // A skill is text that goes into the prompt, so a folder that is not trusted keeps it, in Orbit's directory and in the
+  // roots of other products alike. What trust holds back from such a folder is what can run code.
+  it.live("loads the skills of a folder that is not trusted", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const orbit = path.join(tmp.path, "project", ".orbit")
+          const vendor = path.join(tmp.path, "project", "vendor")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(orbit, "skills", "native"), { recursive: true })
+            await fs.mkdir(path.join(vendor, "skills", "foreign"), { recursive: true })
+            await write(path.join(orbit, "skills"), "native", "Shipped by the project")
+            await write(path.join(vendor, "skills"), "foreign", "Shipped for another product")
+          })
+          const skills = yield* startEntries(
+            [new Directory({ type: "directory", path: AbsolutePath.make(orbit), scope: "project", trusted: false })],
+            path.join(tmp.path, "project"),
+            tmp.path,
+            emptyDiscovery,
+            {
+              enabled: true,
+              roots: [{ path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false }],
+            },
+          )
+          expect((yield* skills.list()).map((item) => item.id).toSorted()).toEqual([
+            Skill.ID.make("foreign"),
+            Skill.ID.make("native"),
+          ])
+        }),
+      ),
+    ),
+  )
+
   it.live("maps config entry types to skill directories", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>
