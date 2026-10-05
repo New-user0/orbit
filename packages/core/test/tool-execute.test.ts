@@ -343,7 +343,8 @@ test("feedback and policy blocks stay tool failures the program can catch", asyn
   expect(ran).toEqual(["later"])
 })
 
-// A local server records what reaches the network, so a refused fetch can be shown to send nothing.
+// A local server records what reaches the network, so a refused fetch can be shown to send nothing. It sends /old on
+// to /new.
 const serving = <A, E>(use: (origin: string, hits: Array<string>) => Effect.Effect<A, E>) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -354,7 +355,9 @@ const serving = <A, E>(use: (origin: string, hits: Array<string>) => Effect.Effe
             hostname: "127.0.0.1",
             port: 0,
             fetch: (request) => {
-              hits.push(`${request.method} ${new URL(request.url).pathname}`)
+              const path = new URL(request.url).pathname
+              hits.push(`${request.method} ${path}`)
+              if (path === "/old") return new Response(null, { status: 302, headers: { location: "/new" } })
               return new Response("served")
             },
           }),
@@ -430,6 +433,67 @@ test("a declined fetch ends the execution like a declined tool call", async () =
           expect(defects(exit)).toEqual([decline])
         }
         expect(hits).toEqual([])
+      }),
+    ),
+  )
+})
+
+test("authorizes each redirect a fetch follows with a call of its own, and a refusal ends the fetch", async () => {
+  const seen: Array<{ call: unknown; context: unknown; sent: number }> = []
+  await Effect.runPromise(
+    serving((origin, hits) =>
+      Effect.gen(function* () {
+        const codeMode = createCodeMode(new Map(), (call, ctx) => {
+          // A URL object is compared by what it spells.
+          seen.push({ call: { ...call, args: [String(call.args[0]), call.args[1]] }, context: ctx, sent: hits.length })
+          return String(call.args[0]).endsWith("/new")
+            ? Effect.fail(new Tool.Error({ message: "Not for this host" }))
+            : Effect.void
+        })
+
+        const result = yield* codeMode.execute(
+          {
+            code: `try { await fetch("${origin}/old", { method: "post", body: "x" }) } catch (e) { return e.message }; return "unreachable"`,
+          },
+          context,
+        )
+
+        expect(result.output.output).toBe("Not for this host")
+        expect(hits).toEqual(["POST /old"])
+        // A 302 turns the POST into a GET, so the redirect is asked about as the request it has become.
+        expect(seen).toEqual([
+          {
+            call: { extension: "web", name: "fetch", args: [`${origin}/old`, { method: "post", body: "x" }] },
+            context,
+            sent: 0,
+          },
+          { call: { extension: "web", name: "fetch", args: [`${origin}/new`, { method: "GET" }] }, context, sent: 1 },
+        ])
+      }),
+    ),
+  )
+})
+
+test("a declined redirect ends the execution like a declined call, and sends nothing more", async () => {
+  const decline = new Permission.DeclinedError()
+  await Effect.runPromise(
+    serving((origin, hits) =>
+      Effect.gen(function* () {
+        const codeMode = createCodeMode(new Map(), (call) =>
+          String(call.args[0]).endsWith("/new") ? Effect.die(decline) : Effect.void,
+        )
+
+        // The program cannot catch its way past it, whichever way it waits for the fetch.
+        for (const code of [
+          `try { await fetch("${origin}/old") } catch (e) { return "caught" }; return "unreachable"`,
+          `return await Promise.all([fetch("${origin}/old"), fetch("${origin}/old")])`,
+          `return await new Promise((resolve) => { fetch("${origin}/old").then(resolve, resolve) })`,
+        ]) {
+          hits.length = 0
+          const exit = yield* Effect.exit(bounded(codeMode.execute({ code }, context)))
+          expect(defects(exit)).toEqual([decline])
+          expect(hits.filter((hit) => hit.endsWith("/new"))).toEqual([])
+        }
       }),
     ),
   )

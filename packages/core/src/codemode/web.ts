@@ -3,7 +3,16 @@ export * as CodeModeWeb from "./web.js"
 import { Extension } from "@orbit/codemode"
 import { PermissionWeb } from "../permission/web.js"
 
+/** The extension a call to `fetch` names. */
+export const name = "web"
+
 const TIMEOUT_MS = 30_000
+const MAX_REDIRECTS = 10
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+// What a request carries for the server it was written for. A redirect to another origin takes none of it along.
+const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization", "host"]
+// The headers that describe a body, which go with it when a redirect turns a request into a GET.
+const BODY_HEADERS = ["content-encoding", "content-language", "content-location", "content-type"]
 
 type Init = {
   readonly method?: string
@@ -11,15 +20,70 @@ type Init = {
   readonly body?: string | Uint8Array<ArrayBuffer> | URLSearchParams
 }
 
-const fetch = async (input: string | URL, init: Init = {}) => {
+/** What `fetch` needs from the execution it runs in. */
+export interface Gate {
+  /**
+   * Asks about a request the program did not write itself: the next one in a chain of redirects. It rejects when that
+   * request must not go out, and then the chain ends.
+   */
+  readonly authorize: (url: URL, method: string) => Promise<void>
+  /** Aborts when the execution ends, so that a fetch outliving its program asks and sends no more. */
+  readonly signal: AbortSignal
+}
+
+/**
+ * The `fetch` a program calls. Its own request is authorized before it runs, as any call to a host function is. A
+ * redirect is a request of its own, to a place the program never named and the user never approved, so `fetch` does not
+ * let the runtime follow one: it hands each one to the gate, which asks about it like any other request, and stops where
+ * the gate refuses. It follows at most 10, so that a loop ends quickly.
+ */
+export const extension = (gate: Gate) => {
   // Bun's fetch also reads file:, data: and s3: URLs and takes an array or an object with a url for the URL. Reading the
   // call with the function that authorizes it makes the request that goes out the one that was approved.
-  const response = await globalThis.fetch(input, {
-    method: request([input, init]).metadata.method,
-    headers: init.headers,
-    body: init.body,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+  const fetch = async (input: string | URL, init: Init = {}) =>
+    send(gate, new URL(input), request([input, init]).metadata.method, init.body, new Headers(init.headers), 0)
+  return Extension.make({ name, globals: { fetch } })
+}
+
+type Reply = Awaited<ReturnType<typeof reply>>
+
+async function send(
+  gate: Gate,
+  url: URL,
+  method: string,
+  body: Init["body"],
+  headers: Headers,
+  redirects: number,
+): Promise<Reply> {
+  const response = await globalThis.fetch(url, {
+    method,
+    headers,
+    body,
+    redirect: "manual",
+    // Each request has its own time, so the time spent waiting for an answer to the one before does not count.
+    signal: AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), gate.signal]),
   })
+  const location = response.headers.get("location")
+  if (!REDIRECT_STATUSES.has(response.status) || location === null) return reply(response, redirects > 0)
+  // Only the headers of a redirect matter.
+  await response.body?.cancel()
+  if (redirects === MAX_REDIRECTS) throw new Error(`fetch stopped after following ${MAX_REDIRECTS} redirects`)
+
+  const next = new URL(location, url)
+  // As fetch does itself: a POST answered with 301 or 302, and any write but a HEAD answered with 303, goes on as a GET
+  // without its body. Every other redirect repeats the request.
+  const toGet =
+    response.status === 303
+      ? method !== "GET" && method !== "HEAD"
+      : (response.status === 301 || response.status === 302) && method === "POST"
+  if (toGet) BODY_HEADERS.forEach((header) => headers.delete(header))
+  if (next.origin !== url.origin) CREDENTIAL_HEADERS.forEach((header) => headers.delete(header))
+  const nextMethod = toGet ? "GET" : method
+  await gate.authorize(next, nextMethod)
+  return send(gate, next, nextMethod, toGet ? undefined : body, headers, redirects + 1)
+}
+
+async function reply(response: Response, redirected: boolean) {
   const bytes = await response.bytes()
   const headers = Object.fromEntries(response.headers)
   const text = () => new TextDecoder().decode(bytes)
@@ -28,7 +92,7 @@ const fetch = async (input: string | URL, init: Init = {}) => {
     status: response.status,
     statusText: response.statusText,
     ok: response.ok,
-    redirected: response.redirected,
+    redirected,
     headers: {
       get: (name: string) => headers[name.toLowerCase()] ?? null,
       has: (name: string) => name.toLowerCase() in headers,
@@ -39,8 +103,6 @@ const fetch = async (input: string | URL, init: Init = {}) => {
     bytes: async () => bytes,
   }
 }
-
-export const extension = Extension.make({ name: "web", globals: { fetch } })
 
 /**
  * The permission request a fetch call makes. The arguments come from the program, so only a URL string or URL object

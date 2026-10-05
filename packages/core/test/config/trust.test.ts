@@ -59,6 +59,8 @@ describe("ConfigTrust.sanitize", () => {
     ["references", { docs: "https://example.com/docs.git" }, "settings"],
     ["worktree", { directory: "../worktrees" }, "settings"],
     ["experimental", { subagent_depth: 4 }, "settings"],
+    // A repository must not be able to open Code Mode fetch to the user's machine and network.
+    ["experimental", { allow_local_fetch: true }, "settings"],
   ]
 
   test.each(withheldWhole)("withholds %p whole and reports it as %p", (field, value, kind) => {

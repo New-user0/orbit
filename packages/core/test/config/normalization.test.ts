@@ -484,6 +484,21 @@ describe("ConfigNormalize", () => {
     })
   })
 
+  test("keeps the setting that lets Code Mode fetch reach local servers, and drops a value that is not a boolean", () => {
+    expect(normalized({ experimental: { allow_local_fetch: true } }).encoded.experimental).toEqual({
+      allow_local_fetch: true,
+    })
+    expect(normalized({ experimental: { allow_local_fetch: false } }).encoded.experimental).toEqual({
+      allow_local_fetch: false,
+    })
+
+    const invalid = normalized({ experimental: { allow_local_fetch: "yes" } })
+    expect(invalid.encoded.experimental).toBeUndefined()
+    expect(invalid.diagnostics.map((item) => [item.kind, item.path])).toEqual([
+      ["invalid", ["experimental", "allow_local_fetch"]],
+    ])
+  })
+
   test("reports unsupported legacy settings without including their values", () => {
     const secret = "do-not-log-this-value"
     const result = normalized({

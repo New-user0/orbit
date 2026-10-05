@@ -14,4 +14,8 @@ export class Info extends Schema.Class<Info>("ConfigExperimental.Info")({
   policies: ConfigPolicy.Info.pipe(Schema.Array, optional).annotate({
     description: "Ordered policies controlling access to configured resources",
   }),
+  allow_local_fetch: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Let fetch in Code Mode reach loopback and private-network addresses, such as local dev servers. Defaults to false. Link-local and cloud metadata addresses stay blocked.",
+  }),
 }) {}

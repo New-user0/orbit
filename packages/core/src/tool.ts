@@ -4,6 +4,7 @@ export type { Context, Metadata, Namespace, Options, Result } from "@orbit/schem
 
 import { ToolDefinition, type ToolCall } from "@orbit/ai"
 import { Tool } from "@orbit/schema/tool"
+import { AddressGuard } from "@orbit/util/address-guard"
 import { Context, Effect, Layer, Result, Schema, SchemaIssue, Types } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import type { Agent } from "./agent.js"
@@ -31,12 +32,18 @@ export interface Editor {
   readonly add: (tool: Tool.Info) => void
   readonly update: (id: string, update: (tool: Types.Mutable<Tool.Info>) => void) => void
   readonly remove: (id: string) => void
+  /** Settings for `fetch` in Code Mode. */
+  readonly web: (settings: { readonly allowLocal?: boolean }) => void
 }
 
 type Data = {
   tools: Map<string, Tool.Info & { readonly id: string }>
   namespaces: Map<string, Tool.Namespace>
   errors: { kind: "tool" | "namespace"; name: string; namespace?: string; error: RegistrationError }[]
+  web: {
+    /** Whether `fetch` may reach loopback and private-network addresses, such as a local dev server. */
+    allowLocal: boolean
+  }
 }
 
 export interface Interface extends State.Transformable<Editor> {
@@ -157,9 +164,21 @@ const layer = Layer.effect(
       }
     })
 
-    // Fail closed: a function the Code Mode runtime exposes is callable only once it is listed here.
+    // Where a request may go whatever the permission rules say: not to this machine or the networks around it, unless the
+    // configuration allows local servers, and never to a link-local or cloud metadata address.
+    const reachable = (host: string) =>
+      Effect.promise(() =>
+        AddressGuard.check(host, { allow: state.get().web.allowLocal ? ["loopback", "private"] : [] }),
+      ).pipe(
+        Effect.flatMap((refusal) =>
+          refusal === undefined ? Effect.void : Effect.fail(new Tool.Error({ message: refusedMessage(host, refusal) })),
+        ),
+      )
+
+    // Fail closed: a function the Code Mode runtime exposes is callable only once it is listed here. It runs for a
+    // program's own call and again for each redirect that call follows, so every request is asked about on its own.
     const authorize: CodeModeTool.Authorize = (call, context) => {
-      if (call.extension !== CodeModeWeb.extension.name || call.name !== "fetch")
+      if (call.extension !== CodeModeWeb.name || call.name !== "fetch")
         return Effect.fail(
           new Tool.Error({ message: `Code Mode function ${call.extension}.${call.name} is not authorized` }),
         )
@@ -185,6 +204,8 @@ const layer = Layer.effect(
                     message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
                   }),
               ),
+              // Only after the ask: resolving the host is a request to the network, and nobody approved this host before.
+              Effect.andThen(reachable(new URL(web.metadata.url).hostname)),
             ),
         ),
       )
@@ -197,6 +218,7 @@ const layer = Layer.effect(
         tools: new Map(),
         namespaces: new Map(),
         errors: [],
+        web: { allowLocal: false },
       }),
       editor: (editor) => ({
         list: () => Array.from(editor.tools.values()),
@@ -236,6 +258,9 @@ const layer = Layer.effect(
         },
         remove: (id) => {
           editor.tools.delete(id)
+        },
+        web: (settings) => {
+          if (settings.allowLocal !== undefined) editor.web.allowLocal = settings.allowLocal
         },
       }),
       notify: (value) => {
@@ -330,6 +355,23 @@ const layer = Layer.effect(
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {
   const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
+}
+
+const addressKinds = {
+  loopback: "a loopback address",
+  private: "a private network address",
+  "link-local": "a link-local address",
+  metadata: "a cloud metadata address",
+} satisfies Record<AddressGuard.Kind, string>
+
+// The program sees this as the error of its fetch, so it names the way out for the kinds that have one.
+function refusedMessage(host: string, refusal: AddressGuard.Refusal) {
+  const named = refusal.address === host ? host : `${host} (${refusal.address})`
+  const hint =
+    refusal.kind === "loopback" || refusal.kind === "private"
+      ? " Set experimental.allow_local_fetch to true in the configuration to let fetch reach local servers."
+      : ""
+  return `fetch cannot reach ${named}: it is ${addressKinds[refusal.kind]}.${hint}`
 }
 
 const formatSchemaIssue = SchemaIssue.makeFormatterDefault()
