@@ -8,7 +8,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { call, heldLines, unsupported } from "../../util/trust"
+import { call, heldLines, quoted, trustCommands, unsupported } from "../../util/trust"
 import { directory } from "./flow/execute"
 
 export default Runtime.handler(
@@ -35,6 +35,24 @@ export default Runtime.handler(
     const location = {
       directory: path.resolve(directory(), expand(Option.getOrUndefined(input.directory) ?? ".", global.home)),
     }
+    // A folder on this machine is checked here, where a typo gets a plain answer rather than a server error. The
+    // folders of a server given with --server are its own.
+    if (Option.isNone(input.server) && !(yield* Effect.promise(() => isFolder(location.directory)))) {
+      process.exitCode = 1
+      return yield* print(
+        [
+          `Not a folder: ${location.directory}`,
+          // A grant is found through the project of the folder it was made for, which the server cannot look up for a
+          // folder that is not there.
+          ...(input.revoke
+            ? [
+                "Orbit revokes a grant through its folder, so one for a folder that was deleted stays until the folder is back: create it again, run this command, and remove it. `orb trust --list` shows the folders that are trusted for good.",
+              ]
+            : []),
+        ],
+        process.stderr,
+      )
+    }
     if (input.revoke) {
       const status = yield* ask((signal) => client.location.trust.update({ location, trust: false }, { signal }))
       return yield* print([
@@ -44,12 +62,6 @@ export default Runtime.handler(
       ])
     }
 
-    // A folder on this machine is checked here, where a typo gets a plain answer rather than a server error. The
-    // folders of a server given with --server are its own.
-    if (Option.isNone(input.server) && !(yield* Effect.promise(() => isFolder(location.directory)))) {
-      process.exitCode = 1
-      return yield* print([`Not a folder: ${location.directory}`], process.stderr)
-    }
     // Asked before anything is granted: a grant for a home directory or a filesystem root is made in memory and would
     // last only until the server restarts, which is not what this command promises.
     const before = yield* ask((signal) => client.location.trust.get({ location }, { signal }))
@@ -63,14 +75,26 @@ export default Runtime.handler(
         process.stderr,
       )
     }
-    if (before.source === "saved") return yield* print([`${before.directory} is already trusted.`])
-    const status = yield* ask((signal) => client.location.trust.update({ location, trust: true }, { signal }))
+    const saved = before.source === "saved"
+    const status = saved
+      ? before
+      : yield* ask((signal) => client.location.trust.update({ location, trust: true }, { signal }))
+    // Only what the grant lifted is applied now. A file in a folder above the project is decided by its own folder's
+    // trust, so it is still held back, and the person is told which folder would lift it.
+    const applied = before.withheld.filter((item) => !status.withheld.some((left) => left.path === item.path))
     return yield* print([
-      `Trusted ${status.directory}`,
-      ...(before.withheld.length === 0
+      saved ? `${status.directory} is already trusted.` : `Trusted ${status.directory}`,
+      ...(applied.length === 0
         ? []
-        : ["Orbit now applies the project config it was holding back:", ...heldLines(before)]),
-      `Stop trusting it with: orb trust --revoke ${status.directory}`,
+        : ["Orbit now applies the project config it was holding back:", ...heldLines(status.directory, applied)]),
+      ...(status.withheld.length === 0
+        ? []
+        : [
+            "Still held back, because it sits in a folder above the project and each folder is trusted on its own:",
+            ...heldLines(status.directory, status.withheld),
+            `Look it over, then trust the folder that holds it with ${trustCommands(status.withheld)}.`,
+          ]),
+      ...(saved ? [] : [`Stop trusting it with: orb trust --revoke ${quoted(status.directory)}`]),
     ])
   }),
 )
