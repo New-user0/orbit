@@ -33,10 +33,15 @@ describe("Trust", () => {
       directory: "/repo",
       trusted: false,
       persistent: true,
-      withheld: [{ path: "/repo/orbit.json", kinds: ["hooks", "mcp"] }],
+      withheld: [
+        { path: "/repo/orbit.json", kinds: ["hooks", "mcp"] },
+        // A file above the project names the folder whose trust lifts it.
+        { path: "/work/.orbit", kinds: ["plugins"], directory: "/work" },
+      ],
     }
     expect<unknown>(encode(decode(untrusted))).toEqual(untrusted)
     expect(encode(decode(untrusted))).not.toHaveProperty("source")
+    expect(encode(decode(untrusted)).withheld[0]).not.toHaveProperty("directory")
     for (const source of ["saved", "session", "implicit"] as const) {
       const trusted = { directory: "/repo", trusted: true, persistent: source === "saved", source, withheld: [] }
       expect<unknown>(encode(decode(trusted))).toEqual(trusted)

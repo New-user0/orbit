@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type { TrustStatus } from "@orbit/client/promise"
+import { SessionID } from "@orbit/schema/session-id"
 import { refusal } from "../src/util/trust"
 import { isolatedEnv } from "./fixture/environment"
 
@@ -97,21 +98,37 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
+// The settings of a project that guards its files: a hook blocks every write.
+const guard = { hooks: { PreToolUse: [{ matcher: "write", hooks: [{ type: "command", command: "exit 2" }] }] } }
+
 // A repository with a hook in its settings and a plugin in its `.orbit` directory: what a clone can bring that runs
-// code on its own. The hook blocks every write, which is what a project that guards its files would ask for.
+// code on its own.
 async function hooked(name: string) {
   const directory = path.join(root, "work", name)
-  await Bun.write(
-    path.join(directory, "orbit.json"),
-    JSON.stringify({
-      hooks: { PreToolUse: [{ matcher: "write", hooks: [{ type: "command", command: "exit 2" }] }] },
-    }),
-  )
+  await Bun.write(path.join(directory, "orbit.json"), JSON.stringify(guard))
   await Bun.write(
     path.join(directory, ".orbit", "plugins", "greeter.ts"),
     `export default { id: "greeter", async setup() {} }`,
   )
   return directory
+}
+
+// A folder whose config holds nothing back.
+async function quiet(name: string) {
+  const directory = path.join(root, "work", name)
+  await Bun.write(path.join(directory, "orbit.json"), JSON.stringify({ model }))
+  return directory
+}
+
+// A git repository in a folder that has config of its own, as a folder of several repositories can. The folder is
+// trusted on its own, so trusting the repository does not lift what the folder holds back.
+async function layered(name: string) {
+  const parent = path.join(root, "work", name)
+  const child = path.join(parent, "child")
+  await Bun.write(path.join(parent, "orbit.json"), JSON.stringify(guard))
+  await fs.mkdir(child, { recursive: true })
+  expect(Bun.spawnSync(["git", "init", "--quiet", child]).exitCode).toBe(0)
+  return { parent, child }
 }
 
 async function orb(directory: string, args: string[]) {
@@ -285,7 +302,7 @@ test("a repository with nothing withheld runs without being trusted, as does --b
   succeeded(await orb(root, ["run", "--trust", "--standalone", "--model", model, "say ok"]))
 }, 180_000)
 
-test("a server older than workspace trust holds nothing back, so orb run goes on and orb trust says why it cannot help", async () => {
+test("a server older than workspace trust holds nothing back, so orb run goes on and says so, and orb trust says why it cannot help", async () => {
   const requests: string[] = []
   const old = Bun.serve({
     port: 0,
@@ -306,6 +323,10 @@ test("a server older than workspace trust holds nothing back, so orb run goes on
     // The run asked about trust, was told there is no such thing, and went on to look for its session.
     expect(requests.slice(0, 3)).toEqual(["/api/info", "/api/location/trust", "/api/location"])
     expect(run.stderr).not.toContain("not trusted")
+    // Such a server applies every project's config, so the run says that nothing was checked, on stderr where a script
+    // reading JSON on stdout does not see it.
+    expect(run.stderr).toContain("older than workspace trust")
+    expect(run.stderr).toContain("orb service restart")
     expect(trust.code).toBe(1)
     expect(trust.stderr).toContain("older than workspace trust")
   } finally {
@@ -360,8 +381,279 @@ test("orb flow run --trust and orb flow resume --trust grant for their own run o
   succeeded(await orb(repository, ["flow", "resume", "--trust", "--standalone", id]))
 }, 240_000)
 
+test("a workflow or suite file is not loaded, so none of its code runs, before the trust check", async () => {
+  const repository = await hooked("load-order")
+  const marker = path.join(root, "work", "load-order.marker")
+  // The top-level code of a file leaves a trace when the file is imported, as the code of any workflow or suite does.
+  const traced = (body: string) =>
+    `import { writeFileSync } from "node:fs"\nwriteFileSync(${JSON.stringify(marker)}, "loaded")\n${body}\n`
+  const flowFile = path.join(root, "work", "load-order-flow.ts")
+  const suiteFile = path.join(root, "work", "load-order-suite.ts")
+  await Bun.write(flowFile, traced(`export default { name: "traced", run: () => "done" }`))
+  await Bun.write(
+    suiteFile,
+    traced(
+      `export default { name: "traced", models: ["${model}"], tasks: [{ id: "task", prompt: "say ok", checks: [] }] }`,
+    ),
+  )
+
+  const started = await orb(repository, ["flow", "run", "--standalone", flowFile])
+  const evaluated = await orb(repository, ["eval", suiteFile, "--standalone"])
+
+  for (const result of [started, evaluated]) {
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("is not trusted")
+  }
+  expect(await Bun.file(marker).exists()).toBe(false)
+
+  // A resumed run names its workflow file in the repository's own run store, so that file is the one it must not import.
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", flowFile]))
+  expect(await Bun.file(marker).exists()).toBe(true)
+  await fs.rm(marker)
+  const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--format", "json"])).stdout)[0].id
+  const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
+  expect(resumed.code).toBe(1)
+  expect(resumed.stderr).toContain("is not trusted")
+  expect(await Bun.file(marker).exists()).toBe(false)
+}, 360_000)
+
+test("a session is checked and trusted in the folder it lives in, wherever the command starts", async () => {
+  const repository = await hooked("session-home")
+  const away = await quiet("session-away")
+  const blocked = path.join(repository, "blocked.txt")
+  const session = SessionID.create()
+  // The session is made in the repository, which is trusted for that one run.
+  succeeded(await orb(repository, ["run", "--trust", "--standalone", "--model", model, "--session", session, "say ok"]))
+  const before = runs
+
+  // Continued from a clean folder it still runs in the repository, which is untrusted, so nothing starts.
+  const refused = await orb(away, ["run", "--standalone", "--model", model, "--session", session, "write blocked.txt"])
+  const looped = await orb(away, [
+    "loop",
+    "10s",
+    "check",
+    "--times",
+    "1",
+    "--standalone",
+    "--model",
+    model,
+    "-s",
+    session,
+  ])
+  for (const result of [refused, looped]) {
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain(`${repository} is not trusted`)
+  }
+  expect(runs).toBe(before)
+  expect(await Bun.file(blocked).exists()).toBe(false)
+
+  // --trust goes to the folder the run happens in, so the repository's hook is in force there.
+  const answered = toolAnswers.length
+  succeeded(
+    await orb(away, ["run", "--trust", "--standalone", "--model", model, "--session", session, "write blocked.txt"]),
+  )
+  expect(toolAnswers.slice(answered).join("")).toContain("Blocked by a PreToolUse hook")
+  expect(await Bun.file(blocked).exists()).toBe(false)
+}, 240_000)
+
+test("a session in a clean folder is not refused for the repository the command starts in", async () => {
+  const repository = await hooked("session-start")
+  const clean = await quiet("session-lives")
+  const session = SessionID.create()
+  succeeded(await orb(clean, ["run", "--standalone", "--model", model, "--session", session, "say ok"]))
+
+  const continued = await orb(repository, ["run", "--standalone", "--model", model, "--session", session, "say ok"])
+  const looped = await orb(repository, [
+    "loop",
+    "10s",
+    "check",
+    "--times",
+    "1",
+    "--standalone",
+    "--model",
+    model,
+    "-s",
+    session,
+  ])
+
+  succeeded(continued)
+  expect(continued.stdout).toContain("ran fine")
+  succeeded(looped)
+  // A session that does not exist yet starts where the command does, and so does --continue.
+  for (const choice of [["--session", SessionID.create()], ["--continue"]]) {
+    const started = await orb(repository, ["run", "--standalone", "--model", model, ...choice, "say ok"])
+    expect(started.code).toBe(1)
+    expect(started.stderr).toContain(`${repository} is not trusted`)
+  }
+}, 240_000)
+
+test("config in a folder above the repository is named with the folder to trust, and trusting the repository does not claim to apply it", async () => {
+  const { parent, child } = await layered("above")
+  const guarded = path.join(parent, "orbit.json")
+  const blocked = path.join(child, "blocked.txt")
+  const before = runs
+
+  const refused = await orb(child, ["run", "--standalone", "--model", model, "say ok"])
+  expect(refused.code).toBe(1)
+  expect(refused.stderr).toContain(guarded)
+  // The remedy is the folder that holds the file, not the repository, and --trust would not lift it either.
+  const advice = refused.stderr.split(/\r?\n/).filter((line) => line.includes("orb trust"))
+  expect(advice.length).toBeGreaterThan(0)
+  for (const line of advice) expect(line).toContain(parent)
+  expect(runs).toBe(before)
+
+  // Trusting the repository leaves the file above it held back, and says so instead of claiming it applies.
+  const trusted = await orb(child, ["trust", "--standalone"])
+  succeeded(trusted)
+  expect(trusted.stdout).toContain(`Trusted ${child}`)
+  expect(trusted.stdout).not.toContain("now applies")
+  expect(trusted.stdout).toContain("Still held back")
+  expect(trusted.stdout).toContain(guarded)
+  expect(trusted.stdout.split(/\r?\n/).some((line) => line.includes("orb trust") && line.includes(parent))).toBe(true)
+
+  // The run that follows goes on, as the repository is trusted, and says that the file above it stays off.
+  const ran = await orb(child, ["run", "--standalone", "--model", model, "write blocked.txt"])
+  succeeded(ran)
+  expect(ran.stderr).toContain(guarded)
+  expect(ran.stderr).toContain("orb trust")
+  expect(await Bun.file(blocked).exists()).toBe(true)
+  await fs.rm(blocked)
+
+  // Trusting the folder that holds it applies it, as that advice said it would.
+  const applied = await orb(child, ["trust", "--standalone", parent])
+  succeeded(applied)
+  expect(applied.stdout).toContain("now applies")
+  expect(applied.stdout).toMatch(/orbit\.json\s+hooks/)
+  const answered = toolAnswers.length
+  const guardedRun = await orb(child, ["run", "--standalone", "--model", model, "write blocked.txt"])
+  succeeded(guardedRun)
+  expect(guardedRun.stderr).not.toContain(guarded)
+  expect(toolAnswers.slice(answered).join("")).toContain("Blocked by a PreToolUse hook")
+  expect(await Bun.file(blocked).exists()).toBe(false)
+}, 360_000)
+
+test("orb run --format json reports a trust request that fails as the JSON error any failure before a session exists is", async () => {
+  const gone = path.join(root, "work", "no-such-folder")
+
+  for (const format of ["json", "stream-json"]) {
+    const result = await orb(gone, ["run", "--standalone", "--format", format, "--model", model, "say ok"])
+
+    expect(result.code).toBe(1)
+    // The message names the folder that could not be checked, rather than leaving a bare status code.
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      type: "error",
+      sessionID: "",
+      error: { type: "unknown", message: expect.stringContaining(`Could not check whether ${gone} is trusted`) },
+    })
+    expect(result.stderr).not.toContain("ClientError")
+  }
+  const result = await orb(gone, ["run", "--standalone", "--format", "result", "--model", model, "say ok"])
+  expect(result.code).toBe(1)
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    type: "result",
+    is_error: true,
+    error: expect.stringContaining(gone),
+  })
+}, 240_000)
+
+test("orb trust --revoke says that a folder has to exist for its grant to be revoked, and revokes it once it does", async () => {
+  const repository = await hooked("gone")
+  succeeded(await orb(repository, ["trust", "--standalone"]))
+  await fs.rm(repository, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+
+  const revoked = await orb(root, ["trust", "--standalone", "--revoke", repository])
+
+  expect(revoked.code).toBe(1)
+  expect(revoked.stdout).toBe("")
+  expect(revoked.stderr).toContain(`Not a folder: ${repository}`)
+  expect(revoked.stderr).toContain("create it again")
+  expect(revoked.stderr).not.toContain("ClientError")
+  // The grant stays in the list, which is why the message asks for the folder back.
+  const listed = await orb(root, ["trust", "--standalone", "--list"])
+  succeeded(listed)
+  expect(listed.stdout).toContain(repository)
+  // A folder at that path, as the message says to make, is enough.
+  await fs.mkdir(repository, { recursive: true })
+  succeeded(await orb(root, ["trust", "--standalone", "--revoke", repository]))
+  const after = await orb(root, ["trust", "--standalone", "--list"])
+  succeeded(after)
+  expect(after.stdout).not.toContain(repository)
+}, 240_000)
+
+test("orb acp says on stderr what the folder it starts in holds back, and keeps stdout for the protocol", async () => {
+  const repository = await hooked("acp")
+  const cli = path.join(import.meta.dir, "..")
+  // ACP takes the folder from the process itself rather than from PWD, so the process, and the private server it
+  // starts, run in the repository. Bun finds its preload for the terminal UI's JSX in the folder it starts in, which
+  // here is the repository, so the repository names it.
+  await Bun.write(
+    path.join(repository, "bunfig.toml"),
+    `preload = [${JSON.stringify(Bun.resolveSync("@opentui/solid/preload", cli))}]\n`,
+  )
+  const child = Bun.spawn([process.execPath, "run", path.join(cli, "src", "index.ts"), "acp"], {
+    cwd: repository,
+    env: isolatedEnv(root, {
+      USERPROFILE: root,
+      ORBIT_TRUST_PROJECT: undefined,
+      ORBIT_CONFIG: undefined,
+      ORBIT_CONFIG_CONTENT: undefined,
+      OLLAMA_CONTEXT_LENGTH: undefined,
+    }),
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  let stderr = ""
+  const errors = (async () => {
+    for await (const chunk of child.stderr) stderr += new TextDecoder().decode(chunk)
+  })()
+  const lines = (async () => {
+    const found: string[] = []
+    let buffered = ""
+    for await (const chunk of child.stdout) {
+      buffered += new TextDecoder().decode(chunk)
+      const complete = buffered.split("\n")
+      buffered = complete.pop() ?? ""
+      found.push(...complete.filter((line) => line.trim() !== ""))
+    }
+    return [...found, ...(buffered.trim() === "" ? [] : [buffered])]
+  })()
+  try {
+    child.stdin.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "trust-test", version: "0" } },
+      }) + "\n",
+    )
+    await child.stdin.flush()
+    const deadline = Date.now() + 60_000
+    while (!stderr.includes("orb trust") && Date.now() < deadline) await Bun.sleep(100)
+  } finally {
+    await child.stdin.end()
+  }
+  await Promise.all([child.exited, errors])
+  const frames = await lines
+
+  expect(stderr).toContain("orb acp:")
+  expect(stderr).toContain(`${repository} is not trusted`)
+  expect(stderr).toMatch(/orbit\.json: hooks/)
+  expect(stderr).toMatch(/\.orbit: plugins/)
+  expect(stderr).toContain("`orb trust`")
+  // Everything on stdout is a JSON-RPC message: the answer to initialize, and nothing the warning was written to.
+  expect(frames.length).toBeGreaterThan(0)
+  for (const frame of frames) expect(JSON.parse(frame)).toMatchObject({ jsonrpc: "2.0" })
+  expect(frames.some((frame) => JSON.parse(frame).id === 1)).toBe(true)
+}, 180_000)
+
+// Folders that the pure functions below only print, so they need not exist.
+const repo = path.resolve("/trust-repo")
+const outer = path.resolve("/trust-outer")
+const wider = path.resolve("/trust-wider")
+
 test("the refusal names what is held back, and says what a home directory needs instead", () => {
-  const folder = path.join(root, "repo")
+  const folder = repo
   const status = {
     directory: folder,
     trusted: false,
@@ -369,7 +661,7 @@ test("the refusal names what is held back, and says what a home directory needs 
     withheld: [
       { path: path.join(folder, "orbit.json"), kinds: ["hooks", "mcp"] },
       { path: path.join(folder, ".orbit"), kinds: ["plugins"] },
-      { path: path.join(root, "orbit.json"), kinds: ["providers"] },
+      { path: path.join(outer, "orbit.json"), kinds: ["providers"], directory: outer },
     ],
   } satisfies TrustStatus
 
@@ -378,13 +670,35 @@ test("the refusal names what is held back, and says what a home directory needs 
   expect(text).toContain(`${folder} is not trusted`)
   expect(text).toMatch(/^ {2}orbit\.json\s+hooks, mcp$/m)
   expect(text).toMatch(/^ {2}\.orbit\s+plugins$/m)
-  // A folder above the project is shown by its whole path.
-  expect(text).toContain(path.join(root, "orbit.json"))
+  // A folder above the project is shown by its whole path, and its own folder is the one to trust for it.
+  expect(text).toContain(path.join(outer, "orbit.json"))
   expect(text).toContain("`orb trust`")
   expect(text).toContain("--trust")
+  expect(text).toContain(`orb trust ${outer}`)
 
   const home = refusal({ ...status, persistent: false })
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("`orb trust` refuses it")
   expect(home).toContain("--trust")
+})
+
+test("the refusal for config above the project names its folder, as neither the project nor --trust lifts it", () => {
+  const status = {
+    directory: repo,
+    trusted: false,
+    persistent: true,
+    withheld: [
+      { path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer },
+      { path: path.join(wider, ".orbit"), kinds: ["plugins"], directory: wider },
+    ],
+  } satisfies TrustStatus
+
+  const text = refusal(status)
+
+  expect(text).toContain(`${repo} is not trusted`)
+  expect(text).toContain(`orb trust ${outer}`)
+  expect(text).toContain(`orb trust ${wider}`)
+  // Nothing of the project's own is held back, so neither trusting it nor --trust would apply any of this.
+  expect(text).not.toContain("`orb trust`")
+  expect(text).not.toContain("--trust")
 })

@@ -89,6 +89,7 @@ export type LocationTrustGetOutput = {
       | "network"
       | "settings"
     >
+    readonly directory?: AbsolutePath | undefined
   }>
 }
 export type LocationTrustGetOperation<E = never> = (
@@ -121,6 +122,7 @@ export type LocationTrustUpdateOutput = {
       | "network"
       | "settings"
     >
+    readonly directory?: AbsolutePath | undefined
   }>
 }
 export type LocationTrustUpdateOperation<E = never> = (

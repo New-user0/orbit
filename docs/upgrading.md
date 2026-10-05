@@ -162,15 +162,16 @@ ignores the variable, because it serves every client and project.
 `formatter`, `default_agent`, `warming` or `allow` and `ask` permission rules, through the background service (the
 terminal UI, VS Code and the desktop app): those settings now stay off. So do the server's plugins from
 `.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `request` overrides and `allow` rules of
-agents in `.orbit/agents`, and language servers and formatters, in every folder that is not trusted, which until it is
-trusted in the terminal UI or with `orb trust` is every folder. The same goes for SDK hosts and servers that leave
-`trust.implicit` unset, and for tests that write project config and start a server. So do the plugins that the terminal
-UI loads from `.orbit/plugins` itself. Code built on `@orbit/core`: `Config.Document` and `Config.Directory` gain
-`trusted`, `Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry `trusted`, `Config` now
-needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs `FSUtil`,
-`ProjectTrust.status` also lists `.orbit` directories, `ProjectTrust.allows` says whether a file may run the code it
-carries (ask it before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and
-a global `trust.updated` event reports each change.
+agents in `.orbit/agents`, and language servers and formatters, in every folder that is not trusted, until it is
+trusted in the terminal UI or with `orb trust` (or, for one run of a headless command, `--trust`). The same goes for SDK
+hosts and servers that leave `trust.implicit` unset, and for tests that write project config and start a server. So do
+the plugins that the terminal UI loads from `.orbit/plugins` itself. Code built on `@orbit/core`: `Config.Document` and
+`Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry
+`trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs
+`FSUtil`, `ProjectTrust.status` also lists `.orbit` directories and gives each file or directory above the project the
+folder to trust for it, as `directory`, `ProjectTrust.allows` says whether a file may run the code it carries (ask it
+before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and a global
+`trust.updated` event reports each change.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run `orb trust` in it, or
 run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which
@@ -215,20 +216,32 @@ only that you can connect from 75+ providers to use other models. When the panel
 ### The headless commands stop in an untrusted folder, and `orb trust` trusts one
 
 `orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` now ask the server, before they do any work,
-whether the folder they start in is trusted (see "A project's config waits for its folder to be trusted" above). When
-it is not, and its project config holds something back, they print what is held back and how to trust the folder, and
-exit with status 1. `orb run --format json`, `stream-json` or `result` reports it as the JSON error that any failure
-before a session exists produces, instead of text. They used to carry on without those settings, which for a script
-meant a run without the repository's hooks and plugins and nothing to say so. A folder that holds nothing back runs as
-before, trusted or not, and so does one on a server that trusts it without a grant (`--standalone` with
-`ORBIT_TRUST_PROJECT=1`). `orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to
-stderr about the folder it started in.
+whether the folder they run in is trusted (see "A project's config waits for its folder to be trusted" above). That is
+the folder they start in, or, for `orb run` and `orb loop` with `--session` naming a session that exists, the folder of
+that session. When it is not trusted, and its project config holds something back, they print what is held back and how
+to trust the folder, and exit with status 1. `orb run --format json`, `stream-json` or `result` reports it as the JSON
+error that any failure before a session exists produces, instead of text, and does the same when the request itself
+fails. They used to carry on without those settings, which for a script meant a run without the repository's hooks and
+plugins and nothing to say so. A folder that holds nothing back runs as before, trusted or not, and so does one on a
+server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`). `orb flow` and `orb eval` load
+the workflow or suite file only after the check, because loading it runs its code. `orb acp` cannot stop, because the
+editor chooses the folders, so it writes a warning to stderr about the folder it started in.
+
+Config in a folder above the project, such as an `orbit.json` in a folder that holds several repositories, follows the
+decision for the folder that holds it, so trusting a repository does not apply it. The refusal lists those files apart
+from the project's own and gives the command for their folder, `orb trust <folder>`, and `orb trust` says which files
+it applied and which are still held back, with the folder to trust for each. Only a project that is not trusted is
+refused, so a command that goes ahead in a trusted project whose config above it is still held back says so on stderr
+(a line that starts with `Warning:`, which a script that reads JSON from stdout does not see) and runs without those
+files.
 
 - **`orb trust [folder]`** trusts the folder, or the current one, for good: the grant is stored, so it outlasts the
   server and is seen by every client of it. `--revoke` takes it back, and `--list` shows the folders that are trusted
   for good. Trust belongs to the project's root folder, so a subfolder, and the linked worktrees of a repository, share
   it. A home directory or a filesystem root is refused, because a grant for it would trust every folder below it; use
-  the next flag, or the terminal UI, which offers to trust it until Orbit restarts.
+  the next flag, or the terminal UI, which offers to trust it until Orbit restarts. The server finds a grant through the
+  project of its folder, so `--revoke` for a folder that has been deleted says so: create the folder again, revoke, and
+  remove it.
 - **`--trust`** on those five commands trusts the folder for that run alone. It starts a private server for the run,
   as `--standalone` does, and the grant lives only in that server, so it ends with the run and never reaches the
   background service. Because it is explicit it also works in a home directory. It cannot be combined with `--server`,
@@ -242,8 +255,9 @@ location's project is trusted and what it holds back, `POST /api/location/trust`
 **Affects:** scripts and CI that call these commands in a clone whose `orbit.json`, `.mcp.json` or `.orbit` directory
 holds something back (hooks, MCP servers, plugins, providers and the other kinds listed above), through the background
 service, which is the default: they now exit with status 1. Commands run with `--standalone` or `--server` against a
-server that trusts the folder are not affected. The new commands call routes that an older background service does not
-have, so against one they fail until it is restarted. Code that implements the server API gains three routes.
+server that trusts the folder are not affected. A background service that was not restarted after the upgrade does not
+have the new routes: `orb trust` fails against it until it is restarted, while the headless commands carry on without
+the check and say so on stderr. Code that implements the server API gains three routes.
 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
 `ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service

@@ -20237,7 +20237,7 @@
             "items": {
               "$ref": "#/components/schemas/Trust.Withheld"
             },
-            "description": "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do."
+            "description": "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do, and names that folder as its `directory`."
           }
         },
         "required": ["directory", "trusted", "persistent", "withheld"],
@@ -20254,6 +20254,10 @@
             "items": {
               "$ref": "#/components/schemas/Trust.Kind"
             }
+          },
+          "directory": {
+            "type": "string",
+            "description": "The folder to trust to lift what this holds back, set only for a file or directory in a folder above the project: trusting the project does not lift it, because each folder is trusted on its own. Unset for the project's own files, which trusting the project lifts."
           }
         },
         "required": ["path", "kinds"],

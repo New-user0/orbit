@@ -508,7 +508,7 @@ export type ConfigEffective = { compatibility: boolean }
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
-export type TrustWithheld = { path: string; kinds: Array<TrustKind> }
+export type TrustWithheld = { path: string; kinds: Array<TrustKind>; directory?: string }
 
 export type SessionMessageLocationSwitched = {
   id: string

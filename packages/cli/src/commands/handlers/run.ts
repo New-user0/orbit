@@ -4,6 +4,7 @@ import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { errorMessage } from "../../util/error"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -24,15 +25,15 @@ export default Runtime.handler(Commands.commands.run, (input) =>
       standalone: input.standalone || input.bare,
       trust: input.trust,
     })
-    // A session continued from another folder still runs there, and the server holds that folder's config back on its
-    // own; this checks the folder the command was started in. The refusal goes out the way any error before a session
-    // exists does, so a script that asked for JSON gets JSON.
-    const refusal = yield* trustRefusal(
+    // Checks the folder the run happens in, which is the folder of the session when --session names one that exists.
+    // A refusal, and a request that fails, go out the way any error before a session exists does, so a script that asked
+    // for JSON gets JSON.
+    const stopped = yield* trustRefusal(
       Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
       directory(),
-      { grant: input.trust },
-    )
-    if (refusal !== undefined) return reportRunError({ format }, refusal)
+      { grant: input.trust, session: Option.getOrUndefined(input.session) },
+    ).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
+    if (stopped !== undefined) return reportRunError({ format }, stopped)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,

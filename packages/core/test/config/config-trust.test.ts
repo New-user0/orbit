@@ -447,12 +447,13 @@ describe("Config under workspace trust", () => {
         expect(named(afterProject, above)?.info.hooks).toBeUndefined()
         expect<unknown>(named(afterProject, above)?.info.model).toEqual({ providerID: "above", model: "model" })
         expect(named(afterProject, vendorAbove)?.info.hooks).toBeUndefined()
-        // The status says what is still held back, though the project is trusted.
+        // The status says what is still held back, though the project is trusted, and which folder lifts it: the one
+        // around the file, and around the vendor directory that holds the other.
         const status = yield* project.status()
         expect(status).toMatchObject({ directory: folders.repo, trusted: true })
         expect<unknown>(status.withheld).toEqual([
-          { path: vendorAbove, kinds: ["hooks"] },
-          { path: above, kinds: ["hooks", "shell"] },
+          { path: vendorAbove, kinds: ["hooks"], directory: folders.work },
+          { path: above, kinds: ["hooks", "shell"], directory: folders.work },
         ])
 
         // The folder above is trusted on its own.
