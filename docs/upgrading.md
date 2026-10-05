@@ -123,6 +123,25 @@ Orbit starts no language server and runs no formatter in a folder that is not tr
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
 working as soon as the folder is trusted.
 
+The files in a project's `.orbit` directory are held to the same decision, because some of them run code:
+
+- **Plugins:** the server does not load the plugins in `.orbit/plugins` (or `.orbit/plugin`), and does not report them
+  as failed. They start when the folder is trusted, without a restart, and stop again when the trust is taken away. The
+  terminal UI finds the plugins in `.orbit/plugins` on its own and loads their `tui` entrypoints whether or not the
+  folder is trusted: it waits for trust only once the trust prompt arrives, in a following change.
+- **Commands:** a command from `.orbit/commands`, or from a `commands` setting of the project, is still listed, and one
+  whose template has no shell snippet works as before. One that runs a shell snippet (an exclamation mark and a command
+  in backticks) fails with a message that names the command and the folder to trust, which is the folder around the
+  `.orbit` directory or config file that defines it. Nothing is asked about or started first.
+- **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt, model and description, and loses
+  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, and `disabled`, so a file
+  cannot remove one of the agents that are already there.
+
+Skills and output styles in a project are text, so they stay available. No Markdown file that Orbit reads from a config
+directory is ever run: front matter written in JavaScript (a file that opens with `---js` or `---javascript`) is
+refused, and the file is skipped. The list of what a folder holds back also names each `.orbit` directory with the
+plugins, commands with shell snippets, and agents with requests or approvals it holds.
+
 Your own config, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT` and the server's remote sources are never held back, and neither
 are the Orbit files in your home directory. Trust belongs to the project's root folder, so a repository and its linked
 git worktrees share it. Config that Orbit finds in the folders above the project, such as an `orbit.json` in a folder
@@ -140,18 +159,23 @@ ignores the variable, because it serves every client and project.
 
 **Affects:** anyone who opens a repository whose config sets `hooks`, `mcp`, `plugins`, `providers`, `sandbox`,
 `formatter`, `default_agent`, `warming` or `allow` and `ask` permission rules, through the background service (the
-terminal UI, VS Code and the desktop app): those settings now stay off. So do language servers and formatters, in every
-folder that is not trusted, which until the trust prompt arrives is every folder. The same goes for SDK hosts and
-servers that leave `trust.implicit` unset, and for tests that write project config and start a server. Code built on
-`@orbit/core`: `Config.Document` and `Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots
-that `Config.compat` lists can carry `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need
-`ProjectTrust`, `ProjectTrust.allows` says whether a file may run the code it carries, and a global `trust.updated`
-event reports each change.
+terminal UI, VS Code and the desktop app): those settings now stay off. So do the server's plugins from
+`.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `request` overrides and `allow` rules of
+agents in `.orbit/agents`, and language servers and formatters, in every folder that is not trusted, which until the
+trust prompt arrives is every folder. The same goes for SDK hosts and servers that leave `trust.implicit` unset, and for
+tests that write project config and start a server. The plugins the terminal UI loads from `.orbit/plugins` itself are
+not held back until the trust prompt arrives. Code built on `@orbit/core`: `Config.Document` and `Config.Directory` gain
+`trusted`, `Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry `trusted`, `Config` now
+needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs `FSUtil`,
+`ProjectTrust.status` also lists `.orbit` directories, `ProjectTrust.allows` says whether a file may run the code it
+carries (ask it before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and
+a global `trust.updated` event reports each change.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run with `--standalone` and
 `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which also suits CI and tests.
-`orb trust`, the trust prompt in the terminal UI and the headless refusals that go with them arrive in following
-changes, and until they do the background service has no way to trust a folder.
+`orb trust`, the trust prompt in the terminal UI (which also holds back the plugins the terminal UI loads from
+`.orbit/plugins`) and the headless refusals that go with them arrive in following changes, and until they do the
+background service has no way to trust a folder.
 
 ## Clients
 

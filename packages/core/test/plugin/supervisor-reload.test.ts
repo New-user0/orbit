@@ -17,9 +17,11 @@ import { Instance } from "@orbit/core/instance"
 import { LocationServiceMap } from "@orbit/core/location-services"
 import { Location } from "@orbit/core/location"
 import { Plugin } from "@orbit/core/plugin"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Rpc } from "@orbit/core/rpc"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { AbsolutePath } from "@orbit/core/schema"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tempGlobalLayer } from "../fixture/global"
 import { offlineModels } from "../fixture/models"
 import { tmpdirScoped } from "../fixture/tmpdir"
@@ -55,36 +57,45 @@ const npmLayer = Layer.succeed(
   }),
 )
 
-const instances = Layer.effect(
-  LocationServiceMap.Service,
-  Effect.gen(function* () {
-    const watcher = yield* Watcher.Test
-    const map = yield* LayerMap.make((ref: Location.Ref) => Instance.layer(ref, { replacements: bindings }), {
-      idleTimeToLive: Duration.infinity,
-    })
-    const bindings: LayerNode.Replacements = [
+// The locations the tests boot, with the replacements that decide what a test is about. The default workspace trust
+// follows ORBIT_TRUST_PROJECT, which the test bootstrap sets, so every folder is trusted unless a test says otherwise.
+const instancesWith = (replacements: LayerNode.Replacements = []) =>
+  Layer.effect(
+    LocationServiceMap.Service,
+    Effect.gen(function* () {
+      const watcher = yield* Watcher.Test
+      const map = yield* LayerMap.make((ref: Location.Ref) => Instance.layer(ref, { replacements: bindings }), {
+        idleTimeToLive: Duration.infinity,
+      })
+      const bindings: LayerNode.Replacements = [
+        Global.node.replace(tempGlobalLayer),
+        offlineModels,
+        Npm.node.replace(npmLayer),
+        Watcher.node.replace(Layer.succeed(Watcher.Service, watcher)),
+        LocationServiceMap.node.replace(Layer.succeed(LocationServiceMap.Service, map)),
+        Instance.node.replace(
+          Layer.succeed(Instance.Service, {
+            provide: (session) => Effect.provide(map.get(session.location)),
+          }),
+        ),
+        ...replacements,
+      ]
+      return map
+    }),
+  ).pipe(Layer.provide(Watcher.testLayer))
+
+const app = (instances: ReturnType<typeof instancesWith>) =>
+  testEffect(
+    AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node]), [
       Global.node.replace(tempGlobalLayer),
       offlineModels,
-      Npm.node.replace(npmLayer),
-      Watcher.node.replace(Layer.succeed(Watcher.Service, watcher)),
-      LocationServiceMap.node.replace(Layer.succeed(LocationServiceMap.Service, map)),
-      Instance.node.replace(
-        Layer.succeed(Instance.Service, {
-          provide: (session) => Effect.provide(map.get(session.location)),
-        }),
-      ),
-    ]
-    return map
-  }),
-).pipe(Layer.provide(Watcher.testLayer))
+      LocationServiceMap.node.replace(instances),
+    ]).pipe(Layer.provideMerge(Watcher.testLayer)),
+  )
 
-const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node]), [
-    Global.node.replace(tempGlobalLayer),
-    offlineModels,
-    LocationServiceMap.node.replace(instances),
-  ]).pipe(Layer.provideMerge(Watcher.testLayer)),
-)
+const it = app(instancesWith())
+// Locations whose folder nothing trusts until a test grants it.
+const untrusted = app(instancesWith([WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]))
 
 const greeter = (command: string) => `export default {
   id: "greeter",
@@ -330,6 +341,61 @@ describe("PluginSupervisor reload", () => {
         yield* plugins.awaitActivation
 
         expect(peak).toBe(1)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+      )
+    }),
+  )
+})
+
+describe("PluginSupervisor under workspace trust", () => {
+  // The supervisor follows a trust change through the config, which reloads and then reactivates the plugins.
+  const commandPresent = (commands: Command.Interface, name: string, expected: boolean) =>
+    commands.get(name).pipe(
+      Effect.filterOrFail(
+        (command) => (command !== undefined) === expected,
+        () => "activation pending",
+      ),
+      Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),
+    )
+
+  untrusted.live("keeps the plugins a project ships off until its folder is trusted, with no restart", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      const file = path.join(directory.path, ".orbit/plugins/greeter.ts")
+      yield* Effect.promise(() => Bun.write(file, greeter("greet-project")))
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        const commands = yield* Command.Service
+        const project = yield* ProjectTrust.Service
+        const local = plugins
+          .list()
+          .pipe(Effect.map((inventory) => inventory.filter((item) => item.source.type === "local")))
+
+        // The plugin is neither activated nor reported as a failure: it is not loaded at all.
+        yield* plugins.awaitActivation
+        expect(yield* project.trusted()).toBe(false)
+        expect(yield* commands.get("greet-project")).toBeUndefined()
+        expect(yield* local).toEqual([])
+
+        yield* project.grant({ persist: false, via: "test" })
+        yield* commandPresent(commands, "greet-project", true)
+        yield* plugins.awaitActivation
+        expect(yield* local).toEqual([
+          expect.objectContaining({
+            id: "greeter",
+            source: { type: "local", path: file },
+            state: { status: "active" },
+          }),
+        ])
+
+        // Taking the trust away stops the plugin the same way.
+        yield* project.revoke()
+        yield* commandPresent(commands, "greet-project", false)
+        yield* plugins.awaitActivation
+        expect(yield* local).toEqual([])
       }).pipe(
         Effect.scoped,
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),

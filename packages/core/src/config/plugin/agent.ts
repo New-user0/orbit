@@ -1,35 +1,24 @@
 export * as ConfigAgentPlugin from "./agent.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
-import { Document, Info, type Entry } from "@orbit/schema/config"
-import { ConfigAgent } from "@orbit/schema/config/agent"
+import { Document, type Directory, type Entry } from "@orbit/schema/config"
 import path from "path"
-import { Effect, Option, PubSub, Schema, Stream } from "effect"
+import { Effect, PubSub, Stream } from "effect"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
-import { ConfigMarkdown } from "../markdown.js"
+import { ConfigTrust } from "../trust.js"
 import { FSUtil } from "@orbit/util/fs-util"
-import { ConfigAgentV1 } from "../../v1/config/agent.js"
-import { ConfigMigrateV1 } from "../../v1/config/migrate.js"
 import { Global } from "@orbit/util/global"
 import { Permission } from "../../permission.js"
 import type { FileAccess } from "../../file-access.js"
 import type { ReadTool } from "../../tool/plugin/read.js"
 import type { EditTool } from "../../tool/plugin/edit.js"
-import { AbsolutePath } from "../../schema.js"
+import { AgentFile } from "./agent-file.js"
 
-const legacySources = [
-  { pattern: "{agent,agents}/**/*.md", primary: false },
-  { pattern: "{mode,modes}/*.md", primary: true },
-] as const
-// Keep in sync with the legacySources patterns and the name-strip regex in decode.
+// Keep in sync with the scan patterns and the name-strip regex in agent-file.ts.
 const sourceDirectories = ["agent", "agents", "mode", "modes"] as const
-const decodeAgent = Schema.decodeUnknownOption(ConfigAgent.Info)
-const decodeLegacyAgent = Schema.decodeUnknownOption(ConfigAgentV1.Info)
-const decodeConfig = Schema.decodeUnknownOption(Info)
 type PathAction = FileAccess.ExternalDirectoryAuthorization["action"] | typeof ReadTool.name | typeof EditTool.name
 const pathActions = ["external_directory", "read", "edit"] as const satisfies readonly PathAction[]
-const agentKeys = new Set(["variant", ...Object.keys(ConfigAgent.Info.fields)])
 
 export const Plugin = define({
   id: "orbit.config.agent",
@@ -40,13 +29,8 @@ export const Plugin = define({
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [entry]
       if (entry.type !== "directory") return []
-      const files = yield* discover(fs, entry.path)
-      return yield* Effect.forEach(files, (file) =>
-        fs.readFileStringSafe(file.filepath).pipe(
-          Effect.map((content) => (content ? decode(file, content) : undefined)),
-          Effect.orElseSucceed(() => undefined),
-        ),
-      ).pipe(Effect.map((documents) => documents.filter((document): document is Document => document !== undefined)))
+      const documents = yield* AgentFile.load(fs, entry.path)
+      return documents.map((document) => inherit(entry, document))
     })
     const load = Effect.fn("ConfigAgentPlugin.load")(function* () {
       return yield* Effect.forEach(yield* config.entries(), loadEntry).pipe(Effect.map((documents) => documents.flat()))
@@ -161,52 +145,21 @@ function expandHome(resource: string, home: string) {
   return resource
 }
 
-function discover(fs: FSUtil.Interface, directory: string) {
-  return Effect.forEach(legacySources, (source) =>
-    fs
-      .scan(source.pattern, { cwd: directory, absolute: true, dot: true, symlink: true })
-      .pipe(
-        Effect.map((files) => files.toSorted().map((filepath) => ({ directory, filepath, primary: source.primary }))),
-      ),
-  ).pipe(
-    Effect.map((files) => files.flat()),
-    Effect.orElseSucceed(() => []),
-  )
-}
-
-function decode(file: { directory: string; filepath: string; primary: boolean }, content: string) {
-  const markdown = ConfigMarkdown.parseOption(content)
-  if (!markdown) return
-  const name = path
-    .relative(file.directory, file.filepath)
-    .replaceAll("\\", "/")
-    .replace(/^(agent|agents|mode|modes)\//, "")
-    .replace(/\.md$/, "")
-  const body = markdown.content.trim()
-  const legacy = Object.keys(markdown.data).some((key) => !agentKeys.has(key))
-  // Join legacy model + variant without sending native request/permissions through migration.
-  // Embedded and structured native selections, and a variant without a model, stay unchanged.
-  const data =
-    typeof markdown.data.model === "string" &&
-    !markdown.data.model.includes("#") &&
-    typeof markdown.data.variant === "string" &&
-    /^[^#]+$/.test(markdown.data.variant)
-      ? { ...markdown.data, model: `${markdown.data.model}#${markdown.data.variant}` }
-      : markdown.data
-  const agent = legacy
-    ? Option.getOrUndefined(
-        Option.map(
-          decodeLegacyAgent({ name, ...markdown.data, prompt: body }, { errors: "all", propertyOrder: "original" }),
-          ConfigMigrateV1.migrateAgent,
-        ),
-      )
-    : Option.getOrUndefined(decodeAgent({ ...data, system: body }, { errors: "all", propertyOrder: "original" }))
-  if (!agent) return
-  const info = Option.getOrUndefined(
-    decodeConfig({
-      agents: { [name]: file.primary ? { ...agent, mode: "primary" } : agent },
-    }),
-  )
-  if (!info) return
-  return new Document({ type: "document", path: AbsolutePath.make(file.filepath), info })
+// An agent file takes the scope of the directory that holds it. While that directory's folder is untrusted it is cut down
+// like the documents of the folder: its prompt and what only describes the agent stay, and its request overrides and
+// every allow or ask rule go, so a repository cannot widen what an agent may do.
+function inherit(entry: Directory, document: Document) {
+  if (entry.trusted !== false) return new Document({ ...document, scope: entry.scope })
+  // An agent names no paths, so what matters about the place is only the folder it belongs to.
+  const sanitized = ConfigTrust.sanitize(document.info, {
+    roots: [ConfigTrust.holder(entry.path)],
+    directory: entry.path,
+  })
+  return new Document({
+    ...document,
+    scope: entry.scope,
+    trusted: false,
+    withheld: sanitized.withheld,
+    info: sanitized.info,
+  })
 }
