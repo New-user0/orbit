@@ -56,7 +56,11 @@ export async function check(host: string, options: Options = {}): Promise<Refusa
     .at(0)
 }
 
-/** The kind of non-public address that `address` is, and undefined for a public address, or for a name, which stands for no address until it is resolved. */
+/**
+ * The kind of non-public address that `address` is, and undefined for a public address, or for a name, which stands for no
+ * address until it is resolved. An IPv6 address that stands for an IPv4 one, as a mapped, compatible, translated, NAT64,
+ * 6to4, Teredo or ISATAP address does, is held to the rules for that IPv4 address as well as its own.
+ */
 export function classify(address: string): Kind | undefined {
   const name = canonical(address)
   if (name === undefined || !literal(name)) return undefined
@@ -97,8 +101,13 @@ function groups(name: string) {
 function kind4([a, b, c, d]: ReadonlyArray<number>): Kind | undefined {
   if (a === 0 || a === 127) return "loopback"
   if (a === 169 && b === 254) return c === 169 && d === 254 ? "metadata" : "link-local"
-  // Where Alibaba Cloud and Azure serve instance credentials. Neither is private in its own range.
-  if ((a === 100 && b === 100 && c === 100 && d === 200) || (a === 168 && b === 63 && c === 129 && d === 16))
+  // Where Alibaba Cloud, Azure and Oracle Cloud Infrastructure Classic serve instance credentials. None of them is
+  // private in its own range, and the last is inside the IETF protocol assignments below.
+  if (
+    (a === 100 && b === 100 && c === 100 && d === 200) ||
+    (a === 168 && b === 63 && c === 129 && d === 16) ||
+    (a === 192 && b === 0 && c === 0 && d === 192)
+  )
     return "metadata"
   if (a === 10 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168)) return "private"
   // Shared address space (carrier-grade NAT), benchmarking, and the IETF protocol assignments.
@@ -108,15 +117,56 @@ function kind4([a, b, c, d]: ReadonlyArray<number>): Kind | undefined {
 }
 
 function kind6(g: ReadonlyArray<number>): Kind | undefined {
-  const zero = (from: number, to: number) => g.slice(from, to).every((group) => group === 0)
   // :: and ::1.
-  if (zero(0, 7) && g[7] <= 1) return "loopback"
-  // An IPv4 address inside an IPv6 one, mapped (::ffff:a.b.c.d) or compatible (::a.b.c.d), is as private as that address.
-  if (zero(0, 5) && (g[5] === 0xffff || g[5] === 0)) return kind4([g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255])
+  if (zero(g, 0, 7) && g[7] <= 1) return "loopback"
+  return strictest([range6(g), ...embedded(g).map(kind4)])
+}
+
+// The kind of the range that an IPv6 address is in, whatever IPv4 address it stands for.
+function range6(g: ReadonlyArray<number>): Kind | undefined {
   // Where AWS serves instance credentials over IPv6.
-  if (g[0] === 0xfd00 && g[1] === 0x0ec2 && zero(2, 7) && g[7] === 0x254) return "metadata"
+  if (g[0] === 0xfd00 && g[1] === 0x0ec2 && zero(g, 2, 7) && g[7] === 0x254) return "metadata"
   if ((g[0] & 0xffc0) === 0xfe80) return "link-local"
-  // Unique local (fc00::/7), and site-local (fec0::/10), which was deprecated.
-  if ((g[0] & 0xfe00) === 0xfc00 || (g[0] & 0xffc0) === 0xfec0) return "private"
+  // Unique local (fc00::/7), site-local (fec0::/10), which was deprecated, and the NAT64 prefix for local use
+  // (64:ff9b:1::/48, RFC 8215). None of them is routed beyond the networks around this machine.
+  if ((g[0] & 0xfe00) === 0xfc00 || (g[0] & 0xffc0) === 0xfec0 || (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1))
+    return "private"
   return undefined
+}
+
+// The IPv4 addresses that an IPv6 address stands for, in the forms that a translator or a tunnel delivers to the IPv4
+// host. A request to such an address is a request to that host, so each one is held to the IPv4 rules.
+function embedded(g: ReadonlyArray<number>) {
+  const bytes = g.flatMap((group) => [group >> 8, group & 255])
+  const at = (...offsets: ReadonlyArray<number>) => offsets.map((offset) => bytes[offset])
+  const last = at(12, 13, 14, 15)
+  // Compatible (::a.b.c.d), mapped (::ffff:a.b.c.d) and translated (::ffff:0:a.b.c.d, RFC 2765).
+  if (zero(g, 0, 5) && (g[5] === 0 || g[5] === 0xffff)) return [last]
+  if (zero(g, 0, 4) && g[4] === 0xffff && g[5] === 0) return [last]
+  // NAT64 with the well-known prefix (64:ff9b::/96, RFC 6052).
+  if (g[0] === 0x64 && g[1] === 0xff9b && zero(g, 2, 6)) return [last]
+  // NAT64 with the prefix for local use (64:ff9b:1::/48). The operator picks how long a prefix to use inside it, and that
+  // decides which bits hold the address (RFC 6052, section 2.2, which leaves bits 64 to 71 out), so each place counts.
+  if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1)
+    return [at(6, 7, 9, 10), at(7, 9, 10, 11), at(9, 10, 11, 12), last]
+  // 6to4 (2002::/16) holds it in the 32 bits after the prefix.
+  if (g[0] === 0x2002) return [at(2, 3, 4, 5)]
+  // Teredo (2001::/32, RFC 4380) holds the client's address in the last 32 bits, with every bit of it inverted.
+  if (g[0] === 0x2001 && g[1] === 0) return [last.map((octet) => octet ^ 255)]
+  // ISATAP (RFC 5214) holds it in the last 32 bits, under any prefix, after an interface identifier of its own.
+  if ((g[4] === 0 || g[4] === 0x0200) && g[5] === 0x5efe) return [last]
+  return []
+}
+
+// An address can be one kind by its range and another by what it stands for, and is reported as the first that applies.
+// Metadata and link-local come first, since nothing allows them. Loopback comes last, because the places of the NAT64
+// prefix for local use that are mostly zeros read as 0.x.y.z, which is loopback, where the address is only private.
+const strictness: ReadonlyArray<Kind> = ["metadata", "link-local", "private", "loopback"]
+
+function strictest(kinds: ReadonlyArray<Kind | undefined>) {
+  return strictness.find((kind) => kinds.includes(kind))
+}
+
+function zero(g: ReadonlyArray<number>, from: number, to: number) {
+  return g.slice(from, to).every((group) => group === 0)
 }

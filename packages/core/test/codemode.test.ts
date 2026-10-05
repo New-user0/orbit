@@ -25,7 +25,7 @@ import type { ConfigPolicy } from "@orbit/schema/config/policy"
 import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { Cause, Effect, Exit, Fiber, Layer, PubSub, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, PubSub, References, Schema, Stream } from "effect"
 import { location } from "./fixture/location"
 import { it, testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
@@ -743,6 +743,37 @@ describe("CodeMode fetch redirects", () => {
       expect(hits).toEqual(["GET /to-local"])
     }),
   )
+
+  web.live("asks about a redirect in the context of the execution, not in a new root fiber", () =>
+    Effect.gen(function* () {
+      const { origin, local } = yield* serve
+      yield* seed()
+      const permission = yield* Permission.Service
+      const hooks = yield* PluginHooks.Service
+      // The minimum log level stands for what the context of an execution holds besides its services, such as loggers and
+      // a tracer: a hook sees it for each request the program makes, and a root fiber has only the default.
+      const seen: Array<readonly [string, string]> = []
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.service(References.MinimumLogLevel).pipe(
+          Effect.map((level) => void seen.push([event.resources[0], level])),
+        ),
+      )
+      const fiber = yield* run(`return await (await fetch("${origin}/to-local")).text()`).pipe(
+        Effect.provideService(References.MinimumLogLevel, "Error"),
+        Effect.forkScoped,
+      )
+
+      yield* permission.reply({ requestID: (yield* nextRequest()).id, reply: "once" })
+      yield* permission.reply({ requestID: (yield* nextRequest()).id, reply: "once" })
+      yield* Fiber.join(fiber)
+
+      // The redirect is asked about where the program's own request is, not in a root fiber that has only the defaults.
+      expect(seen).toEqual([
+        [`${origin}/to-local`, "Error"],
+        [`${local}/landed`, "Error"],
+      ])
+    }),
+  )
 })
 
 // A request that nobody approved, for an address on this machine or the networks around it, is not one the user could
@@ -795,6 +826,13 @@ describe("CodeMode fetch addresses", () => {
           "http://[::ffff:169.254.169.254]/",
           "http://[fd00:ec2::254]/",
           "http://100.100.100.200/",
+          // Oracle Cloud Infrastructure Classic, inside a range that is otherwise only private.
+          "http://192.0.0.192/",
+          // An IPv6 address that a translator or a tunnel delivers to the metadata address.
+          "http://[64:ff9b::a9fe:a9fe]/",
+          "http://[64:ff9b:1::a9fe:a9fe]/",
+          "http://[2002:a9fe:a9fe::]/",
+          "http://[2001:0:4136:e378:8000:63bf:5601:5601]/",
           "http://169.254.1.1/",
           "http://[fe80::1]/",
         ]),
@@ -804,6 +842,11 @@ describe("CodeMode fetch addresses", () => {
         "fetch cannot reach [::ffff:a9fe:a9fe]: it is a cloud metadata address.",
         "fetch cannot reach [fd00:ec2::254]: it is a cloud metadata address.",
         "fetch cannot reach 100.100.100.200: it is a cloud metadata address.",
+        "fetch cannot reach 192.0.0.192: it is a cloud metadata address.",
+        "fetch cannot reach [64:ff9b::a9fe:a9fe]: it is a cloud metadata address.",
+        "fetch cannot reach [64:ff9b:1::a9fe:a9fe]: it is a cloud metadata address.",
+        "fetch cannot reach [2002:a9fe:a9fe::]: it is a cloud metadata address.",
+        "fetch cannot reach [2001:0:4136:e378:8000:63bf:5601:5601]: it is a cloud metadata address.",
         "fetch cannot reach 169.254.1.1: it is a link-local address.",
         "fetch cannot reach [fe80::1]: it is a link-local address.",
       ])

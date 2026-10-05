@@ -357,12 +357,22 @@ for the address it names, like the first request, and a decline or a deny stops 
 10 redirects. "Always allow" for an origin covers the redirects inside it, and a "once" approval covers only the request
 it was given for.
 
-`fetch` also refuses addresses that are not public, after the permission step and whatever the rules say: loopback
-(127.0.0.0/8, `::1`, `0.0.0.0`), private networks (10/8, 172.16/12, 192.168/16, `fc00::/7`, 100.64/10), link-local
-addresses (169.254/16, `fe80::/10`) and cloud metadata addresses (169.254.169.254, `fd00:ec2::254`, 100.100.100.200,
-168.63.129.16). A host name is resolved first, and it is refused when any address it stands for is one of those;
-`localhost` and the names under it count as loopback. The script gets an error that names the address. A name whose
-address changes between the check and the connection is not caught.
+`fetch` also refuses addresses that are not public, after the permission step and whatever the rules say:
+
+- **Loopback:** 127.0.0.0/8, all of 0.0.0.0/8, which reaches this machine too, and `::` and `::1`.
+- **Private networks:** 10/8, 172.16/12, 192.168/16, the shared address space 100.64/10, the benchmarking range
+  198.18/15, the IETF protocol assignments 192.0.0.0/24, `fc00::/7`, the deprecated site-local `fec0::/10`, and the
+  NAT64 prefix for local use `64:ff9b:1::/48`.
+- **Link-local addresses:** 169.254/16 and `fe80::/10`.
+- **Cloud metadata addresses:** 169.254.169.254, `fd00:ec2::254`, 100.100.100.200, 168.63.129.16 and 192.0.0.192.
+
+An IPv6 address that stands for an IPv4 one is refused when that IPv4 address is any of these. The forms that carry one
+are the IPv4-mapped (`::ffff:a.b.c.d`), IPv4-compatible and IPv4-translated addresses, NAT64 (`64:ff9b::/96` and
+`64:ff9b:1::/48`), 6to4 (`2002::/16`), Teredo (`2001::/32`, whose client address is stored inverted) and ISATAP, so
+`[64:ff9b::a9fe:a9fe]` and `[2002:a9fe:a9fe::]` are refused as the metadata address they lead to. An address that a
+network translates to IPv4 with a prefix of its own is not recognised. A host name is resolved first, and it is refused
+when any address it stands for is one of those; `localhost` and the names under it count as loopback. The script gets an
+error that names the address. A name whose address changes between the check and the connection is not caught.
 
 **Affects:** Code Mode scripts that call `fetch`. One that follows a redirect while `webfetch` is set to ask or deny gets
 another prompt. One that calls a server on `localhost`, on a private network or at a link-local address now fails, even

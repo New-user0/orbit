@@ -88,6 +88,9 @@ export const create = (
       Effect.gen(function* () {
         // Aborts when the execution ends, however it ends, so a fetch that is still asking or sending stops with it.
         const signal = yield* Effect.abortSignal
+        // A redirect is asked about from inside `fetch`, which is plain promise code. Running that ask in this execution's
+        // own context keeps its loggers, minimum log level and tracer, as a new root fiber would drop them.
+        const run = Effect.runPromiseExitWith(yield* Effect.context())
         const callIndex = yield* Ref.make(0)
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
@@ -141,7 +144,7 @@ export const create = (
             // A redirect is a request of its own, so it is asked about like a call of the program's own, and a decline
             // stops the whole execution the same way. Whatever stops the request ends the fetch that was following it.
             authorize: async (url, method) => {
-              const exit = await Effect.runPromiseExit(
+              const exit = await run(
                 Effect.andThen(
                   halted,
                   authorized({ extension: CodeModeWeb.name, name: "fetch", args: [url, { method }] }),
