@@ -95,6 +95,7 @@ import { newSessionLocation } from "./config/new-session-location"
 import { UpdateNotificationProvider, useUpdateNotification, type UpdateSource } from "./context/update-notification"
 import { PluginProvider, usePlugin, type PackageSource } from "./plugin/context"
 import { localPluginDirectories } from "./plugin/discovery"
+import { TrustProvider, useTrust } from "./context/trust"
 import { PluginRoute, Slot } from "./plugin/render"
 import { CommandPaletteDialog } from "./component/command-palette"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/keymap"
@@ -221,7 +222,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     Effect.catch(() => Effect.tryPromise(() => api.location.get())),
   )
   const directory = location.directory
-  const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(process.cwd(), global.config))
+  const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(process.cwd(), global))
   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
   const managed = input.server.service
   const service = managed
@@ -406,12 +407,14 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                                             updater={input.updater}
                                                                           >
                                                                             <PanelProvider>
-                                                                              <PluginProvider
-                                                                                packages={input.packages}
-                                                                                directories={pluginDirectories}
-                                                                              >
-                                                                                <App />
-                                                                              </PluginProvider>
+                                                                              <TrustProvider>
+                                                                                <PluginProvider
+                                                                                  packages={input.packages}
+                                                                                  directories={pluginDirectories}
+                                                                                >
+                                                                                  <App />
+                                                                                </PluginProvider>
+                                                                              </TrustProvider>
                                                                             </PanelProvider>
                                                                           </UpdateNotificationProvider>
                                                                         </AttentionProvider>
@@ -488,6 +491,7 @@ function App() {
   const exit = useExit()
   const promptRef = usePromptRef()
   const plugins = usePlugin()
+  const trust = useTrust()
   const clipboard = useClipboard()
   const terminalEnvironment = useTuiTerminalEnvironment()
   let paletteTimer: ReturnType<typeof setTimeout> | undefined
@@ -1086,6 +1090,15 @@ function App() {
             })
             .catch(toast.error)
         },
+        category: "System",
+      },
+      {
+        name: "location.trust",
+        title: "Trust this folder",
+        slash: { name: "trust" },
+        // Only while the folder holds something back that trusting it would turn on.
+        enabled: trust.held,
+        run: trust.open,
         category: "System",
       },
       {

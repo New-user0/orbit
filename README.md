@@ -30,8 +30,8 @@ project. Values accept `{env:VAR}` and `{file:path}`.
 - **Project trust:** until its folder is trusted, a project's config applies only what cannot run code, spend money or
   reach the network. Its hooks, MCP servers (including `.mcp.json`), plugin list, providers, shell, sandbox, formatter
   and language server settings, default agent and keep-alive requests are left out, only its `deny` permission rules
-  are kept, and it cannot choose a web search provider. The server loads none of the plugins in its `.orbit/plugins`;
-  the terminal UI still loads the ones it finds there itself until the trust prompt arrives. Its commands run no shell
+  are kept, and it cannot choose a web search provider. The server loads none of the plugins in its `.orbit/plugins`,
+  and the terminal UI imports none of the ones it finds there itself. Its commands run no shell
   snippets, and its agent files lose their `request` and their `allow` and `ask` rules. Its `{env:VAR}` references are
   not expanded, and a `{file:path}` reference or instruction path counts only inside the project's folder. Orbit starts
   no language server and runs no formatter in such a folder, built-in or configured, because they read its code and
@@ -41,7 +41,8 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   `trust: { implicit: true }`; the shared background service never does, and a host that leaves the option unset trusts
   nothing. `orb trust` trusts a folder for good (`--list` shows the folders, `--revoke` ends it), and `--trust` on
   `orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` trusts it for one run on a private server.
-  Those commands exit with status 1, doing nothing, in a folder that is not trusted and holds something back. See
+  Those commands exit with status 1, doing nothing, in a folder that is not trusted and holds something back. The
+  terminal UI asks about such a folder, and `/trust` asks again. See
   [docs/upgrading.md](docs/upgrading.md).
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and

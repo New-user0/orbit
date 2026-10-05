@@ -22,8 +22,11 @@ export default Runtime.handler(
     const config = yield* Config.Service
     const global = yield* Global.Service
     const info = yield* config.get()
+    // A listing runs nothing, so the plugins a project keeps are listed whether or not its folder is trusted.
     const discovered = yield* Effect.promise(() =>
-      localPluginDirectories(process.cwd(), global.config).then(discoverPluginTargets),
+      localPluginDirectories(process.cwd(), global).then((directories) =>
+        discoverPluginTargets([...directories.global, ...directories.project]),
+      ),
     )
     const npm = yield* Npm.Service
     const configured = yield* Effect.forEach([...(info.plugins ?? []), ...discovered], (entry) =>

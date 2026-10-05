@@ -16,6 +16,8 @@ import { moveSelection, reconcileSelection } from "./select-controller"
 export interface DialogSelectProps<T> {
   title: string
   titleView?: JSX.Element
+  /** Shown between the title and the options, for a question that needs more than a title to be answered. */
+  header?: JSX.Element
   placeholder?: string
   footer?: JSX.Element
   emptyView?: JSX.Element
@@ -678,6 +680,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           </box>
         </Show>
       </box>
+      <Show when={props.header}>
+        <box paddingLeft={4} paddingRight={4} flexShrink={0}>
+          {props.header}
+        </box>
+      </Show>
       <box flexGrow={1} flexShrink={1}>
         <Show
           when={grouped().length > 0}

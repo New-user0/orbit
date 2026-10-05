@@ -5,20 +5,48 @@ import { isMissingPath, localProjectDirectory, projectConfigDirectories } from "
 
 export { localSource }
 
-export async function localPluginDirectories(cwd: string, configDirectory: string) {
+/** Where the terminal UI looks for plugin directories, split by whose they are. */
+export type PluginDirectories = {
+  /** The user's own: the global config directory, and `.orbit` in the home directory. */
+  readonly global: readonly string[]
+  /** The project's: the `.orbit` directories from its root down to the working directory. */
+  readonly project: readonly string[]
+}
+
+export async function localPluginDirectories(
+  cwd: string,
+  directories: { readonly config: string; readonly home: string },
+): Promise<PluginDirectories> {
   const projectDirectory = await localProjectDirectory(cwd)
   const projectConfig = path.join(projectDirectory, ".orbit")
-  const directories = [configDirectory, ...projectConfigDirectories(projectDirectory, cwd)]
+  const candidates = projectConfigDirectories(projectDirectory, cwd)
   const exists = await Promise.all(
-    directories.map(async (directory) => {
-      if (directory === configDirectory || directory === projectConfig) return true
+    candidates.map(async (directory) => {
+      if (directory === projectConfig) return true
       return await stat(directory).then(
         (info) => info.isDirectory(),
         (error) => (isMissingPath(error) ? false : Promise.reject(error)),
       )
     }),
   )
-  return directories.filter((_, index) => exists[index]).map((directory) => path.join(directory, "plugins"))
+  // Orbit files in the home directory are the user's own config even when a walk from the project passes through it,
+  // which is how the server reads them too. path.relative compares case-insensitively where Windows does.
+  const own = path.join(directories.home, ".orbit")
+  const found = candidates
+    .filter((_, index) => exists[index])
+    .map((directory) => ({ plugins: path.join(directory, "plugins"), own: path.relative(own, directory) === "" }))
+  return {
+    global: [path.join(directories.config, "plugins"), ...found.filter((item) => item.own).map((item) => item.plugins)],
+    project: found.filter((item) => !item.own).map((item) => item.plugins),
+  }
+}
+
+/**
+ * The plugin directories to read now. A plugin runs in this process, so the ones a project keeps wait for its folder
+ * to be trusted, as the server's do; the user's own never wait.
+ */
+export function trustedPluginDirectories(directories: PluginDirectories, trusted: boolean) {
+  return trusted ? [...directories.global, ...directories.project] : [...directories.global]
 }
 
 export async function discoverPluginTargets(directories: string[]) {
