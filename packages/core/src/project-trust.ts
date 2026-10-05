@@ -12,6 +12,7 @@ import { CommandFile } from "./config/plugin/command-file.js"
 import { ConfigTrust } from "./config/trust.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
+import { AbsolutePath } from "./schema.js"
 import { WorkspaceTrust } from "./workspace-trust.js"
 
 export interface Interface {
@@ -22,7 +23,8 @@ export interface Interface {
    * the project is untrusted those are its own: the settings its files hold back, and the config directories whose
    * files carry plugins, commands that run shell snippets, or agents that ask for more than deny rules. What a
    * directory holds is read once and kept until a file under a config root changes. A file or directory in a folder
-   * above the project is listed too, until the folder that holds it is trusted, which trusting the project does not do.
+   * above the project is listed too, until the folder that holds it is trusted, which trusting the project does not do,
+   * and it names that folder as its `directory`.
    */
   readonly status: () => Effect.Effect<Trust.Status>
   /** Trusts this Location's project; see `WorkspaceTrust.grant`. Config applies what it held back once it reloads. */
@@ -77,12 +79,15 @@ const layer = Layer.effect(
       return kinds
     })
 
+    // Whether a file is in one of the project's own folders, as against a folder above them.
+    const inside = (file: string) => folders.some((folder) => FSUtil.contains(folder, file))
+
     // What a project or local entry holds back now. The entries are stamped by the last config load, which can trail a
     // decision by a moment, so for the project's own files the decision just made counts: a trusted project holds nothing
     // back, and an entry that is not stamped yet is read for what it would lose. An entry above the project follows the
     // decision for its own folder, which only its stamp knows.
     const heldBack = Effect.fnUntraced(function* (entry: Entry, file: string, trusted: boolean) {
-      const untrusted = folders.some((folder) => FSUtil.contains(folder, file)) ? !trusted : entry.trusted === false
+      const untrusted = inside(file) ? !trusted : entry.trusted === false
       if (!untrusted) return []
       // The files of a directory are not part of its entry, so they are read from the disk.
       if (entry.type === "directory") return yield* inDirectory(entry.path)
@@ -97,7 +102,17 @@ const layer = Layer.effect(
           if (entry.path === undefined) return []
           if (entry.scope !== "project" && entry.scope !== "local") return []
           const kinds = yield* heldBack(entry, entry.path, state.trusted)
-          return kinds.length === 0 ? [] : [{ path: entry.path, kinds }]
+          if (kinds.length === 0) return []
+          // What the project's own folders hold is lifted by trusting the project. What sits above them is not, so it
+          // names the folder whose trust does lift it, which a caller can tell the person to trust.
+          const directory = inside(entry.path) ? undefined : ConfigTrust.covered(entry)
+          return [
+            {
+              path: entry.path,
+              kinds,
+              ...(directory === undefined ? {} : { directory: AbsolutePath.make(directory) }),
+            },
+          ]
         }),
       )
       return { ...state, withheld: listed.flat() } satisfies Trust.Status

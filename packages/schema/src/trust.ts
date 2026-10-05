@@ -37,6 +37,10 @@ export type Source = typeof Source.Type
 export const Withheld = Schema.Struct({
   path: AbsolutePath,
   kinds: Schema.Array(Kind),
+  directory: AbsolutePath.annotate({
+    description:
+      "The folder to trust to lift what this holds back, set only for a file or directory in a folder above the project: trusting the project does not lift it, because each folder is trusted on its own. Unset for the project's own files, which trusting the project lifts.",
+  }).pipe(optional),
 }).annotate({ identifier: "Trust.Withheld" })
 export interface Withheld extends Schema.Schema.Type<typeof Withheld> {}
 
@@ -50,7 +54,7 @@ export const Status = Schema.Struct({
   source: Source.pipe(optional),
   withheld: Schema.Array(Withheld).annotate({
     description:
-      "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do.",
+      "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do, and names that folder as its `directory`.",
   }),
 }).annotate({ identifier: "Trust.Status" })
 export interface Status extends Schema.Schema.Type<typeof Status> {}
