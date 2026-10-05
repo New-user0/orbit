@@ -21,22 +21,33 @@ type SubstituteInput = ParseSource & {
   text: string
   missing?: "error" | "empty"
   env?: Record<string, string>
+  /**
+   * Set for the config of a folder that is not trusted: the folders its references may reach. Nothing is read from the
+   * environment, and a file is read only when it is inside one of them, so the folder cannot pull a secret, or a file
+   * from another machine, into a value that is sent on to a model provider. A reference that is not expanded stays in
+   * the text as it was written.
+   */
+  within?: readonly string[]
 }
 
 /** Apply {env:VAR} and {file:path} substitutions to config text. */
 export const substitute = Effect.fn("ConfigVariable.substitute")(function* (input: SubstituteInput) {
-  const text = input.text.replace(
-    /\{env:([^}]+)\}/g,
-    (_, varName: string) => (input.env?.[varName] ?? process.env[varName]) || "",
-  )
+  const text = input.within
+    ? input.text
+    : input.text.replace(
+        /\{env:([^}]+)\}/g,
+        (_, varName: string) => (input.env?.[varName] ?? process.env[varName]) || "",
+      )
   if (!text.includes("{file:")) return text
   return yield* substituteFiles(input, text)
 })
 
 const substituteFiles = Effect.fnUntraced(function* (input: SubstituteInput, text: string) {
   const fs = yield* FSUtil.Service
-  const configDir = input.type === "path" ? path.dirname(input.path) : input.dir
   const configSource = input.type === "path" ? input.path : input.source
+  const sourceDir = input.type === "path" ? path.dirname(input.path) : input.dir
+  // Real paths on both sides, so that a folder reached through a link is still inside the folders it was checked against.
+  const configDir = input.within ? yield* fs.resolve(sourceDir) : sourceDir
   let out = ""
   let cursor = 0
 
@@ -56,6 +67,11 @@ const substituteFiles = Effect.fnUntraced(function* (input: SubstituteInput, tex
     const filePath = token.slice("{file:".length, -1)
     const expandedPath = filePath.startsWith("~/") ? path.join(os.homedir(), filePath.slice(2)) : filePath
     const resolvedPath = path.isAbsolute(expandedPath) ? expandedPath : path.resolve(configDir, expandedPath)
+    if (input.within && !(yield* reachable(fs, input.within, filePath, resolvedPath))) {
+      out += token
+      cursor = index + token.length
+      continue
+    }
     const fileContent = yield* fs.readFileString(resolvedPath).pipe(
       Effect.catch((error) => {
         if (input.missing === "empty") return Effect.succeed("")
@@ -81,4 +97,20 @@ const substituteFiles = Effect.fnUntraced(function* (input: SubstituteInput, tex
   }
 
   return out + text.slice(cursor)
+})
+
+/**
+ * Whether a reference may be read for a folder that is not trusted. A reference that names a network share, as
+ * `{file://host/share/name}` does on Windows, is refused before anything touches the disk, and so is a path outside
+ * the folders. A file that is inside them but only through a link to somewhere else is refused once the link is followed.
+ */
+const reachable = Effect.fnUntraced(function* (
+  fs: FSUtil.Interface,
+  within: readonly string[],
+  reference: string,
+  file: string,
+) {
+  if (/^[\\/]{2}/.test(reference)) return false
+  const inside = (candidate: string) => within.some((folder) => FSUtil.contains(folder, candidate))
+  return inside(file) && inside(yield* fs.resolve(file))
 })

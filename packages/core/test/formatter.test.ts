@@ -6,9 +6,11 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
 import { LocationServiceMap } from "@orbit/core/location-services"
+import { Config } from "@orbit/core/config"
 import { Plugin } from "@orbit/core/plugin"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { AbsolutePath } from "@orbit/core/schema"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Info } from "@orbit/schema/config"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -265,6 +267,56 @@ describe("Formatter", () => {
         expect(yield* formatter.file(file)).toBe(true)
         expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("xAB")
       }),
+    ),
+  )
+})
+
+describe("Formatter under workspace trust", () => {
+  // The formatter is in the flag scope, which no folder's trust touches, so only the folder's decision keeps it off.
+  const content = JSON.stringify({
+    formatter: {
+      append: {
+        command: [process.execPath, "-e", "require('fs').appendFileSync(process.argv.at(-1), 'A')", "$FILE"],
+        extensions: [".trust"],
+      },
+    },
+  })
+  const trusting = testEffect(
+    AppNodeBuilder.build(
+      LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node, WorkspaceTrust.node]),
+      [
+        Global.node.replace(tempGlobalLayer),
+        offlineModels,
+        Config.node.replace(Config.configured({ content })),
+        WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+      ],
+    ),
+  )
+
+  trusting.live("runs no formatter while the project is untrusted, and runs one once it is trusted", () =>
+    withTemp((directory) =>
+      Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        yield* plugins.awaitActivation
+        const formatter = yield* Formatter.Service
+        const trust = yield* WorkspaceTrust.Service
+        const file = path.join(directory, "test.trust")
+        yield* Effect.promise(() => fs.writeFile(file, "x"))
+
+        expect(yield* formatter.file(file)).toBe(false)
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("x")
+
+        yield* trust.grant(directory, { persist: false, via: "test" })
+        expect(yield* formatter.file(file)).toBe(true)
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("xA")
+
+        yield* trust.revoke(directory)
+        expect(yield* formatter.file(file)).toBe(false)
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("xA")
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(LocationServiceMap.Service.get(Location.Ref.make({ directory: AbsolutePath.make(directory) }))),
+      ),
     ),
   )
 })

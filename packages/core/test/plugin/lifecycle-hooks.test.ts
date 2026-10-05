@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { CompatNames } from "@orbit/compat/names"
-import { Document, Info } from "@orbit/schema/config"
+import { Document, Event, Info } from "@orbit/schema/config"
 import { Tool } from "@orbit/schema/tool"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
@@ -23,7 +23,7 @@ import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { Effect, Exit, Layer, Logger, Schedule, Schema } from "effect"
+import { Effect, Exit, Fiber, Layer, Logger, Schema, Stream } from "effect"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
 import { location, tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
@@ -337,11 +337,17 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
   // Exit code 2 blocks the call it reaches, in bash and in PowerShell alike.
   const block = (matcher: string) => ({ PreToolUse: [{ matcher, hooks: [{ type: "command", command: "exit 2" }] }] })
 
-  const reloaded = (config: Config.Interface, trusted: boolean) =>
-    config.entries().pipe(
-      Effect.filterOrFail((entries) => entries.some((entry) => entry.trusted === false) !== trusted),
-      Effect.retry({ times: 500, schedule: Schedule.spaced("10 millis") }),
-    )
+  // The next config.updated, so that a change is waited for rather than polled for.
+  const nextUpdate = Bus.Service.use((bus) =>
+    bus
+      .subscribe(Event.Updated)
+      .pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.timeout("10 seconds"),
+        Effect.forkScoped({ startImmediately: true }),
+      ),
+  )
 
   it.live("runs the user's hooks, and the project's and its other-product settings hooks only once trusted", () =>
     Effect.gen(function* () {
@@ -360,7 +366,6 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
 
       yield* Effect.gen(function* () {
         const registry = yield* PluginHooks.Service
-        const config = yield* Config.Service
         const trust = yield* WorkspaceTrust.Service
         yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
         const blocked = (tool: string) =>
@@ -372,12 +377,14 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         // Untrusted, only what the user wrote runs.
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
 
+        const granted = yield* nextUpdate
         yield* trust.grant(project, { persist: false, via: "test" })
-        yield* reloaded(config, true)
+        yield* Fiber.join(granted)
         expect(yield* everything).toEqual({ read: true, shell: true, grep: true })
 
+        const revoked = yield* nextUpdate
         yield* trust.revoke(project)
-        yield* reloaded(config, false)
+        yield* Fiber.join(revoked)
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
       }).pipe(Effect.provide(projectConfig(home, project)))
     }),

@@ -37,7 +37,8 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Works
 export interface Options {
   /**
    * Trust every folder except the home directory and filesystem roots, without a grant. Unset, it follows
-   * ORBIT_TRUST_PROJECT, so a host that never configures it stays strict.
+   * ORBIT_TRUST_PROJECT, which is how tests opt the default node in. The server always passes a value, so a host that
+   * does not configure it never follows the environment.
    */
   readonly implicit?: boolean
 }

@@ -1725,6 +1725,18 @@ const projectConfig = (home: string, project: string, trust?: WorkspaceTrust.Opt
 const projectEntries = (home: string, project: string) =>
   Config.Service.use((config) => config.entries()).pipe(Effect.provide(projectConfig(home, project)))
 
+// The next config.updated, so that a change is waited for rather than polled for.
+const nextUpdate = Bus.Service.use((bus) =>
+  bus
+    .subscribe(Event.Updated)
+    .pipe(
+      Stream.take(1),
+      Stream.runCollect,
+      Effect.timeout("10 seconds"),
+      Effect.forkScoped({ startImmediately: true }),
+    ),
+)
+
 describe("MCP servers from .mcp.json", () => {
   const fixture = path.join(import.meta.dir, "fixture/mcp-output-schema.ts")
   const files = (home: string, project: string, user: unknown) =>
@@ -1806,23 +1818,20 @@ describe("MCP servers from .mcp.json", () => {
         // Neither the server in orbit.json nor the ones in .mcp.json are registered, so none of them starts.
         expect(yield* registered(yield* config.entries())).toEqual({ personal: { status: "connected" } })
 
+        // The config reloads a moment after the decision, and says so when it has.
+        const granted = yield* nextUpdate
         yield* trust.grant(project, { persist: false, via: "test" })
-        const reloaded = config.entries().pipe(
-          Effect.filterOrFail((entries) => entries.every((entry) => entry.trusted !== false)),
-          Effect.retry({ times: 500, schedule: Schedule.spaced("10 millis") }),
-        )
-        expect(yield* registered(yield* reloaded)).toEqual({
+        yield* Fiber.join(granted)
+        expect(yield* registered(yield* config.entries())).toEqual({
           personal: { status: "connected" },
           docs: { status: "connected" },
           shared: { status: "connected" },
         })
 
+        const revoked = yield* nextUpdate
         yield* trust.revoke(project)
-        const withheld = config.entries().pipe(
-          Effect.filterOrFail((entries) => entries.some((entry) => entry.trusted === false)),
-          Effect.retry({ times: 500, schedule: Schedule.spaced("10 millis") }),
-        )
-        expect(yield* registered(yield* withheld)).toEqual({ personal: { status: "connected" } })
+        yield* Fiber.join(revoked)
+        expect(yield* registered(yield* config.entries())).toEqual({ personal: { status: "connected" } })
       }).pipe(Effect.provide(projectConfig(home, project, { implicit: false })))
     }),
   )

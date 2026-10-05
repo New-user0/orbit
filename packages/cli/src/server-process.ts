@@ -111,10 +111,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             file: process.env.ORBIT_CONFIG,
             content: process.env.ORBIT_CONFIG_CONTENT,
           },
-          // A private or foreground server belongs to whoever starts it, so it can trust the folders it is pointed at.
-          // The background service is shared by every client and project, and an environment variable that happened
-          // to be set when the first client started it must not decide for all of them.
-          trust: { implicit: options.mode === "service" ? false : truthy(process.env.ORBIT_TRUST_PROJECT) },
+          trust: trustOptions(options.mode, process.env),
           windows: {
             gitbash: process.env.ORBIT_GIT_BASH_PATH,
           },
@@ -183,6 +180,15 @@ const recognizeIncumbent = Effect.fnUntraced(function* (options: DiscoverOptions
 
 function serviceURL(hostname: string, port: number) {
   return `http://${hostname.includes(":") ? `[${hostname}]` : hostname}:${port}`
+}
+
+/**
+ * Whether the server trusts the folders it is pointed at without a grant. A private or foreground server belongs to
+ * whoever starts it, so `ORBIT_TRUST_PROJECT` can ask for that. The background service is shared by every client and
+ * project, and a variable that happened to be set when the first client started it must not decide for all of them.
+ */
+export function trustOptions(mode: Mode, env: Readonly<Record<string, string | undefined>>) {
+  return { implicit: mode === "service" ? false : truthy(env.ORBIT_TRUST_PROJECT) }
 }
 
 function truthy(value?: string) {

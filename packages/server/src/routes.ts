@@ -129,7 +129,8 @@ function makeRoutes<AuthError, AuthServices>(
         content: options.config?.content,
       }),
     ),
-    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: options.trust?.implicit })),
+    // A host that does not ask for implicit trust trusts nothing on its own, whatever its environment holds.
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: options.trust?.implicit ?? false })),
     InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: options.config?.project })),
     ShellSelect.node.replace(ShellSelect.configured({ gitbash: options.windows?.gitbash })),
     Mcp.node.replace(

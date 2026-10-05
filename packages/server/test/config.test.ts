@@ -3,6 +3,7 @@ import path from "node:path"
 import { expect } from "bun:test"
 import { Config } from "@orbit/schema/config"
 import { Effect, Schema } from "effect"
+import { withEnv } from "../../core/test/fixture/env"
 import { tmpdir, tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
@@ -63,10 +64,19 @@ it.live("returns ordered config entries for the requested directory", () =>
   }),
 )
 
-for (const implicit of [false, true]) {
-  it.live(
-    `${implicit ? "applies" : "withholds"} a project's executable config on a server with implicit trust ${implicit ? "on" : "off"}`,
-    () =>
+for (const scenario of [
+  { name: "withholds a project's executable config on a server with implicit trust off", trust: { implicit: false } },
+  { name: "applies a project's executable config on a server with implicit trust on", trust: { implicit: true } },
+  // The variable is for `orb` to read, for the servers it starts. A host that leaves the option unset trusts nothing.
+  {
+    name: "withholds a project's executable config on a server that leaves implicit trust unset, whatever the environment says",
+    trust: {},
+    environment: "1",
+  },
+]) {
+  const implicit = scenario.trust.implicit === true
+  it.live(scenario.name, () =>
+    withEnv({ ORBIT_TRUST_PROJECT: scenario.environment }, () =>
       Effect.gen(function* () {
         const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-config-trust-")))
         const global = path.join(tmp.path, "global")
@@ -88,7 +98,7 @@ for (const implicit of [false, true]) {
             }),
           ),
         )
-        const server = yield* startServer(global, { trust: { implicit } })
+        const server = yield* startServer(global, { trust: scenario.trust })
         const url = new URL("/api/config", server.base)
         url.searchParams.set("location[directory]", project)
         const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
@@ -114,6 +124,7 @@ for (const implicit of [false, true]) {
         expect(document?.info.mcp).toBeUndefined()
         expect(document?.info.permissions).toEqual([{ action: "shell", resource: "rm *", effect: "deny" }])
       }),
+    ),
   )
 }
 

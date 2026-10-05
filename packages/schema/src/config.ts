@@ -154,7 +154,7 @@ export const Scope = Schema.Literals(["remote", "user", "project", "local", "fla
 
 const trusted = Schema.Boolean.pipe(optional).annotate({
   description:
-    "False when the entry belongs to a project or local scope whose folder is not trusted. Unset means the entry is not subject to trust.",
+    "False when the entry belongs to a project or local scope and the folder that holds it is not trusted: the project's folder, or for config found above the project, the folder that holds that config. Unset means the entry is not subject to trust.",
 })
 
 export class Document extends Schema.Class<Document>("Config.Document")({
