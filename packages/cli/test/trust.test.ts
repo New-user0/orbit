@@ -157,6 +157,29 @@ test("orb run stops with guidance in an untrusted repository that holds back its
   expect(runs).toBe(before)
 }, 120_000)
 
+test("orb run reports the refusal in the format it was asked for, as it does any error before a session exists", async () => {
+  const repository = await hooked("refused-json")
+  const before = runs
+
+  const lines = await orb(repository, ["run", "--standalone", "--format", "stream-json", "--model", model, "say ok"])
+  const result = await orb(repository, ["run", "--standalone", "--format", "result", "--model", model, "say ok"])
+
+  expect(lines.code).toBe(1)
+  expect(JSON.parse(lines.stdout)).toMatchObject({
+    type: "error",
+    sessionID: "",
+    error: { type: "unknown", message: expect.stringContaining("is not trusted") },
+  })
+  expect(result.code).toBe(1)
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    type: "result",
+    sessionID: "",
+    is_error: true,
+    error: expect.stringContaining("is not trusted"),
+  })
+  expect(runs).toBe(before)
+}, 120_000)
+
 test("orb run --trust runs once, and the next plain run stops again", async () => {
   const repository = await hooked("one-run")
 

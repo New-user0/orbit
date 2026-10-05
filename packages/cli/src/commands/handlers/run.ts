@@ -4,15 +4,16 @@ import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { requireTrust } from "../../util/trust"
+import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
 export default Runtime.handler(Commands.commands.run, (input) =>
   Effect.gen(function* () {
-    const { runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
+    const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
     const separator = process.argv.indexOf("--", 2)
     const schemaFile = Option.getOrUndefined(input.jsonSchema)
     const jsonSchema = schemaFile ? yield* Effect.promise(() => Bun.file(schemaFile).json()) : undefined
+    const format = jsonSchema === undefined ? input.format : "result"
     // The private server inherits this process's environment, which is how --bare reaches it.
     if (input.bare) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
@@ -24,12 +25,14 @@ export default Runtime.handler(Commands.commands.run, (input) =>
       trust: input.trust,
     })
     // A session continued from another folder still runs there, and the server holds that folder's config back on its
-    // own; this checks the folder the command was started in.
-    yield* requireTrust(
+    // own; this checks the folder the command was started in. The refusal goes out the way any error before a session
+    // exists does, so a script that asked for JSON gets JSON.
+    const refusal = yield* trustRefusal(
       Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
       directory(),
       { grant: input.trust },
     )
+    if (refusal !== undefined) return reportRunError({ format }, refusal)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
@@ -39,7 +42,7 @@ export default Runtime.handler(Commands.commands.run, (input) =>
         fork: input.fork,
         model: Option.getOrUndefined(input.model),
         agent: Option.getOrUndefined(input.agent),
-        format: jsonSchema === undefined ? input.format : "result",
+        format,
         jsonSchema,
         file: [...input.file],
         title: Option.getOrUndefined(input.title),

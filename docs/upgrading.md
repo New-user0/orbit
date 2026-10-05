@@ -208,10 +208,12 @@ not. Leave compatibility on if you want Zed's selection in the TUI.
 `orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` now ask the server, before they do any work,
 whether the folder they start in is trusted (see "A project's config waits for its folder to be trusted" above). When
 it is not, and its project config holds something back, they print what is held back and how to trust the folder, and
-exit with status 1. They used to carry on without those settings, which for a script meant a run without the
-repository's hooks and plugins and nothing to say so. A folder that holds nothing back runs as before, trusted or not,
-and so does one on a server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`). `orb acp`
-cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it started in.
+exit with status 1. `orb run --format json`, `stream-json` or `result` reports it as the JSON error that any failure
+before a session exists produces, instead of text. They used to carry on without those settings, which for a script
+meant a run without the repository's hooks and plugins and nothing to say so. A folder that holds nothing back runs as
+before, trusted or not, and so does one on a server that trusts it without a grant (`--standalone` with
+`ORBIT_TRUST_PROJECT=1`). `orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to
+stderr about the folder it started in.
 
 - **`orb trust [folder]`** trusts the folder, or the current one, for good: the grant is stored, so it outlasts the
   server and is seen by every client of it. `--revoke` takes it back, and `--list` shows the folders that are trusted

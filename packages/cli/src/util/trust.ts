@@ -2,15 +2,17 @@ import { ClientError, type OrbitClient, type TrustStatus } from "@orbit/client/p
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
+import { UI } from "../run/ui"
 
 /**
- * Stops the command, before it does any work, when its folder is untrusted and its project config holds something
- * back: a run that quietly went without the project's hooks, MCP servers and plugins would not be the run it asked for.
- * A folder that holds nothing back runs whether or not it is trusted. With `grant` (the `--trust` flag) an untrusted
- * folder is first trusted for as long as the serving process lives, which callers make a private one that ends with
- * the run. A server older than workspace trust has no such route and holds nothing back, so it asks nothing.
+ * What stops a command before it does any work: its folder is untrusted and its project config holds something back,
+ * so a run would quietly go without the project's hooks, MCP servers and plugins and not be the run it asked for. This
+ * is the text that says so, or undefined when the command may go ahead, as it may in a folder that holds nothing back
+ * whether or not it is trusted. With `grant` (the `--trust` flag) an untrusted folder is first trusted for as long as
+ * the serving process lives, which callers make a private one that ends with the run. A server older than workspace
+ * trust has no such route and holds nothing back, so it asks nothing.
  */
-export const requireTrust = Effect.fn("cli.trust.require")(function* (
+export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
   client: OrbitClient,
   directory: string,
   options: { readonly grant?: boolean } = {},
@@ -19,11 +21,21 @@ export const requireTrust = Effect.fn("cli.trust.require")(function* (
   const current = yield* call((signal) => client.location.trust.get({ location }, { signal })).pipe(
     Effect.catchIf(unsupported, () => Effect.succeed(undefined)),
   )
-  if (current === undefined) return
+  if (current === undefined) return undefined
   const status = options.grant && !current.trusted ? yield* grant(client, location) : current
-  if (!blocked(status)) return
+  return blocked(status) ? refusal(status) : undefined
+})
+
+/** Prints the refusal, if there is one, the way `orb run` prints an error, and exits 1: for a command with nothing of its own to report it through. */
+export const requireTrust = Effect.fn("cli.trust.require")(function* (
+  client: OrbitClient,
+  directory: string,
+  options: { readonly grant?: boolean } = {},
+) {
+  const text = yield* trustRefusal(client, directory, options)
+  if (text === undefined) return
   yield* Effect.sync(() => {
-    process.stderr.write(refusal(status) + EOL)
+    UI.error(text)
     process.exit(1)
   })
 })
