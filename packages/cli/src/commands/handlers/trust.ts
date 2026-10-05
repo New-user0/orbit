@@ -1,5 +1,6 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { Global } from "@orbit/util/global"
 import { Effect, Option } from "effect"
 import { stat } from "node:fs/promises"
 import { EOL } from "node:os"
@@ -30,7 +31,10 @@ export default Runtime.handler(
       )
     }
 
-    const location = { directory: path.resolve(directory(), Option.getOrUndefined(input.directory) ?? ".") }
+    const global = yield* Global.Service
+    const location = {
+      directory: path.resolve(directory(), expand(Option.getOrUndefined(input.directory) ?? ".", global.home)),
+    }
     if (input.revoke) {
       const status = yield* ask((signal) => client.location.trust.update({ location, trust: false }, { signal }))
       return yield* print([
@@ -85,6 +89,10 @@ const ask = <A>(request: (signal: AbortSignal) => Promise<A>) =>
 
 const print = (lines: ReadonlyArray<string>, stream: NodeJS.WriteStream = process.stdout) =>
   Effect.sync(() => void stream.write(lines.join(EOL) + EOL))
+
+// A Unix shell expands a leading ~ before orb sees it. PowerShell and cmd hand it over as typed.
+const expand = (folder: string, home: string) =>
+  folder === "~" || /^~[\\/]/.test(folder) ? path.join(home, folder.slice(1)) : folder
 
 const isFolder = (target: string) =>
   stat(target).then(

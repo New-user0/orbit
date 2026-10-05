@@ -248,14 +248,16 @@ test("after orb trust a plain orb run proceeds, and orb trust --revoke takes the
 test("orb trust refuses the home directory, which is never trusted for good", async () => {
   const repository = await hooked("elsewhere")
 
-  // The test home is the root of the isolated environment.
-  const result = await orb(repository, ["trust", "--standalone", root])
+  // The test home is the root of the isolated environment, named in full and as a shell that does not expand ~ passes it.
+  for (const home of [root, "~"]) {
+    const result = await orb(repository, ["trust", "--standalone", home])
 
-  expect(result.code).toBe(1)
-  expect(result.stdout).toBe("")
-  expect(result.stderr).toContain("home directory or a filesystem root")
-  expect(result.stderr).toContain("--trust")
-  expect(result.stderr).toContain("terminal UI")
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("home directory or a filesystem root")
+    expect(result.stderr).toContain("--trust")
+    expect(result.stderr).toContain("terminal UI")
+  }
   // Nothing was stored for it.
   const listed = await orb(repository, ["trust", "--standalone", "--list"])
   succeeded(listed)
