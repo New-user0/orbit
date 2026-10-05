@@ -38,6 +38,7 @@ import { McpResourceTools } from "@orbit/core/tool/plugin/mcp-resource"
 import { Tool } from "@orbit/core/tool"
 import { ToolOutput } from "@orbit/core/tool-output"
 import { WellKnown } from "@orbit/core/wellknown"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Global } from "@orbit/util/global"
 import {
   Context,
@@ -1705,23 +1706,36 @@ testEffect(Layer.empty).live(
     }),
 )
 
-// The entries that the real configuration loader reports for a project in a home of its own, so that nothing the machine
-// running the test keeps ever takes part.
-const projectEntries = (home: string, project: string) =>
-  Config.Service.use((config) => config.entries()).pipe(
-    Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node]), [
-        Config.node.replace(Config.configured()),
-        Location.node.replace(
-          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
-        ),
-        Global.node.replace(Global.layerWith({ config: path.join(home, ".config", "orbit"), home })),
-        Credential.node.replace(emptyCredentialNode),
-        WellKnown.node.replace(emptyWellknownNode),
-        Watcher.node.replace(Watcher.testLayer),
-      ]),
+// The real configuration loader for a project in a home of its own, so that nothing the machine running the test keeps
+// ever takes part. The folder is trusted, as in every test, unless the trust service says otherwise.
+const projectConfig = (home: string, project: string, trust?: WorkspaceTrust.Options) =>
+  AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node]), [
+    Config.node.replace(Config.configured()),
+    ...(trust ? [WorkspaceTrust.node.replace(WorkspaceTrust.configured(trust))] : []),
+    Location.node.replace(
+      Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
     ),
-  )
+    Global.node.replace(Global.layerWith({ config: path.join(home, ".config", "orbit"), home })),
+    Credential.node.replace(emptyCredentialNode),
+    WellKnown.node.replace(emptyWellknownNode),
+    Watcher.node.replace(Watcher.testLayer),
+  ])
+
+// The entries that the real configuration loader reports for such a project.
+const projectEntries = (home: string, project: string) =>
+  Config.Service.use((config) => config.entries()).pipe(Effect.provide(projectConfig(home, project)))
+
+// The next config.updated, so that a change is waited for rather than polled for.
+const nextUpdate = Bus.Service.use((bus) =>
+  bus
+    .subscribe(Event.Updated)
+    .pipe(
+      Stream.take(1),
+      Stream.runCollect,
+      Effect.timeout("10 seconds"),
+      Effect.forkScoped({ startImmediately: true }),
+    ),
+)
 
 describe("MCP servers from .mcp.json", () => {
   const fixture = path.join(import.meta.dir, "fixture/mcp-output-schema.ts")
@@ -1785,6 +1799,40 @@ describe("MCP servers from .mcp.json", () => {
       const servers = yield* registered(yield* projectEntries(home, project))
 
       expect(servers).toEqual({ shared: { status: "connected" } })
+    }),
+  )
+
+  testEffect(Layer.empty).live("register nothing while the folder is untrusted, and start once it is trusted", () =>
+    Effect.gen(function* () {
+      const home = (yield* tmpdirScoped()).path
+      const project = path.join(home, "work", "repo")
+      // The user's own server comes from the user's config, which trust never touches.
+      yield* files(home, project, {
+        mcp: { servers: { personal: { type: "local", command: [process.execPath, fixture] } } },
+      })
+
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const trust = yield* WorkspaceTrust.Service
+
+        // Neither the server in orbit.json nor the ones in .mcp.json are registered, so none of them starts.
+        expect(yield* registered(yield* config.entries())).toEqual({ personal: { status: "connected" } })
+
+        // The config reloads a moment after the decision, and says so when it has.
+        const granted = yield* nextUpdate
+        yield* trust.grant(project, { persist: false, via: "test" })
+        yield* Fiber.join(granted)
+        expect(yield* registered(yield* config.entries())).toEqual({
+          personal: { status: "connected" },
+          docs: { status: "connected" },
+          shared: { status: "connected" },
+        })
+
+        const revoked = yield* nextUpdate
+        yield* trust.revoke(project)
+        yield* Fiber.join(revoked)
+        expect(yield* registered(yield* config.entries())).toEqual({ personal: { status: "connected" } })
+      }).pipe(Effect.provide(projectConfig(home, project, { implicit: false })))
     }),
   )
 })

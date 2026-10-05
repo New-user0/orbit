@@ -32,6 +32,13 @@ export const ServerOptions = Schema.Struct({
       content: Schema.optional(Schema.String),
     }),
   ),
+  trust: Schema.optional(
+    Schema.Struct({
+      // Trust every folder except the home directory and filesystem roots, without a grant. Unset means false, whatever
+      // ORBIT_TRUST_PROJECT holds: that variable is for the `orb` command to read, for the servers it starts itself.
+      implicit: Schema.optional(Schema.Boolean),
+    }),
+  ),
   windows: Schema.optional(
     Schema.Struct({
       gitbash: Schema.optional(Schema.String),

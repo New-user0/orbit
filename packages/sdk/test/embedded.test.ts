@@ -202,6 +202,46 @@ it.live(
   10_000,
 )
 
+for (const implicit of [false, true]) {
+  it.live(
+    `embedded host ${implicit ? "applies" : "withholds"} a project's executable config with implicit trust ${implicit ? "on" : "off"}`,
+    () =>
+      withEmbedded("orbit-embedded-trust-", (fixture) =>
+        Effect.gen(function* () {
+          const project = path.join(fixture.directory, "project")
+          const configDirectory = path.join(fixture.directory, "config")
+          const file = path.join(project, "orbit.json")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(project, { recursive: true })
+            await fs.mkdir(configDirectory)
+            await fs.writeFile(
+              file,
+              JSON.stringify({
+                model: "acme/fast",
+                hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo ready" }] }] },
+              }),
+            )
+          })
+          const orbit = yield* fixture.sdk.Orbit.create({
+            config: { directory: configDirectory, content: "{}" },
+            models: { fetch: false },
+            fs: { filewatcher: false },
+            trust: { implicit },
+          })
+
+          const entries = yield* orbit.config.get({ location: { directory: project } })
+          const document = entries.find((entry) => entry.type === "document" && entry.path === file)
+          if (document?.type !== "document") throw new Error("Expected the project's config document")
+          expect(document.info.model).toBeDefined()
+          // The host decides: a host that sets nothing trusts nothing on its own.
+          expect(document.trusted).toBe(implicit ? undefined : false)
+          expect(document.withheld).toEqual(implicit ? undefined : ["hooks"])
+          expect(document.info.hooks === undefined).toBe(!implicit)
+        }),
+      ),
+  )
+}
+
 it.live("embedded client exposes plugin-backed web search", () =>
   withEmbedded("orbit-embedded-websearch-", (fixture) =>
     Effect.gen(function* () {

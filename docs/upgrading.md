@@ -94,6 +94,65 @@ names, and to stop Orbit reading that product's settings files and `.mcp.json`, 
 above, which also stops it loading that product's skills, output styles and instruction files. If a repository's
 `.mcp.json` should not start servers for you, turn compatibility off, or move the servers you want into `orbit.json`.
 
+### A project's config waits for its folder to be trusted
+
+The settings in a project's `orbit.json` and `orbit.local.json`, and in the hook settings and `.mcp.json` that other
+agent products keep there, used to apply the moment Orbit opened the folder. They now apply in full only once the
+folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
+rest:
+
+- **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
+  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
+  agent, whose entry goes with it. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out
+  too: a project's value outranks yours, so it would otherwise replace the one in your own config.
+- **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
+  add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
+  instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
+  switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
+  keyless search pool, and it cannot start generations that you pay for.
+- **Kept as written:** everything else, such as `model`, `output_style`, `username`, `snapshots`, `watcher`, `media`,
+  `tool_output`, `compaction`, and the fields of an agent that only describe it.
+
+What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
+`{file:path}` reference is read only when it names a file inside the project's folder, not through a link that leaves
+it and never on a network share, so a repository cannot pull a secret or another file into a value that is sent to a
+model provider. A reference that is not expanded stays in the text as it was written, and expands once the folder is
+trusted.
+
+Orbit starts no language server and runs no formatter in a folder that is not trusted, the built-in ones and the ones
+in your own config alike, because they read the folder's own code and config and several of them run it. Both start
+working as soon as the folder is trusted.
+
+Your own config, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT` and the server's remote sources are never held back, and neither
+are the Orbit files in your home directory. Trust belongs to the project's root folder, so a repository and its linked
+git worktrees share it. Config that Orbit finds in the folders above the project, such as an `orbit.json` in a folder
+that holds several repositories, follows the decision for the folder that holds it: trusting a repository does not
+trust what surrounds it, and until that folder is trusted too, those files stay in the list of what is held back. A
+grant is kept in Orbit's database, and granting or revoking it reloads the config of every open project it concerns,
+which turns hooks, MCP servers and plugins on or off without a restart. The home directory and filesystem roots can be
+trusted only until the server restarts.
+
+A server can instead trust every folder except the home directory and filesystem roots, without a grant. A private
+server (`--standalone`, and `orb acp`) or a foreground `orb serve` does so when it starts with `ORBIT_TRUST_PROJECT=1`
+or `true` in its environment. An SDK host or `@orbit/server` host does so with `trust: { implicit: true }` in its
+options, and when that is not set, it trusts nothing on its own, whatever its environment says. The background service
+ignores the variable, because it serves every client and project.
+
+**Affects:** anyone who opens a repository whose config sets `hooks`, `mcp`, `plugins`, `providers`, `sandbox`,
+`formatter`, `default_agent`, `warming` or `allow` and `ask` permission rules, through the background service (the
+terminal UI, VS Code and the desktop app): those settings now stay off. So do language servers and formatters, in every
+folder that is not trusted, which until the trust prompt arrives is every folder. The same goes for SDK hosts and
+servers that leave `trust.implicit` unset, and for tests that write project config and start a server. Code built on
+`@orbit/core`: `Config.Document` and `Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots
+that `Config.compat` lists can carry `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need
+`ProjectTrust`, `ProjectTrust.allows` says whether a file may run the code it carries, and a global `trust.updated`
+event reports each change.
+
+**What to do:** nothing for config you keep in your own files. For a repository you trust, run with `--standalone` and
+`ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which also suits CI and tests.
+`orb trust`, the trust prompt in the terminal UI and the headless refusals that go with them arrive in following
+changes, and until they do the background service has no way to trust a folder.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

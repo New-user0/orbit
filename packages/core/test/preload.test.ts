@@ -8,6 +8,11 @@ describe("Core test environment", () => {
     expect(process.env.NPM_CONFIG_AUDIT).toBe("false")
   })
 
+  test("trusts project folders in the default node graph", () => {
+    // Trust tests build WorkspaceTrust with `implicit: false` instead.
+    expect(process.env.ORBIT_TRUST_PROJECT).toBe("1")
+  })
+
   test("isolates global home and XDG roots", () => {
     const home = process.env.ORBIT_TEST_HOME
     expect(home).toBeDefined()

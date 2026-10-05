@@ -7,13 +7,15 @@ import { Context, Effect, Layer, Schema } from "effect"
 import path from "path"
 import { Config } from "../config.js"
 import { Location } from "../location.js"
+import { ProjectTrust } from "../project-trust.js"
 import { which } from "../util/which.js"
 import { LspClient } from "./client.js"
 
 /**
  * Language servers for the files a Location edits. Servers come from the `lsp` config and from built-in definitions
  * whose command is already on PATH; nothing is downloaded. Each server starts the first time a matching file needs
- * it and stops with the Location. `lsp: false` turns them all off.
+ * it and stops with the Location. `lsp: false` turns them all off. None starts while the Location's project is not
+ * trusted: a language server reads the folder's own code, and several of them run it.
  */
 
 export type Diagnostic = LspClient.Diagnostic
@@ -54,6 +56,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
+    const trust = yield* ProjectTrust.Service
     // One start attempt per server; a server that fails to start stays off until the Location reloads.
     const clients = new Map<string, Promise<LspClient.Client | undefined>>()
     yield* Effect.addFinalizer(() =>
@@ -101,6 +104,7 @@ const layer = Layer.effect(
     return Service.of({
       diagnostics: Effect.fn("Lsp.diagnostics")(
         function* (files) {
+          if (!(yield* trust.trusted())) return {}
           const found = yield* Effect.forEach(
             files,
             (file) =>
@@ -120,6 +124,8 @@ const layer = Layer.effect(
         Effect.orElseSucceed(() => ({})),
       ),
       request: Effect.fn("Lsp.request")(function* (method, file, params) {
+        if (!(yield* trust.trusted()))
+          return yield* new Error({ message: "Language servers stay off until this folder is trusted." })
         const target = yield* client(file)
         if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
         const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
@@ -133,4 +139,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Config.node, FSUtil.node, Location.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [Config.node, FSUtil.node, Location.node, ProjectTrust.node],
+})

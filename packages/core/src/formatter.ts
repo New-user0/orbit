@@ -7,6 +7,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { AppProcess } from "@orbit/util/process"
 import { Location } from "./location.js"
 import type { Info } from "./formatter/builtins.js"
+import { ProjectTrust } from "./project-trust.js"
 import { State } from "./state.js"
 
 type Data = {
@@ -29,6 +30,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const location = yield* Location.Service
     const processes = yield* AppProcess.Service
+    const trust = yield* ProjectTrust.Service
     const commands = new WeakMap<Info, string[] | false>()
     const state = State.create<Data, Editor>({
       name: "formatter",
@@ -54,6 +56,9 @@ const layer = Layer.effect(
     })
 
     const file = Effect.fn("Formatter.file")(function* (filepath: string) {
+      // A formatter reads the folder's own config, and several of them run it as code, so none runs while the
+      // Location's project is not trusted.
+      if (!(yield* trust.trusted())) return false
       const extension = path.extname(filepath)
       const matching = state.get().formatters.filter((formatter) => formatter.extensions.includes(extension))
 
@@ -100,5 +105,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Location.node, AppProcess.node],
+  deps: [Location.node, AppProcess.node, ProjectTrust.node],
 })

@@ -24,6 +24,7 @@ import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
 import { ConfigWarming } from "./config/warming.js"
 import { ConfigWorktree } from "./config/worktree.js"
+import { Trust } from "./trust.js"
 
 export class Info extends Schema.Class<Info>("Config.Info")({
   $schema: optional(Schema.String).annotate({
@@ -151,11 +152,21 @@ export const Scope = Schema.Literals(["remote", "user", "project", "local", "fla
     "Where a configuration entry came from, listed from lowest to highest precedence: remote (well-known), user (global config directory and home directory), project (orbit.json files and .orbit directories up the tree), local (orbit.local.json files), flag (ORBIT_CONFIG and ORBIT_CONFIG_CONTENT), managed (organization-managed settings).",
 })
 
+const trusted = Schema.Boolean.pipe(optional).annotate({
+  description:
+    "False when the entry belongs to a project or local scope and the folder that holds it is not trusted: the project's folder, or for config found above the project, the folder that holds that config. Unset means the entry is not subject to trust.",
+})
+
 export class Document extends Schema.Class<Document>("Config.Document")({
   type: Schema.Literal("document"),
   path: AbsolutePath.pipe(optional),
   // Optional so entries produced before scopes existed still decode; a missing scope is treated as user.
   scope: Scope.pipe(optional),
+  trusted,
+  withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
+    description:
+      "The kinds of configuration removed from info because the folder is not trusted. Present only when trusted is false.",
+  }),
   info: Info,
 }) {}
 
@@ -163,6 +174,7 @@ export class Directory extends Schema.Class<Directory>("Config.Directory")({
   type: Schema.Literal("directory"),
   path: AbsolutePath,
   scope: Scope.pipe(optional),
+  trusted,
 }) {}
 
 export const Entry = Schema.Union([Document, Directory]).annotate({

@@ -11,6 +11,8 @@ export function isolatedEnv(root: string, overrides: Record<string, string | und
     ORBIT_DISABLE_FILEWATCHER: "true",
     ORBIT_DISABLE_MODELS_FETCH: "true",
     ORBIT_TEST_HOME: root,
+    // Private servers trust the folders they run in, as before; trust tests override this with undefined.
+    ORBIT_TRUST_PROJECT: "1",
     XDG_CACHE_HOME: path.join(root, "cache"),
     XDG_CONFIG_HOME: path.join(root, "xdg-config"),
     XDG_DATA_HOME: path.join(root, "data"),

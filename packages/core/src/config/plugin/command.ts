@@ -23,6 +23,7 @@ import { ShellSelect } from "../../shell/select.js"
 import { which } from "../../util/which.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { ConfigMarkdown } from "../markdown.js"
+import { ConfigTrust } from "../trust.js"
 
 const decodeCommand = Schema.decodeUnknownOption(ConfigCommand.Info)
 
@@ -208,7 +209,7 @@ function evaluateTemplate(template: string, input: string, sessionID: SessionSch
     // Spans are read from the authored template alone and run exactly as written, so a placeholder inside one reaches
     // the shell untouched. Argument text is expanded into the prose around them afterwards and is never scanned, so
     // it cannot start a command, even when a model supplied it.
-    const parts = template.split(shellRegex)
+    const parts = template.split(ConfigTrust.shellSnippet)
     const prose = parts.filter((_, index) => index % 2 === 0)
     const outputs = yield* runSpans(
       parts.filter((_, index) => index % 2 === 1),
@@ -314,4 +315,3 @@ function parseArguments(input: string) {
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
 const placeholderRegex = /\$(\d+)/g
 const quoteTrimRegex = /^["']|["']$/g
-const shellRegex = /!`([^`]+)`/g

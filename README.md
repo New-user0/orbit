@@ -27,6 +27,17 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   skills that live only in `.agents/skills` or another product's directory no longer load: move them to
   `.orbit/skills` first. The same switch decides whether the TUI reads Zed's own editor database for the selection in
   a Zed terminal.
+- **Project trust:** until its folder is trusted, a project's config applies only what cannot run code, spend money or
+  reach the network. Its hooks, MCP servers (including `.mcp.json`), plugin list, providers, shell, sandbox, formatter
+  and language server settings, default agent and keep-alive requests are left out, only its `deny` permission rules
+  are kept, and it cannot choose a web search provider. Its `{env:VAR}` references are not expanded, and a
+  `{file:path}` reference or instruction path counts only inside the project's folder. Orbit starts no language server
+  and runs no formatter in such a folder, built-in or configured, because they read its code and some run it. Config
+  in the folders above a project follows the decision for the folder that holds it. Your own config, `ORBIT_CONFIG`
+  and `ORBIT_CONFIG_CONTENT` are never held back. A private or foreground server trusts every folder except the home
+  directory and filesystem roots when it starts with `ORBIT_TRUST_PROJECT=1`, and an SDK host does with
+  `trust: { implicit: true }`; the shared background service never does, and a host that leaves the option unset
+  trusts nothing. See [docs/upgrading.md](docs/upgrading.md).
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and
   OS roots. `ORBIT_CLIENT_CERT`, `ORBIT_CLIENT_KEY` and `ORBIT_CLIENT_KEY_PASSPHRASE` add a client certificate.

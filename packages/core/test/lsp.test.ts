@@ -7,6 +7,8 @@ import { Config } from "@orbit/core/config"
 import { Location } from "@orbit/core/location"
 import { Lsp } from "@orbit/core/lsp/index"
 import { AbsolutePath } from "@orbit/core/schema"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
 import { Layer } from "effect"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -57,6 +59,44 @@ describe("Lsp", () => {
       )
       yield* withLsp(directory, false, (lsp) =>
         lsp.diagnostics([file]).pipe(Effect.map((found) => expect(found).toEqual({}))),
+      )
+    }),
+  )
+
+  it.live("starts no server while the project is untrusted, and starts one once it is trusted", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      const file = path.join(directory, "main.fake")
+      yield* Effect.promise(() => Bun.write(file, "here is an ERROR\n"))
+      yield* Effect.gen(function* () {
+        const lsp = yield* Lsp.Service
+        const trust = yield* WorkspaceTrust.Service
+        const hover = lsp.request("textDocument/hover", file, { position: { line: 0, character: 0 } })
+
+        // The server is in config that trust never touches, so only the folder's decision keeps it from starting.
+        expect(yield* lsp.diagnostics([file])).toEqual({})
+        expect((yield* hover.pipe(Effect.flip)).message).toBe("Language servers stay off until this folder is trusted.")
+
+        yield* trust.grant(directory, { persist: false, via: "test" })
+        expect(Object.keys(yield* lsp.diagnostics([file]))).toEqual([file])
+        expect(yield* hover).toEqual({ contents: { kind: "markdown", value: "a fake symbol" } })
+
+        yield* trust.revoke(directory)
+        expect(yield* lsp.diagnostics([file])).toEqual({})
+        expect((yield* hover.pipe(Effect.flip)).message).toBe("Language servers stay off until this folder is trusted.")
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Lsp.node, WorkspaceTrust.node]), [
+            Config.node.replace(configured({ fake: { command: [process.execPath, server], extensions: [".fake"] } })),
+            WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+            Location.node.replace(
+              Layer.succeed(
+                Location.Service,
+                Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
+              ),
+            ),
+          ]),
+        ),
       )
     }),
   )

@@ -1,0 +1,326 @@
+export * as ConfigTrust from "./trust.js"
+
+import path from "path"
+import { CompatNames } from "@orbit/compat/names"
+import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
+import { ConfigAgent } from "@orbit/schema/config/agent"
+import { ConfigCommand } from "@orbit/schema/config/command"
+import type { ConfigWarming } from "@orbit/schema/config/warming"
+import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
+import type { Permission } from "@orbit/schema/permission"
+import { Trust } from "@orbit/schema/trust"
+import { FSUtil } from "@orbit/util/fs-util"
+
+// Config from a folder that is not trusted yet. Consumers read whole values with `Config.latest`, and project and local
+// documents outrank the user's, so a partial value from a repository could replace one the user set. Whatever a
+// repository could use to run code, spend money or reach the network is therefore withheld whole, and a field that
+// cannot do any of that is kept as written. A few fields are kept in part: a deny rule only tightens what is allowed.
+
+/** What is left of a value once what an untrusted folder may not supply is taken out, and the kinds of what went. */
+interface Outcome<V> {
+  /** Unset when nothing is left. The same value, not a copy, when nothing was taken out. */
+  readonly value: V | undefined
+  readonly withheld: readonly Trust.Kind[]
+}
+
+/** How one field is treated while its folder is untrusted. */
+type Treatment<V> =
+  /** Harmless as written: it cannot run code, spend money or reach the network. */
+  | { readonly type: "inert" }
+  /** Withheld whole, even when empty, because the user's value must stay visible to `Config.latest`. */
+  | { readonly type: "withhold"; readonly kind: Trust.Kind }
+  /** Kept whole, but reported when `when` holds, because a later step refuses to run what it names. */
+  | { readonly type: "flag"; readonly kind: Trust.Kind; readonly when: (value: V) => boolean }
+  /** Kept in part. */
+  | { readonly type: "filter"; readonly apply: (value: V, place: Place) => Outcome<V> }
+
+/** A treatment for every field of T, so that a field added to the schema does not compile until it is classified. */
+type Table<T> = { readonly [K in keyof T]-?: Treatment<NonNullable<T[K]>> }
+
+/** T while it is being built. */
+type Draft<T> = { -readonly [K in keyof T]?: T[K] }
+
+/** Where a document sits, for the paths it names. */
+export interface Place {
+  /** The folders its paths may point into: the ones trust is decided for. */
+  readonly roots: readonly string[]
+  /** The folder its relative paths are read from. */
+  readonly directory: string
+}
+
+const inert = { type: "inert" } as const
+const withhold = (kind: Trust.Kind) => ({ type: "withhold", kind }) as const
+const flag = <V>(kind: Trust.Kind, when: (value: V) => boolean) => ({ type: "flag", kind, when }) as const
+const filter = <V>(apply: (value: V, place: Place) => Outcome<V>) => ({ type: "filter", apply }) as const
+
+/**
+ * A command in a template that runs when the command is used: an exclamation mark and a command in backticks. The
+ * regular expression is global, so test it with `search` or `split`, never `test`.
+ */
+export const shellSnippet = /!`([^`]+)`/g
+
+export function hasShellSnippet(template: string) {
+  return template.search(shellSnippet) >= 0
+}
+
+/** Anything written as `scheme://`, whether it is fetched over the network or read from disk. */
+function isUrl(entry: string) {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(entry)
+}
+
+// A path stays inside when it is read from the document's own folder and lands in one of the folders trust is decided
+// for. Home is not one of them, and neither is a network share, which `\\host\share` and `//host/share` both name.
+function inside(place: Place, entry: string) {
+  if (entry === "~" || entry.startsWith("~/") || entry.startsWith("~\\") || /^[\\/]{2}/.test(entry)) return false
+  const resolved = path.resolve(place.directory, entry)
+  return place.roots.some((root) => FSUtil.contains(root, resolved))
+}
+
+// An ask or allow rule can shadow a deny the user wrote, because the last matching rule wins, and then be approved.
+function denyRules(rules: Permission.Ruleset): Outcome<Permission.Ruleset> {
+  const denies = rules.filter((rule) => rule.effect === "deny")
+  if (denies.length === rules.length) return { value: rules, withheld: [] }
+  return { value: denies.length === 0 ? undefined : denies, withheld: ["permissions"] }
+}
+
+// A URL is fetched, and a path outside the folder is a file that is not the repository's to name: once something reads
+// these, either would put what it finds into the prompt.
+function instructionPaths(entries: readonly string[], place: Place): Outcome<readonly string[]> {
+  const paths = entries.filter((entry) => !isUrl(entry))
+  const kept = paths.filter((entry) => inside(place, entry))
+  if (kept.length === entries.length) return { value: entries, withheld: [] }
+  const withheld: Trust.Kind[] = [
+    ...(paths.length === entries.length ? [] : ["network" as const]),
+    ...(kept.length === paths.length ? [] : ["settings" as const]),
+  ]
+  return { value: kept.length === 0 ? undefined : kept, withheld }
+}
+
+// Turning web search off stays possible, because the user's own provider selection is what it would otherwise mask.
+function webSearch(selection: ConfigWebSearch.Selection): Outcome<ConfigWebSearch.Selection> {
+  return selection === false ? { value: selection, withheld: [] } : { value: undefined, withheld: ["network"] }
+}
+
+// Keep-alive requests are generations that are paid for, and nothing bounds how often a repository could ask for one.
+// Only turning them off is kept, for the reason that applies to web search.
+function warming(selection: boolean | ConfigWarming.Info): Outcome<boolean | ConfigWarming.Info> {
+  return selection === false ? { value: selection, withheld: [] } : { value: undefined, withheld: ["network"] }
+}
+
+function agents(
+  value: Readonly<Record<string, ConfigAgent.Info>>,
+  place: Place,
+): Outcome<Readonly<Record<string, ConfigAgent.Info>>> {
+  const results = Object.entries(value).map(([name, agent]) => ({
+    name,
+    agent,
+    result: walk(agent, classification.agent, place, (fields) => new ConfigAgent.Info(fields)),
+  }))
+  const withheld = results.flatMap((item) => item.result.withheld)
+  // A disabled agent ignores the rest of its entry. What is left of the entry once `disabled` is taken out must not
+  // stand in for it: for a name nobody defined, it would be a new agent that allows everything.
+  const kept = results.filter((item) => item.agent.disabled !== true)
+  if (kept.length === results.length && kept.every((item) => item.result.value === item.agent)) {
+    return { value, withheld }
+  }
+  return {
+    value: kept.length === 0 ? undefined : Object.fromEntries(kept.map((item) => [item.name, item.result.value])),
+    withheld,
+  }
+}
+
+function commands(
+  value: Readonly<Record<string, ConfigCommand.Info>>,
+  place: Place,
+): Outcome<Readonly<Record<string, ConfigCommand.Info>>> {
+  // No command field is withheld, so a command is never rebuilt: its snippets are only reported.
+  const results = Object.values(value).map((command) => walk(command, classification.command, place, () => command))
+  return { value, withheld: results.flatMap((result) => result.withheld) }
+}
+
+/**
+ * The classification of every field that a folder's config can set, for Config.Info and for the two records nested
+ * in it that hold more than a value: agents and commands. The completeness test checks it against the schema.
+ */
+export const classification = {
+  info: {
+    $schema: inert,
+    shell: withhold("shell"),
+    model: inert,
+    // Which agent a session starts as decides which permission rules apply to it.
+    default_agent: withhold("permissions"),
+    output_style: inert,
+    update: withhold("network"),
+    share: withhold("network"),
+    enterprise: withhold("network"),
+    username: inert,
+    permissions: filter(denyRules),
+    agents: filter(agents),
+    snapshots: inert,
+    watcher: inert,
+    hooks: withhold("hooks"),
+    formatter: withhold("formatter"),
+    lsp: withhold("lsp"),
+    media: inert,
+    sandbox: withhold("sandbox"),
+    tool_output: inert,
+    mcp: withhold("mcp"),
+    compaction: inert,
+    // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
+    compatibility: inert,
+    skills: withhold("settings"),
+    commands: filter(commands),
+    instructions: filter(instructionPaths),
+    references: withhold("settings"),
+    websearch: filter(webSearch),
+    plugins: withhold("plugins"),
+    worktree: withhold("settings"),
+    warming: filter(warming),
+    providers: withhold("providers"),
+    experimental: withhold("settings"),
+  } satisfies Table<Info>,
+  agent: {
+    model: inert,
+    // Extra headers and body fields reach the provider, whose tools and endpoints they can change.
+    request: withhold("providers"),
+    system: inert,
+    description: inert,
+    mode: inert,
+    hidden: inert,
+    color: inert,
+    steps: inert,
+    // Removing an agent also removes the rules the user attached to it, and an agent defined afterwards starts from
+    // allowing everything.
+    disabled: withhold("permissions"),
+    permissions: filter(denyRules),
+  } satisfies Table<ConfigAgent.Info>,
+  command: {
+    // A snippet runs a command, and a later step refuses to; the rest of the template is only text.
+    template: flag("commands", hasShellSnippet),
+    description: inert,
+    agent: inert,
+    model: inert,
+    subagent: inert,
+    subtask: inert,
+  } satisfies Table<ConfigCommand.Info>,
+}
+
+export interface Result {
+  readonly info: Info
+  /** In the order of `Trust.Kinds`, each once. */
+  readonly withheld: readonly Trust.Kind[]
+}
+
+/** What an untrusted folder's document may contribute, and the kinds of what it may not. */
+export function sanitize(info: Info, place: Place): Result {
+  const result = walk(info, classification.info, place, (fields) => new Info(fields))
+  return { info: result.value, withheld: result.withheld }
+}
+
+/** What became of one field: the value that is kept, if any, the kinds that went, and whether the field was altered. */
+interface Step {
+  readonly name: PropertyKey
+  readonly kept: unknown
+  readonly withheld: readonly Trust.Kind[]
+  readonly changed: boolean
+}
+
+function walk<T extends object>(
+  value: T,
+  table: Table<T>,
+  place: Place,
+  make: (fields: Draft<T>) => T,
+): { readonly value: T; readonly withheld: readonly Trust.Kind[] } {
+  const treat = <K extends keyof T>(name: K): readonly Step[] => {
+    const field = value[name]
+    if (field === undefined || field === null) return []
+    // A field the table does not know came from a newer schema, so it is held back like any other unknown setting.
+    const treatment: Treatment<NonNullable<T[K]>> | undefined = table[name]
+    if (treatment === undefined) return [{ name, kept: undefined, withheld: ["settings" as const], changed: true }]
+    if (treatment.type === "withhold") return [{ name, kept: undefined, withheld: [treatment.kind], changed: true }]
+    if (treatment.type === "filter") {
+      const outcome = treatment.apply(field, place)
+      return [{ name, kept: outcome.value, withheld: outcome.withheld, changed: outcome.value !== field }]
+    }
+    const reported = treatment.type === "flag" && treatment.when(field) ? [treatment.kind] : []
+    return [{ name, kept: field, withheld: reported, changed: false }]
+  }
+  const steps = (Object.keys(value) as (keyof T)[]).flatMap((name) => treat(name))
+  return {
+    value: steps.some((step) => step.changed)
+      ? make(
+          Object.fromEntries(
+            steps.filter((step) => step.kept !== undefined).map((step) => [step.name, step.kept]),
+          ) as Draft<T>,
+        )
+      : value,
+    withheld: Trust.Kinds.filter((kind) => steps.some((step) => step.withheld.includes(kind))),
+  }
+}
+
+/**
+ * The entry as it applies while its folder is untrusted. The project and local entries are stamped `trusted: false`,
+ * and a document keeps only what it may contribute and lists what it lost. The user's, the flag's, the organization's
+ * and the remote entries are never subject to trust.
+ */
+export function stamp(entry: Entry, place: Place): Entry {
+  if (entry.scope !== "project" && entry.scope !== "local") return entry
+  if (entry.type === "directory") return new Directory({ ...entry, trusted: false })
+  const sanitized = sanitize(entry.info, place)
+  return new Document({ ...entry, info: sanitized.info, trusted: false, withheld: sanitized.withheld })
+}
+
+// The folders that a product keeps its config in. They sit inside the folder the config belongs to.
+const containers = [".orbit", CompatNames.vendor.directory, CompatNames.agents]
+
+/**
+ * The folder that config found in `location` belongs to: the folder around a `.orbit` directory or another product's,
+ * and otherwise the location itself. Trust is decided for that folder, so a grant for a repository covers the config
+ * in it and does not reach the config that discovery finds in the folders above.
+ */
+export function holder(location: string) {
+  return containers.includes(path.basename(location)) ? path.dirname(location) : location
+}
+
+/** What decides a file that no config entry speaks for. */
+export interface Context {
+  /** The folders the project's decision covers, and what is decided. */
+  readonly roots: readonly string[]
+  readonly trusted: boolean
+  /** The roots of other products, as `Config.compat` lists them with the verdict it stamped on the ones above. */
+  readonly compat: readonly { readonly path: string; readonly scope: "user" | "project"; readonly trusted?: boolean }[]
+}
+
+/**
+ * Whether a file may run the code it carries, such as the hooks in a skill's or an agent's front matter. The source
+ * nearest the file decides: the config around it, the roots other products keep config in, and the project's folders,
+ * which are untrusted unless the decision says otherwise. So a file in an untrusted project is refused whether or not the
+ * project has any config of its own, and one in the user's own config or in a root of the user's, which are never
+ * subject to trust, is allowed even when the project's folder contains it. A file that nothing covers is allowed.
+ * Ask `ProjectTrust.allows` rather than assembling the context.
+ */
+export function allows(entries: readonly Entry[], file: string, context: Context) {
+  const covers = [
+    ...entries.flatMap((entry) => {
+      const root = covered(entry)
+      return root === undefined ? [] : [{ root, trusted: entry.trusted !== false }]
+    }),
+    ...context.roots.map((root) => ({ root, trusted: context.trusted })),
+    // A root with no verdict leaves the decision to the sources around it: only what is known is added.
+    ...context.compat.flatMap((root) => {
+      if (root.scope === "user") return [{ root: root.path, trusted: true }]
+      return root.trusted === false ? [{ root: root.path, trusted: false }] : []
+    }),
+  ]
+  const around = covers.filter((cover) => FSUtil.contains(cover.root, file))
+  // The sources that are no further out than any other around the file; the others are overruled by them.
+  const innermost = around.filter((item) => around.every((other) => FSUtil.contains(other.root, item.root)))
+  return innermost.every((item) => item.trusted)
+}
+
+function covered(entry: Entry) {
+  const location =
+    entry.type === "directory" ? entry.path : entry.path === undefined ? undefined : path.dirname(entry.path)
+  if (location === undefined) return undefined
+  return entry.scope === "project" || entry.scope === "local" ? holder(location) : location
+}

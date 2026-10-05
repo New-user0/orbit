@@ -27,6 +27,7 @@ import { Plugin } from "./plugin.js"
 import { PluginHooks } from "./plugin/hooks.js"
 import { InstancePlugins } from "./plugin/instance.js"
 import { PluginSupervisor } from "./plugin/supervisor.js"
+import { ProjectTrust } from "./project-trust.js"
 import { WorktreeStrategies } from "./worktree/strategies.js"
 import { Pty } from "./pty.js"
 import { Shell } from "./shell.js"
@@ -61,6 +62,7 @@ const nodes = [
   LocationLifecycle.node,
   Environment.node,
   Config.node,
+  ProjectTrust.node,
   Agent.node,
   Command.node,
   Reference.node,

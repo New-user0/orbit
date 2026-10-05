@@ -13226,6 +13226,9 @@
           },
           "scope": {
             "$ref": "#/components/schemas/Config.Scope"
+          },
+          "trusted": {
+            "type": "boolean"
           }
         },
         "required": ["type", "path"],
@@ -13243,6 +13246,15 @@
           },
           "scope": {
             "$ref": "#/components/schemas/Config.Scope"
+          },
+          "trusted": {
+            "type": "boolean"
+          },
+          "withheld": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trust.Kind"
+            }
           },
           "info": {
             "$ref": "#/components/schemas/Config.InfoEncoded"
@@ -19942,6 +19954,24 @@
         },
         "required": ["type", "text"],
         "additionalProperties": false
+      },
+      "Trust.Kind": {
+        "type": "string",
+        "enum": [
+          "hooks",
+          "mcp",
+          "plugins",
+          "commands",
+          "permissions",
+          "providers",
+          "shell",
+          "formatter",
+          "lsp",
+          "sandbox",
+          "network",
+          "settings"
+        ],
+        "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, formatters, language servers, the sandbox, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
       },
       "UnauthorizedErrorEncoded": {
         "type": "object",
