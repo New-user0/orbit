@@ -160,7 +160,7 @@ const assistant = (message: SessionMessage.Assistant, model: Model.Ref, provider
         {
           type: "text",
           text: item.text,
-          // Text can carry provider-bound state (e.g. Gemini thought signatures),
+          // Text can carry provider-bound state (e.g. thought signatures),
           // which is only replayable against the model that produced it.
           providerMetadata: reuseProviderMetadata ? providerMetadata(providerMetadataKey, item.state) : undefined,
         },
@@ -178,8 +178,8 @@ const assistant = (message: SessionMessage.Assistant, model: Model.Ref, provider
         : item.text.length > 0
           ? [{ type: message.error === undefined ? "reasoning" : "text", text: item.text }]
           : []
-    // Call-side metadata is model-scoped proof of generation (Gemini thought
-    // signatures, OpenAI encrypted reasoning): only the producing model may
+    // Call-side metadata is model-scoped proof of generation (thought
+    // signatures, encrypted reasoning): only the producing model may
     // replay it.
     const reuseToolProviderMetadata =
       reuseProviderMetadata ||
@@ -189,7 +189,7 @@ const assistant = (message: SessionMessage.Assistant, model: Model.Ref, provider
       reuseToolProviderMetadata ? providerMetadata(providerMetadataKey, item.providerState) : undefined,
     )
     if (item.executed !== true) return [call]
-    // Hosted tools (e.g. google_search) run inside the provider, so their
+    // Hosted tools (e.g. a provider's own web search) run inside the provider, so their
     // result payload (`providerResultState`) is provider-format data rather
     // than model-scoped proof: it stays replayable across models of the same
     // provider. After a model switch, echo only that payload — never fall

@@ -93,3 +93,10 @@ Tests run per package, never from the root (for example `cd packages/core && bun
 
 `bun tools/rebrand/rebrand.ts --check` fails if the upstream product name appears anywhere in the tree.
 After merging upstream changes, run `bun tools/rebrand/rebrand.ts --apply`, then the check.
+
+## Vendor branding gate
+
+`bun tools/rebrand/vendor.ts --check` fails if another agent product's name, directory, instruction file, variable or web
+app appears outside `packages/compat`, or if a model vendor's name appears outside provider adapter code, tests and the
+few other places the allowlist in `tools/rebrand/vendor.ts` names. Every allowlist entry carries a reason. Without `.git`,
+both checks read the tree instead and skip what its `.gitignore` files exclude.

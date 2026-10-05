@@ -426,7 +426,7 @@ export const deploymentArchitectureSource = `flowchart LR
     end
 
     DB[(PlanetScale)]
-    Models[Anthropic / OpenAI / other providers]
+    Models[Hosted API / local / other providers]
 
     Client -->|/inference/*| DNS --> Infer
     Client -->|/console/*| DNS --> Web

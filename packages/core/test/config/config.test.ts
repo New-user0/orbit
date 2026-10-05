@@ -1238,7 +1238,7 @@ describe("Config", () => {
                   buffer: 10000,
                 },
                 skills: ["./skills", "~/shared-skills", "https://example.com/.well-known/skills/"],
-                instructions: ["CONTRIBUTING.md", ".cursor/rules/*.md", "https://example.com/shared-rules.md"],
+                instructions: ["CONTRIBUTING.md", "docs/rules/*.md", "https://example.com/shared-rules.md"],
                 references: {
                   local: { path: "../library" },
                   sdk: { repository: "github.com/example/sdk", branch: "main" },
@@ -1328,7 +1328,7 @@ describe("Config", () => {
             ])
             expect(documents[0]?.info.instructions).toEqual([
               "CONTRIBUTING.md",
-              ".cursor/rules/*.md",
+              "docs/rules/*.md",
               "https://example.com/shared-rules.md",
             ])
             expect(documents[0]?.info.references).toEqual({

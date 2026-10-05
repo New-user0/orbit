@@ -203,6 +203,15 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
 
+### The sidebar's getting-started text no longer lists model families
+
+The getting-started panel in the TUI sidebar used to end its second line with a list of three model families. It now says
+only that you can connect from 75+ providers to use other models. When the panel shows and what it does are unchanged.
+
+**Affects:** people who see the panel, which shows until a provider is connected or the panel is dismissed.
+
+**What to do:** Nothing.
+
 ### The headless commands stop in an untrusted folder, and `orb trust` trusts one
 
 `orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` now ask the server, before they do any work,

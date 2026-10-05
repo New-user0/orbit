@@ -8,8 +8,8 @@ repository is assumed to be at `D:\Project\harness`; adjust paths to yours.
 ```powershell
 cd D:\Project\harness
 git fetch origin
-git checkout claude/tender-mccarthy-67q6q9
-git pull origin claude/tender-mccarthy-67q6q9
+git checkout main
+git pull origin main
 bun --version          # must be 1.4.2 or newer; if not: bun upgrade
 ```
 
