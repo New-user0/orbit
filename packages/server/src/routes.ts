@@ -75,6 +75,8 @@ const applicationServiceNodes = [
   LocationActivity.node,
   SessionRestart.node,
   Workspace.node,
+  // Listing grants needs no location, so the handler reads the store the locations share.
+  WorkspaceTrust.node,
 ] as const
 const applicationServices = LayerNode.group(applicationServiceNodes)
 

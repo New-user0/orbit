@@ -1,8 +1,12 @@
+import { Orbit } from "@orbit/client"
+import { Service } from "@orbit/client/effect/service"
 import { SessionID } from "@orbit/schema/session-id"
 import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { requireTrust } from "../../util/trust"
+import { directory } from "./flow/execute"
 
 const UNITS = { s: 1_000, m: 60_000, h: 3_600_000 }
 
@@ -25,7 +29,15 @@ export default Runtime.handler(Commands.commands.loop, (input) =>
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
+      trust: input.trust,
     })
+    // Once, before the first run: a refusal that came with every run would only repeat itself on each interval. The
+    // folder is the one the runs happen in, which is the folder of the session when --session names one that exists.
+    yield* requireTrust(
+      Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+      directory(),
+      { grant: input.trust, session: Option.getOrUndefined(input.session) },
+    )
     // One session for the whole loop, so each run sees what the previous ones found.
     const session = Option.getOrElse(input.session, () => SessionID.create())
     const times = Option.getOrUndefined(input.times)

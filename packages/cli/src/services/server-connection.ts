@@ -9,6 +9,11 @@ import { Standalone } from "./standalone"
 export type Args = {
   readonly server?: string
   readonly standalone?: boolean
+  /**
+   * The command will trust its folder for this run only (`--trust`). That grant must end with the run, so it needs a
+   * private server of its own: a shared server or a URL would keep it.
+   */
+  readonly trust?: boolean
   readonly mismatch?: "replace" | "ignore" | "error"
   readonly onStart?: EnsureOptions["onStart"]
 }
@@ -21,6 +26,12 @@ export type Resolved = {
 export const resolve = Effect.fn("cli.server-connection.resolve")(function* (args: Args = {}) {
   if (args.server !== undefined && args.standalone)
     return yield* Effect.fail(new Error("--server and --standalone cannot be combined"))
+  if (args.server !== undefined && args.trust)
+    return yield* Effect.fail(
+      new Error(
+        "--trust and --server cannot be combined: a grant for one run would stay with the server, so trust the folder there with `orb trust --server <url>` instead",
+      ),
+    )
   if (args.server !== undefined) {
     const password = yield* Env.password
     const endpoint = {
@@ -38,7 +49,7 @@ export const resolve = Effect.fn("cli.server-connection.resolve")(function* (arg
       )
     return { endpoint } satisfies Resolved
   }
-  if (args.standalone || (yield* ServiceConfig.read()).disabled === true) {
+  if (args.standalone || args.trust || (yield* ServiceConfig.read()).disabled === true) {
     return { endpoint: yield* Standalone.start() } satisfies Resolved
   }
 

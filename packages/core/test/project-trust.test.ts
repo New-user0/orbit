@@ -33,13 +33,16 @@ interface Folders {
 
 // The real configuration loader and ProjectTrust over a project in a home of its own, in a folder that nothing trusts
 // on its own. The watcher is the test one, so that a test can say that a file changed.
-function loader(folders: Folders) {
+// With `canonical`, the project is a linked worktree of a main checkout kept there.
+function loader(folders: Folders, canonical?: string) {
   const here = location({ directory: AbsolutePath.make(folders.repo) })
+  const placed =
+    canonical === undefined ? here : { ...here, project: { ...here.project, canonical: AbsolutePath.make(canonical) } }
   return Layer.mergeAll(
     AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]), [
       Config.node.replace(Config.configured()),
       WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
-      Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(here))),
+      Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(placed))),
       Global.node.replace(Global.layerWith({ config: folders.globalConfig, home: folders.home })),
       Credential.node.replace(emptyCredentialNode),
       WellKnown.node.replace(emptyWellknownNode),
@@ -203,10 +206,14 @@ describe("ProjectTrust.status", () => {
       )
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
-        expect<unknown>(held(folders.root, yield* project.status())).toEqual([
+        const listed = yield* project.status()
+        expect<unknown>(held(folders.root, listed)).toEqual([
           [path.join("work", ".orbit"), ["plugins"]],
           [path.join("work", "repo", ".orbit"), ["commands"]],
         ])
+        // What sits above the project names the folder to trust for it. The project's own files do not, because trusting
+        // the project lifts them.
+        expect<unknown>(listed.withheld.map((item) => item.directory)).toEqual([folders.work, undefined])
 
         // Trusting the project does not trust the folder around it.
         const granted = yield* nextUpdate
@@ -215,6 +222,7 @@ describe("ProjectTrust.status", () => {
         const above = yield* project.status()
         expect(above.trusted).toBe(true)
         expect<unknown>(held(folders.root, above)).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
+        expect<unknown>(above.withheld.map((item) => item.directory)).toEqual([folders.work])
 
         const trust = yield* WorkspaceTrust.Service
         const grantedAbove = yield* nextUpdate
@@ -222,6 +230,57 @@ describe("ProjectTrust.status", () => {
         yield* Fiber.join(grantedAbove)
         expect((yield* project.status()).withheld).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("names the folder around an Orbit file or a file in a `.orbit` directory above the project", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const settings = { hooks: { PreToolUse: [{ matcher: "shell", hooks: [{ type: "command", command: "echo" }] }] } }
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.work, "orbit.json"), settings),
+          write(path.join(folders.root, ".orbit", "orbit.json"), settings),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const status = yield* project.status()
+
+        // The file beside the project's folder and the one in a `.orbit` directory of a folder further up each name the
+        // folder around them, which is the one whose trust decides them.
+        expect(
+          status.withheld.map((item) => [path.relative(folders.root, item.path), item.directory]).toSorted(),
+        ).toEqual([
+          [path.join(".orbit", "orbit.json"), folders.root],
+          [path.join("work", "orbit.json"), folders.work],
+        ])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("names no folder for the files of a linked worktree, whose own folder is not its canonical root", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      // The project is a worktree at `repo` of a main checkout kept elsewhere, so what it holds is not inside the
+      // canonical root that the decision is made for, but trusting the project still lifts it.
+      const main = path.join(folders.root, "main")
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.repo, ".orbit", "plugins", "greeter.ts"), plugin),
+          write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const status = yield* project.status()
+
+        expect(status.directory).toBe(AbsolutePath.make(main))
+        expect(status.withheld.map((item) => [path.relative(folders.root, item.path), item.directory])).toEqual([
+          [path.join("work", ".orbit"), folders.work],
+          [path.join("work", "repo", ".orbit"), undefined],
+        ])
+      }).pipe(Effect.provide(loader(folders, main)))
     }),
   )
 

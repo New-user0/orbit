@@ -22,6 +22,16 @@ const ServerParams = {
   ),
 }
 
+// For commands that start work in the current folder and stop, rather than ask, when its project config is held back.
+const TrustParams = {
+  trust: Flag.boolean("trust").pipe(
+    Flag.withDescription(
+      "Trust this folder for this run only, so its project config applies; runs on a private server and cannot be combined with --server",
+    ),
+    Flag.withDefault(false),
+  ),
+}
+
 const PermissionParams = {
   auto: Flag.boolean("auto").pipe(
     Flag.withDescription("Auto-approve permissions that are not explicitly denied"),
@@ -289,6 +299,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           description: "Run a workflow file",
           params: {
             ...ServerParams,
+            ...TrustParams,
             file: Argument.string("file").pipe(Argument.withDescription("Workflow file (.ts, .js, .yaml or .yml)")),
             input: Flag.string("input").pipe(
               Flag.withDescription("Workflow input as key=value (repeat for multiple), or a JSON object"),
@@ -316,6 +327,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           description: "Resume a run, reusing nodes that already succeeded",
           params: {
             ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             auto: Flag.boolean("auto").pipe(
               Flag.withDescription("Approve actions that need permission instead of rejecting them"),
@@ -417,6 +429,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Run an eval suite on one or more models and compare pass rate, tokens, cost and time",
       params: {
         ...ServerParams,
+        ...TrustParams,
         suite: Argument.string("suite").pipe(
           Argument.withDescription("Eval suite file (.ts, .js, .json, .yaml or .yml)"),
         ),
@@ -510,6 +523,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Send the same message to one session on a schedule, such as checking a build every 10 minutes",
       params: {
         ...ServerParams,
+        ...TrustParams,
         interval: Argument.string("interval").pipe(
           Argument.withDescription('Time between runs, such as "30s", "10m" or "1h" (at least 10s)'),
         ),
@@ -540,6 +554,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Run Orbit with a message",
       params: {
         ...ServerParams,
+        ...TrustParams,
         message: Argument.string("message").pipe(
           Argument.withDescription("Message to send"),
           Argument.variadic({ min: 0 }),
@@ -697,6 +712,24 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Reload configuration",
       params: {
         ...ServerParams,
+      },
+    }),
+    Spec.make("trust", {
+      description: "Trust a folder, so that the project config it holds back can run",
+      params: {
+        ...ServerParams,
+        directory: Argument.string("directory").pipe(
+          Argument.withDescription("Folder to trust; the current folder when omitted"),
+          Argument.optional,
+        ),
+        revoke: Flag.boolean("revoke").pipe(
+          Flag.withDescription("Stop trusting the folder instead of trusting it"),
+          Flag.withDefault(false),
+        ),
+        list: Flag.boolean("list").pipe(
+          Flag.withDescription("List the folders that are trusted for good"),
+          Flag.withDefault(false),
+        ),
       },
     }),
     Spec.make("pair", {

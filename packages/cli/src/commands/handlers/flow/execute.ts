@@ -3,11 +3,13 @@ import { Service } from "@orbit/client/effect/service"
 import { Effect, Option, Schema } from "effect"
 import path from "node:path"
 import { ServerConnection } from "../../../services/server-connection"
+import { requireTrust } from "../../../util/trust"
 
 // Shared by `orb flow run` and `orb flow resume`: connect, load the workflow file, and drive the run.
 export const execute = Effect.fn("cli.flow.execute")(function* (input: {
   readonly server: Option.Option<string>
   readonly standalone: boolean
+  readonly trust: boolean
   readonly auto: boolean
   readonly model: Option.Option<string>
   readonly maxCost: Option.Option<number>
@@ -18,14 +20,19 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
 }) {
   const { run } = yield* Effect.promise(() => import("@orbit/flow"))
   const file = path.resolve(directory(), input.file)
-  const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
   const server = yield* ServerConnection.resolve({
     server: Option.getOrUndefined(input.server),
     standalone: input.standalone,
+    trust: input.trust,
   })
+  const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+  // Before the workflow is loaded: loading imports the file, whose top-level code then runs here, and for a resumed run
+  // the file is the one the repository's run store names. A refusal that says no work was done has to come before it.
+  yield* requireTrust(client, directory(), { grant: input.trust })
+  const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
   const result = yield* Effect.promise(() =>
     run({
-      client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+      client,
       workflow,
       file,
       directory: directory(),

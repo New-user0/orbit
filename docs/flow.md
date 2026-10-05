@@ -83,6 +83,10 @@ orb flow trace <run> [--format otlp] [--otlp <collector url>]
 orb eval <suite> --models a,b
 ```
 
+`orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and whose
+own config holds something back, such as hooks or plugins. Run `orb trust` in the folder to trust it for good, or pass
+`--trust` to trust it for that run alone; see [upgrading](upgrading.md).
+
 ## Writing `orb flow` workflows
 
 ## The context

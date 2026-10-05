@@ -6,6 +6,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { requireTrust } from "../../util/trust"
 import { directory } from "./flow/execute"
 
 export default Runtime.handler(
@@ -13,6 +14,15 @@ export default Runtime.handler(
   Effect.fn("cli.eval")(function* (input) {
     const { evaluate, loadSuite, openStore, summarize } = yield* Effect.promise(() => import("@orbit/flow"))
     const file = path.resolve(directory(), input.suite)
+    const server = yield* ServerConnection.resolve({
+      server: Option.getOrUndefined(input.server),
+      standalone: input.standalone,
+      trust: input.trust,
+    })
+    const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    // Before the suite is loaded: loading imports the file, whose top-level code then runs here, so a refusal that says
+    // no work was done has to come before it.
+    yield* requireTrust(client, directory(), { grant: input.trust })
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })
     const resume = Option.getOrUndefined(input.resume)
     // A resumed eval compares the models it started with.
@@ -31,14 +41,10 @@ export default Runtime.handler(
           ?.split(",")
           .map((model) => model.trim())
           .filter(Boolean)
-    const server = yield* ServerConnection.resolve({
-      server: Option.getOrUndefined(input.server),
-      standalone: input.standalone,
-    })
     const result = yield* Effect.tryPromise({
       try: () =>
         evaluate({
-          client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+          client,
           suite,
           file,
           directory: directory(),
