@@ -5,13 +5,15 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
 import { DialogTrust } from "../../../component/dialog-trust"
 import { TrustIndicator } from "../../../component/trust-indicator"
+import { holdsBack } from "../../../context/trust"
 import { StoryFooter } from "./footer"
 import type { Story } from "./index"
 
 const directory = "/Users/kit/code/orbit-app"
 
-// What the indicator can be shown for: a folder that holds something back, one that is untrusted but holds nothing
-// back, which is most repositories and shows nothing, and one that is trusted.
+// What the indicator can be shown for: a folder that holds something back, with or without config above it that only
+// its own folder's trust turns on, one that is untrusted but holds nothing back of its own, which is most repositories
+// and shows nothing, and one that is trusted.
 const STATES: readonly { label: string; status: TrustStatus }[] = [
   {
     label: "untrusted, holds config back",
@@ -23,6 +25,27 @@ const STATES: readonly { label: string; status: TrustStatus }[] = [
         { path: `${directory}/.orbit`, kinds: ["plugins", "commands"] },
         { path: `${directory}/orbit.json`, kinds: ["hooks", "mcp"] },
       ],
+    },
+  },
+  {
+    label: "untrusted, own and above config",
+    status: {
+      directory,
+      trusted: false,
+      persistent: true,
+      withheld: [
+        { path: "/Users/kit/code/orbit.json", kinds: ["hooks"], directory: "/Users/kit/code" },
+        { path: `${directory}/orbit.json`, kinds: ["hooks", "mcp"] },
+      ],
+    },
+  },
+  {
+    label: "untrusted, only above config",
+    status: {
+      directory,
+      trusted: false,
+      persistent: true,
+      withheld: [{ path: "/Users/kit/code/orbit.json", kinds: ["hooks"], directory: "/Users/kit/code" }],
     },
   },
   {
@@ -42,8 +65,13 @@ function TrustIndicatorStory(props: { context: Plugin.Context }) {
   const [message, setMessage] = createSignal("click the indicator, or press enter, to open the question")
   const status = createMemo(() => STATES[state()].status)
 
-  // What activating the indicator does in the app, with the answers kept here.
+  // What activating the indicator does in the app, with the answers kept here. There is nothing to activate while the
+  // indicator is not shown.
   const open = () => {
+    if (!holdsBack(status())) {
+      setMessage("the indicator is not shown, so there is nothing to activate")
+      return
+    }
     setMessage("question opened")
     props.context.ui.dialog.show(() => (
       <DialogTrust

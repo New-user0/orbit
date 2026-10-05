@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import type { TrustStatus } from "@orbit/client"
+import type { TrustStatus, TrustWithheld } from "@orbit/client"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { TrustIndicator } from "../../../src/component/trust-indicator"
@@ -56,15 +56,30 @@ test.each([
   }
 })
 
+// What sits in a folder above the project is turned on by that folder's own trust, so trusting this one would do nothing.
+const above: TrustWithheld = { path: "/projects/orbit.json", kinds: ["hooks"], directory: "/projects" }
+
 test.each([
   ["a trusted folder", { ...untrusted, trusted: true, source: "saved" as const, withheld: [] }],
+  ["a trusted folder with config above it held back", { ...untrusted, trusted: true, withheld: [above] }],
   ["an untrusted folder that holds nothing back", { ...untrusted, withheld: [] }],
+  ["an untrusted folder whose only held-back config is above it", { ...untrusted, withheld: [above] }],
   ["a folder whose status is not known", undefined],
 ])("%s is not marked", async (_, status) => {
   const app = await render(status, 100)
 
   try {
     expect(app.captureCharFrame()).not.toContain("Untrusted")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("an untrusted folder with config above it as well as its own is marked", async () => {
+  const app = await render({ ...untrusted, withheld: [above, ...untrusted.withheld] }, 100)
+
+  try {
+    expect(app.captureCharFrame()).toContain("⊙ Untrusted")
   } finally {
     app.renderer.destroy()
   }

@@ -7,6 +7,7 @@ import { dialogWidth, useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { Locale } from "../util/locale"
 import { abbreviateHome, formatPath } from "../util/path-format"
+import { groupWithheld, trustCommands } from "../util/trust"
 
 const labels: Record<TrustKind, string> = {
   hooks: "hooks",
@@ -26,7 +27,8 @@ const labels: Record<TrustKind, string> = {
 /**
  * Asks whether to trust the folder whose project config is held back. `onTrust` receives whether the grant can be kept
  * on disk, which it cannot for a home directory or a filesystem root: those are trusted only until Orbit restarts, and
- * the dialog offers nothing else for them.
+ * the dialog offers nothing else for them. Config in a folder above it is listed after the folder's own, with the
+ * command that trusts the folder that holds it, because trusting this one does not turn it on.
  */
 export function DialogTrust(props: {
   status: TrustStatus
@@ -39,17 +41,24 @@ export function DialogTrust(props: {
   const paths = useTuiPaths()
   const [pending, setPending] = createSignal(false)
   const intro = "Orbit is leaving out what could run code or reach the network:"
+  const held = createMemo(() => groupWithheld(props.status.withheld))
   const outro = createMemo(() =>
-    props.status.persistent
-      ? "Trust it only if you trust whoever wrote it.\nIt stays trusted until `orb trust --revoke`."
-      : "Trusting a home directory or filesystem root lasts only until Orbit restarts, or on the background service " +
-        "until the service restarts.\nEnd it sooner with `orb trust --revoke`.",
+    [
+      props.status.persistent
+        ? "Trust it only if you trust whoever wrote it.\nIt stays trusted until `orb trust --revoke`."
+        : "Trusting a home directory or filesystem root lasts only until Orbit restarts, or on the background service " +
+          "until the service restarts.\nEnd it sooner with `orb trust --revoke`.",
+      ...(held().above.length === 0
+        ? []
+        : [`Config above this folder stays off until its own folder is trusted: ${trustCommands(held().above)}.`]),
+    ].join("\n"),
   )
   // The dialog's own padding is taken off, so a row never runs past its edge.
   const width = createMemo(() => Math.min(dialogWidth("medium"), dimensions().width - 2) - 8)
-  // One entry per file or directory that holds something back, named from the folder when it lies inside it.
+  // One entry per file or directory that holds something back, named from the folder when it lies inside it. What
+  // trusting the folder turns on comes first, so a list that has to be cut short keeps it.
   const sources = createMemo(() =>
-    props.status.withheld.map((item) => ({
+    [...held().own, ...held().above].map((item) => ({
       name: formatPath(item.path, { base: props.status.directory, home: paths.home, forwardSlashes: true }),
       kinds: item.kinds.map((kind) => labels[kind]).join(", "),
     })),

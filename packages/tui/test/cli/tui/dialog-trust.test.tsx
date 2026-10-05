@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import type { TrustStatus } from "@orbit/client"
+import type { TrustStatus, TrustWithheld } from "@orbit/client"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
@@ -32,6 +32,15 @@ const project: TrustStatus = {
 // The home directory, which is never trusted for good.
 const home: TrustStatus = { ...project, directory: "/tmp/orbit/home", persistent: false }
 
+// A project with config of its own and in the folder above it. Discovery goes from the outermost folder in, so what sits
+// above can be reported ahead of the project's own, and each folder is trusted on its own.
+const above: TrustWithheld = { path: "/tmp/orbit/orbit.json", kinds: ["hooks"], directory: "/tmp/orbit" }
+const layered: TrustStatus = {
+  ...project,
+  directory: "/tmp/orbit/app",
+  withheld: [above, { path: "/tmp/orbit/app/orbit.json", kinds: ["mcp"] }],
+}
+
 const title = "Trust this folder?"
 // The choice, as opposed to the question that carries the same words.
 const choice = /Trust this folder(?!\?)/
@@ -58,6 +67,71 @@ test("a folder that can be remembered offers trust and not now, and trusting it 
 
     expect(fixture.updates).toEqual([{ trust: true, persist: true }])
     expect(fixture.status().trusted).toBe(true)
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("config above the folder is listed after the folder's own, with the command that trusts the folder that holds it", async () => {
+  const fixture = await renderTrust(layered)
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    const frame = fixture.app.captureCharFrame()
+    // What this choice turns on comes first, though the server reported it second.
+    expect(frame).toContain("MCP servers")
+    expect(frame).toContain("/tmp/orbit/orbit.json")
+    expect(frame.indexOf("MCP servers")).toBeLessThan(frame.indexOf("hooks"))
+    // Trusting this folder does not turn the rest on, and what does is named, as the commands name it.
+    expect(frame).toMatch(/Config\s+above\s+this\s+folder\s+stays\s+off\s+until\s+its\s+own\s+folder\s+is\s+trusted/)
+    expect(frame).toMatch(/orb\s+trust\s+\/tmp\/orbit`/)
+    expect(frame).toMatch(choice)
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("a folder with no config above it does not mention one", async () => {
+  const fixture = await renderTrust(project)
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    expect(fixture.app.captureCharFrame()).not.toContain("Config above this folder")
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("trusting the folder says what stays off above it, and that its own folder has to be trusted for it", async () => {
+  const fixture = await renderTrust(layered, { leaves: [above] })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await until(() => fixture.toast().currentToast !== null)
+
+    expect(fixture.toast().currentToast).toMatchObject({
+      variant: "success",
+      message:
+        "Trusted /tmp/orbit/app. Config above it stays off until its own folder is trusted: `orb trust /tmp/orbit`",
+    })
+    expect(fixture.updates).toEqual([{ trust: true, persist: true }])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("trusting a folder with nothing above it says only that it is trusted", async () => {
+  const fixture = await renderTrust(project)
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await until(() => fixture.toast().currentToast !== null)
+
+    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted /tmp/orbit" })
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -165,10 +239,13 @@ test("the question can be asked again after not now", async () => {
   }
 })
 
-test("a folder that holds nothing back, or is trusted, is not asked about", async () => {
+test("a folder that holds nothing of its own back, or is trusted, is not asked about", async () => {
   for (const status of [
     { ...project, withheld: [] },
+    // Trusting this folder would turn nothing on, as the one file that is held back is decided by the folder above.
+    { ...layered, withheld: [above] },
     { ...project, trusted: true, source: "saved" as const, withheld: [] },
+    { ...layered, trusted: true, source: "saved" as const, withheld: [above] },
   ]) {
     const fixture = await renderTrust(status)
 
@@ -221,7 +298,11 @@ test("trusting the folder somewhere else closes the question", async () => {
 
 type Fixture = Awaited<ReturnType<typeof renderTrust>>
 
-async function renderTrust(initial: TrustStatus, options?: { busy?: boolean; refuse?: boolean }) {
+async function renderTrust(
+  initial: TrustStatus,
+  // `leaves` is what a grant leaves held back, which is what sits in the folders above the one that is trusted.
+  options?: { busy?: boolean; refuse?: boolean; leaves?: TrustWithheld[] },
+) {
   const events = createEventStream()
   let status = initial
   let reads = 0
@@ -237,7 +318,12 @@ async function renderTrust(initial: TrustStatus, options?: { busy?: boolean; ref
     const body = (await request.json()) as { trust: boolean; persist?: boolean }
     updates.push(body)
     if (options?.refuse) return new Response("unavailable", { status: 503 })
-    status = { ...status, trusted: true, source: body.persist === false ? "session" : "saved", withheld: [] }
+    status = {
+      ...status,
+      trusted: true,
+      source: body.persist === false ? "session" : "saved",
+      withheld: options?.leaves ?? [],
+    }
     return json(status)
   }, events)
 

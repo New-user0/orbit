@@ -54,7 +54,14 @@ test("Home asks about an untrusted folder once, and the indicator and /trust ask
   expect(updates).toEqual([{ trust: true, persist: true }])
 })
 
-test("a trusted folder is not asked about and has no indicator", async () => {
+// Config in a folder above the project is turned on by that folder's own trust, so trusting the project would not.
+const above = { path: "/tmp/orbit.json", kinds: ["hooks"], directory: "/tmp" }
+
+test.each([
+  ["a trusted folder", { ...untrusted("/tmp/orbit"), trusted: true, source: "saved", withheld: [] }],
+  ["a trusted folder with config above it held back", { ...untrusted("/tmp/orbit"), trusted: true, withheld: [above] }],
+  ["an untrusted folder whose only held-back config is above it", { ...untrusted("/tmp/orbit"), withheld: [above] }],
+])("%s is not asked about and has no indicator", async (_, answer) => {
   await using state = await tmpdir()
   let reads = 0
   await using setup = await createAppFixture({
@@ -62,7 +69,7 @@ test("a trusted folder is not asked about and has no indicator", async () => {
     fetch: (url) => {
       if (url.pathname !== "/api/location/trust") return undefined
       reads++
-      return json({ ...untrusted("/tmp/orbit"), trusted: true, source: "saved", withheld: [] })
+      return json(answer)
     },
   })
 

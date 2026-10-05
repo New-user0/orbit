@@ -4,6 +4,7 @@ import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { abbreviateHome } from "../util/path-format"
+import { groupWithheld, trustCommands } from "../util/trust"
 import { useClient } from "./client"
 import { useData } from "./data"
 import { createSimpleContext } from "./helper"
@@ -13,9 +14,13 @@ import { useTuiPaths } from "./runtime"
 
 const DialogTrustKey = Symbol("DialogTrust")
 
-/** Whether the folder is untrusted and so holds something back, which is what the prompt and the indicator are for. */
+/**
+ * Whether the folder is untrusted and so holds something of its own back, which is what the prompt and the indicator
+ * are for. Config in a folder above it follows that folder's own decision, so a folder whose only held-back config
+ * sits above it has nothing that trusting it would turn on.
+ */
 export function holdsBack(status: TrustStatus | undefined) {
-  return status !== undefined && !status.trusted && status.withheld.length > 0
+  return status !== undefined && !status.trusted && groupWithheld(status.withheld).own.length > 0
 }
 
 /**
@@ -104,9 +109,16 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
           await Promise.all([current.refresh(), startup.refresh()])
           if (dialog.key === DialogTrustKey) dialog.clear()
           const folder = abbreviateHome(status.directory, paths.home)
+          // The grant lifts the folder's own config, so what is still held back sits above it, in folders of their own.
+          const above = groupWithheld(status.withheld).above
           toast.show({
             variant: "success",
-            message: status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
+            message: [
+              status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
+              ...(above.length === 0
+                ? []
+                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above)}`]),
+            ].join(". "),
           })
         }, toast.error)
     }

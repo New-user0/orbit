@@ -14,8 +14,7 @@ const ROOTS = [
   { label: "filesystem root", directory: "/", persistent: false },
 ] as const
 
-// What is held back, in the order it is listed. A path that starts with a slash lies outside the root, as the config
-// of a folder above a project does, so the dialog shows both the relative and the absolute way of naming a file.
+// What the folder holds back, in the order it is listed: its own config, which trusting it turns on.
 const SOURCES: readonly { path: string; kinds: readonly TrustKind[] }[] = [
   { path: ".orbit", kinds: ["plugins", "commands"] },
   { path: "orbit.json", kinds: ["hooks", "mcp", "providers"] },
@@ -24,17 +23,28 @@ const SOURCES: readonly { path: string; kinds: readonly TrustKind[] }[] = [
   { path: "packages/web/.orbit", kinds: ["plugins"] },
   { path: "packages/api/orbit.json", kinds: ["shell", "formatter", "lsp"] },
   { path: "packages/docs/a-deliberately-long-directory-name/.orbit", kinds: ["network", "settings"] },
-  { path: "/Users/kit/code/shared/orbit.json", kinds: ["settings"] },
+]
+
+// Config in the folders above the project, each with the folder whose own trust turns it on, which trusting the project
+// does not. Discovery goes from the outermost folder in, so these can come ahead of the project's own in what the server
+// reports, and are listed here that way to show that the dialog puts the project's own first.
+const ABOVE: readonly { path: string; kinds: readonly TrustKind[]; directory: string }[] = [
+  { path: "/Users/kit/code/orbit.json", kinds: ["hooks", "mcp"], directory: "/Users/kit/code" },
+  { path: "/Users/kit/code/shared/.orbit", kinds: ["plugins"], directory: "/Users/kit/code/shared" },
 ]
 
 // How much is held back: one file, a few, or more than the dialog has room for.
 const AMOUNTS = [1, 3, SOURCES.length] as const
+
+// How much sits above the project: nothing, the files of one folder, or those of two.
+const ABOVE_AMOUNTS = [0, 1, ABOVE.length] as const
 
 function DialogTrustStory(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const theme = props.context.theme
   const [root, setRoot] = createSignal(0)
   const [amount, setAmount] = createSignal(0)
+  const [above, setAbove] = createSignal(0)
   const [message, setMessage] = createSignal("dialog open")
 
   const status = createMemo<TrustStatus>(() => {
@@ -43,10 +53,13 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
       directory: item.directory,
       trusted: false,
       persistent: item.persistent,
-      withheld: SOURCES.slice(0, AMOUNTS[amount()]).map((source) => ({
-        path: source.path.startsWith("/") ? source.path : `${item.directory.replace(/\/$/, "")}/${source.path}`,
-        kinds: [...source.kinds],
-      })),
+      withheld: [
+        ...ABOVE.slice(0, ABOVE_AMOUNTS[above()]).map((source) => ({ ...source, kinds: [...source.kinds] })),
+        ...SOURCES.slice(0, AMOUNTS[amount()]).map((source) => ({
+          path: `${item.directory.replace(/\/$/, "")}/${source.path}`,
+          kinds: [...source.kinds],
+        })),
+      ],
     }
   })
 
@@ -92,6 +105,12 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
         group: "Storybook",
         run: () => setAmount((value) => (value + 1) % AMOUNTS.length),
       },
+      {
+        bind: "a",
+        title: "Cycle how much config sits above the project",
+        group: "Storybook",
+        run: () => setAbove((value) => (value + 1) % ABOVE_AMOUNTS.length),
+      },
       { bind: "o,return", title: "Open the dialog", group: "Storybook", run: open },
       {
         bind: "x",
@@ -101,6 +120,7 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
           batch(() => {
             setRoot(0)
             setAmount(0)
+            setAbove(0)
           })
           open()
         },
@@ -120,11 +140,12 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
       <StoryFooter
         context={props.context}
         title="storybook / trust dialog"
-        details={[ROOTS[root()].label, `${AMOUNTS[amount()]} held back`]}
+        details={[ROOTS[root()].label, `${AMOUNTS[amount()]} held back`, `${ABOVE_AMOUNTS[above()]} above`]}
         message={message()}
         controls={[
           { shortcut: "r", label: "root" },
           { shortcut: "s", label: "amount held back" },
+          { shortcut: "a", label: "config above" },
           { shortcut: "o", label: "open" },
           { shortcut: "x", label: "reset" },
           { shortcut: "esc", label: "back" },

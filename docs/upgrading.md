@@ -270,23 +270,30 @@ The terminal UI could not trust a folder, and it imported the `tui` entrypoint o
 about the folder of the session in view, when it starts, whenever the location, the configuration or a grant changes,
 and after it reconnects.
 
-- **The question:** when the folder in view, on Home or in a session, is untrusted and holds something back, a dialog
-  lists the files and directories that hold it, by path from the folder, with what each holds, and offers "Trust this
-  folder" or "Not now". Enter on its own is "Not now", so a key typed ahead of the dialog never trusts a folder, and
-  closing the dialog with Esc counts as "Not now". Either one keeps it from opening by itself again for that folder
-  until the terminal UI restarts. A home directory or a filesystem root is offered "Trust until Orbit restarts"
+- **The question:** when the folder in view, on Home or in a session, is untrusted and holds something of its own back,
+  a dialog lists the files and directories that hold it, by path from the folder, with what each holds, and offers
+  "Trust this folder" or "Not now". Enter on its own is "Not now", so a key typed ahead of the dialog never trusts a
+  folder, and closing the dialog with Esc counts as "Not now". Either one keeps it from opening by itself again for that
+  folder until the terminal UI restarts. A home directory or a filesystem root is offered "Trust until Orbit restarts"
   instead, which on the background service lasts until the service restarts; `orb trust --revoke` ends it sooner.
+- **Config above the folder:** a file or directory in a folder above the project follows the decision for the folder
+  that holds it, so trusting the project does not turn it on. The dialog lists it after the folder's own files, and
+  says which folder to trust for it, as the command `orb trust <folder>`. When a grant leaves such config off, the
+  confirmation says so and names the same folder.
 - **The reminder:** an "Untrusted" indicator in the prompt's footer, and the `/trust` command ("Trust this folder"),
-  open the dialog again. Both show only while the folder is untrusted and holds something back, so a repository with no
-  project config of its own never shows them.
+  open the dialog again. Both show only while the folder is untrusted and holds something of its own back, so a
+  repository with no project config of its own never shows them, and neither does one whose only held-back config is
+  above it, because trusting it would turn nothing on.
 - **Plugins:** the plugins in a project's `.orbit/plugins` are imported only while the folder is trusted, and are
   dropped when the trust is taken away. The terminal UI imports no plugin until the first answer has come, so the
   start takes one request longer. A server that cannot answer, such as one older than workspace trust, counts as not
   trusting the folder, so the project's plugins stay off and the terminal UI starts as usual. The plugins in your own
   config directory, in `.orbit` in your home directory and in the `plugins` of your terminal UI settings load either
   way.
-- **`orb mini`:** it prints one line before the session starts when its folder is untrusted and holds something back,
-  which points to `orb trust`.
+- **`orb mini`:** it prints one line before the session starts when its folder is untrusted and holds something of its
+  own back, which points to `orb trust`. Config in a folder above the project is named in the same line, with the
+  `orb trust <folder>` command for the folder that holds it, whether or not the project is trusted, as `orb run` says
+  on stderr.
 
 **Affects:** people who start the terminal UI in a clone that has plugins in `.orbit/plugins`, which stop loading until
 the folder is trusted, and everyone who now sees the dialog. Code that calls `localPluginDirectories` from
@@ -294,7 +301,8 @@ the folder is trusted, and everyone who now sees the dialog. Code that calls `lo
 `{ global, project }` back instead of one list.
 
 **What to do:** choose "Trust this folder" for each repository you trust, or run `orb trust` in it. In a home directory
-choose "Trust until Orbit restarts", or pass `--trust` to a headless command.
+choose "Trust until Orbit restarts", or pass `--trust` to a headless command. For config in a folder above a repository,
+run `orb trust <folder>` for the folder that holds it.
 
 ## Permissions
 
