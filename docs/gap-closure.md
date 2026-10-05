@@ -1,7 +1,8 @@
 # Gap closure tracker
 
-Closing the gaps found by comparing Orbit with Claude Code's public documentation. Every item is built from public
-docs, open standards and Orbit's own code. A step is ticked once it is committed with tests and `bun run check` passes.
+Closing the gaps found by comparing Orbit with another agent product's public documentation. Every item is built from
+public docs, open standards and Orbit's own code. A step is ticked once it is committed with tests and `bun run check`
+passes.
 
 ## W1. System prompts
 
@@ -18,7 +19,7 @@ docs, open standards and Orbit's own code. A step is ticked once it is committed
 
 ## W3. Safe defaults and instruction files
 
-- [x] Load `ORBIT.md`, `AGENTS.md` or `CLAUDE.md`, first one per directory
+- [x] Load `ORBIT.md`, `AGENTS.md` or another product's instruction file, first one per directory
 - [ ] Ask before edits and shell commands by default — blocked by the session's safety classifier; needs the owner
 - [ ] Auto-allow read-only shell commands — blocked, as above
 - [ ] Flow agents approve edits inside their own worktrees — blocked, as above
@@ -45,7 +46,7 @@ docs, open standards and Orbit's own code. A step is ticked once it is committed
 ## W7. Settings hooks
 
 - [x] `hooks` config: PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop, PreCompact
-- [x] Read hooks from `.claude/settings.json` and `settings.local.json`
+- [x] Read hooks from another product's `settings.json` and `settings.local.json`
 
 ## W8. Language servers
 

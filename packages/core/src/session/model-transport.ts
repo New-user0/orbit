@@ -450,8 +450,8 @@ export const makeLayer = (connector: WebSocketConnector) =>
                 owner.streamFailures = 0
                 yield* metric("terminal", { type: terminal.type })
                 if (terminal.type === "rejected") yield* metric("rejection", { recovery: terminal.recovery })
-                // The Codex backend stops serving a connection after any error frame: the next request is
-                // never answered and the socket dies with 1006. api.openai.com keeps it open, so reconnecting
+                // Some backends stop serving a connection after any error frame: the next request is
+                // never answered and the socket dies with 1006. Others keep it open, so reconnecting
                 // costs one handshake there. Drop the socket after every error so retries never race that.
                 if (terminal.type !== "completed" && terminal.type !== "incomplete") yield* closeChannel(owner, channel)
                 return

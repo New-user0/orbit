@@ -50,12 +50,12 @@ function SessionLocationMissingStory(props: { context: Plugin.Context }) {
         <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
           Workerd Modal workspace driver
         </text>
-        <text fg={theme.text.muted}>build · GPT-5.6 Sol (high)</text>
+        <text fg={theme.text.muted}>build · Sol 5.6 (high)</text>
         <box height={1} />
         <text fg={theme.text.base}>You</text>
         <text fg={theme.text.muted}>Test the mounted workspace and verify the deployment.</text>
         <box height={1} />
-        <text fg={theme.text.base}>Build · GPT-5.6 Sol (high)</text>
+        <text fg={theme.text.base}>Build · Sol 5.6 (high)</text>
         <text fg={theme.text.muted}>The deployment is verified and the worktree is clean.</text>
         <box flexGrow={1} />
         <SessionLocationUnavailable directory={directory} onMove={open} />
