@@ -290,10 +290,10 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     const id = ++reconciliationID
     const started = Date.now()
     log.info("plugin reconciliation started", { id })
-    // The plugins of a project import into this process, so they are read only while its folder is trusted. Nothing
-    // else here depends on the trust: the user's directories and config load either way, and the server's own list
-    // already leaves out what the folder keeps.
-    const directories = trustedPluginDirectories(props.directories, trust.startup.trusted())
+    // The plugins of a project import into this process, so they are read only while its folder is trusted, and not
+    // from a folder around it that the server still holds back. Nothing else here depends on the trust: the user's
+    // directories and config load either way, and the server's own list already leaves out what the folder keeps.
+    const directories = trustedPluginDirectories(props.directories, trust.startup.trusted(), trust.startup.above())
     await trace("watch", { reconciliation: id, directories }, () =>
       Promise.all(directories.map(watcher.wait)).then(() => undefined),
     )
@@ -540,7 +540,12 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
       // Nothing is imported until the trust status is known, so no project plugin loads in the moment it takes to ask.
       () =>
         trust.startup.settled()
-          ? JSON.stringify([serverTuiPlugins(), config.data.plugins ?? [], trust.startup.trusted()])
+          ? JSON.stringify([
+              serverTuiPlugins(),
+              config.data.plugins ?? [],
+              trust.startup.trusted(),
+              trust.startup.above(),
+            ])
           : undefined,
       (key) => {
         if (key === undefined) return

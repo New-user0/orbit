@@ -7,7 +7,7 @@ import { ConfigProvider } from "../../../src/config"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
-import { LocationProvider } from "../../../src/context/location"
+import { LocationProvider, useLocation } from "../../../src/context/location"
 import { RouteProvider } from "../../../src/context/route"
 import { ThemeProvider } from "../../../src/context/theme"
 import { TrustProvider, useTrust, useTrustPrompt } from "../../../src/context/trust"
@@ -41,9 +41,19 @@ const layered: TrustStatus = {
   withheld: [above, { path: "/tmp/orbit/app/orbit.json", kinds: ["mcp"] }],
 }
 
+// A folder a person can move to, such as the one a session works in: a clone of its own, with a root of its own.
+const away: TrustStatus = {
+  directory: "/elsewhere/other-clone",
+  trusted: false,
+  persistent: true,
+  withheld: [{ path: "/elsewhere/other-clone/orbit.json", kinds: ["providers"] }],
+}
+
 const title = "Trust this folder?"
 // The choice, as opposed to the question that carries the same words.
 const choice = /Trust this folder(?!\?)/
+// Whether the question is on screen and asks about the folder, which is what its first line names.
+const asksAbout = (frame: string, folder: string) => frame.includes(title) && frame.includes(`⊙ Untrusted  ${folder}`)
 
 test("a folder that can be remembered offers trust and not now, and trusting it sends persist", async () => {
   const fixture = await renderTrust(project)
@@ -65,7 +75,8 @@ test("a folder that can be remembered offers trust and not now, and trusting it 
     fixture.app.mockInput.pressEnter()
     await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
-    expect(fixture.updates).toEqual([{ trust: true, persist: true }])
+    // For the folder the question was about, which is the one in view.
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
     expect(fixture.status().trusted).toBe(true)
   } finally {
     fixture.app.renderer.destroy()
@@ -116,7 +127,7 @@ test("trusting the folder says what stays off above it, and that its own folder 
       message:
         "Trusted /tmp/orbit/app. Config above it stays off until its own folder is trusted: `orb trust /tmp/orbit`",
     })
-    expect(fixture.updates).toEqual([{ trust: true, persist: true }])
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -168,7 +179,7 @@ test("a home directory offers only trust until restart, which never sends persis
     fixture.app.mockInput.pressEnter()
     await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
-    expect(fixture.updates).toEqual([{ trust: true, persist: false }])
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: false }])
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -216,7 +227,7 @@ test("a grant the server refuses is reported and leaves the question open", asyn
 
     expect(fixture.toast().currentToast).toMatchObject({ variant: "error", message: expect.stringContaining("503") })
     expect(fixture.app.captureCharFrame()).toContain(title)
-    expect(fixture.updates).toEqual([{ trust: true, persist: true }])
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
     expect(fixture.status().trusted).toBe(false)
   } finally {
     fixture.app.renderer.destroy()
@@ -296,41 +307,175 @@ test("trusting the folder somewhere else closes the question", async () => {
   }
 })
 
+test("the question closes when another folder comes into view, so no choice is made for a folder that was not shown", async () => {
+  const held = Promise.withResolvers<void>()
+  const fixture = await renderTrust(project, { away: { status: away, held: held.promise } })
+
+  try {
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, project.directory))
+
+    // What is known of the other folder is not in yet, so nothing says what trusting it would turn on.
+    fixture.view(away.directory)
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.renderOnce()
+    expect(fixture.updates).toEqual([])
+
+    // The question comes back for the folder now in view once it is known, and a choice is for that folder.
+    held.resolve()
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
+    expect(fixture.app.captureCharFrame()).toContain("providers")
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
+
+    expect(fixture.updates).toEqual([{ directory: away.directory, trust: true, persist: true }])
+    expect(fixture.status().trusted).toBe(false)
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("not now holds for the folder it was said for, and the folder that was left is asked about when it is back", async () => {
+  const fixture = await renderTrust(project, { away: { status: away } })
+
+  try {
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, project.directory))
+    fixture.view(away.directory)
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
+
+    fixture.app.mockInput.pressEnter()
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
+    await fixture.app.renderOnce()
+    // The folder that was just declined is not asked about again.
+    expect(fixture.app.captureCharFrame()).not.toContain(title)
+
+    // Leaving the first folder was not an answer about it.
+    fixture.view(directory)
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, project.directory))
+    expect(fixture.updates).toEqual([])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("a grant that is answered once another folder is in view leaves the question about that folder open", async () => {
+  const answer = Promise.withResolvers<void>()
+  const fixture = await renderTrust(project, { away: { status: away }, granting: answer.promise })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await until(() => fixture.updates.length > 0)
+
+    // The server is slow, and the person has moved on.
+    fixture.view(away.directory)
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
+    answer.resolve()
+    await until(() => fixture.toast().currentToast !== null)
+    await fixture.app.renderOnce()
+
+    expect(fixture.toast().currentToast).toMatchObject({ variant: "success", message: "Trusted /tmp/orbit" })
+    expect(asksAbout(fixture.app.captureCharFrame(), away.directory)).toBe(true)
+    expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+test("the folders above the one the terminal UI started in that the server holds back are the same list until the answer changes", async () => {
+  // Trusted, with config in the folder above still held back for that folder's own decision.
+  const fixture = await renderTrust({ ...layered, trusted: true, source: "saved", withheld: [above] })
+
+  try {
+    await until(() => fixture.reads() > 0)
+    await until(() => fixture.trust().startup.settled())
+    const first = fixture.trust().startup.above()
+    expect(first).toEqual(["/tmp/orbit"])
+
+    // The plugins are rebuilt when this list changes, which retries the packages that failed to install, so a read that
+    // finds the same answer must not look like a change.
+    const reads = fixture.reads()
+    fixture.events.emit({
+      id: "evt_trust",
+      created: 1,
+      type: "trust.updated",
+      data: { directory: "/tmp/orbit", trusted: true },
+    })
+    await until(() => fixture.reads() >= reads + 2)
+    await fixture.app.renderOnce()
+    expect(fixture.trust().startup.above()).toBe(first)
+
+    // And when the folder above is trusted, the server stops listing it.
+    fixture.trustElsewhere()
+    fixture.events.emit({
+      id: "evt_trust_above",
+      created: 2,
+      type: "trust.updated",
+      data: { directory: "/tmp/orbit", trusted: true },
+    })
+    await until(() => fixture.trust().startup.above().length === 0)
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 type Fixture = Awaited<ReturnType<typeof renderTrust>>
 
 async function renderTrust(
   initial: TrustStatus,
-  // `leaves` is what a grant leaves held back, which is what sits in the folders above the one that is trusted.
-  options?: { busy?: boolean; refuse?: boolean; leaves?: TrustWithheld[] },
+  options?: {
+    busy?: boolean
+    refuse?: boolean
+    // What a grant leaves held back, which is what sits in the folders above the one that is trusted.
+    leaves?: TrustWithheld[]
+    // A folder a person can move to, with what is read for it. `held` keeps that answer back until it is resolved.
+    away?: { status: TrustStatus; held?: Promise<void> }
+    // Keeps the answer to a grant back until it is resolved, as a slow server would.
+    granting?: Promise<void>
+  },
 ) {
   const events = createEventStream()
-  let status = initial
+  // What a read or a grant answers, by the folder it names: the one the terminal UI starts in, and the one a person can
+  // move to.
+  const statuses = new Map([[directory, initial]])
+  if (options?.away) statuses.set(options.away.status.directory, options.away.status)
   let reads = 0
   const updates: unknown[] = []
   let trust!: ReturnType<typeof useTrust>
   let toast!: ReturnType<typeof useToast>
+  let location!: ReturnType<typeof useLocation>
   const calls = createFetch(async (url, request) => {
     if (url.pathname !== "/api/location/trust") return undefined
+    const folder = url.searchParams.get("location[directory]") ?? directory
+    const known = statuses.get(folder) ?? initial
     if (request.method === "GET") {
       reads++
-      return json(status)
+      if (folder === options?.away?.status.directory) await options.away.held
+      return json(known)
     }
     const body = (await request.json()) as { trust: boolean; persist?: boolean }
-    updates.push(body)
+    // Which folder the grant is for is part of what is asked.
+    updates.push({ directory: folder, ...body })
     if (options?.refuse) return new Response("unavailable", { status: 503 })
-    status = {
-      ...status,
+    await options?.granting
+    const granted: TrustStatus = {
+      ...known,
       trusted: true,
       source: body.persist === false ? "session" : "saved",
       withheld: options?.leaves ?? [],
     }
-    return json(status)
+    statuses.set(folder, granted)
+    return json(granted)
   }, events)
 
   // What a route does: ask whenever the folder in view holds something back.
   function Route() {
     trust = useTrust()
     toast = useToast()
+    location = useLocation()
     const dialog = useDialog()
     if (options?.busy) onMount(() => dialog.replace(() => <DialogAlert title="Busy" message="Another dialog" />))
     useTrustPrompt()
@@ -349,7 +494,7 @@ async function renderTrust(
                     <LocationProvider>
                       <ThemeProvider mode="dark" source={emptyThemeSource}>
                         <DialogProvider>
-                          <TrustProvider>
+                          <TrustProvider directory={directory}>
                             <Route />
                           </TrustProvider>
                         </DialogProvider>
@@ -366,16 +511,20 @@ async function renderTrust(
     { width: 100, height: 40, kittyKeyboard: true },
   )
   app.renderer.start()
+  // The folder the terminal UI starts in.
+  const status = () => statuses.get(directory) ?? initial
   return {
     app,
     events,
     updates,
-    status: () => status,
+    status,
     reads: () => reads,
     trust: () => trust,
     toast: () => toast,
+    // What a session does when it opens: puts another folder in view.
+    view: (folder: string) => location.set({ directory: folder }),
     trustElsewhere() {
-      status = { ...status, trusted: true, source: "saved", withheld: [] }
+      statuses.set(directory, { ...status(), trusted: true, source: "saved", withheld: [] })
     },
   }
 }

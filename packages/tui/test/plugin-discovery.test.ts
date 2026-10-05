@@ -26,12 +26,37 @@ test("a project's plugin directories wait for its folder to be trusted and the u
     project: ["/project/.orbit/plugins", "/project/packages/app/.orbit/plugins"],
   }
 
-  expect(trustedPluginDirectories(directories, false)).toEqual(["/config/plugins"])
-  expect(trustedPluginDirectories(directories, true)).toEqual([
+  expect(trustedPluginDirectories(directories, false, [])).toEqual(["/config/plugins"])
+  expect(trustedPluginDirectories(directories, true, [])).toEqual([
     "/config/plugins",
     "/project/.orbit/plugins",
     "/project/packages/app/.orbit/plugins",
   ])
+})
+
+test("a plugin directory in a folder above the project waits for that folder's own decision", () => {
+  // The terminal UI finds its project's root on its own, and here that is /code, while the server's project is the
+  // folder the terminal UI was started in, /code/app. The server holds /code back, as a folder above its project.
+  const directories = {
+    global: ["/config/plugins"],
+    project: ["/code/.orbit/plugins", "/code/app/.orbit/plugins", "/code/app/packages/ui/.orbit/plugins"],
+  }
+
+  expect(trustedPluginDirectories(directories, true, ["/code"])).toEqual([
+    "/config/plugins",
+    "/code/app/.orbit/plugins",
+    "/code/app/packages/ui/.orbit/plugins",
+  ])
+  // The project's own directories are not named by what is held back above it, and neither is a folder that only
+  // starts with the same letters.
+  expect(trustedPluginDirectories(directories, true, ["/code/ap", "/co"])).toEqual([
+    "/config/plugins",
+    ...directories.project,
+  ])
+  // Once that folder is trusted the server stops listing it, and the plugins in it load.
+  expect(trustedPluginDirectories(directories, true, [])).toEqual(["/config/plugins", ...directories.project])
+  // And an untrusted project loads none of its own, whatever is held back.
+  expect(trustedPluginDirectories(directories, false, ["/code"])).toEqual(["/config/plugins"])
 })
 
 test("plugin directories are the user's global config directory and the project's own .orbit directories", async () => {

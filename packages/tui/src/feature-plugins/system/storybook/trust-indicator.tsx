@@ -5,7 +5,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
 import { DialogTrust } from "../../../component/dialog-trust"
 import { TrustIndicator } from "../../../component/trust-indicator"
-import { holdsBack } from "../../../context/trust"
+import { holdsBack } from "../../../util/trust"
 import { StoryFooter } from "./footer"
 import type { Story } from "./index"
 
