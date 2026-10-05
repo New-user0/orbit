@@ -122,10 +122,15 @@ function kind6(g: ReadonlyArray<number>): Kind | undefined {
   return strictest([range6(g), ...embedded(g).map(kind4)])
 }
 
+// Where AWS (instance metadata, and the EKS Pod Identity Agent), Compute Engine and Oracle Cloud Infrastructure serve
+// instance credentials over IPv6. Each one is inside the unique local range, which is otherwise only private.
+const metadata6 = ["fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "fd00:c1::a9fe:a9fe"].map((address) =>
+  groups(`[${address}]`),
+)
+
 // The kind of the range that an IPv6 address is in, whatever IPv4 address it stands for.
 function range6(g: ReadonlyArray<number>): Kind | undefined {
-  // Where AWS serves instance credentials over IPv6.
-  if (g[0] === 0xfd00 && g[1] === 0x0ec2 && zero(g, 2, 7) && g[7] === 0x254) return "metadata"
+  if (metadata6.some((address) => address.every((group, index) => group === g[index]))) return "metadata"
   if ((g[0] & 0xffc0) === 0xfe80) return "link-local"
   // Unique local (fc00::/7), site-local (fec0::/10), which was deprecated, and the NAT64 prefix for local use
   // (64:ff9b:1::/48, RFC 8215). None of them is routed beyond the networks around this machine.

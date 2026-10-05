@@ -404,7 +404,10 @@ it was given for.
   198.18/15, the IETF protocol assignments 192.0.0.0/24, `fc00::/7`, the deprecated site-local `fec0::/10`, and the
   NAT64 prefix for local use `64:ff9b:1::/48`.
 - **Link-local addresses:** 169.254/16 and `fe80::/10`.
-- **Cloud metadata addresses:** 169.254.169.254, `fd00:ec2::254`, 100.100.100.200, 168.63.129.16 and 192.0.0.192.
+- **Cloud metadata addresses:** 169.254.169.254, 100.100.100.200, 168.63.129.16 and 192.0.0.192, and the IPv6 endpoints
+  that sit in the unique local range `fc00::/7`: `fd00:ec2::254` (AWS instance metadata), `fd00:ec2::23` (the EKS Pod
+  Identity Agent's credentials), `fd20:ce::254` (Compute Engine) and `fd00:c1::a9fe:a9fe` (Oracle Cloud
+  Infrastructure). Only these exact addresses are metadata; the rest of `fc00::/7` is a private network.
 
 An IPv6 address that stands for an IPv4 one is refused when that IPv4 address is any of these. The forms that carry one
 are the IPv4-mapped (`::ffff:a.b.c.d`), IPv4-compatible and IPv4-translated addresses, NAT64 (`64:ff9b::/96` and

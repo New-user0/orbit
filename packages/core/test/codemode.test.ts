@@ -825,6 +825,10 @@ describe("CodeMode fetch addresses", () => {
           "http://0xa9fea9fe/",
           "http://[::ffff:169.254.169.254]/",
           "http://[fd00:ec2::254]/",
+          // The IPv6 endpoints of the other clouds' credentials, inside the unique local range that is otherwise only private.
+          "http://[fd20:ce::254]/",
+          "http://[fd00:c1::a9fe:a9fe]/",
+          "http://[fd00:ec2::23]/",
           "http://100.100.100.200/",
           // Oracle Cloud Infrastructure Classic, inside a range that is otherwise only private.
           "http://192.0.0.192/",
@@ -841,6 +845,9 @@ describe("CodeMode fetch addresses", () => {
         "fetch cannot reach 169.254.169.254: it is a cloud metadata address.",
         "fetch cannot reach [::ffff:a9fe:a9fe]: it is a cloud metadata address.",
         "fetch cannot reach [fd00:ec2::254]: it is a cloud metadata address.",
+        "fetch cannot reach [fd20:ce::254]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:c1::a9fe:a9fe]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:ec2::23]: it is a cloud metadata address.",
         "fetch cannot reach 100.100.100.200: it is a cloud metadata address.",
         "fetch cannot reach 192.0.0.192: it is a cloud metadata address.",
         "fetch cannot reach [64:ff9b::a9fe:a9fe]: it is a cloud metadata address.",

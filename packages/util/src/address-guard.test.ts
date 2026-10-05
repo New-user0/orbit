@@ -50,6 +50,14 @@ describe("AddressGuard.classify", () => {
         "fec0::1",
         "::ffff:10.1.2.3",
         "::ffff:c0a8:101",
+        // Next to the IPv6 metadata endpoints below, which are only these exact addresses of the unique local range.
+        "fd00:ec2::253",
+        "fd00:ec2::24",
+        "fd00:ec2:1::254",
+        "fd20:ce::253",
+        "fd00:ce::254",
+        "fd00:c1::a9fe:a9ff",
+        "fd00:c1:1::a9fe:a9fe",
       ],
     ],
     [
@@ -62,7 +70,17 @@ describe("AddressGuard.classify", () => {
         "169.254.169.254",
         "[::ffff:169.254.169.254]",
         "::ffff:a9fe:a9fe",
+        // Where AWS, Compute Engine and Oracle Cloud Infrastructure serve instance credentials over IPv6, and where the EKS
+        // Pod Identity Agent serves its own. All of them are inside the unique local range, which is otherwise private.
         "fd00:ec2::254",
+        "fd00:ec2::23",
+        "fd20:ce::254",
+        "fd00:c1::a9fe:a9fe",
+        // The same addresses in the other spellings of an IPv6 literal.
+        "[fd20:ce::254]",
+        "FD20:CE:0:0:0:0:0:254",
+        "fd00:0c1:0::a9fe:a9fe",
+        "fd00:ec2::23%eth0",
         "100.100.100.200",
         "168.63.129.16",
         // Where Oracle Cloud Infrastructure Classic serves instance credentials, inside a range that is otherwise private.
@@ -213,6 +231,10 @@ describe("AddressGuard.check", () => {
       "169.254.169.254",
       "192.0.0.192",
       "100.100.100.200",
+      "[fd00:ec2::254]",
+      "[fd00:ec2::23]",
+      "[fd20:ce::254]",
+      "[fd00:c1::a9fe:a9fe]",
       "[::ffff:a9fe:a9fe]",
       "[::ffff:0:a9fe:a9fe]",
       "[64:ff9b::a9fe:a9fe]",
