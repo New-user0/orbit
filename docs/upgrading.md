@@ -127,8 +127,9 @@ The files in a project's `.orbit` directory are held to the same decision, becau
 
 - **Plugins:** the server does not load the plugins in `.orbit/plugins` (or `.orbit/plugin`), and does not report them
   as failed. They start when the folder is trusted, without a restart, and stop again when the trust is taken away. The
-  terminal UI finds the plugins in `.orbit/plugins` on its own and loads their `tui` entrypoints whether or not the
-  folder is trusted: it waits for trust only once the trust prompt arrives, in a following change.
+  terminal UI finds the plugins in `.orbit/plugins` on its own and imports their `tui` entrypoints, so it waits for the
+  folder to be trusted as well: it imports none of them until the server has answered and the folder is trusted, and
+  drops them when the trust is taken away.
 - **Commands:** a command from `.orbit/commands`, or from a `commands` setting of the project, is still listed, and one
   whose template has no shell snippet works as before. One that runs a shell snippet (an exclamation mark and a command
   in backticks) fails with a message that names the command and the folder to trust, which is the folder around the
@@ -162,21 +163,20 @@ ignores the variable, because it serves every client and project.
 terminal UI, VS Code and the desktop app): those settings now stay off. So do the server's plugins from
 `.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `request` overrides and `allow` rules of
 agents in `.orbit/agents`, and language servers and formatters, in every folder that is not trusted, until it is
-trusted with `orb trust` (or, for one run of a headless command, `--trust`). The same goes for SDK hosts and servers that
-leave `trust.implicit` unset, and for tests that write project config and start a server. The plugins the terminal UI
-loads from `.orbit/plugins` itself are not held back until the trust prompt arrives. Code built on `@orbit/core`:
-`Config.Document` and `Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots that
-`Config.compat` lists can carry `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need
-`ProjectTrust`, `ProjectTrust` now needs `FSUtil`, `ProjectTrust.status` also lists `.orbit` directories and gives each
-file or directory above the project the folder to trust for it, as `directory`, `ProjectTrust.allows` says whether a
-file may run the code it carries (ask it before running anything a file carries, such as the hooks in a skill's or an
-agent's front matter), and a global `trust.updated` event reports each change.
+trusted in the terminal UI or with `orb trust` (or, for one run of a headless command, `--trust`). The same goes for SDK
+hosts and servers that leave `trust.implicit` unset, and for tests that write project config and start a server. So do
+the plugins that the terminal UI loads from `.orbit/plugins` itself. Code built on `@orbit/core`: `Config.Document` and
+`Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry
+`trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs
+`FSUtil`, `ProjectTrust.status` also lists `.orbit` directories and gives each file or directory above the project the
+folder to trust for it, as `directory`, `ProjectTrust.allows` says whether a file may run the code it carries (ask it
+before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and a global
+`trust.updated` event reports each change.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run `orb trust` in it, or
 run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which
-also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" under
-Clients. The trust prompt in the terminal UI (which also holds back the plugins the terminal UI loads from
-`.orbit/plugins`) arrives in a following change, and until it does the terminal UI has no way to trust a folder.
+also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" and "The
+terminal UI asks whether to trust a folder" under Clients.
 
 ## Clients
 
@@ -239,8 +239,9 @@ files.
   server and is seen by every client of it. `--revoke` takes it back, and `--list` shows the folders that are trusted
   for good. Trust belongs to the project's root folder, so a subfolder, and the linked worktrees of a repository, share
   it. A home directory or a filesystem root is refused, because a grant for it would trust every folder below it; use
-  the next flag, or the terminal UI once its prompt arrives. The server finds a grant through the project of its
-  folder, so `--revoke` for a folder that has been deleted says so: create the folder again, revoke, and remove it.
+  the next flag, or the terminal UI, which offers to trust it until Orbit restarts. The server finds a grant through the
+  project of its folder, so `--revoke` for a folder that has been deleted says so: create the folder again, revoke, and
+  remove it.
 - **`--trust`** on those five commands trusts the folder for that run alone. It starts a private server for the run,
   as `--standalone` does, and the grant lives only in that server, so it ends with the run and never reaches the
   background service. Because it is explicit it also works in a home directory. It cannot be combined with `--server`,
@@ -261,6 +262,47 @@ the check and say so on stderr. Code that implements the server API gains three 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
 `ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
 restart`), so that it knows the new routes.
+
+### The terminal UI asks whether to trust a folder
+
+The terminal UI could not trust a folder, and it imported the `tui` entrypoint of every plugin in the project's
+`.orbit/plugins` whether or not the folder was trusted. It now asks the server about the folder it started in, and
+about the folder of the session in view, when it starts, whenever the location, the configuration or a grant changes,
+and after it reconnects.
+
+- **The question:** when the folder in view, on Home or in a session, is untrusted and holds something of its own back,
+  a dialog lists the files and directories that hold it, by path from the folder, with what each holds, and offers
+  "Trust this folder" or "Not now". Enter on its own is "Not now", so a key typed ahead of the dialog never trusts a
+  folder, and closing the dialog with Esc counts as "Not now". Either one keeps it from opening by itself again for that
+  folder until the terminal UI restarts. A home directory or a filesystem root is offered "Trust until Orbit restarts"
+  instead, which on the background service lasts until the service restarts; `orb trust --revoke` ends it sooner.
+- **Config above the folder:** a file or directory in a folder above the project follows the decision for the folder
+  that holds it, so trusting the project does not turn it on. The dialog lists it after the folder's own files, and
+  says which folder to trust for it, as the command `orb trust <folder>`. When a grant leaves such config off, the
+  confirmation says so and names the same folder.
+- **The reminder:** an "Untrusted" indicator in the prompt's footer, and the `/trust` command ("Trust this folder"),
+  open the dialog again. Both show only while the folder is untrusted and holds something of its own back, so a
+  repository with no project config of its own never shows them, and neither does one whose only held-back config is
+  above it, because trusting it would turn nothing on.
+- **Plugins:** the plugins in a project's `.orbit/plugins` are imported only while the folder is trusted, and are
+  dropped when the trust is taken away. The terminal UI imports no plugin until the first answer has come, so the
+  start takes one request longer. A server that cannot answer, such as one older than workspace trust, counts as not
+  trusting the folder, so the project's plugins stay off and the terminal UI starts as usual. The plugins in your own
+  config directory, in `.orbit` in your home directory and in the `plugins` of your terminal UI settings load either
+  way.
+- **`orb mini`:** it prints one line before the session starts when its folder is untrusted and holds something of its
+  own back, which points to `orb trust`. Config in a folder above the project is named in the same line, with the
+  `orb trust <folder>` command for the folder that holds it, whether or not the project is trusted, as `orb run` says
+  on stderr.
+
+**Affects:** people who start the terminal UI in a clone that has plugins in `.orbit/plugins`, which stop loading until
+the folder is trusted, and everyone who now sees the dialog. Code that calls `localPluginDirectories` from
+`@orbit/tui/plugin/discovery` passes the global config and home directories instead of the config directory, and gets
+`{ global, project }` back instead of one list.
+
+**What to do:** choose "Trust this folder" for each repository you trust, or run `orb trust` in it. In a home directory
+choose "Trust until Orbit restarts", or pass `--trust` to a headless command. For config in a folder above a repository,
+run `orb trust <folder>` for the folder that holds it.
 
 ## Permissions
 

@@ -95,6 +95,9 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/path") return json({ home: "", state: "", config: "", worktree, directory })
     if (url.pathname === "/api/location")
       return json({ directory, project: { id: "proj_test", directory: worktree, canonical: worktree } })
+    // Trusted, so that the project's own plugins and prompts stay out of tests that are about something else.
+    if (url.pathname === "/api/location/trust")
+      return json({ directory: worktree, trusted: true, persistent: true, source: "saved", withheld: [] })
     if (url.pathname === "/api/plugin")
       return json({
         location: { directory, project: { id: "proj_test", directory: worktree, canonical: worktree } },

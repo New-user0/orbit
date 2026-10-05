@@ -10,6 +10,7 @@ import { useLocal } from "../context/local"
 import { useEditorContext } from "../context/editor"
 import { useData } from "../context/data"
 import { useLocation } from "../context/location"
+import { useTrustPrompt } from "../context/trust"
 import { FormPrompt } from "./session/form"
 import { Slot } from "../plugin/render"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -51,6 +52,7 @@ export function Home() {
     const target = currentLocation()
     untrack(() => location.set(target))
   })
+  useTrustPrompt()
 
   onMount(() => {
     editor.clearSelection()

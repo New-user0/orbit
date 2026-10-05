@@ -26,10 +26,17 @@ import { useConfig } from "../config"
 import { useTuiLifecycle } from "../context/runtime"
 import { useClient } from "../context/client"
 import { useData } from "../context/data"
+import { useTrust } from "../context/trust"
 import { errorMessage } from "../util/error"
 import { createPluginContext, usePluginHost, type Dispose, type RegisteredSlot, type SlotRender } from "./api"
 import { createSourceWatcher } from "./watch"
-import { discoverPluginTargets, localSource, mergePluginTargets } from "./discovery"
+import {
+  discoverPluginTargets,
+  localSource,
+  mergePluginTargets,
+  trustedPluginDirectories,
+  type PluginDirectories,
+} from "./discovery"
 import { createPluginSources } from "./source"
 import { isMissingPath } from "../util/config-directories"
 import { createMarkdownRenderer } from "./markdown"
@@ -85,13 +92,14 @@ type Trace = <T>(stage: string, tags: LogTags, task: () => Promise<T>) => Promis
 
 const PluginContext = createContext<Value>()
 
-export function PluginProvider(props: ParentProps<{ packages: PackageSource; directories: string[] }>) {
+export function PluginProvider(props: ParentProps<{ packages: PackageSource; directories: PluginDirectories }>) {
   const host = usePluginHost()
   const log = useLog({ component: "plugin" })
   const config = useConfig()
   const lifecycle = useTuiLifecycle()
   const client = useClient()
   const data = useData()
+  const trust = useTrust()
   const [serverPlugins, setServerPlugins] = createSignal<readonly PluginInfo[]>([])
   const serverTuiPlugins = createMemo(() =>
     serverPlugins().filter(
@@ -282,18 +290,21 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     const id = ++reconciliationID
     const started = Date.now()
     log.info("plugin reconciliation started", { id })
-    await trace("watch", { reconciliation: id, directories: props.directories }, () =>
-      Promise.all(props.directories.map(watcher.wait)).then(() => undefined),
+    // The plugins of a project import into this process, so they are read only while its folder is trusted. Nothing
+    // else here depends on the trust: the user's directories and config load either way, and the server's own list
+    // already leaves out what the folder keeps.
+    const directories = trustedPluginDirectories(props.directories, trust.startup.trusted())
+    await trace("watch", { reconciliation: id, directories }, () =>
+      Promise.all(directories.map(watcher.wait)).then(() => undefined),
+    )
+    const discovered = await trace("discover", { reconciliation: id, directories }, () =>
+      discoverPluginTargets(directories),
     )
     // Discovery admits TUI-only plugins while server inventory carries combined plugins.
     // Their overlap is intentional; explicit configuration remains the final authority.
     const entries = mergePluginTargets(
       [
-        ...(
-          await trace("discover", { reconciliation: id, directories: props.directories }, () =>
-            discoverPluginTargets(props.directories),
-          )
-        ).map((entry) => ({
+        ...discovered.map((entry) => ({
           entry,
           install: true,
           optional: true,
@@ -526,8 +537,13 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
   const resolved = createMemo(() => resolveSlots({ paths: new Set(Object.keys(mounted)), claims: claims() }))
   createEffect(
     on(
-      () => JSON.stringify([serverTuiPlugins(), config.data.plugins ?? []]),
-      () => {
+      // Nothing is imported until the trust status is known, so no project plugin loads in the moment it takes to ask.
+      () =>
+        trust.startup.settled()
+          ? JSON.stringify([serverTuiPlugins(), config.data.plugins ?? [], trust.startup.trusted()])
+          : undefined,
+      (key) => {
+        if (key === undefined) return
         npmFailures.clear()
         void enqueue(reconcile).then(
           () => setStore("ready", true),

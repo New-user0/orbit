@@ -91,6 +91,7 @@ import { collapseShellOutput, collapseToolOutput } from "../../util/collapse-too
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { useLocation } from "../../context/location"
+import { useTrustPrompt } from "../../context/trust"
 import { Slot } from "../../plugin/render"
 import { usePlugin } from "../../plugin/context"
 import {
@@ -187,6 +188,7 @@ export function Session(props: {
   const location = createMemo(() => session()?.location ?? currentLocation.ref)
 
   createEffect(() => currentLocation.set(location()))
+  useTrustPrompt()
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
