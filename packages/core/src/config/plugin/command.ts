@@ -25,7 +25,7 @@ import { ConfigTrust } from "../trust.js"
 import { CommandFile } from "./command-file.js"
 
 /** A command from a folder that is not trusted runs a shell snippet, which nothing may run until the folder is. */
-export class UntrustedError extends Schema.TaggedError<UntrustedError>()("ConfigCommand.UntrustedError", {
+export class UntrustedError extends Schema.TaggedError<UntrustedError>()("ConfigCommandPlugin.UntrustedError", {
   command: Schema.String,
   message: Schema.String,
 }) {}
@@ -36,13 +36,14 @@ export const Plugin = define({
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     // The commands of an entry, and whether its folder lets them run shell snippets: only a project or local entry that
-    // config stamped untrusted does not. Plain templates are only text, so they run either way.
+    // config stamped untrusted does not. Plain templates are only text, so they run either way. The folder is the one
+    // that has to be trusted, which a refusal names.
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
-      const trusted = entry.trusted !== false
-      if (entry.type === "document") return [{ commands: entry.info.commands, trusted }]
+      const trust = { trusted: entry.trusted !== false, folder: ConfigTrust.covered(entry) }
+      if (entry.type === "document") return [{ commands: entry.info.commands, ...trust }]
       if (entry.type !== "directory") return []
       const commands = yield* CommandFile.load(fs, entry.path)
-      return [{ commands: Object.fromEntries(commands.map((command) => [command.name, command.info])), trusted }]
+      return [{ commands: Object.fromEntries(commands.map((command) => [command.name, command.info])), ...trust }]
     })
     const location = yield* Location.Service
     const processes = yield* AppProcess.Service
@@ -54,7 +55,9 @@ export const Plugin = define({
     const load = Effect.fn("ConfigCommandPlugin.load")(function* () {
       return yield* Effect.forEach(yield* config.entries(), loadEntry).pipe(Effect.map((documents) => documents.flat()))
     })
-    const loaded = { documents: [] as { commands: Info["commands"]; trusted: boolean }[] }
+    const loaded = {
+      documents: [] as { commands: Info["commands"]; trusted: boolean; folder: string | undefined }[],
+    }
     const reload = load().pipe(
       Effect.tap((documents) => Effect.sync(() => (loaded.documents = documents))),
       Effect.andThen(ctx.command.reload()),
@@ -109,7 +112,7 @@ export const Plugin = define({
                   input.prompt.text,
                   input.sessionID,
                   { config, location, permission, processes, shell },
-                  { name, trusted: document.trusted },
+                  { name, trusted: document.trusted, folder: document.folder },
                 )
                 if (subagent ?? commandAgent?.mode === "subagent") {
                   const parent = yield* sessions.get(input.sessionID)
@@ -182,15 +185,17 @@ function evaluateTemplate(
   input: string,
   sessionID: SessionSchema.ID,
   services: Services,
-  source: { readonly name: string; readonly trusted: boolean },
+  source: { readonly name: string; readonly trusted: boolean; readonly folder: string | undefined },
 ) {
   return Effect.gen(function* () {
     // A folder that is not trusted may define commands but not start anything: its template is only text. Refusing
-    // before the spans are read means nothing is scanned, asked about or run for it.
+    // before the spans are read means nothing is scanned, asked about or run for it. Trust is decided for the folder
+    // that holds the config, which can be one above the project, so the refusal names it.
     if (!source.trusted && ConfigTrust.hasShellSnippet(template)) {
+      const folder = source.folder === undefined ? "" : ` (${source.folder})`
       return yield* new UntrustedError({
         command: source.name,
-        message: `The "${source.name}" command runs shell commands, and the folder it comes from is not trusted. Trust the folder, then run it again.`,
+        message: `The "${source.name}" command runs shell commands, and the folder it comes from${folder} is not trusted. Trust the folder, then run it again.`,
       })
     }
     // Spans are read from the authored template alone and run exactly as written, so a placeholder inside one reaches

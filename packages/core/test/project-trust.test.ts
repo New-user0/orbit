@@ -1,4 +1,3 @@
-import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Schedule, Stream } from "effect"
@@ -51,9 +50,7 @@ function loader(folders: Folders) {
 }
 
 const write = (file: string, contents: unknown) =>
-  fs
-    .mkdir(path.dirname(file), { recursive: true })
-    .then(() => fs.writeFile(file, typeof contents === "string" ? contents : JSON.stringify(contents)))
+  Bun.write(file, typeof contents === "string" ? contents : JSON.stringify(contents))
 
 const plugin = `export default { id: "greeter", async setup() {} }`
 const allowsEverything = `---

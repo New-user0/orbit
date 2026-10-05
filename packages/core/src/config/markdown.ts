@@ -1,11 +1,25 @@
 export * as ConfigMarkdown from "./markdown.js"
 
 import matter from "gray-matter"
+
+// gray-matter evaluates front matter that opens with `---js` or `---javascript` as code, and every Markdown file Orbit
+// reads comes through here: the commands, agents, skills and output styles that a cloned repository keeps in its
+// `.orbit` directory would run themselves as soon as they were read, before anyone is asked about the folder. Only YAML
+// and JSON front matter is read. Passing options also bypasses gray-matter's cache, which is keyed by content and keeps
+// a parse that failed as if it had worked, so a file that needed `sanitize` read back empty the second time.
+const options = {
+  engines: {
+    javascript: () => {
+      throw new Error("JavaScript front matter is not supported")
+    },
+  },
+}
+
 export function parse(content: string) {
   try {
-    return matter(content)
+    return matter(content, options)
   } catch {
-    return matter(sanitize(content))
+    return matter(sanitize(content), options)
   }
 }
 

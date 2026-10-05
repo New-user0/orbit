@@ -376,32 +376,46 @@ describe("command template shell spans", () => {
 // A folder that is not trusted may define commands, but nothing it defines may start a process. Config stamps the
 // entries of such a folder, and these tests use the stamps it would put on them.
 describe("command template shell spans from a folder that is not trusted", () => {
+  // What the refusal says. It names the folder to trust when the entry knows where it came from.
   const refusal =
     'The "probe" command runs shell commands, and the folder it comes from is not trusted. Trust the folder, then run it again.'
+  const refusalFor = (folder: string) =>
+    `The "probe" command runs shell commands, and the folder it comes from (${folder}) is not trusted. Trust the folder, then run it again.`
 
-  // A directory that holds the command `probe` as a Markdown file, as `.orbit/commands/probe.md` would.
+  // A directory that holds the command `probe` as a Markdown file, as `.orbit/commands/probe.md` would, and the folder
+  // around it, which is the one whose trust decides it.
   const directory = (template: string, trusted: boolean) =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
-      yield* Effect.promise(() => Bun.write(path.join(tmp.path, "commands", "probe.md"), template))
-      const entry = new Directory({ type: "directory", path: AbsolutePath.make(tmp.path), scope: "project" })
-      return trusted ? entry : ConfigTrust.stamp(entry, { roots: [tmp.path], directory: tmp.path })
+      const orbit = path.join(tmp.path, ".orbit")
+      yield* Effect.promise(() => Bun.write(path.join(orbit, "commands", "probe.md"), template))
+      const entry = new Directory({ type: "directory", path: AbsolutePath.make(orbit), scope: "project" })
+      return {
+        folder: tmp.path,
+        entry: trusted ? entry : ConfigTrust.stamp(entry, { roots: [tmp.path], directory: orbit }),
+      }
     })
 
-  // A document of orbit.json, which defines the commands `probe` and `other` inline.
-  const document = (templates: Record<string, string>, trusted: boolean) => {
+  // A document of orbit.json, which defines the commands `probe` and `other` inline. It comes from no file unless it
+  // is given one.
+  const document = (templates: Record<string, string>, trusted: boolean, file?: string) => {
     const commands = Object.fromEntries(Object.entries(templates).map(([name, template]) => [name, { template }]))
-    const entry = new Document({ type: "document", scope: "project", info: decode({ commands }) })
+    const entry = new Document({
+      type: "document",
+      scope: "project",
+      ...(file === undefined ? {} : { path: AbsolutePath.make(file) }),
+      info: decode({ commands }),
+    })
     return trusted ? entry : ConfigTrust.stamp(entry, { roots: [process.cwd()], directory: process.cwd() })
   }
 
   // Nothing was scanned, asked about or started, and no prompt was submitted.
-  const refused = (entries: Entry[], text = "") =>
+  const refused = (entries: Entry[], message: string, text = "") =>
     Effect.gen(function* () {
       const probe = yield* installEntries(entries)
       const error = yield* probe.execute(text).pipe(Effect.flip)
       expect(error).toBeInstanceOf(Command.ExecutionError)
-      expect(error.message).toBe(refusal)
+      expect(error.message).toBe(message)
       expect(asserted).toEqual([])
       expect(spawned).toEqual([])
       expect(probe.prompts).toEqual([])
@@ -413,21 +427,33 @@ describe("command template shell spans from a folder that is not trusted", () =>
     "!`one` and !`two`",
   ]) {
     it.live(`refuses ${JSON.stringify(template)} from a document, before it asks or starts anything`, () =>
-      refused([document({ probe: template }, false)], "src"),
+      refused([document({ probe: template }, false)], refusal, "src"),
     )
 
     it.live(`refuses ${JSON.stringify(template)} from a directory, before it asks or starts anything`, () =>
       Effect.gen(function* () {
-        yield* refused([yield* directory(template, false)], "src")
+        const found = yield* directory(template, false)
+        yield* refused([found.entry], refusalFor(found.folder), "src")
       }),
     )
   }
+
+  // Trust is decided for the folder that holds the config, and that can be a folder above the project, so the refusal
+  // has to say which one.
+  it.live("names the folder around the config file that defines the command", () =>
+    Effect.gen(function* () {
+      const folder = (yield* tmpdirScoped()).path
+      for (const file of [path.join(folder, "orbit.json"), path.join(folder, ".orbit", "orbit.json")]) {
+        yield* refused([document({ probe: "Status: !`git status`" }, false, file)], refusalFor(folder))
+      }
+    }),
+  )
 
   it.live("runs the same span once its folder is trusted", () =>
     Effect.gen(function* () {
       for (const entry of [
         document({ probe: "Status: !`git status`" }, true),
-        yield* directory("Status: !`git status`", true),
+        (yield* directory("Status: !`git status`", true)).entry,
       ]) {
         spawned.length = 0
         asserted.length = 0
@@ -443,9 +469,10 @@ describe("command template shell spans from a folder that is not trusted", () =>
   it.live("still runs a template that holds no span, whatever its folder", () =>
     Effect.gen(function* () {
       const templates = ["Explain $ARGUMENTS.", "Say `hello` and !not-a-span for $1"]
+      const directories = yield* Effect.forEach(templates, (template) => directory(template, false))
       for (const entry of [
         ...templates.map((template) => document({ probe: template }, false)),
-        ...(yield* Effect.forEach(templates, (template) => directory(template, false))),
+        ...directories.map((found) => found.entry),
       ]) {
         const probe = yield* installEntries([entry])
         // Argument text that looks like a span is only text, in an untrusted folder as in any other.

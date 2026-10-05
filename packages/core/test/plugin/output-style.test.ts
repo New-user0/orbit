@@ -16,6 +16,7 @@ import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Model } from "@orbit/schema/model"
 import { Effect, Layer, Schema } from "effect"
+import { scriptedMarkdown } from "../fixture/front-matter"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -127,6 +128,28 @@ describe("OutputStylePlugin", () => {
       expect(text).toContain("# Communication")
       expect(text).not.toContain("# Doing tasks")
       expect(text).not.toContain("# Verification")
+    }),
+  )
+
+  it.live("leaves a style unresolved when its front matter is JavaScript, and runs nothing", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const directory = (yield* tmpdirScoped()).path
+      const marker = path.join(directory, "ran")
+      yield* Effect.promise(() =>
+        Bun.write(path.join(directory, "output-styles", "scripted.md"), scriptedMarkdown(marker)),
+      )
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      yield* config.setEntries([
+        new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+        styled("scripted"),
+      ])
+
+      const scripted = context()
+      yield* hooks.trigger("session", "context", scripted)
+      expect(scripted.system[0]?.text).toBe(base)
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
     }),
   )
 })

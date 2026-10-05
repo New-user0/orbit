@@ -50,7 +50,7 @@ export const Status = Schema.Struct({
   source: Source.pipe(optional),
   withheld: Schema.Array(Withheld).annotate({
     description:
-      "The configuration files that hold back something now, and what each holds. While the folder is untrusted these are the project's own files. A file in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do.",
+      "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do.",
   }),
 }).annotate({ identifier: "Trust.Status" })
 export interface Status extends Schema.Schema.Type<typeof Status> {}

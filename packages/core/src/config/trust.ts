@@ -19,8 +19,9 @@ import { FSUtil } from "@orbit/util/fs-util"
 // The files in a config directory are held to the same decision, each where it is read. The config stamps the directory
 // `trusted: false`, and then a plugin file is not loaded (`ConfigPluginSource`), a command runs no shell snippet
 // (`ConfigCommandPlugin`), and an agent file is cut down with `sanitize` (`ConfigAgentPlugin`). Skills and output styles
-// are text, so they stay available. Anything else that would run what a file carries, such as the hooks in the front
-// matter of a skill or an agent, must ask `allows` first.
+// are text, so they stay available: `ConfigMarkdown` reads front matter as YAML or JSON and refuses JavaScript, so no
+// Markdown file runs just by being read. Anything else that would run what a file carries, such as the hooks in the
+// front matter of a skill or an agent, must ask `allows` first.
 
 /** What is left of a value once what an untrusted folder may not supply is taken out, and the kinds of what went. */
 interface Outcome<V> {
@@ -324,7 +325,12 @@ export function allows(entries: readonly Entry[], file: string, context: Context
   return innermost.every((item) => item.trusted)
 }
 
-function covered(entry: Entry) {
+/**
+ * The folder whose trust decision covers an entry, which is the one to trust to lift what the entry holds back. For a
+ * project or local entry that is the folder around its `.orbit` directory or its file, and for any other the entry's
+ * own location. Unset for a document that has no file.
+ */
+export function covered(entry: Entry) {
   const location =
     entry.type === "directory" ? entry.path : entry.path === undefined ? undefined : path.dirname(entry.path)
   if (location === undefined) return undefined
