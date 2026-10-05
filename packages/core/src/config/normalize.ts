@@ -431,6 +431,15 @@ function normalizeExperimental(
         )
         if (value !== undefined) result.subagent_depth = value
       }
+      if (own(experimental, "allow_local_fetch")) {
+        const value = decodeEncoded(
+          ConfigExperimental.Info.fields.allow_local_fetch,
+          experimental.allow_local_fetch,
+          ["experimental", "allow_local_fetch"],
+          diagnostics,
+        )
+        if (value !== undefined) result.allow_local_fetch = value
+      }
       native.push(
         ...decodeList(
           experimental.policies,

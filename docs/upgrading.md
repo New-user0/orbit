@@ -325,11 +325,11 @@ per URL, the same way the `webfetch` tool does, and a policy or rule that denies
 a method other than GET or HEAD also asks about `METHOD url`, for example `POST https://example.com/x`. A rule or
 approval written for a URL, an origin or a host never allows such a write; a deny written for them still blocks it. Only
 `http:` and `https:` URLs work, so `file:` and `data:` URLs now fail before anything is sent, and the URL must be a
-string or a `URL` and the method a string. Redirects are not checked again: a request to an approved origin that
-redirects elsewhere still goes through.
+string or a `URL` and the method a string. A redirect is asked about too, as the last note in this section describes.
 
 **Affects:** agents that run Code Mode scripts calling `fetch` while `webfetch` is set to ask or deny. With the default
-allow-all rules nothing changes, apart from the new limits on what `fetch` accepts.
+allow-all rules nothing changes, apart from the new limits on what `fetch` accepts and the refusals that the last note
+in this section describes.
 
 **What to do:** approve the prompts, or add `webfetch` allow rules for the origins the scripts use, such as
 `https://api.example.com/*`. Add a method rule such as `POST https://api.example.com/*` for scripts that write, or allow
@@ -348,3 +348,27 @@ earlier keep allowing reads of that host on any scheme and port.
 
 **What to do:** nothing for saved approvals. Approve an origin again if you need it on another scheme or port, and read
 `event.aliases?.[resource]` in plugin hooks.
+
+### Code Mode `fetch` asks again for each redirect and refuses local addresses
+
+`fetch` in a Code Mode script used to follow redirects on its own, so a request to an approved origin could be sent on to
+any other host without a second question. Now every redirect is a request of its own. It asks for `webfetch` permission
+for the address it names, like the first request, and a decline or a deny stops the chain there. A script follows at most
+10 redirects. "Always allow" for an origin covers the redirects inside it, and a "once" approval covers only the request
+it was given for.
+
+`fetch` also refuses addresses that are not public, after the permission step and whatever the rules say: loopback
+(127.0.0.0/8, `::1`, `0.0.0.0`), private networks (10/8, 172.16/12, 192.168/16, `fc00::/7`, 100.64/10), link-local
+addresses (169.254/16, `fe80::/10`) and cloud metadata addresses (169.254.169.254, `fd00:ec2::254`, 100.100.100.200,
+168.63.129.16). A host name is resolved first, and it is refused when any address it stands for is one of those;
+`localhost` and the names under it count as loopback. The script gets an error that names the address. A name whose
+address changes between the check and the connection is not caught.
+
+**Affects:** Code Mode scripts that call `fetch`. One that follows a redirect while `webfetch` is set to ask or deny gets
+another prompt. One that calls a server on `localhost`, on a private network or at a link-local address now fails, even
+with allow-all rules.
+
+**What to do:** approve the extra prompts, or add `webfetch` allow rules for the origins the redirects lead to. To let
+scripts reach local dev servers, set `experimental.allow_local_fetch` to `true` in your own config. It lets `fetch` reach
+loopback and private-network addresses and no others, and like the rest of `experimental` it is ignored in the config of
+a folder that is not trusted.

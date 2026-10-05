@@ -10,7 +10,7 @@ import type {
   Namespace as ToolNamespace,
   Result,
 } from "@orbit/schema/tool"
-import { Cause, Deferred, Effect, Ref, Schema, Semaphore } from "effect"
+import { Cause, Deferred, Effect, Exit, Ref, Schema, Semaphore } from "effect"
 import { Permission } from "../permission.js"
 import { definition, normalizedName } from "../tool/runtime.js"
 import { CodeModeCatalog } from "./catalog.js"
@@ -70,7 +70,8 @@ const description = [
 ].join("\n")
 
 // A call the program makes straight to a host function, such as `fetch`, is not a tool call, so it is authorized
-// before it runs. A plain decline dies as a defect, as it does for a tool; any other failure fails the call.
+// before it runs. A plain decline dies as a defect, as it does for a tool; any other failure fails the call. The
+// function also asks about what the call does on its own, such as the redirects `fetch` follows, with a call of its own.
 export type Authorize = (call: CodeMode.ExtensionInvocation, context: Context) => Effect.Effect<void, Error>
 
 export const create = (
@@ -85,6 +86,8 @@ export const create = (
     output: ExecuteOutput,
     execute: ({ code }, context) =>
       Effect.gen(function* () {
+        // Aborts when the execution ends, however it ends, so a fetch that is still asking or sending stops with it.
+        const signal = yield* Effect.abortSignal
         const callIndex = yield* Ref.make(0)
         const files = yield* Ref.make<Array<CollectedFiles>>([])
         const calls = yield* Ref.make<Array<ExecuteCall>>([])
@@ -108,7 +111,9 @@ export const create = (
           lock.withPermit(
             Ref.updateAndGet(calls, update).pipe(Effect.tap((toolCalls) => context.progress({ toolCalls }))),
           )
-        const progress = progressHooks(record, (call) => authorize(call, context).pipe(Effect.catchCause(latchDecline)))
+        const authorized = (call: CodeMode.ExtensionInvocation) =>
+          authorize(call, context).pipe(Effect.catchCause(latchDecline))
+        const progress = progressHooks(record, authorized)
         const codeMode = runtime(
           inventory,
           (name, tool, input) =>
@@ -130,6 +135,21 @@ export const create = (
             ...progress,
             "tool.before": (call) => Effect.andThen(halted, progress["tool.before"](call)),
             "extension.before": (call) => Effect.andThen(halted, progress["extension.before"](call)),
+          },
+          {
+            signal,
+            // A redirect is a request of its own, so it is asked about like a call of the program's own, and a decline
+            // stops the whole execution the same way. Whatever stops the request ends the fetch that was following it.
+            authorize: async (url, method) => {
+              const exit = await Effect.runPromiseExit(
+                Effect.andThen(
+                  halted,
+                  authorized({ extension: CodeModeWeb.name, name: "fetch", args: [url, { method }] }),
+                ),
+                { signal },
+              )
+              if (Exit.isFailure(exit)) throw Cause.squash(exit.cause)
+            },
           },
         )
         // The program settles however it likes, but a decline stops it and has the last word, even over a program
@@ -168,7 +188,7 @@ export const create = (
           content,
           metadata,
         }
-      }),
+      }).pipe(Effect.scoped),
   } satisfies Info
 }
 
@@ -260,6 +280,8 @@ function runtime(
   inventory: Inventory,
   executeTool: (name: string, tool: Info, input: unknown) => Effect.Effect<unknown, unknown>,
   hooks?: CodeMode.Hooks,
+  // Absent where nothing runs a program, such as when only the catalog is listed, and then there is no `fetch` to call.
+  web?: CodeModeWeb.Gate,
 ) {
   // A path may carry namespace metadata, a callable tool, child tools, or all three.
   const root: ToolNode = { children: new Map() }
@@ -274,7 +296,11 @@ function runtime(
     })
   }
   const tools = renderTools(root)
-  return CodeMode.make<typeof tools>({ tools, extensions: [CodeModeWeb.extension], hooks })
+  return CodeMode.make<typeof tools>({
+    tools,
+    extensions: web === undefined ? [] : [CodeModeWeb.extension(web)],
+    hooks,
+  })
 }
 
 function getNode<T>(root: Node<T>, path: string) {

@@ -14308,6 +14308,9 @@
                   "required": ["action", "resource", "effect"],
                   "additionalProperties": false
                 }
+              },
+              "allow_local_fetch": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false

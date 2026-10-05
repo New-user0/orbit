@@ -2377,6 +2377,7 @@ export type ConfigEntry =
           portable_shell_scanner?: boolean
           subagent_depth?: number
           policies?: Array<{ action: "provider.use" | "permission"; resource: string; effect: "allow" | "deny" }>
+          allow_local_fetch?: boolean
         }
       }
     }
