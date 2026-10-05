@@ -274,8 +274,11 @@ and after it reconnects.
   a dialog lists the files and directories that hold it, by path from the folder, with what each holds, and offers
   "Trust this folder" or "Not now". Enter on its own is "Not now", so a key typed ahead of the dialog never trusts a
   folder, and closing the dialog with Esc counts as "Not now". Either one keeps it from opening by itself again for that
-  folder until the terminal UI restarts. A home directory or a filesystem root is offered "Trust until Orbit restarts"
-  instead, which on the background service lasts until the service restarts; `orb trust --revoke` ends it sooner.
+  folder until the terminal UI restarts. A dialog is about one folder: if another comes into view while it is open,
+  such as when a session in another clone opens, it closes without counting as "Not now", and the terminal UI asks
+  about the folder now in view once it has the answer for it. A home directory or a filesystem root is offered "Trust
+  until Orbit restarts" instead, which on the background service lasts until the service restarts; `orb trust --revoke`
+  ends it sooner.
 - **Config above the folder:** a file or directory in a folder above the project follows the decision for the folder
   that holds it, so trusting the project does not turn it on. The dialog lists it after the folder's own files, and
   says which folder to trust for it, as the command `orb trust <folder>`. When a grant leaves such config off, the
@@ -285,11 +288,13 @@ and after it reconnects.
   repository with no project config of its own never shows them, and neither does one whose only held-back config is
   above it, because trusting it would turn nothing on.
 - **Plugins:** the plugins in a project's `.orbit/plugins` are imported only while the folder is trusted, and are
-  dropped when the trust is taken away. The terminal UI imports no plugin until the first answer has come, so the
-  start takes one request longer. A server that cannot answer, such as one older than workspace trust, counts as not
-  trusting the folder, so the project's plugins stay off and the terminal UI starts as usual. The plugins in your own
-  config directory, in `.orbit` in your home directory and in the `plugins` of your terminal UI settings load either
-  way.
+  dropped when the trust is taken away. The question for them is about the folder they are found from, which is the one
+  the terminal UI was started in, whatever folder the server calls its default. The terminal UI imports no plugin until
+  the first answer has come, so the start takes one request longer, and waits at most two seconds for it. A server that
+  cannot answer in that time, such as one older than workspace trust, counts as not trusting the folder, so the
+  project's plugins stay off and the terminal UI starts as usual; the next change, or a reconnect, asks again. The
+  plugins in your own config directory, in `.orbit` in your home directory and in the `plugins` of your terminal UI
+  settings load either way.
 - **`orb mini`:** it prints one line before the session starts when its folder is untrusted and holds something of its
   own back, which points to `orb trust`. Config in a folder above the project is named in the same line, with the
   `orb trust <folder>` command for the folder that holds it, whether or not the project is trusted, as `orb run` says

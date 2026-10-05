@@ -4,7 +4,7 @@ import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { abbreviateHome } from "../util/path-format"
-import { groupWithheld, trustCommands } from "../util/trust"
+import { groupWithheld, holdsBack, trustCommands } from "../util/trust"
 import { useClient } from "./client"
 import { useData } from "./data"
 import { createSimpleContext } from "./helper"
@@ -15,18 +15,10 @@ import { useTuiPaths } from "./runtime"
 const DialogTrustKey = Symbol("DialogTrust")
 
 /**
- * Whether the folder is untrusted and so holds something of its own back, which is what the prompt and the indicator
- * are for. Config in a folder above it follows that folder's own decision, so a folder whose only held-back config
- * sits above it has nothing that trusting it would turn on.
- */
-export function holdsBack(status: TrustStatus | undefined) {
-  return status !== undefined && !status.trusted && groupWithheld(status.withheld).own.length > 0
-}
-
-/**
  * The trust status of the folder at `directory`, read again whenever the server reports that trust or config changed.
  * A read that fails keeps the last answer, because a dropped connection says nothing about trust, but `settled` still
- * turns true: a server that cannot answer, such as one older than workspace trust, must not hold anything up.
+ * turns true: a server that cannot answer, such as one older than workspace trust, or that does not answer in time, must
+ * not hold anything up.
  */
 function createTrustStatus(input: {
   client: ReturnType<typeof useClient>
@@ -42,19 +34,23 @@ function createTrustStatus(input: {
 
   const refresh = async () => {
     const attempt = ++generation
-    await input.client.api.location.trust.get({ location: { directory: directory() } }).then(
-      (next) => {
-        if (attempt !== generation) return
-        batch(() => {
-          setStatus(next)
-          setSettled(true)
-        })
-      },
-      (error) => {
-        input.log.warn("failed to read workspace trust", { error })
-        if (attempt === generation) setSettled(true)
-      },
-    )
+    await input.client.api.location.trust
+      // A server that takes the request and never answers would otherwise leave the terminal UI on its loading screen,
+      // as nothing starts before the first answer. Two seconds, as `orb mini` allows; timing out is a failed read.
+      .get({ location: { directory: directory() } }, { signal: AbortSignal.timeout(2_000) })
+      .then(
+        (next) => {
+          if (attempt !== generation) return
+          batch(() => {
+            setStatus(next)
+            setSettled(true)
+          })
+        },
+        (error) => {
+          input.log.warn("failed to read workspace trust", { error })
+          if (attempt === generation) setSettled(true)
+        },
+      )
   }
   // A reload touches several files and sends several events, which should come to one read.
   const schedule = () => {
@@ -78,7 +74,8 @@ function createTrustStatus(input: {
 
 export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
   name: "Trust",
-  init: () => {
+  // `directory` is the folder the terminal UI was started in, which is where it looks for its project's plugins.
+  init: (props: { directory: string }) => {
     const client = useClient()
     const data = useData()
     const location = useLocation()
@@ -87,10 +84,10 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     const paths = useTuiPaths()
     const log = useLog({ component: "trust" })
     const directory = createMemo(() => (location.ref ?? data.location.default()).directory)
-    // The folder the terminal UI started in is where it finds its project's plugins, whichever session is open, so
-    // what those may do follows its trust and not that of the folder in view.
-    const started = data.location.default().directory
-    const startup = createTrustStatus({ client, log, directory: () => started })
+    // The plugins the terminal UI imports are the ones it finds from the folder it was started in, whichever session is
+    // open, so what they may do follows that folder's trust and not that of the folder in view. That folder is asked
+    // about by name: the server's default may be another folder, when the server could not resolve this one.
+    const startup = createTrustStatus({ client, log, directory: () => props.directory })
     const current = createTrustStatus({ client, log, directory })
     // "Not now" holds for the rest of this run, by folder, so a refresh or a visit to another session asks no more.
     const [dismissed, setDismissed] = createSignal<ReadonlySet<string>>(new Set())
@@ -101,13 +98,15 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
       return status.directory
     })
 
-    const grant = async (persist: boolean) => {
+    // A choice is for `target`, the folder the dialog was opened for.
+    const grant = async (target: string, persist: boolean) => {
       await client.api.location.trust
-        .update({ location: { directory: directory() }, trust: true, persist })
+        .update({ location: { directory: target }, trust: true, persist })
         .then(async (status) => {
-          // The dialog closes on the answer the server gives now, not on the one it gave before.
+          // The dialog closes on the answer the server gives now, not on the one it gave before. If another folder came
+          // into view while the server was answering, the dialog that is up asks about that one and stays.
           await Promise.all([current.refresh(), startup.refresh()])
-          if (dialog.key === DialogTrustKey) dialog.clear()
+          if (directory() === target && dialog.key === DialogTrustKey) dialog.clear()
           const folder = abbreviateHome(status.directory, paths.home)
           // The grant lifts the folder's own config, so what is still held back sits above it, in folders of their own.
           const above = groupWithheld(status.withheld).above
@@ -126,11 +125,22 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     const open = () => {
       const status = current.status()
       if (!status) return
+      // A dialog asks about one folder, the one in view now, and what is chosen in it is for that folder. When another
+      // comes into view the dialog closes (below), so a choice is never made for a folder that was not on the screen.
+      const folder = directory()
       dialog.replace(
-        () => <DialogTrust status={current.status() ?? status} onTrust={grant} onNotNow={() => dialog.clear()} />,
-        // However the dialog closes, unless the folder is trusted by then the answer is not now.
+        () => (
+          <DialogTrust
+            status={current.status() ?? status}
+            onTrust={(persist) => grant(folder, persist)}
+            onNotNow={() => dialog.clear()}
+          />
+        ),
+        // However the dialog closes, unless the folder is trusted by then the answer is not now. The exception is a
+        // dialog that closes because another folder came into view: nobody answered it.
         () => {
-          if (!current.status()?.trusted) setDismissed((previous) => new Set(previous).add(status.directory))
+          if (directory() === folder && !current.status()?.trusted)
+            setDismissed((previous) => new Set(previous).add(status.directory))
         },
         { key: DialogTrustKey },
       )
@@ -139,6 +149,13 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     createEffect(() => {
       if (current.status()?.trusted && dialog.key === DialogTrustKey) dialog.clear()
     })
+    // Another folder coming into view ends the dialog, and `useTrustPrompt` asks about that folder once its status is
+    // read.
+    createEffect(
+      on(directory, () => {
+        if (dialog.key === DialogTrustKey) dialog.clear()
+      }),
+    )
 
     return {
       /** The status of the folder in view: the current session's, or Home's. */

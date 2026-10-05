@@ -1011,6 +1011,12 @@ test.each([false, true])("uses the resolved launch directory for new prompts (fa
     requests
       .slice(1)
       .filter((url) => url.searchParams.has("location[directory]"))
+      // The one request that still names the local folder asks whether the plugins found in it may load. A server that
+      // cannot resolve the folder cannot trust it, so that read fails, which leaves them off.
+      .filter(
+        (url) =>
+          url.pathname !== "/api/location/trust" || url.searchParams.get("location[directory]") !== process.cwd(),
+      )
       .every((url) => url.searchParams.get("location[directory]") === target),
   ).toBe(true)
 })

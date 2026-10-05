@@ -111,6 +111,68 @@ test("nothing is imported before the first answer, and a trusted folder's plugin
   })
 })
 
+test("the project's plugins follow the trust of the folder they are found from, not that of the server's default folder", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  const asked: string[] = []
+  let trusted = false
+  await inside(fixture.path, async () => {
+    const cwd = process.cwd()
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        const folder = url.searchParams.get("location[directory]") ?? ""
+        asked.push(folder)
+        // Every folder is trusted but the one the plugins are in, which is not the one the server calls its own.
+        return json(status(folder, folder !== cwd || trusted))
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await setup.flush()
+    expect(asked).toContain(cwd)
+    expect(await fixture.marks()).toEqual([])
+
+    trusted = true
+    setup.events.emit({ id: "evt_trust", created: 1, type: "trust.updated", data: { directory: cwd, trusted: true } })
+    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
+    expect(await fixture.marks()).toEqual(["loaded"])
+  })
+})
+
+test("a server that takes the first read and never answers does not hold the terminal UI up, and a later change asks again", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  let answering = false
+  await inside(fixture.path, async () => {
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: async (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        if (answering) return json(status(fixture.path, true))
+        // Silent until the terminal UI gives up on the request.
+        await new Promise((resolve) => request.signal.addEventListener("abort", resolve, { once: true }))
+        return new Response("gone", { status: 503 })
+      },
+    })
+    await setup.ready
+    // The terminal UI gives up on the read after two seconds, which takes more passes than the default allows.
+    await setup.waitForFrame((frame) => promptReady(frame), { maxPasses: 600 })
+    expect(await fixture.marks()).toEqual([])
+
+    answering = true
+    setup.events.emit({
+      id: "evt_trust",
+      created: 1,
+      type: "trust.updated",
+      data: { directory: fixture.path, trusted: true },
+    })
+    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
+    expect(await fixture.marks()).toEqual(["loaded"])
+  })
+}, 20_000)
+
 test.each([
   ["has no trust route", () => new Response("not found", { status: 404 })],
   ["fails", () => new Response("unavailable", { status: 503 })],

@@ -217,12 +217,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   })
   const options = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
   const api = Orbit.make(options)
-  const location = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
+  const cwd = process.cwd()
+  const location = yield* Effect.tryPromise(() => api.file.list({ location: { directory: cwd } })).pipe(
     Effect.map((response) => response.location),
     Effect.catch(() => Effect.tryPromise(() => api.location.get())),
   )
   const directory = location.directory
-  const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(process.cwd(), global))
+  const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(cwd, global))
   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
   const managed = input.server.service
   const service = managed
@@ -407,7 +408,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                                             updater={input.updater}
                                                                           >
                                                                             <PanelProvider>
-                                                                              <TrustProvider>
+                                                                              <TrustProvider directory={cwd}>
                                                                                 <PluginProvider
                                                                                   packages={input.packages}
                                                                                   directories={pluginDirectories}

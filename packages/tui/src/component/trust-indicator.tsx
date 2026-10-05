@@ -1,8 +1,8 @@
 import type { TrustStatus } from "@orbit/client"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, Show } from "solid-js"
-import { holdsBack } from "../context/trust"
 import { useTheme } from "../context/theme"
+import { holdsBack } from "../util/trust"
 
 /** Shown while the folder in view is untrusted and so holds something back; opens the question of trusting it. */
 export function TrustIndicator(props: { status: TrustStatus | undefined; onOpen: () => void }) {
