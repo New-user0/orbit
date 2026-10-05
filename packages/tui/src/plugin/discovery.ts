@@ -44,9 +44,21 @@ export async function localPluginDirectories(
 /**
  * The plugin directories to read now. A plugin runs in this process, so the ones a project keeps wait for its folder
  * to be trusted, as the server's do; the user's own never wait.
+ *
+ * `above` is the folders around the project whose config the server still holds back, each waiting on its own decision.
+ * The terminal UI finds the project's root without asking the server, so when the two disagree, a folder the server
+ * counts as above its project can lie inside the terminal UI's walk, and its plugins wait like the server's.
  */
-export function trustedPluginDirectories(directories: PluginDirectories, trusted: boolean) {
-  return trusted ? [...directories.global, ...directories.project] : [...directories.global]
+export function trustedPluginDirectories(directories: PluginDirectories, trusted: boolean, above: readonly string[]) {
+  if (!trusted) return [...directories.global]
+  return [
+    ...directories.global,
+    // A plugins directory sits in `.orbit` in the folder that holds it. path.relative compares case-insensitively where
+    // Windows does.
+    ...directories.project.filter(
+      (plugins) => !above.some((folder) => path.relative(folder, path.dirname(path.dirname(plugins))) === ""),
+    ),
+  ]
 }
 
 export async function discoverPluginTargets(directories: string[]) {

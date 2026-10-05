@@ -1,4 +1,5 @@
 import type { TrustStatus } from "@orbit/client"
+import { isDeepEqual } from "remeda"
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js"
 import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
@@ -163,8 +164,22 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
       held: createMemo(() => holdsBack(current.status())),
       pending,
       open,
-      /** Whether the plugins in the project the terminal UI started in may load, and whether that is known yet. */
-      startup: { trusted: createMemo(() => startup.status()?.trusted === true), settled: startup.settled },
+      startup: {
+        /** Whether the plugins in the project the terminal UI started in may load. */
+        trusted: createMemo(() => startup.status()?.trusted === true),
+        /**
+         * The folders above the project that the server still holds config back for, each until its own decision. The
+         * terminal UI finds its project's root without asking, so its plugins can lie in one of them. The same list is
+         * the same answer, so that a read that finds nothing new does not rebuild the plugins.
+         */
+        above: createMemo(
+          () => groupWithheld(startup.status()?.withheld ?? []).above.flatMap((item) => item.directory ?? []),
+          [],
+          { equals: isDeepEqual },
+        ),
+        /** Whether the first answer has come, whatever it was. */
+        settled: startup.settled,
+      },
     }
   },
 })

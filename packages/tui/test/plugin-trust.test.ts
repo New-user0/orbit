@@ -173,6 +173,40 @@ test("a server that takes the first read and never answers does not hold the ter
   })
 }, 20_000)
 
+test("a plugin in a folder above the folder the server calls its project waits until that folder is trusted too", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  const sub = path.join(fixture.path, "sub")
+  await mkdir(sub)
+  let held = true
+  // The terminal UI looks for the project's root on its own and finds the repository around `sub`. The server, which
+  // could not open that repository, takes `sub` as its project, and lists the folder around it as config above.
+  await inside(sub, async () => {
+    const cwd = process.cwd()
+    const above = path.dirname(cwd)
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        return json({
+          ...status(cwd, true),
+          withheld: held ? [{ path: path.join(above, ".orbit"), kinds: ["plugins"], directory: above }] : [],
+        })
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await setup.flush()
+    // The folder in view is trusted, and no dialog asks about the one above it, but its plugin has not run.
+    expect(await fixture.marks()).toEqual([])
+
+    held = false
+    setup.events.emit({ id: "evt_trust", created: 1, type: "trust.updated", data: { directory: above, trusted: true } })
+    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
+    expect(await fixture.marks()).toEqual(["loaded"])
+  })
+})
+
 test.each([
   ["has no trust route", () => new Response("not found", { status: 404 })],
   ["fails", () => new Response("unavailable", { status: 503 })],

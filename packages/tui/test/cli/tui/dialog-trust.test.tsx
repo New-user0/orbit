@@ -385,6 +385,43 @@ test("a grant that is answered once another folder is in view leaves the questio
   }
 })
 
+test("the folders above the one the terminal UI started in that the server holds back are the same list until the answer changes", async () => {
+  // Trusted, with config in the folder above still held back for that folder's own decision.
+  const fixture = await renderTrust({ ...layered, trusted: true, source: "saved", withheld: [above] })
+
+  try {
+    await until(() => fixture.reads() > 0)
+    await until(() => fixture.trust().startup.settled())
+    const first = fixture.trust().startup.above()
+    expect(first).toEqual(["/tmp/orbit"])
+
+    // The plugins are rebuilt when this list changes, which retries the packages that failed to install, so a read that
+    // finds the same answer must not look like a change.
+    const reads = fixture.reads()
+    fixture.events.emit({
+      id: "evt_trust",
+      created: 1,
+      type: "trust.updated",
+      data: { directory: "/tmp/orbit", trusted: true },
+    })
+    await until(() => fixture.reads() >= reads + 2)
+    await fixture.app.renderOnce()
+    expect(fixture.trust().startup.above()).toBe(first)
+
+    // And when the folder above is trusted, the server stops listing it.
+    fixture.trustElsewhere()
+    fixture.events.emit({
+      id: "evt_trust_above",
+      created: 2,
+      type: "trust.updated",
+      data: { directory: "/tmp/orbit", trusted: true },
+    })
+    await until(() => fixture.trust().startup.above().length === 0)
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 type Fixture = Awaited<ReturnType<typeof renderTrust>>
 
 async function renderTrust(
