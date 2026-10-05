@@ -85,7 +85,7 @@ orb eval <suite> --models a,b
 
 `orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and
 whose own config holds something back, such as hooks or plugins. They also stop, even where the folder holds no config
-at all, when the workflow or suite brings code or commands that a run would execute:
+at all, when the workflow or suite brings code, commands or approvals that a run would carry out:
 
 - **A TypeScript or JavaScript workflow or suite**, because loading one runs the code in it. `orb flow replay` stops
   for a workflow module as well.
@@ -94,9 +94,24 @@ at all, when the workflow or suite brings code or commands that a run would exec
   front of them, and a fresh clone can bring such a file. The refusal lists the commands it found. A file that defines
   none, such as a `verify` node whose `checks` are empty, runs as before. `orb flow replay` is not stopped for commands,
   because a replay answers every check from the recording and runs none.
+- **A YAML workflow that sets `permissions: auto`** on an agent or verify node, or on a member of a team. A run then
+  approves, once, every action the agents of that node ask permission for, where it rejects them otherwise, so the
+  file would answer your own `ask` rules for you; see [Permissions](#permissions). The refusal lists each such node,
+  a team member as `team/member`, with the value as written. A value that is a template, such as `{{plan.text}}`,
+  counts as well, because it is filled in when the node starts and an agent's reply can say `auto`. `--auto` is your
+  own flag, so it is not held up, and neither is `orb flow replay`, which calls no model. A suite cannot set
+  `permissions`.
 
 Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
 [upgrading](upgrading.md).
+
+A server older than workspace trust, such as a background service that was started before an upgrade and not restarted,
+cannot say whether the folder is trusted. Where the check is only for held-back config, as it is for `orb run` and
+`orb loop`, the command goes ahead with a warning on stderr, because such a server applies a folder's config without
+asking. `orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` stop instead when they would import a
+module, run shell commands or approve actions, because this process would do that itself, and they say so. Restart the
+server (`orb service restart` for the background service), or pass `--standalone`, or `--trust`, which also trusts the
+folder for the run. Both start a current private server.
 
 ## Writing `orb flow` workflows
 
@@ -166,6 +181,9 @@ output: merge
 - A `check` node, and a `verify` node that has `checks`, run shell commands. In a folder that is not trusted, a
   workflow that has one is not run until the folder is trusted or `--trust` is passed, and the refusal lists the
   commands; see the note under the `orb flow` commands above.
+- `permissions: auto` on an agent node, a verify node or a member of a team approves what that node's agents ask
+  permission for. A workflow that sets it is not run in a folder that is not trusted either, and the refusal lists the
+  nodes.
 
 Eval suites can be YAML or JSON as well.
 
@@ -205,8 +223,16 @@ A run is unattended. When an agent asks to do something that needs approval, the
 to continue without it (`permissions: "reject"`, the default). Use `permissions: "auto"` on a node, or `orb flow run
 --auto`, to approve such requests once. Rules you configured as `deny` stay denied either way.
 
+A node's own `permissions` wins over `--auto`, and a node that is set to `auto` answers every request that your own
+`ask` rules lead to with a yes. So a workflow file that you did not write could approve what you meant to be asked
+about, and a folder that is not trusted is stopped from running one that sets `permissions: "auto"` on an agent or
+verify node, or on a member of a team, until the folder is trusted or `--trust` is passed. The refusal lists each such
+node, a team member as `team/member`. A `permissions` that is a template, such as `{{plan.text}}`, is listed as well,
+because it is filled in when the node starts and an agent's reply can say `auto`. `--auto` is your own flag and nothing
+the folder brings, so it is not held up. See the note under the `orb flow` commands above.
+
 The commands of `check` nodes and of `checks` are not agent actions, so no permission rule is asked about them. A folder
-that is not trusted is stopped from running them instead; see the note under the `orb flow` commands above.
+that is not trusted is stopped from running them instead; see the same note.
 
 ## Resume
 

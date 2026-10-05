@@ -62,6 +62,39 @@ export async function suiteCommands(file: string) {
   return (await loadSuite(file)).tasks.flatMap((task) => listed(task?.id, task?.checks))
 }
 
+/**
+ * The nodes of the YAML workflow in `file` whose agents have every action they ask permission for approved, once, where a
+ * run rejects them unless it is told otherwise: an agent or verify node that sets `permissions` to `auto`, and each member
+ * of a team that does, named `team/member`, with the value as written. That takes the answer to the user's own `ask`
+ * rules out of the user's hands, as `--auto` does when the user passes it, so a file that brings it needs the same care
+ * as a command. A value that is a template counts as well: `{{node.text}}` is filled in when the node starts, and the
+ * reply of an agent can say `auto`. These are the only places `execute` in `yaml.ts` hands `permissions` on, and the runner
+ * approves for `auto` and nothing else. Asked before `loadWorkflow` like `workflowCommands`, which it reads and validates
+ * as that does, and for the same reason only a YAML file is read: what a module passes on is known only once it runs.
+ */
+export async function workflowApprovals(file: string) {
+  if (!isYaml(file)) return []
+  const nodes = validate((await read(file, "Workflow file")) as Spec, file)
+  return [...nodes.values()].flatMap((node) => {
+    const type = node.type ?? "agent"
+    if (type === "agent" || type === "verify") return approving(node.id, node.permissions)
+    // `validate` takes any object for the members, an array and null included, and a member can be any value. Only one
+    // that is an object has `permissions` to hand on.
+    if (type === "team")
+      return Object.entries((node.members ?? {}) as Record<string, { readonly permissions?: unknown } | null>).flatMap(
+        ([name, member]) => approving(`${node.id}/${name}`, member?.permissions),
+      )
+    return []
+  })
+}
+
+// `auto`, or a string with a template in it, which `fill` may turn into `auto` once the run reaches the node. Any other
+// value is a rejection to the runner.
+function approving(id: string, permissions: unknown) {
+  if (typeof permissions !== "string") return []
+  return permissions === "auto" || permissions.includes("{{") ? [{ id, permissions }] : []
+}
+
 // The entries of a `checks` list. A list that is not an array makes `verify` fail before it runs anything, and every
 // entry of an array goes to the shell however it is written, so each counts, and a malformed one shows as what runs.
 function listed(id: unknown, checks: unknown) {
