@@ -23,7 +23,8 @@ export default Runtime.handler(
     })
     // A replay runs on no server, but a module workflow is code that runs here as it does for `orb flow run`, and the
     // file is the one the repository's run store names unless --file says otherwise. So before it is loaded the folder
-    // has to be trusted, which only a server can say. A YAML workflow is only read, and connects to nothing.
+    // has to be trusted, which only a server can say. A YAML workflow is only read, and connects to nothing: a replay
+    // answers every check from the recording, so the shell commands that the workflow defines never run here.
     if (importsModule(file)) {
       const server = yield* ServerConnection.resolve({
         server: Option.getOrUndefined(input.server),

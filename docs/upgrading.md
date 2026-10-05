@@ -224,11 +224,12 @@ to trust the folder, and exit with status 1. `orb run --format json`, `stream-js
 error that any failure before a session exists produces, instead of text, and does the same when the request itself
 fails. They used to carry on without those settings, which for a script meant a run without the repository's hooks and
 plugins and nothing to say so. A folder that holds nothing back runs as before, trusted or not, and so does one on a
-server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`), except that a TypeScript or
-JavaScript workflow or suite needs a trusted folder either way (see "`orb flow` and `orb eval` need a trusted folder to
-load a workflow or suite module" under Clients). `orb flow` and `orb eval` load the workflow or suite file only after
-the check, because loading it runs its code. `orb acp` cannot stop, because the editor chooses the folders, so it writes
-a warning to stderr about the folder it started in.
+server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`), except that a workflow or suite
+that is a TypeScript or JavaScript module, or that defines shell commands, needs a trusted folder either way (see
+"`orb flow` and `orb eval` need a trusted folder to run a workflow or suite's code or commands" under Clients).
+`orb flow` and `orb eval` import a workflow or suite module only after the check, because importing it runs its code.
+`orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it
+started in.
 
 Config in a folder above the project, such as an `orbit.json` in a folder that holds several repositories, follows the
 decision for the folder that holds it, so trusting a repository does not apply it. The refusal lists those files apart
@@ -317,31 +318,41 @@ the folder is trusted, and everyone who now sees the dialog. Code that calls `lo
 choose "Trust until Orbit restarts", or pass `--trust` to a headless command. For config in a folder above a repository,
 run `orb trust <folder>` for the folder that holds it.
 
-### `orb flow` and `orb eval` need a trusted folder to load a workflow or suite module
+### `orb flow` and `orb eval` need a trusted folder to run a workflow or suite's code or commands
 
-A workflow or eval suite written in TypeScript or JavaScript is loaded by importing it, which runs the code at the top
-of the file. `orb flow run`, `orb flow resume` and `orb eval` stopped for an untrusted folder only when its project
-config held something back (see "The headless commands stop in an untrusted folder, and `orb trust` trusts one"
-above), so a fresh clone that brought nothing but a `workflow.ts` ran that file without ever being trusted. For
-`orb flow resume`, the file is the one that the repository's own run store names. Importing a module now needs a trusted
-folder whether or not the folder holds anything back. The command stops before it imports the file, says that it runs
-code from the folder, names the file, and gives `orb trust` and `--trust` as the ways to go on, as for held-back config.
+A workflow or eval suite can run what the folder brings in two ways. One written in TypeScript or JavaScript is loaded
+by importing it, which runs the code at the top of the file. And a YAML workflow or a YAML or JSON suite can define
+shell commands: a `check` node, a `verify` node's `checks`, and a suite task's `checks`. A run executes those through
+the platform shell, in the CLI process, and no permission rule is asked about them. `orb flow run`, `orb flow resume`
+and `orb eval` stopped for an untrusted folder only when its project config held something back (see "The headless
+commands stop in an untrusted folder, and `orb trust` trusts one" above), so a fresh clone that brought nothing but a
+`workflow.ts`, a `workflow.yaml` with a check node or a `suite.json` with checks ran its own code or commands without
+ever being trusted. For `orb flow resume`, the file is the one that the repository's own run store names.
+
+They now stop for an untrusted folder, whether or not it holds anything back, when the file is a module, or when the
+YAML or JSON file defines any such command. The command stops before it imports or runs anything. It says that it runs
+code or shell commands from the folder, names the file, lists the commands it found by node or task, and gives
+`orb trust` and `--trust` as the ways to go on, as for held-back config. A workflow or suite that defines no command,
+such as one whose `checks` are empty, is only read, so it keeps the check it had: an untrusted folder stops it when
+the folder's config holds something back, and not otherwise.
 
 `orb flow replay` loads the same files, from the run store or with `--file`, and used to check nothing, because a replay
-calls no model and connects to no server. It now makes the same check for a module. To ask, it connects to a server,
-which for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust`
-as the other `orb flow` commands do. A YAML workflow, and a JSON or YAML suite, are read and not imported, so they keep
-the check they had, and replaying a YAML workflow still connects to no server.
+calls no model and connects to no server. It now makes the check for a module. To ask, it connects to a server, which
+for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust` as
+the other `orb flow` commands do. A replay answers every check from the recording and runs no command, so a YAML
+workflow is not stopped for the commands it defines, and replaying one still connects to no server.
 
 **Affects:** scripts and CI that run `orb flow run`, `orb flow resume`, `orb flow replay` or `orb eval` on a TypeScript
-or JavaScript file in a folder that is not trusted, through the background service, which is the default: they now exit
-with status 1 even where the folder holds no project config. A replay of a module workflow now connects to a server, and
-starts the background service if that is the server it uses and it is not running. Commands run with `--standalone`
-and `ORBIT_TRUST_PROJECT=1`, or against a server that trusts the folder, are not affected.
+or JavaScript file, or `orb flow run`, `orb flow resume` or `orb eval` on a YAML workflow or a YAML or JSON suite that
+defines shell commands, in a folder that is not trusted, through the background service, which is the default: they now
+exit with status 1 even where the folder holds no project config. That is nearly every eval, because nearly every
+suite has checks. A replay of a module workflow now connects to a server, and starts the background service if that is
+the server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or against a
+server that trusts the folder, are not affected.
 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
-`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Look over a workflow or suite that you did not write before you trust
-the folder that holds it, because trusting the folder lets it run.
+`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Look over a workflow or suite that you did not write, and the
+commands that the refusal lists, before you trust the folder that holds it, because trusting the folder lets it run.
 
 ## Permissions
 

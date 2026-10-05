@@ -23,11 +23,11 @@ const ServerParams = {
 }
 
 // For commands that start work in the current folder and stop, rather than ask, when its project config is held back or
-// when they are about to load code from it.
+// when they are about to load code from it or run the shell commands that a file in it defines.
 const TrustParams = {
   trust: Flag.boolean("trust").pipe(
     Flag.withDescription(
-      "Trust this folder for this run only, so its project config applies and the code it holds may run; runs on a private server and cannot be combined with --server",
+      "Trust this folder for this run only, so its project config applies and the code and commands it holds may run; runs on a private server and cannot be combined with --server",
     ),
     Flag.withDefault(false),
   ),

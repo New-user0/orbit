@@ -81,6 +81,9 @@ function isRejected(value: unknown) {
   return typeof value === "object" && value !== null && "approved" in value && value.approved === false
 }
 
+// `check` and `verify` are the types that start commands of the file's own. `workflowCommands` in load.ts lists them
+// for the callers that ask whether the folder is trusted before the run, so a type added here that runs one is added
+// there.
 function execute(ctx: Context, node: NodeSpec, needed: Readonly<Record<string, unknown>>) {
   const options = fill(
     Object.fromEntries(Object.entries(node).filter(([key]) => !["id", "type", "needs"].includes(key))),

@@ -83,10 +83,19 @@ orb flow trace <run> [--format otlp] [--otlp <collector url>]
 orb eval <suite> --models a,b
 ```
 
-`orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` stop, before they do any work, in a folder that is
-not trusted and whose own config holds something back, such as hooks or plugins. They also stop when the workflow or
-suite is a TypeScript or JavaScript module, because loading one runs the code in it, even where the folder holds no
-config at all. Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
+`orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and
+whose own config holds something back, such as hooks or plugins. They also stop, even where the folder holds no config
+at all, when the workflow or suite brings code or commands that a run would execute:
+
+- **A TypeScript or JavaScript workflow or suite**, because loading one runs the code in it. `orb flow replay` stops
+  for a workflow module as well.
+- **A YAML workflow, or a YAML or JSON suite, that defines shell commands:** a `check` node, a `verify` node's
+  `checks`, or a suite task's `checks`. A run executes them through the platform shell with no permission step in
+  front of them, and a fresh clone can bring such a file. The refusal lists the commands it found. A file that defines
+  none, such as a `verify` node whose `checks` are empty, runs as before. `orb flow replay` is not stopped for commands,
+  because a replay answers every check from the recording and runs none.
+
+Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
 [upgrading](upgrading.md).
 
 ## Writing `orb flow` workflows
@@ -154,6 +163,9 @@ output: merge
 - The output is the result of the `output` node, or every node's result by id.
 - The file is checked before anything runs: unique ids, known types, required options, `needs` that exist, no
   cycles, and templates, `in` and `branches` naming only upstream nodes.
+- A `check` node, and a `verify` node that has `checks`, run shell commands. In a folder that is not trusted, a
+  workflow that has one is not run until the folder is trusted or `--trust` is passed, and the refusal lists the
+  commands; see the note under the `orb flow` commands above.
 
 Eval suites can be YAML or JSON as well.
 
@@ -192,6 +204,9 @@ With `onError: "fail"` (the default) a failed node fails the run, after its para
 A run is unattended. When an agent asks to do something that needs approval, the run rejects it and tells the agent
 to continue without it (`permissions: "reject"`, the default). Use `permissions: "auto"` on a node, or `orb flow run
 --auto`, to approve such requests once. Rules you configured as `deny` stay denied either way.
+
+The commands of `check` nodes and of `checks` are not agent actions, so no permission rule is asked about them. A folder
+that is not trusted is stopped from running them instead; see the note under the `orb flow` commands above.
 
 ## Resume
 
@@ -318,6 +333,10 @@ orb eval .orbit/evals/api.ts --models ollama/a,ollama/b --format json
 - Each task is a verify node in its own worktree from the current commit. Models never see each other's work, and
   the checkout is not changed.
 - `maxIterations` defaults to 1, which scores first-try success. Tasks can set `judge` like a verify node.
+- The `checks` are shell commands, so in a folder that is not trusted `orb eval` stops for a JSON or YAML suite whose
+  tasks have any, and lists them. It stops for a TypeScript or JavaScript suite whatever it holds, because importing it
+  runs its code. Run `orb trust` once, or pass `--trust` for one run. Nearly every suite has `checks`, so in practice a
+  suite needs the trust.
 - `--concurrency n` runs n tasks at once (default 1).
 - The report has passed tasks, pass rate, tokens, cost and time per model, and a task-by-model grid.
 - An eval is a run like any other: `orb flow show` and `orb flow cost` work on it, and `orb eval <suite> --resume

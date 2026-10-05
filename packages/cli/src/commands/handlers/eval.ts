@@ -7,14 +7,12 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { requireTrust } from "../../util/trust"
-import { directory } from "./flow/execute"
+import { directory, trustOptions } from "./flow/execute"
 
 export default Runtime.handler(
   Commands.commands.eval,
   Effect.fn("cli.eval")(function* (input) {
-    const { evaluate, importsModule, loadSuite, openStore, summarize } = yield* Effect.promise(
-      () => import("@orbit/flow"),
-    )
+    const { evaluate, loadSuite, openStore, summarize } = yield* Effect.promise(() => import("@orbit/flow"))
     const file = path.resolve(directory(), input.suite)
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
@@ -22,10 +20,9 @@ export default Runtime.handler(
       trust: input.trust,
     })
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-    // Before the suite is loaded: loading imports a module, whose top-level code then runs here. So a module needs a
-    // trusted folder whatever the folder holds back, and a refusal that says no work was done has to come before it.
-    // Loading a JSON or YAML suite runs nothing, so it keeps the check that `orb run` has.
-    yield* requireTrust(client, directory(), { grant: input.trust, imports: importsModule(file) ? file : undefined })
+    // Before the suite is loaded, so that a refusal that says no work was done comes before any code of the file runs.
+    const trust = yield* trustOptions(file, "suite")
+    yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })
     const resume = Option.getOrUndefined(input.resume)
     // A resumed eval compares the models it started with.
