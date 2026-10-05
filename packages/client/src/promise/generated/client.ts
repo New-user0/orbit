@@ -6,6 +6,11 @@ import type {
   LocationGetInput,
   LocationGetOutput,
   LocationReloadOutput,
+  LocationTrustGetInput,
+  LocationTrustGetOutput,
+  LocationTrustUpdateInput,
+  LocationTrustUpdateOutput,
+  LocationTrustListOutput,
   AgentListInput,
   AgentListOutput,
   AgentGetInput,
@@ -467,6 +472,38 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      trust: {
+        get: (input?: LocationTrustGetInput, requestOptions?: RequestOptions) =>
+          request<LocationTrustGetOutput>(
+            {
+              method: "GET",
+              path: `/api/location/trust`,
+              query: { location: input?.["location"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ),
+        update: (input: LocationTrustUpdateInput, requestOptions?: RequestOptions) =>
+          request<LocationTrustUpdateOutput>(
+            {
+              method: "POST",
+              path: `/api/location/trust`,
+              query: { location: input["location"] },
+              body: { trust: input["trust"], persist: input["persist"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ),
+        list: (requestOptions?: RequestOptions) =>
+          request<LocationTrustListOutput>(
+            { method: "GET", path: `/api/trust`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
+            requestOptions,
+          ),
+      },
     },
     agent: {
       list: (input?: AgentListInput, requestOptions?: RequestOptions) =>

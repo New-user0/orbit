@@ -1,7 +1,11 @@
+import { Orbit } from "@orbit/client"
+import { Service } from "@orbit/client/effect/service"
 import { Effect, Option } from "effect"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { requireTrust } from "../../util/trust"
+import { directory } from "./flow/execute"
 
 export default Runtime.handler(Commands.commands.run, (input) =>
   Effect.gen(function* () {
@@ -17,7 +21,15 @@ export default Runtime.handler(Commands.commands.run, (input) =>
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone || input.bare,
+      trust: input.trust,
     })
+    // A session continued from another folder still runs there, and the server holds that folder's config back on its
+    // own; this checks the folder the command was started in.
+    yield* requireTrust(
+      Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+      directory(),
+      { grant: input.trust },
+    )
     yield* Effect.promise(() =>
       runNonInteractive({
         server,

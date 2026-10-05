@@ -6,6 +6,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { requireTrust } from "../../util/trust"
 import { directory } from "./flow/execute"
 
 export default Runtime.handler(
@@ -34,11 +35,14 @@ export default Runtime.handler(
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone,
+      trust: input.trust,
     })
+    const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    yield* requireTrust(client, directory(), { grant: input.trust })
     const result = yield* Effect.tryPromise({
       try: () =>
         evaluate({
-          client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+          client,
           suite,
           file,
           directory: directory(),

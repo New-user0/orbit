@@ -39,7 +39,10 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   `ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT` are never held back. A private or foreground server trusts every folder
   except the home directory and filesystem roots when it starts with `ORBIT_TRUST_PROJECT=1`, and an SDK host does with
   `trust: { implicit: true }`; the shared background service never does, and a host that leaves the option unset trusts
-  nothing. See [docs/upgrading.md](docs/upgrading.md).
+  nothing. `orb trust` trusts a folder for good (`--list` shows the folders, `--revoke` ends it), and `--trust` on
+  `orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` trusts it for one run on a private server.
+  Those commands exit with status 1, doing nothing, in a folder that is not trusted and holds something back. See
+  [docs/upgrading.md](docs/upgrading.md).
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and
   OS roots. `ORBIT_CLIENT_CERT`, `ORBIT_CLIENT_KEY` and `ORBIT_CLIENT_KEY_PASSPHRASE` add a client certificate.

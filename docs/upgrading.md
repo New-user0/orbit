@@ -171,11 +171,11 @@ needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectT
 carries (ask it before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and
 a global `trust.updated` event reports each change.
 
-**What to do:** nothing for config you keep in your own files. For a repository you trust, run with `--standalone` and
-`ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which also suits CI and tests.
-`orb trust`, the trust prompt in the terminal UI (which also holds back the plugins the terminal UI loads from
-`.orbit/plugins`) and the headless refusals that go with them arrive in following changes, and until they do the
-background service has no way to trust a folder.
+**What to do:** nothing for config you keep in your own files. For a repository you trust, run `orb trust` in it, or
+run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which
+also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" under
+Clients. The trust prompt in the terminal UI (which also holds back the plugins the terminal UI loads from
+`.orbit/plugins`) arrives in a following change, and until it does the terminal UI has no way to trust a folder.
 
 ## Clients
 
@@ -202,6 +202,41 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
+
+### The headless commands stop in an untrusted folder, and `orb trust` trusts one
+
+`orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` now ask the server, before they do any work,
+whether the folder they start in is trusted (see "A project's config waits for its folder to be trusted" above). When
+it is not, and its project config holds something back, they print what is held back and how to trust the folder, and
+exit with status 1. They used to carry on without those settings, which for a script meant a run without the
+repository's hooks and plugins and nothing to say so. A folder that holds nothing back runs as before, trusted or not,
+and so does one on a server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`). `orb acp`
+cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it started in.
+
+- **`orb trust [folder]`** trusts the folder, or the current one, for good: the grant is stored, so it outlasts the
+  server and is seen by every client of it. `--revoke` takes it back, and `--list` shows the folders that are trusted
+  for good. Trust belongs to the project's root folder, so a subfolder, and the linked worktrees of a repository, share
+  it. A home directory or a filesystem root is refused, because a grant for it would trust every folder below it; use
+  the next flag, or the terminal UI once its prompt arrives.
+- **`--trust`** on those five commands trusts the folder for that run alone. It starts a private server for the run,
+  as `--standalone` does, and the grant lives only in that server, so it ends with the run and never reaches the
+  background service. Because it is explicit it also works in a home directory. It cannot be combined with `--server`,
+  because the grant would stay with a server that other runs share; use `orb trust --server <url>` there.
+
+The grants are made through new routes: `GET /api/location/trust` (`client.location.trust.get`) reports whether a
+location's project is trusted and what it holds back, `POST /api/location/trust` (`client.location.trust.update`) with
+`{ trust, persist? }` trusts it or, with `trust: false`, ends every grant for it, and `GET /api/trust`
+(`client.location.trust.list`) lists the grants that are stored. A grant is stored unless `persist` is false.
+
+**Affects:** scripts and CI that call these commands in a clone whose `orbit.json`, `.mcp.json` or `.orbit` directory
+holds something back (hooks, MCP servers, plugins, providers and the other kinds listed above), through the background
+service, which is the default: they now exit with status 1. Commands run with `--standalone` or `--server` against a
+server that trusts the folder are not affected. The new commands call routes that an older background service does not
+have, so against one they fail until it is restarted. Code that implements the server API gains three routes.
+
+**What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
+`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
+restart`), so that it knows the new routes.
 
 ## Permissions
 

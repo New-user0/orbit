@@ -8,6 +8,24 @@ export type PairingSession = { token: string }
 
 export type LocationPublicInfo = { directory: string; project: { id: string; directory: string; canonical: string } }
 
+export type TrustSource = "saved" | "session" | "implicit"
+
+export type TrustKind =
+  | "hooks"
+  | "mcp"
+  | "plugins"
+  | "commands"
+  | "permissions"
+  | "providers"
+  | "shell"
+  | "formatter"
+  | "lsp"
+  | "sandbox"
+  | "network"
+  | "settings"
+
+export type TrustGrant = { directory: string; time: number; via: string }
+
 export type LocationPublicRef = { directory: string }
 
 export type ModelRef = { id: string; providerID: string; variant?: string }
@@ -435,20 +453,6 @@ export type WebSearchResult = { url: string; title?: string; content?: string; t
 
 export type ConfigScope = "remote" | "user" | "project" | "local" | "flag" | "managed"
 
-export type TrustKind =
-  | "hooks"
-  | "mcp"
-  | "plugins"
-  | "commands"
-  | "permissions"
-  | "providers"
-  | "shell"
-  | "formatter"
-  | "lsp"
-  | "sandbox"
-  | "network"
-  | "settings"
-
 export type ConfigHooksCommand = {
   type: "command"
   command: string
@@ -503,6 +507,8 @@ export type ConfigModelCapabilities = { tools?: boolean; input?: Array<string>; 
 export type ConfigEffective = { compatibility: boolean }
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
+
+export type TrustWithheld = { path: string; kinds: Array<TrustKind> }
 
 export type SessionMessageLocationSwitched = {
   id: string
@@ -1761,6 +1767,14 @@ export type VcsInfo = { provider?: string; branch: VcsBranch }
 
 export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
 
+export type TrustStatus = {
+  directory: string
+  trusted: boolean
+  persistent: boolean
+  source?: TrustSource
+  withheld: Array<TrustWithheld>
+}
+
 export type SessionInboxMove = {
   id: string
   sessionID: string
@@ -2873,6 +2887,22 @@ export type LocationGetInput = {
 export type LocationGetOutput = LocationPublicInfo
 
 export type LocationReloadOutput = void
+
+export type LocationTrustGetInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type LocationTrustGetOutput = TrustStatus
+
+export type LocationTrustUpdateInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly trust: { readonly trust: boolean; readonly persist?: boolean | undefined }["trust"]
+  readonly persist?: { readonly trust: boolean; readonly persist?: boolean | undefined }["persist"]
+}
+
+export type LocationTrustUpdateOutput = TrustStatus
+
+export type LocationTrustListOutput = Array<TrustGrant>
 
 export type AgentListInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]

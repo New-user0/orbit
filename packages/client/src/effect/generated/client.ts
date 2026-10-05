@@ -12,6 +12,11 @@ import type {
   LocationGetInput,
   LocationGetOutput,
   LocationReloadOutput,
+  LocationTrustGetInput,
+  LocationTrustGetOutput,
+  LocationTrustUpdateInput,
+  LocationTrustUpdateOutput,
+  LocationTrustListOutput,
   AgentListInput,
   AgentListOutput,
   AgentGetInput,
@@ -313,9 +318,30 @@ const EndpointLocationGet = (raw: RawClient["server.location"]) => (input?: Loca
 const EndpointLocationReload = (raw: RawClient["server.location"]) => () =>
   preserveEffect<LocationReloadOutput>()(raw["location.reload"]({}).pipe(Effect.mapError(mapClientError)))
 
+const EndpointLocationTrustGet = (raw: RawClient["server.location"]) => (input?: LocationTrustGetInput) =>
+  preserveEffect<LocationTrustGetOutput>()(
+    raw["location.trust.get"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointLocationTrustUpdate = (raw: RawClient["server.location"]) => (input: LocationTrustUpdateInput) =>
+  preserveEffect<LocationTrustUpdateOutput>()(
+    raw["location.trust.update"]({
+      query: { location: input["location"] },
+      payload: { trust: input["trust"], persist: input["persist"] },
+    }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointLocationTrustList = (raw: RawClient["server.location"]) => () =>
+  preserveEffect<LocationTrustListOutput>()(raw["trust.list"]({}).pipe(Effect.mapError(mapClientError)))
+
 const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
   get: EndpointLocationGet(raw),
   reload: EndpointLocationReload(raw),
+  trust: {
+    get: EndpointLocationTrustGet(raw),
+    update: EndpointLocationTrustUpdate(raw),
+    list: EndpointLocationTrustList(raw),
+  },
 })
 
 const EndpointAgentList = (raw: RawClient["server.agent"]) => (input?: AgentListInput) =>

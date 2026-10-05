@@ -204,7 +204,11 @@ describe("mini command", () => {
     const server = Bun.serve({
       port: 0,
       fetch(request) {
-        if (new URL(request.url).pathname === "/api/session") return new Response("boom", { status: 500 })
+        const pathname = new URL(request.url).pathname
+        if (pathname === "/api/session") return new Response("boom", { status: 500 })
+        // The folder is trusted, so the run goes on to the session this test wants to fail.
+        if (pathname === "/api/location/trust")
+          return Response.json({ directory: process.cwd(), trusted: true, persistent: true, withheld: [] })
         return Response.json({
           version: "incompatible",
           pid: process.pid,

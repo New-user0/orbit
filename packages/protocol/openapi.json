@@ -266,6 +266,224 @@
         "summary": "Reload configuration"
       }
     },
+    "/api/location/trust": {
+      "get": {
+        "tags": ["location"],
+        "operationId": "location.trust.get",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Trust.Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trust.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Report whether the requested location's project is trusted, why, and which configuration files and directories hold something back while it is not. Never waits for a person.",
+        "summary": "Get workspace trust"
+      },
+      "post": {
+        "tags": ["location"],
+        "operationId": "location.trust.update",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Trust.Status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trust.Status"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which turns what was held back on or off, and publishes trust.updated.",
+        "summary": "Update workspace trust",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "trust": {
+                    "type": "boolean",
+                    "description": "True trusts the location's project; false ends every grant for it."
+                  },
+                  "persist": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Whether a grant is stored on disk (true when omitted) or lasts only until the serving process restarts. A grant for the home directory or a filesystem root always lasts only until the restart. Ignored when trust is false."
+                  }
+                },
+                "required": ["trust"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/trust": {
+      "get": {
+        "tags": ["location"],
+        "operationId": "trust.list",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Trust.Grant"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "List the grants stored on disk, ordered by folder. A grant that lasts only until the serving process restarts is not listed.",
+        "summary": "List trusted folders"
+      }
+    },
     "/api/agent": {
       "get": {
         "tags": ["agent"],
@@ -19955,6 +20173,25 @@
         "required": ["type", "text"],
         "additionalProperties": false
       },
+      "Trust.Grant": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "time": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "When the grant was made, in milliseconds since the Unix epoch"
+          },
+          "via": {
+            "type": "string",
+            "description": "What made the grant, such as the terminal UI or a command"
+          }
+        },
+        "required": ["directory", "time", "via"],
+        "additionalProperties": false
+      },
       "Trust.Kind": {
         "type": "string",
         "enum": [
@@ -19972,6 +20209,55 @@
           "settings"
         ],
         "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, formatters, language servers, the sandbox, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
+      },
+      "Trust.Source": {
+        "type": "string",
+        "enum": ["saved", "session", "implicit"],
+        "description": "Why a folder is trusted: a grant stored on disk (saved), a grant that lasts until the serving process restarts (session), or a server that trusts every folder except home and filesystem roots (implicit)."
+      },
+      "Trust.Status": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "The folder trust is decided for: the project's canonical root"
+          },
+          "trusted": {
+            "type": "boolean"
+          },
+          "persistent": {
+            "type": "boolean",
+            "description": "Whether a grant for this folder can be stored on disk. False for the home directory and for filesystem roots, which can only be trusted until the serving process restarts."
+          },
+          "source": {
+            "$ref": "#/components/schemas/Trust.Source"
+          },
+          "withheld": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trust.Withheld"
+            },
+            "description": "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do."
+          }
+        },
+        "required": ["directory", "trusted", "persistent", "withheld"],
+        "additionalProperties": false
+      },
+      "Trust.Withheld": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trust.Kind"
+            }
+          }
+        },
+        "required": ["path", "kinds"],
+        "additionalProperties": false
       },
       "UnauthorizedErrorEncoded": {
         "type": "object",

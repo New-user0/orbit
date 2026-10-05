@@ -1,5 +1,7 @@
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
+import { ProjectTrust } from "@orbit/core/project-trust"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { ServiceUnavailableError } from "@orbit/protocol/errors"
 import { Cause, Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -8,6 +10,7 @@ import { Api } from "../api"
 export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (handlers) =>
   Effect.gen(function* () {
     const locations = yield* LocationServiceMap.Service
+    const workspaces = yield* WorkspaceTrust.Service
     return handlers
       .handle(
         "location.get",
@@ -29,5 +32,16 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
           ),
         ),
       )
+      .handle("location.trust.get", () => ProjectTrust.Service.use((trust) => trust.status()))
+      .handle(
+        "location.trust.update",
+        Effect.fn(function* (ctx) {
+          const trust = yield* ProjectTrust.Service
+          if (!ctx.payload.trust) return yield* trust.revoke()
+          // The API does not know which client asked, so a grant says only that it came through here.
+          return yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
+        }),
+      )
+      .handle("trust.list", () => workspaces.list())
   }),
 )
