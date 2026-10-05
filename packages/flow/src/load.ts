@@ -21,14 +21,27 @@ export async function loadSuite(file: string): Promise<EvalSuite> {
   return suite as EvalSuite
 }
 
+/**
+ * Whether loading `file` imports it as a module, which runs its top-level code before anything else can look at it.
+ * Only YAML and JSON are read as data. A caller that has to decide whether the file may run, such as one that asks
+ * whether its folder is trusted, asks this before it calls `loadWorkflow` or `loadSuite`, which import it without asking.
+ */
+export function importsModule(file: string) {
+  return !isYaml(file) && !isJson(file)
+}
+
 async function read(file: string, kind: string): Promise<unknown> {
   const handle = Bun.file(file)
   if (!(await handle.exists())) throw new Error(`${kind} not found: ${file}`)
   if (isYaml(file)) return Bun.YAML.parse(await handle.text())
-  if (file.toLowerCase().endsWith(".json")) return handle.json()
+  if (isJson(file)) return handle.json()
   return (await import(pathToFileURL(file).href)).default
 }
 
 function isYaml(file: string) {
   return /\.ya?ml$/i.test(file)
+}
+
+function isJson(file: string) {
+  return file.toLowerCase().endsWith(".json")
 }

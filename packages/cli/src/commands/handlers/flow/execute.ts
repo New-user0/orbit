@@ -18,7 +18,7 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
   readonly input?: Readonly<Record<string, unknown>>
   readonly resume?: string
 }) {
-  const { run } = yield* Effect.promise(() => import("@orbit/flow"))
+  const { importsModule, run } = yield* Effect.promise(() => import("@orbit/flow"))
   const file = path.resolve(directory(), input.file)
   const server = yield* ServerConnection.resolve({
     server: Option.getOrUndefined(input.server),
@@ -26,9 +26,11 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
     trust: input.trust,
   })
   const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-  // Before the workflow is loaded: loading imports the file, whose top-level code then runs here, and for a resumed run
-  // the file is the one the repository's run store names. A refusal that says no work was done has to come before it.
-  yield* requireTrust(client, directory(), { grant: input.trust })
+  // Before the workflow is loaded: loading imports a module, whose top-level code then runs here, and for a resumed run
+  // the file is the one the repository's run store names. So a module needs a trusted folder whatever the folder holds
+  // back, and a refusal that says no work was done has to come before it. Loading a YAML file runs nothing, so it keeps
+  // the check that `orb run` has.
+  yield* requireTrust(client, directory(), { grant: input.trust, imports: importsModule(file) ? file : undefined })
   const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })
   const result = yield* Effect.promise(() =>
     run({

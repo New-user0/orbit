@@ -154,7 +154,8 @@ test("a verify loop feeds failed checks back to the author until they pass, then
   // Git for Windows may check files out with CRLF line endings (core.autocrlf).
   expect((await Bun.file(path.join(repository, "answer.txt")).text()).replace(/\r\n/g, "\n")).toBe("42\n")
   const calls = authored.length + reviews.length
-  const replayed = await orb(repository, ["flow", "replay", await runID(repository)])
+  // A replay calls no model, but it asks a server whether the folder is trusted before it loads the workflow module.
+  const replayed = await orb(repository, ["flow", "replay", "--standalone", await runID(repository)])
   expect({ code: replayed.code, stderr: replayed.code === 0 ? "" : replayed.stderr }).toEqual({ code: 0, stderr: "" })
   expect(replayed.stderr).toContain("replay matches the recorded output")
   expect(authored.length + reviews.length).toBe(calls)

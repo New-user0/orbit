@@ -435,7 +435,9 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   const calls = requests.length
   const worktrees = await fs.readdir(path.join(repository, ".orbit", "worktrees"))
 
-  const same = await orb(repository, ["flow", "replay", id])
+  // A module workflow is code, so a replay asks a server whether the folder is trusted before it loads one: a private
+  // server here, though the replay itself calls no model.
+  const same = await orb(repository, ["flow", "replay", "--standalone", id])
 
   expect({ code: same.code, stderr: same.code === 0 ? "" : same.stderr }).toEqual({ code: 0, stderr: "" })
   expect(same.stderr).toContain(`replaying ${id} as`)
@@ -447,14 +449,14 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
 
   const edited = path.join(root, "three-edited.ts")
   await Bun.write(edited, (await Bun.file(workflow).text()).replace("write ${node}.txt", "write ${node}.txt carefully"))
-  const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
+  const changed = await orb(repository, ["flow", "replay", "--standalone", id, "--file", edited])
   expect(changed.code).toBe(0)
   expect(changed.stderr).toContain("~ a: its inputs differ from the recording")
   expect(changed.stderr).toContain("Nodes whose inputs changed since the recording: a, b, c")
 
   const longer = path.join(root, "three-longer.ts")
   await Bun.write(longer, (await Bun.file(workflow).text()).replace('["a", "b", "c"]', '["a", "b", "c", "d"]'))
-  const diverged = await orb(repository, ["flow", "replay", id, "--file", longer])
+  const diverged = await orb(repository, ["flow", "replay", "--standalone", id, "--file", longer])
   expect(diverged.code).toBe(1)
   expect(diverged.stderr).toContain(`Replay diverged: d is not in the recording of ${id}`)
   expect(requests.length).toBe(calls)

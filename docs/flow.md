@@ -83,9 +83,11 @@ orb flow trace <run> [--format otlp] [--otlp <collector url>]
 orb eval <suite> --models a,b
 ```
 
-`orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and whose
-own config holds something back, such as hooks or plugins. Run `orb trust` in the folder to trust it for good, or pass
-`--trust` to trust it for that run alone; see [upgrading](upgrading.md).
+`orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` stop, before they do any work, in a folder that is
+not trusted and whose own config holds something back, such as hooks or plugins. They also stop when the workflow or
+suite is a TypeScript or JavaScript module, because loading one runs the code in it, even where the folder holds no
+config at all. Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
+[upgrading](upgrading.md).
 
 ## Writing `orb flow` workflows
 
@@ -362,8 +364,10 @@ How it runs:
 `orb flow watch [<run>]` redraws a run's nodes and team conversation every second until it stops; without a run it
 watches the newest.
 
-`orb flow replay <run>` re-runs a finished run as a new run from its recorded results: no model calls, worktrees,
-merges or server connection. Every node returns what the recording holds for its id. Uses:
+`orb flow replay <run>` re-runs a finished run as a new run from its recorded results: no model calls, worktrees or
+merges. Every node returns what the recording holds for its id. It connects to a server only to ask whether the folder
+is trusted, before it loads a workflow module, and takes `--standalone`, `--server` and `--trust` as `orb flow run` does;
+a YAML workflow needs no server. Uses:
 
 - **Debugging a workflow's logic:** pass an edited copy with `--file`. Nodes whose inputs changed are reported
   (`~ node: its inputs differ from the recording`) and still return the recorded result. A node the recording lacks
