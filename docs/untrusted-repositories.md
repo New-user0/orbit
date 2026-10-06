@@ -7,10 +7,11 @@ a file or changes how the `orb` binary is built. The one-line rules are in [AGEN
 Repositories". This page holds the reasons, the helpers, the tests and the review questions behind them.
 
 It comes from the first milestone (M1), which made project config, plugins, commands, workflows and the compiled binary
-safe to open in a folder that is not trusted yet. Its reviews and audits found 160 distinct defects: one blocker, 36
-majors, 114 minors and nine holes that no review had caught first. 131 of them fall into the fifteen classes below,
-including the blocker and most of the majors, and most classes came back in a new place after their first fix. Writing
-the rule once for the whole class costs less than finding the next instance in review.
+safe to open in a folder that is not trusted yet. Its reviews and audits had found 160 distinct defects by the time the
+compiled binary was last fixed: one blocker, 36 majors, 114 minors and nine holes that no review had caught first. The
+review of that fix then found a second blocker. 131 of the 160 fall into the fifteen classes below, including the first
+blocker and most of the majors, and most classes came back in a new place after their first fix. Writing the rule once
+for the whole class costs less than finding the next instance in review.
 
 **The promise.** Until a person trusts a folder, no file that the folder supplies may run code, spend their money, reach
 the network, carry a file of theirs to a model provider or change which of their rules apply. A change that breaks one
@@ -51,7 +52,7 @@ The classes, by the number that the checklist cites:
 7. [Failing open, and dropping silently](#7-failing-open-and-dropping-silently)
 8. [Permission widening through agent, mode, default, scope-order and approval-display choices](#8-permission-widening-through-agent-mode-default-scope-order-and-approval-display-choices)
 9. [Terminal control characters in printed or stored text](#9-terminal-control-characters-in-printed-or-stored-text)
-10. [The compiled binary resolves names from the folder it starts in](#10-the-compiled-binary-resolves-names-from-the-folder-it-starts-in)
+10. [The process resolves names from the folder it starts in](#10-the-process-resolves-names-from-the-folder-it-starts-in)
 11. [Parsers whose engines evaluate content](#11-parsers-whose-engines-evaluate-content)
 12. [Entry points and process boundaries each need the gate](#12-entry-points-and-process-boundaries-each-need-the-gate)
 13. [Failure and decline paths are not carried end to end](#13-failure-and-decline-paths-are-not-carried-end-to-end)
@@ -89,6 +90,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/file-access.test.ts`, `test/tool-edit.test.ts`, `test/tool-write.test.ts`.
 - Language servers and formatters: `ProjectTrust.trusted()` in `Lsp` and `Formatter`. Proof: `test/lsp.test.ts`,
   `test/formatter.test.ts`.
+- Executables that Orbit spawns by name (`git`, `rg`, shells, formatters, language servers, the sandbox tool): found
+  through `which` in `packages/core/src/util/which.ts`. No gate yet: on Windows that lookup searches the working folder
+  first (see Known gaps).
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
@@ -695,28 +699,34 @@ repository text.
 - Does a numeric column come from the store? Read it with `Number()`.
 - Is the text stored, so that it outlives the clone? Escape it at write time.
 
-### 10. The compiled binary resolves names from the folder it starts in
+### 10. The process resolves names from the folder it starts in
 
 **Rule:** Assume that the single binary starts in an untrusted repository before any trust check
 (`orb trust --standalone`, `serve --stdio`). Keep the autoload options off except `package.json`, never resolve a
-package that is not built in by name from inside the binary, and replace every bundled dependency lookup that the
-bundler leaves to the runtime.
+package that is not built in by name from inside the binary, replace every bundled dependency lookup that the bundler
+leaves to the runtime, and look executables up on `PATH` only, never in the working folder.
 
 **Why:** Bun applies the `paths` of a `tsconfig.json` in the start folder to the binary's own imports, resolves any bare
 name that the bundle leaves open from the folder's `node_modules`, and loads a native library from an npm package that
-its lookup finds. A committed file then runs in the server process before the trust gate is asked.
+its lookup finds. A committed file then runs in the server process before the trust gate is asked. Executables are found
+the same way: on Windows a lookup that searches the working folder before `PATH`, as the npm `which` package does, finds
+a `git.exe` or `rg.exe` that the repository ships.
 
 **In M1:** a repository's `tsconfig.json` `paths` ran at the start of `orb trust --list` (verification round 5), and
 `Provider.loadPackage` resolved a provider by name from the repository's `node_modules` (#22 round 8). The prescribed
 `autoloadPackageJson: false` then broke packages that name their entry by `main` or `exports`, so it is back on. The
-last hole was js-yaml's lazy `var _require = require; _require('esprima')`, which ran a committed
+next hole was js-yaml's lazy `var _require = require; _require('esprima')`, which ran a committed
 `node_modules/esprima/index.js`. A dynamic probe found it, and a scan for names would not have, because the require is
 aliased. The same probe closed Babel's browserslist lookup and fff's native-library lookup (on Windows the embedded path
-says `~BUN`, not `$bunfs`). Four commits in three rounds.
+says `~BUN`, not `$bunfs`). Then the review of that fix found one more kind of name: `which` in
+`packages/core/src/util/which.ts` wraps the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
+gathered version control info, and a committed `rg.exe` ran during file search, before any trust. A blocker, and still
+open when this was written (see Known gaps). The earlier holes took four fix commits in three rounds.
 
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
-first started the server inside the repository, audit what the binary loads from its start folder before any trust
-check. No earlier audit had looked.
+first started the server inside the repository, audit what the process resolves from its start folder before any trust
+check: modules, packages, native libraries and executables. No earlier audit had looked, and M1's rounds found each kind
+in turn.
 
 **How to comply:**
 
@@ -729,6 +739,10 @@ check. No earlier audit had looked.
 - `Provider.loadPackage` (`packages/core/src/provider.ts`) fails with `LoadError` inside a compiled binary
   (`Bun.isStandaloneExecutable`) for a package that is not built in. Otherwise it installs with `npm.add` and resolves
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
+- Look executables up on `PATH` only, with `Bun.which(command, { PATH })` or a resolver that you have checked does not
+  search the working folder: the npm `which` package searches it first on Windows. `which` in
+  `packages/core/src/util/which.ts` wraps that package, and it feeds `gitExecutable`, `RipgrepBinary`, `ShellSelect`,
+  the built-in formatters and language servers, the sandbox tool and the Azure CLI check.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -746,6 +760,9 @@ check. No earlier audit had looked.
   0, no marker, and that fff finds no library.
 - A control built with each option on, or the plugin off, must write the marker, so the test cannot pass because the
   folder never had a way to run.
+- Executables, on Windows: put a marker-writing `git.exe` and `rg.exe` in the folder and run a command that spawns each,
+  as the review did with `orb session list --standalone` for git and a file search for ripgrep. Assert no marker, with
+  the real executable still found on `PATH`.
 - The build fails if a replacement matched nothing (`packages/cli/test/compile-autoload.test.ts`,
   `packages/cli/test/compile-runtime-requires.test.ts`, `packages/core/test/provider-compiled.test.ts`).
 
@@ -756,6 +773,8 @@ check. No earlier audit had looked.
 - Does the binary start in a folder that the user chose, before the trust check, and what does the runtime read from it?
 - Was it tested on the real built binary on Windows and on Linux?
 - Is a package ever loaded by name from the working folder instead of from the npm cache?
+- Does it spawn an executable that it finds by name, and does that lookup skip the working folder? Some resolvers search
+  it first on Windows.
 
 ### 11. Parsers whose engines evaluate content
 
@@ -766,7 +785,7 @@ engines are disabled. Never call a parser library directly, and test every spell
 clone ships (a command, an agent, a skill, an output style) ran code as soon as the location loaded, before any gate was
 asked.
 
-**In M1:** the only blocker of the milestone, in the review of #15. It was reproduced with `---js`, `---javascript`,
+**In M1:** the first blocker of the milestone, in the review of #15. It was reproduced with `---js`, `---javascript`,
 `---JS`, `---JavaScript` and `--- js`, and it contradicted the spec's premise that skills and output styles are text.
 Passing options to gray-matter also bypasses its cache, which is keyed by content and had kept a failed parse as a
 success. The same class at build level: js-yaml's `!!js/function` type loads esprima when js-yaml loads (class 10).
@@ -991,8 +1010,9 @@ These come from how M1 was run, and they apply to any change in this area.
 
 - **Fix the class, not the instance.** When a finding lands, list the members of its class from this page (surfaces,
   sinks, spellings, entry points) and close them all in one commit with a table-driven test. In M1 each round closed
-  only the reported instance and the next round found the next one: from the merge of #20 to the last fix there were
-  five audit and verification rounds, nine review rounds on #22 and 26 commits, about 24 hours. An audit may report "no
+  only the reported instance and the next round found the next one: from the merge of #20 to the esprima fix there were
+  five audit and verification rounds, nine review rounds on #22 and 26 commits, about 24 hours, and the review of that
+  fix found another member of the class (an executable found in the working folder, class 10). An audit may report "no
   holes" only with a table of the surfaces it checked and the evidence for each row. The round-1 audit found nothing
   where rounds 2 to 4 found five.
 - **What blocks.** A finding blocks only if it breaks the promise at the top of this page on a default or demonstrated
@@ -1021,6 +1041,10 @@ These come from how M1 was run, and they apply to any change in this area.
 
 Not fixed in M1. Carry each into a task, and do not claim otherwise in docs or in a PR.
 
+- **Executables found in the working folder.** On Windows the npm `which` package searches the working folder before
+  `PATH`, so `which` in `packages/core/src/util/which.ts` finds a committed `git.exe` or `rg.exe`, and runs it, before
+  the folder is trusted. The review of the last fix in #22 found it and called it a blocker. Look executables up on
+  `PATH` only, as class 10 says, and drop this entry when that lands.
 - **A holder that is a filesystem root.** `standing()` in `packages/core/src/config.ts` still lets `{file:}` in
   untrusted config read across the drive when the holder of the file is a filesystem root (#14 re-review, N1).
 - **A stale-stamp window.** `ProjectTrust.allows` mixes the live decision with stale stamps for about 100 ms after a
@@ -1091,6 +1115,8 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
       before the gate (1, 12).
 - [ ] Whatever the folder can make this code spawn, approve or choose is listed, whether it is a path, an agent, a model
       or a provider (2, 8).
+- [ ] An executable that is spawned by name is looked up on `PATH` only, and the resolver does not search the working
+      folder first, as the npm `which` package does on Windows (10).
 - [ ] The approver sees the whole thing that is approved: the full span, the method, the URL, the folder (8).
 - [ ] No default or fallback names an agent or a mode by constant instead of by configuration, and whose rules come last
       has been asked (8).
