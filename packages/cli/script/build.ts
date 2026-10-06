@@ -8,6 +8,7 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import type { BunPlugin } from "bun"
 import pkg from "../package.json"
 import { autoload } from "./autoload"
+import { runtimeRequires, verifyRuntimeRequires } from "./runtime-requires"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 
 const dir = path.resolve(import.meta.dirname, "..")
@@ -63,6 +64,7 @@ if (!targets.length) throw new Error(`Unknown build target: ${requestedTarget}`)
 if (!skipInstall) await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
 for (const item of targets) {
   const simulationInputs = new Set<string>()
+  const replacedRuntimeRequires = new Set<string>()
   const simulationGraphPlugin: BunPlugin = {
     name: "orbit-simulation-graph",
     setup(build) {
@@ -89,7 +91,7 @@ for (const item of targets) {
   const result = await Bun.build({
     entrypoints: ["./src/index.ts"],
     tsconfig: "./tsconfig.json",
-    plugins: [solidPlugin, parcelWatcherPlugin, simulationGraphPlugin],
+    plugins: [solidPlugin, parcelWatcherPlugin, simulationGraphPlugin, runtimeRequires(replacedRuntimeRequires)],
     external: ["node-gyp"],
     format: "esm",
     minify: true,
@@ -127,6 +129,7 @@ for (const item of targets) {
     process.exit(1)
   }
   verifySimulationGraph(simulationInputs)
+  verifyRuntimeRequires(replacedRuntimeRequires)
 
   await Bun.write(
     path.join(outdir, name, "package.json"),

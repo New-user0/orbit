@@ -12,6 +12,9 @@
  * import inside the binary to a file of the repository, but the binary imports no `#name` at runtime: the bundler
  * resolves every one of them when it builds. Nothing may import a `#name` that is left to the runtime, so look for
  * `import("#`, `require("#` and `from"#` in the build when a dependency or a dynamic import changes.
+ *
+ * None of these options stops the runtime resolving a bare name that the bundle leaves open from the folder the binary
+ * starts in. What the bundled dependencies leave open that way is closed in runtime-requires.ts.
  */
 export const autoload = {
   autoloadBunfig: false,

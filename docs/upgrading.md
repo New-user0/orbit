@@ -565,6 +565,29 @@ the registry, and loads the latest version, and no longer loads the second.
 **What to do:** nothing for the providers that Orbit includes. To use a copy that you keep yourself, point `package` at
 its entry file with a `file://` URL.
 
+### The `orb` binary does not look for what its dependencies ask for in the folder it starts in
+
+The single-file `orb` carries its dependencies, but three of them looked up a name while they ran, in a way that the
+bundler cannot follow, and Bun resolves such a name from the folder the binary starts in. That folder can be a
+repository that is not trusted yet. js-yaml, which reads the front matter of every Markdown file, looked for `esprima`
+for its `!!js/function` type as soon as it loaded, so a `node_modules/esprima/index.js` committed to a repository ran
+when `orb` started there, before any trust check: `orb trust --standalone --list` did it, in the server process that it
+starts in the folder, and so did `orb models`, `orb run` and the other commands that start one. Babel, which transforms
+the source of a terminal UI plugin, handed the browserslist config of the folder to browserslist, so a `package.json`
+with `"browserslist": ["extends browserslist-config-x"]` ran `node_modules/browserslist-config-x` when the terminal UI
+loaded a plugin source file. On Windows, where fff is off unless `ORBIT_DISABLE_FFF=0` turns it on, the file finder
+looked for its native library in an npm package before it used the embedded one, and found
+`node_modules/@ff-labs/fff-bin-win32-x64` of the folder, so a library committed there was loaded as native code. The
+build now replaces the `!!js/function` type with one that matches nothing, Babel's lookup with its browser build, which
+reads no config, and the lookup of fff with one that finds nothing, so the embedded library is the one that loads. A
+build that cannot do any of these fails. Nothing that worked changes: front matter is read with the safe YAML schema,
+which never had that type, nothing that Orbit transforms reads browserslist targets, and the library of fff is always
+embedded.
+
+**Affects:** nobody who works in a folder of their own. A repository that commits those files no longer gets them run.
+
+**What to do:** nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
