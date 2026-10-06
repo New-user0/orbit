@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -943,4 +944,34 @@ test("orb flow resume and replay print the failure for a workflow file that the 
     expectNoControl(output.stdout, output.stderr)
     expect(output.stderr).toContain(`w${shown}.yaml`)
   }
+}, 180_000)
+
+// The runner titles each session `<workflow name> · <node>`. The title stays in the server's database after the clone is
+// gone, and `orb session list` and the terminal UI show it, so it is what a person reads later.
+test("orb flow run titles the sessions it opens without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-title")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9b\\x7fend"
+  const file = path.join(repository, "titled.yaml")
+  await Bun.write(
+    file,
+    [
+      `name: ${JSON.stringify(`titled${evil}`)}`,
+      "nodes:",
+      `  - id: ${JSON.stringify(`a${evil}`)}`,
+      "    prompt: write a.txt",
+      "",
+    ].join("\n"),
+  )
+
+  const result = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+
+  expect({ code: result.code, stderr: result.code === 0 ? "" : result.stderr }).toEqual({ code: 0, stderr: "" })
+  // The private server has stopped, so its database can be read: the one that every test of this file shares.
+  const database = new Database(path.join(root, "orbit.db"), { readonly: true })
+  const titles = (
+    database.query("SELECT title FROM session_v2 WHERE title LIKE 'titled%'").all() as Array<{ title: string }>
+  ).map((row) => row.title)
+  database.close()
+  expect(titles).toEqual([`titled${shown} · a${shown}`])
 }, 180_000)

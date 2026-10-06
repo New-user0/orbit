@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { mark } from "../logo"
 
 const reset = "\x1b[0m"
@@ -13,12 +14,14 @@ function wordmark(pad = "") {
   ]
 }
 
+// Printed to the terminal once the interface has gone, so a title that holds a control character, from a model or from an
+// older workflow run, is written out and cannot act on it.
 export function sessionEpilogue(input: { title: string; sessionID?: string }) {
   const weak = (text: string) => `${dim}${text.padEnd(10, " ")}${reset}`
   return [
     ...wordmark("  "),
     "",
-    `  ${weak("Session")}${bold}${input.title}${reset}`,
+    `  ${weak("Session")}${bold}${plain(input.title)}${reset}`,
     `  ${weak("Continue")}${bold}orb -s ${input.sessionID}${reset}`,
     "",
   ].join("\n")

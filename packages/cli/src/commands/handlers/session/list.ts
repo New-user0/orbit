@@ -1,5 +1,6 @@
 import { Orbit, type SessionInfo } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { json, plain } from "@orbit/flow/plain"
 import { Effect, Option, Stream } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
@@ -35,7 +36,7 @@ const handler = Effect.fn("cli.session.list")(function* (
   if (input.format === "table" && page.data.length === 0) return
   const output =
     (input.format === "json"
-      ? JSON.stringify(
+      ? json(
           page.data.map((session) => ({
             id: session.id,
             title: session.title,
@@ -44,8 +45,6 @@ const handler = Effect.fn("cli.session.list")(function* (
             projectId: session.projectID,
             directory: session.location.directory,
           })),
-          null,
-          2,
         )
       : formatList(page.data)) + EOL
   const write = Effect.tryPromise(
@@ -96,12 +95,13 @@ export default Runtime.handler(Commands.commands.session.commands.list, (input) 
   ),
 )
 
+// A title can come from a workflow file or a model, so what it holds besides plain text is written out, not printed.
 function formatList(sessions: ReadonlyArray<SessionInfo>) {
   return sessions
     .map((session) =>
       [
         session.id,
-        (session.title ?? "Untitled session").replace(/[\r\n\t]/g, " "),
+        plain((session.title ?? "Untitled session").replace(/[\r\n\t]/g, " ")),
         new Date(session.time.updated).toLocaleString(),
       ].join("\t"),
     )

@@ -2,7 +2,7 @@ import { mark } from "../../src/logo"
 import { expect, test } from "bun:test"
 import { RGBA, TextAttributes, type ScrollbackWriter } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { entrySplash, entrySplashLayout, exitSplash } from "../../src/mini/splash"
+import { entrySplash, entrySplashLayout, exitSplash, splashMeta } from "../../src/mini/splash"
 import { stringWidth } from "../../src/util/string-width"
 
 const preview = "1.18.4-preview.abcd1234567890"
@@ -120,6 +120,17 @@ test.each([false, true])("entry layout preserves admitted information at every w
       expect(previous.version).toBe(version)
     }
   }
+})
+
+test.each([false, true])("exit leaves control characters out of the title (mono=%s)", async (mono) => {
+  // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: a title
+  // can come from a model, or from a workflow that an older release ran, and the splash is written to the terminal as it is.
+  const title = "Odd\u001b]0;pwned\u0007\u001b[2K\u009b\u{202e}   title"
+
+  expect(splashMeta({ title, session_id: sessionID, mono }).title).toBe("Odd]0;pwned[2K title")
+  const result = await renderSplash(exitSplash({ title, session_id: sessionID, theme, mono }), 100)
+  expect(result.rows[1]).toContain("Session  Odd]0;pwned[2K title")
+  expect(result.rows.join("")).not.toMatch(/\p{C}/u)
 })
 
 test.each([false, true])("entry skips abbreviated paths that are longer than the full path (mono=%s)", (mono) => {

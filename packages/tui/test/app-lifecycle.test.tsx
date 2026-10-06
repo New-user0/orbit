@@ -345,6 +345,82 @@ test("session lifecycle updates the terminal title and prints the epilogue after
   }
 })
 
+// A title can come from a model, or from a workflow that an older release ran, and the renderer writes the title of the
+// window into a set-title sequence as it is: a BEL in it would end the sequence early. The epilogue goes to the terminal
+// once the interface has gone.
+test("a session title with control characters is cleaned in the terminal title and written out in the epilogue", async () => {
+  await using state = await tmpdir()
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const titles: string[] = []
+  const oddTitle = Promise.withResolvers<void>()
+  const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
+  setup.renderer.setTerminalTitle = (title) => {
+    titles.push(title)
+    if (title === "OC | Odd]0;pwned[2K title") oddTitle.resolve()
+    setTitle(title)
+  }
+  const events = createEventStream()
+  const calls = createFetch((url) => {
+    const session = {
+      id: "dummy",
+      title: "Demo session",
+      projectID: "project",
+      location: { directory },
+      cost: 0,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 0, updated: 0 },
+    }
+    if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
+    if (url.pathname === "/api/session/dummy") return json({ data: session })
+    if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/dummy/inbox") return json({ data: [] })
+    if (url.pathname === "/api/session/dummy/permission") return json({ data: [] })
+  }, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const originalWrite = process.stdout.write.bind(process.stdout)
+  let stdout = ""
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout += String(chunk)
+    return true
+  }) as typeof process.stdout.write
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        app: { name: "test", version: "test", channel: "test" },
+        server: { endpoint: { url: server.url.toString() } },
+        config: { get: async () => ({}), update: async () => ({}) },
+        packages: { prepare: async () => ({ directory: "" }) },
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: () => {} }),
+        args: { sessionID: "dummy" },
+        log: () => {},
+      }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
+    )
+
+    // Once the session is on screen, with the title it was made with.
+    while (!titles.includes("OC | Demo session")) await Bun.sleep(10)
+    events.emit({
+      id: "evt_odd",
+      created: 1,
+      type: "session.renamed",
+      durable: { aggregateID: "dummy", seq: 1, version: 1 },
+      data: { sessionID: "dummy", title: "Odd\u001b]0;pwned\u0007\u001b[2K\u{202e} title" },
+    })
+    await oddTitle.promise
+    setup.renderer.destroy()
+    await task
+
+    expect(titles.filter((title) => /\p{C}/u.test(title))).toEqual([])
+    expect(stdout).toContain("Odd\\x1b]0;pwned\\x07\\x1b[2K\\u{202e} title")
+    expect(stdout).not.toContain("\u001b]0;pwned")
+  } finally {
+    process.stdout.write = originalWrite
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await server.stop()
+  }
+})
+
 test("session title generated while an untitled session is loading remains visible", async () => {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
