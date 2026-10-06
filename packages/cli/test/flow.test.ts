@@ -633,3 +633,90 @@ test("orb flow trace shows a timeline, prints OTLP, and sends it only to a colle
   expect(sent.stdout).toContain(`Sent 4 spans of ${id}`)
   expect(received).toEqual([exported])
 }, 120_000)
+
+// A clone brings its own .orbit/runs.db, so what the run store says is not to be trusted, and `orb flow clean` acts on
+// it without any trust check: removing worktrees and branches is all it does, and only inside .orbit/worktrees.
+test("orb flow clean in a clone whose run store names runs like paths leaves everything outside .orbit/worktrees alone", async () => {
+  const repository = await repo("hostile-clean")
+  const victim = path.join(root, "victim")
+  await Bun.write(path.join(victim, "precious.txt"), "keep\n")
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  // `../../../victim` from .orbit/worktrees is the folder beside the repository, `../..` the repository itself and `..`
+  // its .orbit folder, where the run store is.
+  for (const id of ["../../../victim", "../..", "..", "run_20260101000005_0a1b2c"]) {
+    store.create({ id, workflow: "w", file: "w.ts", directory: repository, input: {} })
+    store.status(id, "succeeded")
+  }
+  store.close()
+
+  const cleaned = await orb(repository, ["flow", "clean"])
+
+  expect({ code: cleaned.code, stderr: cleaned.code === 0 ? "" : cleaned.stderr }).toEqual({ code: 0, stderr: "" })
+  // Only the run with an ID the runner could have made is a run.
+  expect(cleaned.stdout).toContain("from 1 run(s)")
+  // Naming such a run does not make it one, for any command that takes a run, and resuming one makes no worktree.
+  for (const command of ["clean", "show", "resume"]) {
+    const named = await orb(repository, ["flow", command, "../../../victim"])
+    expect({ command, code: named.code }).toEqual({ command, code: 1 })
+    expect(named.stderr).toContain("No run ../../../victim in this repository")
+  }
+  expect(await Bun.file(path.join(victim, "precious.txt")).text()).toBe("keep\n")
+  expect(await Bun.file(path.join(repository, "readme.md")).text()).toBe("fixture\n")
+  expect(await Bun.file(path.join(repository, ".orbit", "runs.db")).exists()).toBe(true)
+}, 120_000)
+
+test("orb flow prints what a run store says without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-text")
+  const id = "run_20260101000006_0a1b2c"
+  // An operating system command that sets the title of the window, a sequence that erases the line and a right-to-left
+  // override: a clone's run store can carry them in any text it holds, and a carriage return in the workflow's name.
+  const evil = "\u001b]0;pwned\u0007name\u001b[2K‮end"
+  const shown = "\\x1b]0;pwned\\x07name\\x1b[2K\\u{202e}end"
+  const workflow = `${evil}\rreturn`
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  store.create({ id, workflow, file: `${evil}.ts`, directory: repository, input: {} })
+  store.append(id, `node${evil}`, "node.started", { key: "k" })
+  store.append(id, `node${evil}`, "attempt.started", { model: `model${evil}`, attempt: 1 })
+  store.append(id, `node${evil}`, "attempt.ended", { model: `model${evil}`, cost: 1, input: 2, output: 3 })
+  store.append(id, `node${evil}`, "node.failed", { error: { class: "invalid", message: `failed${evil}` } })
+  store.append(id, "gate", "gate.pending", { message: `ship${evil}` })
+  store.append(id, "team", "team.message", { from: `lead${evil}`, to: `coder${evil}`, text: `do it${evil}` })
+  store.append(id, "team", "team.note", { from: `lead${evil}`, key: `plan${evil}`, text: `note${evil}` })
+  store.status(id, "waiting")
+  store.close()
+
+  // One after the other: processes that open the same store at once can find it locked.
+  const outputs = []
+  for (const args of [["ls"], ["show", id], ["watch", id], ["cost", id], ["trace", id]])
+    outputs.push(await orb(repository, ["flow", ...args]))
+
+  // No line has a control character in it: nothing reaches the terminal that moves the cursor, sets a title or erases
+  // text. The ends of the lines are the commands' own, and `watch` only clears a terminal when its output is one.
+  for (const [index, output] of outputs.entries()) {
+    expect({ index, code: output.code, stderr: output.code === 0 ? "" : output.stderr }).toEqual({
+      index,
+      code: 0,
+      stderr: "",
+    })
+    for (const line of output.stdout.split(/\r?\n/)) expect(line).not.toMatch(/\p{Cc}/u)
+  }
+  // What the text said is still there, written out.
+  expect(outputs[0].stdout).toContain(`${id}  waiting    ${shown}\\x0dreturn`)
+  expect(outputs[1].stdout).toContain(`${id}  ${shown}\\x0dreturn  waiting`)
+  expect(outputs[1].stdout).toContain(`file  ${shown}.ts`)
+  expect(outputs[1].stdout).toContain(`node${shown}`)
+  expect(outputs[1].stdout).toContain(`failed${shown}`)
+  expect(outputs[1].stdout).toContain(`waiting: ship${shown}`)
+  expect(outputs[1].stdout).toContain(`team: lead${shown} → coder${shown}: do it${shown}`)
+  expect(outputs[1].stdout).toContain(`team: lead${shown} noted plan${shown}: note${shown}`)
+  expect(outputs[2].stdout).toBe(outputs[1].stdout)
+  expect(outputs[3].stdout).toContain(`model${shown}`)
+  expect(outputs[4].stdout).toContain(`run ${shown}\\x0dreturn`)
+
+  // JSON is for programs, and it escapes the control characters itself.
+  const listed = await orb(repository, ["flow", "ls", "--format", "json"])
+  expect(listed.stdout).not.toContain("\u001b")
+  expect(JSON.parse(listed.stdout)[0].workflow).toBe(workflow)
+}, 120_000)

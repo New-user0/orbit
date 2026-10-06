@@ -469,3 +469,9 @@ sends traces nowhere unless you give that flag.
 
 Worktrees and branches stay after a run for inspection. `orb flow clean` removes them for every run that is not
 running or waiting; `orb flow clean <run>` for one run. The run history in `.orbit/runs.db` stays.
+
+`.orbit/runs.db` is a file in the repository, so a clone brings one of its own, and `orb flow` does not trust what it
+says. It lists and acts on a run only when its ID has the shape that Orbit makes (`run_`, a timestamp of 14 digits, `_`
+and 6 hexadecimal digits), so a row that names a path such as `../..` is not a run and `orb flow clean` never removes
+anything outside `.orbit/worktrees`. `orb flow ls`, `show`, `watch`, `cost` and `trace` write control characters in the
+names and messages it holds out as `\x1b`, so an escape sequence in a workflow's name cannot act on your terminal.

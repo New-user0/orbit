@@ -6,6 +6,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { plain } from "../../util/plain"
 import { requireTrust } from "../../util/trust"
 import { directory, trustOptions } from "./flow/execute"
 
@@ -64,10 +65,11 @@ export default Runtime.handler(
     if (input.format === "json")
       return process.stdout.write(JSON.stringify({ run: result.id, summary, scores: result.scores }, null, 2) + EOL)
     const tasks = [...new Set(result.scores.map((score) => score.task))]
+    // A resumed eval takes its models from the run store, a file in the repository that a clone brings along.
     const table = [
       ["model", "passed", "rate", "input", "output", "cost", "time"],
       ...summary.map((row) => [
-        row.model,
+        plain(row.model),
         `${row.passed}/${row.total}`,
         `${Math.round((row.passed / row.total) * 100)}%`,
         String(row.input),
@@ -77,7 +79,7 @@ export default Runtime.handler(
       ]),
     ]
     const tasksTable = [
-      ["task", ...summary.map((row) => row.model)],
+      ["task", ...summary.map((row) => plain(row.model))],
       ...tasks.map((task) => [
         task,
         ...summary.map((row) => {

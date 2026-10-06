@@ -2,30 +2,42 @@ import { Effect } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
+import { plain } from "../../../util/plain"
 import type { Event, NodeState, Run } from "@orbit/flow"
 import { directory } from "./execute"
 
-/** A run, its nodes and team conversations, as `orb flow show` prints them. */
+/**
+ * A run, its nodes and team conversations, as `orb flow show` prints them. The run store is a file in the repository, so
+ * a clone brings its own and what it says is text from an untrusted file: every piece of text is printed through
+ * `plain`, and the amounts are read with `Number`, which leaves no text in them.
+ */
 export function render(run: Run, nodes: ReadonlyArray<NodeState>, events: ReadonlyArray<Event>) {
   const lines = [
-    `${run.id}  ${run.workflow}  ${run.status}`,
-    `file  ${run.file}`,
+    `${shown(run.id)}  ${shown(run.workflow)}  ${shown(run.status)}`,
+    `file  ${shown(run.file)}`,
     ...nodes.map((node) => {
-      const usage = node.result?.usage as { cost?: number; input?: number; output?: number } | undefined
+      const usage = node.result?.usage as { cost?: unknown; input?: unknown; output?: unknown } | undefined
       return [
-        `${marks[node.status]} ${node.id}`,
+        `${marks[node.status]} ${shown(node.id)}`,
         ...(node.attempts > 0 ? [`attempts ${node.attempts}`] : []),
-        ...(usage ? [`tokens ${usage.input ?? 0}/${usage.output ?? 0}`, `cost ${(usage.cost ?? 0).toFixed(4)}`] : []),
-        ...(node.error ? [String(node.error.message)] : []),
-        ...(node.status === "waiting" ? [`waiting: ${node.message}`] : []),
+        ...(usage
+          ? [
+              `tokens ${Number(usage.input ?? 0)}/${Number(usage.output ?? 0)}`,
+              `cost ${Number(usage.cost ?? 0).toFixed(4)}`,
+            ]
+          : []),
+        ...(node.error ? [shown(node.error.message)] : []),
+        ...(node.status === "waiting" ? [`waiting: ${shown(node.message)}`] : []),
       ].join("  ")
     }),
     // Teams: what members said to each other and wrote on the board, in order.
     ...events.flatMap((event) =>
       event.type === "team.message"
-        ? [`  ${event.node}: ${event.data.from} → ${event.data.to}: ${oneLine(event.data.text)}`]
+        ? [`  ${shown(event.node)}: ${shown(event.data.from)} → ${shown(event.data.to)}: ${oneLine(event.data.text)}`]
         : event.type === "team.note"
-          ? [`  ${event.node}: ${event.data.from} noted ${event.data.key}: ${oneLine(event.data.text)}`]
+          ? [
+              `  ${shown(event.node)}: ${shown(event.data.from)} noted ${shown(event.data.key)}: ${oneLine(event.data.text)}`,
+            ]
           : [],
     ),
   ]
@@ -49,7 +61,9 @@ export default Runtime.handler(
   }),
 )
 
+const shown = (value: unknown) => plain(String(value))
+
 function oneLine(value: unknown) {
-  const text = String(value).replace(/\s+/g, " ")
+  const text = shown(String(value).replace(/\s+/g, " "))
   return text.length > 160 ? `${text.slice(0, 160)}…` : text
 }

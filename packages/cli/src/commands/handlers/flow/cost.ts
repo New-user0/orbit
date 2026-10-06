@@ -2,6 +2,7 @@ import { Effect } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
+import { plain } from "../../../util/plain"
 import { directory } from "./execute"
 
 export default Runtime.handler(
@@ -34,9 +35,10 @@ export default Runtime.handler(
     if (input.format === "json") return process.stdout.write(JSON.stringify({ rows, total }, null, 2) + EOL)
     const table = [
       ["node", "model", "attempts", "input", "output", "cost"],
+      // The names are text from the run store, a file in the repository that a clone brings along.
       ...rows.map((row) => [
-        row.node,
-        row.model,
+        plain(row.node),
+        plain(row.model),
         String(row.attempts),
         String(row.input),
         String(row.output),

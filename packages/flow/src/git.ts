@@ -44,9 +44,23 @@ export function branch(run: string, node: string) {
   return `orbit/${run}/${node.replace(/[^a-zA-Z0-9._-]+/g, "-")}`
 }
 
+// A run ID is a folder under .orbit/worktrees and part of a branch name, and git reads the branch name as a pattern. The
+// runner makes `run_<timestamp>_<hex>`, but an ID can also come from a run store, which a repository can ship, so it is
+// one plain name or it is not a run: no separator that leads out of the folder (`../..`), no `.` or `..`, and no
+// character that a pattern or a file system treats as more than itself.
+const PLAIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+function runFolder(repository: string, run: string) {
+  if (!PLAIN_NAME.test(run)) throw new Error(`Not a run: ${JSON.stringify(run)}`)
+  return path.join(repository, ".orbit", "worktrees", run)
+}
+
 /** Create (or reuse, on resume) the worktree for a node, branching from `base`. */
 export async function worktree(repository: string, run: string, node: string, base: string) {
-  const directory = path.join(repository, ".orbit", "worktrees", run, node.replace(/[^a-zA-Z0-9._-]+/g, "-"))
+  const segment = node.replace(/[^a-zA-Z0-9._-]+/g, "-")
+  // A node named `.` or `..`, or with no name, would be the run's folder or the one that holds every run's.
+  if (/^\.*$/.test(segment)) throw new Error(`Not a node: ${JSON.stringify(node)}`)
+  const directory = path.join(runFolder(repository, run), segment)
   const name = branch(run, node)
   if (existsSync(directory)) return { directory, branch: name }
   const exists = (await git(repository, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`])).code === 0
@@ -132,7 +146,7 @@ export async function diff(directory: string, base: string, limit = 40_000) {
 
 /** Remove a run's worktrees and branches; returns how many of each went. */
 export async function clean(repository: string, run: string) {
-  const prefix = path.join(repository, ".orbit", "worktrees", run)
+  const prefix = runFolder(repository, run)
   const listed = (await ok(repository, ["worktree", "list", "--porcelain"]))
     .split("\n")
     .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))

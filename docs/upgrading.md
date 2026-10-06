@@ -447,6 +447,30 @@ against a server that trusts the folder, are not affected.
 restart`). Look over a workflow or suite that you did not write, and the commands, nodes and agents that the refusal
 lists, before you trust the folder that holds it, because trusting the folder lets it run.
 
+### `orb flow` treats the run store of a repository as untrusted text
+
+The run store is `.orbit/runs.db`, a file in the repository, so a clone can bring one of its own. `orb flow clean` took
+the ID of every finished run in it and removed `.orbit/worktrees/<run>` and the branches under `orbit/<run>/`, and
+resumed runs made their worktrees the same way, so a row whose ID was a path, such as `../../../x` or `../..`, led them
+out of the repository: a clone could have the command delete a folder beside the repository or the repository itself,
+without being trusted. `orb flow ls`, `show`, `watch`, `cost` and `trace` also printed the names, messages and files
+that the store holds as they were, so an escape sequence in a workflow's name could set the title of the terminal or
+erase the lines above it.
+
+The store now lists and returns only runs whose ID has the shape that Orbit makes, `run_` and 14 digits of timestamp,
+`_` and 6 hexadecimal digits, and ignores any other row. `orb flow clean` and the worktrees of a run refuse an ID that is
+not one plain name, and a node named `.` or `..`. The five commands print what the store says through the same
+escaping as the trust refusal: control characters and format characters, such as a right-to-left override, are written
+out as `\x1b` or `\u{202e}`, and a line break as `\n`. `--format json` is not changed, because JSON escapes control
+characters itself.
+
+**Affects:** a repository whose `.orbit/runs.db` holds a run with another ID: it no longer shows up in `orb flow ls`, the
+terminal UI or the VS Code Runs view, and `orb flow show`, `resume` and `clean` report that there is no such run. Orbit's
+own runs have always had an ID of this shape, so nothing that Orbit made is affected. Scripts that parse the text output
+of `orb flow` see a control character in a name as an escape.
+
+**What to do:** nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

@@ -5,6 +5,7 @@ import path from "node:path"
 import { UI } from "../run/ui"
 import { findSession } from "../session-target"
 import { errorMessage } from "./error"
+import { plain } from "./plain"
 
 type Withheld = TrustStatus["withheld"][number]
 
@@ -290,18 +291,6 @@ function columns(rows: ReadonlyArray<readonly [string, string]>) {
   const width = Math.max(...shown.map((item) => item.id.length))
   return shown.map((item) => `  ${item.id.padEnd(width)}  ${item.text}`)
 }
-
-// Text from a file that is not trusted yet, on one line and without the characters that act on a terminal or on the text
-// around them: control characters, as a carriage return or an escape sequence could overwrite what was printed before
-// it, and format characters, as a right-to-left override or a zero-width space reorder or hide text. Either could hide
-// a command from the person who is asked to look the file over, and so could a file name that holds one, as a clone can
-// name its files as it likes.
-const plain = (text: string) =>
-  text.trim().replace(/\r?\n|\p{C}/gu, (match) => {
-    if (match.endsWith("\n")) return "\\n"
-    const code = match.codePointAt(0) ?? 0
-    return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
-  })
 
 // Trusts the folder for as long as this server lives, and nothing is stored. The config applies a grant a moment after
 // it is made, so a run that began in that moment would go without the hooks and plugins that were trusted for it.

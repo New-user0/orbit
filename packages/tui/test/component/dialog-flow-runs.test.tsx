@@ -11,12 +11,14 @@ import { json } from "../fixture/tui-client"
 
 test("lists runs, opens a run's nodes, and approves a waiting gate", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-tui-flow-"))
+  // The store lists only IDs in the shape that the runner makes.
+  const run = "run_20260101000007_0a1b2c"
   const store = Store.at(directory)
-  store.create({ id: "run_tui", workflow: "release", file: "release.ts", directory, input: {} })
-  store.append("run_tui", "build", "node.started", { key: "k" })
-  store.append("run_tui", "build", "node.succeeded", { key: "k", result: { usage: { input: 900, output: 100 } } })
-  store.append("run_tui", "ship", "gate.pending", { message: "Ship it?" })
-  store.status("run_tui", "waiting")
+  store.create({ id: run, workflow: "release", file: "release.ts", directory, input: {} })
+  store.append(run, "build", "node.started", { key: "k" })
+  store.append(run, "build", "node.succeeded", { key: "k", result: { usage: { input: 900, output: 100 } } })
+  store.append(run, "ship", "gate.pending", { message: "Ship it?" })
+  store.status(run, "waiting")
   store.close()
 
   await using setup = await renderLocal({
@@ -34,9 +36,7 @@ test("lists runs, opens a run's nodes, and approves a waiting gate", async () =>
   await setup.waitForFrame((frame) => frame.includes("Orbit Flow runs") && frame.includes("? release"))
   await focused()
   setup.mockInput.pressEnter()
-  await setup.waitForFrame(
-    (frame) => frame.includes("run_tui") && frame.includes("? ship") && frame.includes("✓ build"),
-  )
+  await setup.waitForFrame((frame) => frame.includes(run) && frame.includes("? ship") && frame.includes("✓ build"))
   expect(setup.captureCharFrame()).toContain("1000 tokens")
   await focused()
   await setup.mockInput.typeText("ship")
@@ -49,7 +49,7 @@ test("lists runs, opens a run's nodes, and approves a waiting gate", async () =>
   await setup.waitForFrame((frame) => frame.includes("✓ ship") && frame.includes("✓ build"))
 
   const after = Store.at(directory)
-  expect(after.nodes("run_tui").get("ship")).toMatchObject({ status: "succeeded", result: { approved: true } })
+  expect(after.nodes(run).get("ship")).toMatchObject({ status: "succeeded", result: { approved: true } })
   after.close()
   await fs.rm(directory, { recursive: true, force: true })
 })
