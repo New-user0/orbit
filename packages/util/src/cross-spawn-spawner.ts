@@ -107,8 +107,14 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     return path.resolve(opts.cwd)
   })
 
-  const env = (opts: ChildProcess.CommandOptions) =>
-    opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env
+  const env = (command: ChildProcess.StandardCommand) => {
+    const base = command.options.extendEnv ? { ...globalThis.process.env, ...command.options.env } : command.options.env
+    // cross-spawn runs a .cmd or .bat file through cmd.exe, which looks in the working folder before PATH, so a folder
+    // could put its own hg.bat in front of the installed hg. cmd.exe skips the folder when this is set. A path to a
+    // program and a command line run with `shell` resolve as written, so only a bare program name gets it.
+    if (process.platform !== "win32" || command.options.shell || /[\\/]/.test(command.command)) return base
+    return { ...(base ?? globalThis.process.env), NoDefaultCurrentDirectoryInExePath: "1" }
+  }
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x
@@ -352,8 +358,10 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     signal: NodeJS.Signals,
   ) => {
     if (globalThis.process.platform === "win32") {
+      // Run by name through a shell, taskkill would be looked for in the working folder before the system folder.
+      const taskkill = path.join(globalThis.process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
-        NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
+        NodeChildProcess.execFile(taskkill, ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true }, (err) => {
           if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
           resume(Effect.void)
         })
@@ -433,7 +441,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
           const [proc, closed, exited, stopOutput] = yield* Effect.acquireRelease(
             spawn(command, {
               cwd: dir,
-              env: env(command.options),
+              env: env(command),
               stdio: stdios(sin, sout, serr, extra),
               detached: command.options.detached ?? process.platform !== "win32",
               shell: command.options.shell,

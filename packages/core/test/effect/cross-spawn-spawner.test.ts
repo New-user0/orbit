@@ -492,5 +492,116 @@ describe("cross-spawn spawner", () => {
         expect(code).toBe(ChildProcessSpawner.ExitCode(0))
       }),
     )
+
+    // cmd.exe skips the working folder when this variable is set, and the shell that runs the tests may set it, which
+    // would hide what the tests below are about from the processes they start.
+    const withCurrentDirectoryOnPath = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const before = process.env.NoDefaultCurrentDirectoryInExePath
+          delete process.env.NoDefaultCurrentDirectoryInExePath
+          return before
+        }),
+        () => effect,
+        (before) =>
+          Effect.sync(() => {
+            if (before !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = before
+          }),
+      )
+
+    // cross-spawn runs a .bat file through cmd.exe, which looks in the working folder before PATH, and a program that is
+    // itself cmd.exe, as the pager of `orb session list` is, looks up what it runs the same way.
+    for (const [name, command, args] of [
+      ["a command it was given only a name for", "planted", []],
+      ["a program that cmd.exe finds by name", "cmd", ["/c", "planted"]],
+    ] as const) {
+      fx.effect(
+        `does not run ${name} from its own working folder`,
+        Effect.gen(function* () {
+          if (process.platform !== "win32") return
+
+          const tmp = yield* Effect.acquireRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+          )
+          const marker = path.join(tmp.path, "ran.txt")
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(tmp.path, "planted.bat"), `@echo off\r\necho ran> "${marker}"\r\n`),
+          )
+
+          yield* withCurrentDirectoryOnPath(
+            ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
+              svc.exitCode(ChildProcess.make(command, args, { cwd: tmp.path, extendEnv: true })),
+            ),
+          )
+
+          expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        }),
+      )
+    }
+
+    fx.effect(
+      "still starts a .cmd file that PATH holds, by name",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const bin = path.join(tmp.path, "bin")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(bin)
+          await fs.writeFile(path.join(bin, "installed.cmd"), "@echo off\r\necho from-path\r\n")
+        })
+        const root = process.env.SystemRoot ?? "C:\\Windows"
+
+        // cmd.exe runs the file, and has to find it on PATH once it no longer looks in the working folder.
+        const out = yield* ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
+          svc.string(
+            ChildProcess.make("installed", [], {
+              cwd: tmp.path,
+              env: { PATH: `${bin};${path.join(root, "System32")}`, SystemRoot: root },
+              extendEnv: false,
+            }),
+          ),
+        )
+
+        expect(out.trim()).toBe("from-path")
+      }),
+    )
+
+    fx.effect(
+      "stops a process without running a taskkill from the folder the process started in",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const marker = path.join(tmp.path, "ran.txt")
+        yield* Effect.promise(() =>
+          fs.writeFile(path.join(tmp.path, "taskkill.bat"), `@echo off\r\necho ran> "${marker}"\r\n`),
+        )
+        const handle = yield* js("setTimeout(() => {}, 3_000)")
+
+        // The spawner stops a process on Windows with taskkill, which cmd.exe looks for in the working folder first.
+        yield* withCurrentDirectoryOnPath(
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const before = process.cwd()
+              process.chdir(tmp.path)
+              return before
+            }),
+            () => handle.kill(),
+            (before) => Effect.sync(() => process.chdir(before)),
+          ),
+        )
+
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        expect(yield* handle.isRunning).toBe(false)
+      }),
+    )
   })
 })

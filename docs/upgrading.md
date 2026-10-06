@@ -604,6 +604,24 @@ Orbit no longer finds it there. A repository that commits such a file no longer 
 **What to do:** nothing when the program is on PATH. Otherwise put it on PATH. For ripgrep, copying `rg.exe` to Orbit's
 `bin` folder works as well.
 
+### On Windows, `orb` starts a program it only has a name for without looking in the folder first
+
+Orbit starts some programs by name and not by path: Mercurial's `hg`, `git` when it is not on PATH, the pager of
+`orb session list`, which is `cmd /c more`, and the command of an MCP server, for example. On Windows `cmd.exe` runs a
+`.bat` or `.cmd` file and finds a program by looking in the current folder before PATH, and that folder can be a
+repository that is not trusted yet: a folder with a `.hg` directory and an `hg.bat` ran that file while Orbit
+identified the project, before any trust check. A program that Orbit starts by name now gets
+`NoDefaultCurrentDirectoryInExePath` in its environment, which makes `cmd.exe` skip the current folder, so what it finds
+is on PATH. Orbit also stops a process with the `taskkill.exe` of the Windows folder. It used to run `taskkill` by name
+through `cmd.exe`, so a `taskkill.exe` in the folder it started in ran instead. A path to a program, and a command line
+that is run through a shell, are looked up as written, as before.
+
+**Affects:** Windows users whose project starts a program by a bare name that exists only in the project folder, such as
+an MCP server whose `command` is `server.bat`: it is no longer found there.
+
+**What to do:** nothing for programs on PATH. For one that you keep in the folder, write `.\server.bat` or its full
+path.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

@@ -553,6 +553,37 @@ describe("Project.resolve", () => {
     }),
   )
 
+  it.live("resolving a mercurial folder does not run an hg.bat that the folder holds", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const marker = path.join(tmp.path, "ran.txt")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(tmp.path, ".hg"))
+        await fs.writeFile(path.join(tmp.path, "hg.bat"), `@echo off\r\necho ran> "${marker}"\r\n`)
+      })
+      const project = yield* Project.Service
+
+      // The project is identified before the user is asked about trusting its folder. cmd.exe skips the working folder
+      // when this variable is set, and the shell that runs the tests may set it, which would hide what is tested.
+      const before = process.env.NoDefaultCurrentDirectoryInExePath
+      delete process.env.NoDefaultCurrentDirectoryInExePath
+      yield* project.resolve(abs(tmp.path)).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (before !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = before
+          }),
+        ),
+      )
+
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+    }),
+  )
+
   it.live("returns global id for unreadable mercurial metadata", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
