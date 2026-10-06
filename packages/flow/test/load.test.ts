@@ -2,7 +2,16 @@ import { afterAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { importsModule, loadSuite, loadWorkflow, suiteCommands, workflowApprovals, workflowCommands } from "../src/load"
+import {
+  importsModule,
+  loadSuite,
+  loadWorkflow,
+  suiteAgents,
+  suiteCommands,
+  workflowAgents,
+  workflowApprovals,
+  workflowCommands,
+} from "../src/load"
 import type { Context } from "../src/workflow"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-load-"))
@@ -153,6 +162,7 @@ test("a workflow that is not valid fails workflowCommands as it fails loadWorkfl
 
   await expect(workflowCommands(file)).rejects.toThrow(problem)
   await expect(workflowApprovals(file)).rejects.toThrow(problem)
+  await expect(workflowAgents(file)).rejects.toThrow(problem)
   await expect(loadWorkflow(file)).rejects.toThrow(problem)
 })
 
@@ -370,6 +380,276 @@ test("every node that the workflow hands an auto to is one that workflowApproval
   expect((await workflowApprovals(file)).map((item) => item.id)).toEqual(expect.arrayContaining(handed))
 })
 
+// A workflow with a node of every type that also sets `agent` on each of them: only an agent node, a verify node, the judge
+// of a verify node and a member of a team hand one to the runner.
+const choosing = [
+  "name: agents",
+  "nodes:",
+  "  - id: plan",
+  "    prompt: say ok",
+  "    agent: plan",
+  "  - id: default",
+  "    prompt: say ok",
+  "  - id: api",
+  "    type: verify",
+  "    prompt: build the api",
+  "    agent: build",
+  "    checks: []",
+  "    judge: { agent: review, model: ollama/a, criteria: be strict }",
+  "  - id: ui",
+  "    type: verify",
+  "    prompt: build the ui",
+  "    checks: []",
+  "    judge: true",
+  "  - id: docs",
+  "    type: verify",
+  "    prompt: build the docs",
+  "    agent: docs",
+  "    checks: []",
+  "    judge: { model: ollama/a }",
+  "  - id: crew",
+  "    type: team",
+  "    goal: ship it",
+  "    agent: ignored",
+  "    members:",
+  "      lead: { role: lead, agent: captain }",
+  "      coder: { role: code }",
+  "      tester: { role: test, agent: qa }",
+  "  - id: tests",
+  "    type: check",
+  "    needs: [plan]",
+  "    command: npm test",
+  "    agent: ignored",
+  "  - id: ask",
+  "    type: gate",
+  "    needs: [tests]",
+  "    message: Go on?",
+  "    agent: ignored",
+  "  - id: merge",
+  "    type: merge",
+  "    needs: [ask]",
+  "    branches: [tests]",
+  "    agent: ignored",
+  "",
+]
+
+test("workflowAgents lists the agent of each agent and verify node, of each verify node's judge and of each team member", async () => {
+  const file = path.join(root, "agents.yaml")
+  await Bun.write(file, choosing.join("\n"))
+
+  // The check, gate and merge nodes pass no `agent` on, and neither does a team itself: only its members do. A judge that
+  // is `true`, or that sets no agent, runs as the default agent.
+  expect(await workflowAgents(file)).toEqual([
+    { id: "plan", agent: "plan" },
+    { id: "api", agent: "build" },
+    { id: "api/judge", agent: "review" },
+    { id: "docs", agent: "docs" },
+    { id: "crew/lead", agent: "captain" },
+    { id: "crew/tester", agent: "qa" },
+  ])
+})
+
+test("workflowAgents lists a template, because it is filled in when the node starts and a reply can name an agent", async () => {
+  const file = path.join(root, "agents-templated.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: templated",
+      "nodes:",
+      "  - id: plan",
+      "    prompt: reply with the name of an agent",
+      "  - id: later",
+      "    needs: [plan]",
+      "    prompt: go on",
+      '    agent: "{{plan.text}}"',
+      "  - id: chosen",
+      "    prompt: go on",
+      '    agent: "{{ input.agent }}"',
+      "  - id: reviewed",
+      "    type: verify",
+      "    needs: [plan]",
+      "    prompt: go on",
+      "    checks: []",
+      '    judge: { agent: "{{plan.text}}" }',
+      "  - id: crew",
+      "    type: team",
+      "    needs: [plan]",
+      "    goal: ship it",
+      "    members:",
+      '      lead: { role: lead, agent: "{{plan.text}}" }',
+      "  - id: worded",
+      "    needs: [plan]",
+      '    prompt: "{{plan.text}} is the plan"',
+      "",
+    ].join("\n"),
+  )
+
+  // A template in the prompt is only text. One in `agent` is what the node hands the runner.
+  expect(await workflowAgents(file)).toEqual([
+    { id: "later", agent: "{{plan.text}}" },
+    { id: "chosen", agent: "{{ input.agent }}" },
+    { id: "reviewed/judge", agent: "{{plan.text}}" },
+    { id: "crew/lead", agent: "{{plan.text}}" },
+  ])
+})
+
+test("workflowAgents lists nothing for a value that the runner does not send, and a value that is not text as it is sent", async () => {
+  const file = path.join(root, "agents-values.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: values",
+      "nodes:",
+      // The runner sends an agent to the server only when it is not falsy, and whatever it is when it is not.
+      ...["''", "null", "false", "0", "true", "7", "[a, b]", "{ name: a }"].flatMap((value, index) => [
+        `  - id: node${index}`,
+        "    prompt: say ok",
+        `    agent: ${value}`,
+      ]),
+      "  - id: unset",
+      "    prompt: say ok",
+      "    agent:",
+      "",
+    ].join("\n"),
+  )
+
+  expect(await workflowAgents(file)).toEqual([
+    { id: "node4", agent: "true" },
+    { id: "node5", agent: "7" },
+    { id: "node6", agent: '["a","b"]' },
+    { id: "node7", agent: '{"name":"a"}' },
+  ])
+})
+
+test("workflowAgents takes the judge and the members of a team as the runner does, and fails on none of them", async () => {
+  const list = path.join(root, "agents-member-list.yaml")
+  const odd = path.join(root, "agents-member-odd.yaml")
+  const none = path.join(root, "agents-member-none.yaml")
+  const judges = path.join(root, "agents-judges.yaml")
+  // `validate` takes any object for the members, so a list works as members named by their position.
+  await Bun.write(
+    list,
+    "name: list\nnodes:\n  - id: crew\n    type: team\n    goal: ship it\n    members:\n      - { role: lead, agent: captain }\n      - { role: code }\n",
+  )
+  // A member that is not an object has no `agent` to hand on, and does not hide the members around it.
+  await Bun.write(
+    odd,
+    "name: odd\nnodes:\n  - id: crew\n    type: team\n    goal: ship it\n    members:\n      text: lead\n      empty:\n      number: 7\n      real: { role: code, agent: coder }\n",
+  )
+  await Bun.write(none, "name: none\nnodes:\n  - id: crew\n    type: team\n    goal: ship it\n    members:\n")
+  // The runner reads `agent` off whatever the judge is, so only an object that has one names an agent.
+  await Bun.write(
+    judges,
+    [
+      "name: judges",
+      "nodes:",
+      ...[
+        "true",
+        "false",
+        "null",
+        "review",
+        "7",
+        "[review]",
+        "{ agent: '' }",
+        "{ model: ollama/a }",
+        "{ agent: review }",
+      ].flatMap((value, index) => [
+        `  - id: node${index}`,
+        "    type: verify",
+        "    prompt: say ok",
+        "    checks: []",
+        `    judge: ${value}`,
+      ]),
+      "",
+    ].join("\n"),
+  )
+
+  expect(await workflowAgents(list)).toEqual([{ id: "crew/0", agent: "captain" }])
+  expect(await workflowAgents(odd)).toEqual([{ id: "crew/real", agent: "coder" }])
+  // The run fails when it reaches the team, with no one to lead it, before it asks anything.
+  expect(await workflowAgents(none)).toEqual([])
+  await expect(loadWorkflow(none)).resolves.toMatchObject({ name: "none" })
+  expect(await workflowAgents(judges)).toEqual([{ id: "node8/judge", agent: "review" }])
+})
+
+test("every agent that the workflow hands the runner is one that workflowAgents lists", async () => {
+  const file = path.join(root, "agents-handed.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: handed",
+      "nodes:",
+      "  - id: plan",
+      "    prompt: reply with the name of an agent",
+      "    agent: planner",
+      "  - id: filled",
+      "    needs: [plan]",
+      "    prompt: go on",
+      '    agent: "{{plan.text}}"',
+      "  - id: verified",
+      "    needs: [plan]",
+      "    type: verify",
+      "    prompt: go on",
+      "    agent: builder",
+      "  - id: crew",
+      "    needs: [plan]",
+      "    type: team",
+      "    goal: ship it",
+      "    agent: ignored",
+      "    members:",
+      '      lead: { role: lead, agent: "{{plan.text}}" }',
+      "      coder: { role: code, agent: coder }",
+      "      tester: { role: test }",
+      "  - id: unnamed",
+      "    needs: [plan]",
+      "    prompt: go on",
+      "  - id: tests",
+      "    type: check",
+      "    needs: [plan]",
+      "    command: npm test",
+      "    agent: ignored",
+      "",
+    ].join("\n"),
+  )
+  const handed: string[] = []
+  // What each node of the file passes to the runner. Every agent replies with a name, so a template that names one fills
+  // in as that name.
+  const reply = (id: string) => ({ id, status: "succeeded", text: "reviewer", sessions: [], attempts: 1 })
+  const ctx = {
+    input: {},
+    run: { id: "run", directory: root },
+    agent: async (id: string, options: { readonly agent?: unknown }) => {
+      if (options.agent) handed.push(`${id}: ${String(options.agent)}`)
+      return reply(id)
+    },
+    verify: async (id: string, options: { readonly agent?: unknown }) => {
+      if (options.agent) handed.push(`${id}: ${String(options.agent)}`)
+      return reply(id)
+    },
+    // The runner reads the `agent` of each member, and none of the team itself.
+    team: async (id: string, options: { readonly members: Record<string, { readonly agent?: unknown }> }) => {
+      for (const [name, member] of Object.entries(options.members))
+        if (member.agent) handed.push(`${id}/${name}: ${String(member.agent)}`)
+      return reply(id)
+    },
+    check: async (id: string) => ({ id, command: "npm test", ok: true, code: 0, output: "" }),
+  } as unknown as Context
+
+  await (await loadWorkflow(file)).run(ctx)
+
+  expect(handed.toSorted()).toEqual([
+    "crew/coder: coder",
+    "crew/lead: reviewer",
+    "filled: reviewer",
+    "plan: planner",
+    "verified: builder",
+  ])
+  // The listing has the value as written where the run has it filled in, and the same nodes.
+  expect((await workflowAgents(file)).map((item) => item.id).toSorted()).toEqual(
+    handed.map((item) => item.slice(0, item.indexOf(":"))).toSorted(),
+  )
+})
+
 test("suiteCommands lists every entry of each task's checks in JSON and YAML suites", async () => {
   const json = path.join(root, "commands.json")
   const yaml = path.join(root, "commands-suite.yaml")
@@ -443,19 +723,115 @@ test("a suite that is not valid fails suiteCommands as it fails loadSuite", asyn
   const problem = `${file} must define { name, tasks: [{ id, prompt, checks }] }`
 
   await expect(suiteCommands(file)).rejects.toThrow(problem)
+  await expect(suiteAgents(file)).rejects.toThrow(problem)
   await expect(loadSuite(file)).rejects.toThrow(problem)
 })
 
-test("asking for the commands or approvals of a module imports nothing and lists none, because its code can do anything once imported", async () => {
+test("suiteAgents lists the agent of each task's judge in JSON and YAML suites", async () => {
+  const json = path.join(root, "agents.json")
+  const yaml = path.join(root, "agents-suite.yaml")
+  await Bun.write(
+    json,
+    JSON.stringify({
+      name: "agents",
+      tasks: [
+        { id: "pagination", prompt: "paginate", checks: [], judge: { agent: "review", criteria: "strict" } },
+        { id: "plain", prompt: "no judge", checks: [] },
+        { id: "boolean", prompt: "any judge", checks: [], judge: true },
+        { id: "default", prompt: "the default agent", checks: [], judge: { model: "ollama/a" } },
+        // `evaluate` hands the node the task's `judge` and no agent of its own, so this chooses nothing.
+        { id: "own", prompt: "its own agent", checks: [], agent: "build" },
+        { id: "limits", prompt: "limit", checks: [], judge: { agent: "qa" } },
+      ],
+    }),
+  )
+  await Bun.write(
+    yaml,
+    [
+      "name: agents",
+      "tasks:",
+      "  - id: pagination",
+      "    prompt: paginate",
+      "    checks: []",
+      "    judge: { agent: review, criteria: strict }",
+      "  - id: plain",
+      "    prompt: no judge",
+      "    checks: []",
+      "  - id: boolean",
+      "    prompt: any judge",
+      "    checks: []",
+      "    judge: true",
+      "  - id: own",
+      "    prompt: its own agent",
+      "    checks: []",
+      "    agent: build",
+      "  - id: limits",
+      "    prompt: limit",
+      "    checks: []",
+      "    judge: { agent: qa }",
+      "",
+    ].join("\n"),
+  )
+  const expected = [
+    { id: "pagination/judge", agent: "review" },
+    { id: "limits/judge", agent: "qa" },
+  ]
+
+  expect(await suiteAgents(json)).toEqual(expected)
+  expect(await suiteAgents(yaml)).toEqual(expected)
+})
+
+test("a judge or a task that is not written as an object is read as the runner reads it, and does not hide the tasks around it", async () => {
+  const file = path.join(root, "agents-odd.json")
+  await Bun.write(
+    file,
+    JSON.stringify({
+      name: "odd",
+      tasks: [
+        null,
+        "task",
+        7,
+        { id: "null", prompt: "odd", checks: [], judge: null },
+        { id: "text", prompt: "odd", checks: [], judge: "review" },
+        { id: "list", prompt: "odd", checks: [], judge: ["review"] },
+        { id: "number", prompt: "odd", checks: [], judge: 7 },
+        { id: "empty", prompt: "odd", checks: [], judge: { agent: "" } },
+        { id: "real", prompt: "real", checks: [], judge: { agent: "review" } },
+        { prompt: "no id", checks: [], judge: { agent: "qa" } },
+      ],
+    }),
+  )
+
+  // A judge that names an agent counts whatever its task lacks, as the runner sends it all the same.
+  const listed = await suiteAgents(file)
+  expect(listed.map((item) => item.agent)).toEqual(["review", "qa"])
+  expect(listed[0]).toEqual({ id: "real/judge", agent: "review" })
+})
+
+test("asking for the commands, approvals or agents of a module imports nothing and lists none, because its code can do anything once imported", async () => {
   const files: ReadonlyArray<
-    readonly [string, string, typeof workflowCommands | typeof suiteCommands | typeof workflowApprovals]
+    readonly [
+      string,
+      string,
+      (
+        | typeof workflowCommands
+        | typeof suiteCommands
+        | typeof workflowApprovals
+        | typeof workflowAgents
+        | typeof suiteAgents
+      ),
+    ]
   > = [
     ["ask-flow.ts", traced(workflow), workflowCommands],
     ["ask-flow.js", traced(workflow), workflowCommands],
     ["ask-approvals.ts", traced(workflow), workflowApprovals],
     ["ask-approvals.mjs", traced(workflow), workflowApprovals],
+    ["ask-agents.ts", traced(workflow), workflowAgents],
+    ["ask-agents.mjs", traced(workflow), workflowAgents],
     ["ask-suite.ts", traced(suite), suiteCommands],
     ["ask-suite.mjs", traced(suite), suiteCommands],
+    ["ask-suite-agents.ts", traced(suite), suiteAgents],
+    ["ask-suite-agents.mjs", traced(suite), suiteAgents],
   ]
 
   for (const [name, source, commands] of files) {
@@ -468,7 +844,7 @@ test("asking for the commands or approvals of a module imports nothing and lists
   }
 })
 
-test("a JSON file is no workflow, as loadWorkflow cannot load one, so workflowCommands and workflowApprovals list none for it", async () => {
+test("a JSON file is no workflow, as loadWorkflow cannot load one, so workflowCommands, workflowApprovals and workflowAgents list none for it", async () => {
   const file = path.join(root, "workflow.json")
   await Bun.write(
     file,
@@ -476,12 +852,13 @@ test("a JSON file is no workflow, as loadWorkflow cannot load one, so workflowCo
       name: "json",
       nodes: [
         { id: "tests", type: "check", command: "npm test" },
-        { id: "plan", prompt: "say ok", permissions: "auto" },
+        { id: "plan", prompt: "say ok", permissions: "auto", agent: "build" },
       ],
     }),
   )
 
   expect(await workflowCommands(file)).toEqual([])
   expect(await workflowApprovals(file)).toEqual([])
+  expect(await workflowAgents(file)).toEqual([])
   await expect(loadWorkflow(file)).rejects.toThrow("must export default { name, run(ctx) }")
 })

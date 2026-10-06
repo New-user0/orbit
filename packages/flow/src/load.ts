@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url"
 import type { EvalSuite } from "./eval.js"
 import type { Workflow } from "./workflow.js"
-import { compile, validate, type Spec } from "./yaml.js"
+import { compile, validate, type NodeSpec, type Spec } from "./yaml.js"
 
 // Workflows and eval suites are TypeScript or JavaScript modules with a default export, or YAML (and suites JSON).
 
@@ -78,14 +78,50 @@ export async function workflowApprovals(file: string) {
   return [...nodes.values()].flatMap((node) => {
     const type = node.type ?? "agent"
     if (type === "agent" || type === "verify") return approving(node.id, node.permissions)
-    // `validate` takes any object for the members, an array and null included, and a member can be any value. Only one
-    // that is an object has `permissions` to hand on.
     if (type === "team")
-      return Object.entries((node.members ?? {}) as Record<string, { readonly permissions?: unknown } | null>).flatMap(
-        ([name, member]) => approving(`${node.id}/${name}`, member?.permissions),
-      )
+      return members(node).flatMap(([name, member]) => approving(`${node.id}/${name}`, member?.permissions))
     return []
   })
+}
+
+/**
+ * The agents that a run of the YAML workflow in `file` runs its nodes as, which are whichever of the user's agents the file
+ * names: the `agent` of an agent or verify node, the `agent` of a verify node's `judge`, named `node/judge`, and the `agent`
+ * of each member of a team, named `team/member`, each with the value as written. An agent's own rules are added after the
+ * user's global rules, and the last match wins, so naming one chooses the rules a node runs under. A file can name an agent
+ * whose rules allow what the user's own would ask about, and then the action is done without asking, where the run
+ * rejects it for a node that names none: the choice takes the answer to the user's own `ask` rules out of the user's hands,
+ * as `permissions: auto` does, so a file that brings it needs the same care. A value that is a template counts as well:
+ * `{{node.text}}` is filled in when the node starts, and the reply of an agent can name one. These are the only places
+ * where the runner reads an `agent` from what `execute` in `yaml.ts` hands it, and it sends any value that is not falsy to
+ * the server as the agent of the session (see `attempt` in `agent.ts`). Asked before `loadWorkflow` like
+ * `workflowCommands`, which it reads and validates as that does, and for the same reason only a YAML file is read: what a
+ * module passes on is known only once it runs.
+ */
+export async function workflowAgents(file: string) {
+  if (!isYaml(file)) return []
+  const nodes = validate((await read(file, "Workflow file")) as Spec, file)
+  return [...nodes.values()].flatMap((node) => {
+    const type = node.type ?? "agent"
+    if (type === "agent") return naming(node.id, node.agent)
+    if (type === "verify") return [...naming(node.id, node.agent), ...judging(node.id, node.judge)]
+    if (type === "team") return members(node).flatMap(([name, member]) => naming(`${node.id}/${name}`, member?.agent))
+    return []
+  })
+}
+
+/**
+ * The agents that a run of the suite in `file` runs its tasks as: the `agent` of each task's `judge`, named `task/judge`
+ * as the judge of a verify node is, because a suite runs each task as a verify node (see `evaluate` in `eval.ts`) and
+ * hands it the task's `judge` and no `agent` of its own, so a task's own `agent` chooses nothing. Asked before
+ * `loadSuite` like `workflowAgents`, and as there, a module has none to list, because it is stopped by `importsModule`
+ * and never read here.
+ */
+export async function suiteAgents(file: string) {
+  if (importsModule(file)) return []
+  // `loadSuite` checks no more than the list, so a task may be anything. One that is not an object lists nothing here,
+  // as `evaluate` fails on it before anything runs.
+  return (await loadSuite(file)).tasks.flatMap((task) => judging(task?.id, task?.judge))
 }
 
 // `auto`, or a string with a template in it, which `fill` may turn into `auto` once the run reaches the node. Any other
@@ -93,6 +129,27 @@ export async function workflowApprovals(file: string) {
 function approving(id: string, permissions: unknown) {
   if (typeof permissions !== "string") return []
   return permissions === "auto" || permissions.includes("{{") ? [{ id, permissions }] : []
+}
+
+// An agent the runner hands to the server: `attempt` sends any value that is not falsy as the agent of the session, so
+// each counts, and a value that is not text, which the server rejects, shows as written.
+function naming(id: unknown, agent: unknown) {
+  if (!agent) return []
+  return [{ id: String(id), agent: typeof agent === "object" ? JSON.stringify(agent) : String(agent) }]
+}
+
+// The runner reads `agent` off whatever the `judge` is: `true`, text, `null` and a list name none, and only an object that
+// has one names it.
+function judging(id: unknown, judge: unknown) {
+  return naming(`${String(id)}/judge`, (judge as { readonly agent?: unknown } | null | undefined)?.agent)
+}
+
+// `validate` takes any object for the members, an array and null included, and a member can be any value. Only one that is
+// an object has options to hand on.
+function members(node: NodeSpec) {
+  return Object.entries(
+    (node.members ?? {}) as Record<string, { readonly agent?: unknown; readonly permissions?: unknown } | null>,
+  )
 }
 
 // The entries of a `checks` list. A list that is not an array makes `verify` fail before it runs anything, and every

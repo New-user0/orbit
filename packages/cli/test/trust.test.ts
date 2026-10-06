@@ -15,6 +15,9 @@ const model = "ollama/trust:1b"
 let runs = 0
 // What the model was told the last time a tool answered it.
 const toolAnswers: string[] = []
+// The agents that a request of the model was made as, which are the ones that a system prompt of the form AGENT-<name>
+// names. A test clears it before the run it looks at.
+const askedAs = new Set<string>()
 const details = {
   format: "gguf",
   family: "llama",
@@ -43,12 +46,17 @@ const ollama = Bun.serve({
     if (pathname === "/api/ps") return Response.json({ models: [] })
     const body: { tools?: unknown; messages: Array<{ role: string; content?: unknown }> } = await request.json()
     if (body.tools) runs++
+    const agent = body.tools ? JSON.stringify(body.messages).match(/AGENT-(\w+)/)?.[1] : undefined
+    if (agent) askedAs.add(agent)
     const last = body.messages.at(-1)
     if (last?.role === "tool") toolAnswers.push(JSON.stringify(last.content))
     // Asked to write a file, the model calls the write tool once; every other request gets a plain reply.
     const writes = body.tools && last?.role === "user" && JSON.stringify(last.content).includes("write blocked.txt")
     // The lead of a team ends it on its first turn, with the tag a lead finishes with.
     const finishes = body.tools && last?.role === "user" && JSON.stringify(last.content).includes("You lead.")
+    // A reviewer approves, which is the word its reply has to start with.
+    const approves =
+      body.tools && last?.role === "user" && JSON.stringify(last.content).includes("Review a change another agent made")
     const events = [
       {
         choices: [
@@ -68,7 +76,13 @@ const ollama = Bun.serve({
                 }
               : {
                   role: "assistant",
-                  content: body.tools ? (finishes ? "<done>finished</done>" : "ran fine") : "Trust",
+                  content: body.tools
+                    ? finishes
+                      ? "<done>finished</done>"
+                      : approves
+                        ? "APPROVED"
+                        : "ran fine"
+                    : "Trust",
                 },
           },
         ],
@@ -109,6 +123,20 @@ afterAll(async () => {
 
 // The settings of a project that guards its files: a hook blocks every write.
 const guard = { hooks: { PreToolUse: [{ matcher: "write", hooks: [{ type: "command", command: "exit 2" }] }] } }
+
+// The config of a user who is asked before every edit, and who has agents of their own. An agent's rules are added after
+// the global ones, where the last match wins, so `autopilot` edits without being asked and every other agent is asked. Each
+// agent's system prompt says which one a request of the model was made as, which `askedAs` collects.
+const user = {
+  ORBIT_CONFIG_CONTENT: JSON.stringify({
+    permissions: [{ action: "edit", resource: "*", effect: "ask" }],
+    agents: {
+      autopilot: { system: "AGENT-autopilot", permissions: [{ action: "edit", resource: "*", effect: "allow" }] },
+      reviewer: { system: "AGENT-reviewer" },
+      captain: { system: "AGENT-captain" },
+    },
+  }),
+}
 
 // A repository with a hook in its settings and a plugin in its `.orbit` directory: what a clone can bring that runs
 // code on its own.
@@ -169,7 +197,7 @@ async function layered(name: string) {
   return { parent, child }
 }
 
-async function orb(directory: string, args: string[]) {
+async function orb(directory: string, args: string[], env: Record<string, string | undefined> = {}) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
     env: isolatedEnv(root, {
@@ -179,6 +207,7 @@ async function orb(directory: string, args: string[]) {
       ORBIT_CONFIG: undefined,
       ORBIT_CONFIG_CONTENT: undefined,
       OLLAMA_CONTEXT_LENGTH: undefined,
+      ...env,
     }),
     stdin: "ignore",
     stdout: "pipe",
@@ -391,6 +420,20 @@ test("a server older than workspace trust cannot say that a folder is trusted: o
         tasks: [{ id: "task", prompt: "say ok", checks: [check.command] }],
       }),
     )
+    const agentFile = path.join(clone, "agent.yaml")
+    const judgeFile = path.join(clone, "judge.json")
+    await Bun.write(
+      agentFile,
+      `name: older\nnodes:\n  - id: work\n    prompt: say ok\n    model: ${model}\n    agent: autopilot\n`,
+    )
+    await Bun.write(
+      judgeFile,
+      JSON.stringify({
+        name: "older",
+        models: [model],
+        tasks: [{ id: "task", prompt: "say ok", checks: [], judge: { agent: "reviewer" } }],
+      }),
+    )
     const server = old.url.toString()
     const before = runs
     const asked = requests.length
@@ -401,6 +444,14 @@ test("a server older than workspace trust cannot say that a folder is trusted: o
       [await orb(clone, ["flow", "run", "--server", server, autoFile]), "approves actions without asking you"],
       [await orb(clone, ["eval", suiteModule.file, "--server", server]), "runs code from the folder"],
       [await orb(clone, ["eval", suiteFile, "--server", server]), "runs shell commands from the folder"],
+      [
+        await orb(clone, ["flow", "run", "--server", server, agentFile]),
+        "lets the file choose which of your agents run its nodes",
+      ],
+      [
+        await orb(clone, ["eval", judgeFile, "--server", server]),
+        "lets the file choose which of your agents run its nodes",
+      ],
     ] as const
 
     for (const [result, says] of stopped) {
@@ -794,6 +845,190 @@ test("a recorded run whose agents were set to approve is not run again by resume
 
   succeeded(await orb(repository, ["flow", "resume", "--trust", "--standalone", id]))
 }, 360_000)
+
+test("a YAML workflow that names an agent is not run in an untrusted folder that holds nothing back, and runs with --trust", async () => {
+  const repository = await bare("agent-named")
+  const named = path.join(repository, "named.yaml")
+  const plain = path.join(repository, "plain.yaml")
+  const written = path.join(repository, "blocked.txt")
+  // The same node, which asks the model to write a file, with the agent that the user's rules let edit and without it.
+  await Bun.write(
+    named,
+    `name: named\nnodes:\n  - id: work\n    prompt: write blocked.txt\n    model: ${model}\n    agent: autopilot\n`,
+  )
+  await Bun.write(plain, `name: plain\nnodes:\n  - id: work\n    prompt: write blocked.txt\n    model: ${model}\n`)
+
+  // Without an agent the node runs as the default one, and the run rejects the write that the user's rules ask about. The
+  // file chooses nothing, so the folder needs no trust.
+  const answered = toolAnswers.length
+  succeeded(await orb(repository, ["flow", "run", "--standalone", plain], user))
+  expect(toolAnswers.slice(answered).join("")).toContain("does not approve actions that need permission")
+  expect(await Bun.file(written).exists()).toBe(false)
+  const before = runs
+
+  // As the agent whose rules allow the edit the node would get it done with no question, and the run's rejection would
+  // never come into play. So the file is stopped, before anything runs.
+  const refused = await orb(repository, ["flow", "run", "--standalone", named], user)
+
+  expect(refused.code).toBe(1)
+  expect(refused.stdout).toBe("")
+  expect(refused.stderr).toContain(`${repository} is not trusted`)
+  // It says the command lets the file choose the agents, names the file, lists the node with its agent, and gives both
+  // ways to trust the folder.
+  expect(refused.stderr).toContain("lets the file choose which of your agents run its nodes")
+  expect(refused.stderr).toContain("named.yaml names an `agent`")
+  expect(refused.stderr).toContain("  work  agent: autopilot")
+  expect(refused.stderr).toContain("`orb trust`")
+  expect(refused.stderr).toContain("--trust")
+  // Nothing is held back, and the file defines no command or approval, so none is listed.
+  expect(refused.stderr).not.toContain("holds back")
+  expect(refused.stderr).not.toContain("shell commands")
+  expect(refused.stderr).not.toContain("approves actions")
+  expect(runs).toBe(before)
+  expect(await Bun.file(written).exists()).toBe(false)
+
+  // --trust is the explicit grant for one run: the node runs as the agent, which edits without being asked, so the run's
+  // rejection never comes into play.
+  askedAs.clear()
+  const granted = toolAnswers.length
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", named], user))
+  expect([...askedAs]).toEqual(["autopilot"])
+  expect(toolAnswers.length).toBeGreaterThan(granted)
+  expect(toolAnswers.slice(granted).join("")).not.toContain("does not approve actions that need permission")
+  expect(await Bun.file(written).exists()).toBe(true)
+
+  // A resumed run loads the file that the repository's run store names, so it is held to the same trust.
+  await fs.rm(written)
+  const recorded: Array<{ id: string; workflow: string }> = JSON.parse(
+    (await orb(repository, ["flow", "ls", "--format", "json"])).stdout,
+  )
+  const id = recorded.find((run) => run.workflow === "named")?.id
+  expect(id).toBeString()
+  const settled = runs
+  const resumed = await orb(repository, ["flow", "resume", "--standalone", String(id)], user)
+  expect(resumed.code).toBe(1)
+  expect(resumed.stderr).toContain(`${repository} is not trusted`)
+  expect(resumed.stderr).toContain("  work  agent: autopilot")
+  // A replay answers every node from the recording and opens no session, so no agent runs under rules that the file chose:
+  // it needs no trust, and it connects to no server, which nothing listens at that address would show. (It exits with 1
+  // all the same, because an agent's replayed result is marked as reused and so differs from what was recorded.)
+  const replayed = await orb(repository, ["flow", "replay", String(id), "--server", "http://127.0.0.1:9"], user)
+  expect(replayed.stderr).toContain("= work (replayed)")
+  expect(replayed.stderr).not.toContain("is not trusted")
+  expect(runs).toBe(settled)
+  expect(await Bun.file(written).exists()).toBe(false)
+}, 480_000)
+
+test("every agent that a run of a workflow is made as is one that the refusal lists, whichever node or member names it", async () => {
+  const repository = await bare("agent-roles")
+  const file = path.join(repository, "roles.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: roles",
+      "nodes:",
+      "  - id: author",
+      "    type: verify",
+      "    prompt: say ok",
+      `    model: ${model}`,
+      "    agent: autopilot",
+      "    checks: []",
+      "    judge: { agent: reviewer }",
+      "  - id: crew",
+      "    type: team",
+      "    needs: [author]",
+      "    goal: say ok",
+      "    members:",
+      `      lead: { role: lead, model: ${model}, agent: captain }`,
+      // The lead finishes the team on its first turn, so this member never takes one, and it is listed all the same.
+      `      coder: { role: code, model: ${model}, agent: coder }`,
+      "",
+    ].join("\n"),
+  )
+  const before = runs
+
+  const refused = await orb(repository, ["flow", "run", "--standalone", file], user)
+
+  expect(refused.code).toBe(1)
+  expect(runs).toBe(before)
+  const listed = [...refused.stderr.matchAll(/^ {2}(\S+)\s+agent: (\S+)$/gm)].map((match) => [match[1], match[2]])
+  expect(listed).toEqual([
+    ["author", "autopilot"],
+    ["author/judge", "reviewer"],
+    ["crew/lead", "captain"],
+    ["crew/coder", "coder"],
+  ])
+
+  // The author, the reviewer of its work and the lead of the team each made requests of the model as the agent that the
+  // file names for it, and each is among the ones that were listed.
+  askedAs.clear()
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", file], user))
+  expect([...askedAs].toSorted()).toEqual(["autopilot", "captain", "reviewer"])
+  for (const agent of askedAs) expect(listed.map((item) => item[1])).toContain(agent)
+}, 360_000)
+
+test("a suite whose task has a judge that names an agent is not run in an untrusted folder that holds nothing back, and runs with --trust", async () => {
+  const repository = await bare("agent-judges")
+  const suiteFile = path.join(repository, "suite.json")
+  const plainFile = path.join(repository, "plain.json")
+  await Bun.write(
+    suiteFile,
+    JSON.stringify({
+      name: "judged",
+      models: [model],
+      tasks: [
+        { id: "reviewed", prompt: "say ok", checks: [], judge: { agent: "reviewer" } },
+        // `evaluate` passes a task's `judge` on and no agent of the task's own, so this one chooses nothing.
+        { id: "own", prompt: "say ok", checks: [], agent: "captain" },
+      ],
+    }),
+  )
+  await Bun.write(
+    plainFile,
+    JSON.stringify({
+      name: "plain",
+      models: [model],
+      tasks: [{ id: "reviewed", prompt: "say ok", checks: [], judge: true }],
+    }),
+  )
+
+  // A judge that names no agent runs as the default one, so the file chooses nothing and the folder needs no trust.
+  succeeded(await orb(repository, ["eval", plainFile, "--standalone"], user))
+  const before = runs
+
+  const refused = await orb(repository, ["eval", suiteFile, "--standalone"], user)
+
+  expect(refused.code).toBe(1)
+  expect(refused.stdout).toBe("")
+  expect(refused.stderr).toContain(`${repository} is not trusted`)
+  expect(refused.stderr).toContain("lets the file choose which of your agents run its nodes")
+  expect(refused.stderr).toContain("suite.json names an `agent`")
+  // The judge of a task is listed as it is for a verify node of a workflow, and a task's own agent is not.
+  expect(refused.stderr).toContain("  reviewed/judge  agent: reviewer")
+  expect(refused.stderr).not.toContain("captain")
+  expect(refused.stderr).toContain("`orb trust`")
+  expect(refused.stderr).toContain("--trust")
+  expect(refused.stderr).not.toContain("holds back")
+  expect(refused.stderr).not.toContain("shell commands")
+  expect(runs).toBe(before)
+
+  // --trust is the explicit grant for one run: each task is made as its author, and the reviewer as the agent named. The
+  // task's own agent is never made as, which is why it needs no listing.
+  askedAs.clear()
+  succeeded(await orb(repository, ["eval", suiteFile, "--trust", "--standalone"], user))
+  expect([...askedAs]).toEqual(["reviewer"])
+  expect(runs).toBeGreaterThan(before)
+
+  // A resumed eval loads the same suite, so it is held to the same trust.
+  const recorded: Array<{ id: string; workflow: string }> = JSON.parse(
+    (await orb(repository, ["flow", "ls", "--format", "json"])).stdout,
+  )
+  const evalRun = recorded.find((run) => run.workflow === "eval:judged")?.id
+  expect(evalRun).toBeString()
+  const resumed = await orb(repository, ["eval", suiteFile, "--resume", String(evalRun), "--standalone"], user)
+  expect(resumed.code).toBe(1)
+  expect(resumed.stderr).toContain("  reviewed/judge  agent: reviewer")
+}, 480_000)
 
 test("a YAML workflow or a suite whose checks are empty defines no command, so it keeps the check that orb run has", async () => {
   const empty = await bare("no-commands")
@@ -1194,7 +1429,7 @@ test("the refusal for a command that runs the shell commands of a file lists the
     { id: "api", command: "npm run lint" },
   ]
 
-  const text = refusal(status, undefined, { file, commands, approvals: [] })
+  const text = refusal(status, undefined, { file, commands, approvals: [], agents: [] })
 
   expect(text).toContain(`${repo} is not trusted`)
   expect(text).toContain("runs shell commands from the folder")
@@ -1212,7 +1447,7 @@ test("the refusal for a command that runs the shell commands of a file lists the
   expect(text).not.toContain("holds back")
 
   const withheld = [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }] satisfies TrustStatus["withheld"]
-  const held = refusal({ ...status, withheld }, undefined, { file, commands, approvals: [] })
+  const held = refusal({ ...status, withheld }, undefined, { file, commands, approvals: [], agents: [] })
   expect(held).toContain("runs shell commands from the folder")
   expect(held).toMatch(/^ {2}tests {2}npm test$/m)
   expect(held).toContain("The project config it finds also holds back what could run code or reach the network:")
@@ -1221,9 +1456,11 @@ test("the refusal for a command that runs the shell commands of a file lists the
 
   // A file outside the folder is named in full.
   const away = path.join(outer, "suite.json")
-  expect(refusal(status, undefined, { file: away, commands, approvals: [] })).toContain(`${away} defines them`)
+  expect(refusal(status, undefined, { file: away, commands, approvals: [], agents: [] })).toContain(
+    `${away} defines them`,
+  )
 
-  const home = refusal({ ...status, persistent: false }, undefined, { file, commands, approvals: [] })
+  const home = refusal({ ...status, persistent: false }, undefined, { file, commands, approvals: [], agents: [] })
   expect(home).toContain("runs shell commands from the folder")
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("`orb trust` refuses it")
@@ -1234,7 +1471,7 @@ test("the refusal for a command that runs the shell commands of a file lists the
   const above = refusal(
     { ...status, withheld: [{ path: path.join(outer, "orbit.json"), kinds: ["hooks"], directory: outer }] },
     undefined,
-    { file, commands, approvals: [] },
+    { file, commands, approvals: [], agents: [] },
   )
   expect(above).toContain("runs shell commands from the folder")
   expect(above).toContain("Look the file over, then trust the folder for good")
@@ -1256,7 +1493,7 @@ test("the refusal shows what an untrusted file says on one line, without the cha
     { id: "text", command: "echo éа \u{1f600}" },
   ]
 
-  const text = refusal(status, undefined, { file, commands, approvals: [] })
+  const text = refusal(status, undefined, { file, commands, approvals: [], agents: [] })
 
   // No line has a control or format character in it, apart from the end of the line that the text itself is made of.
   for (const line of text.split(EOL)) expect(line).not.toMatch(/\p{C}/u)
@@ -1267,6 +1504,17 @@ test("the refusal shows what an untrusted file says on one line, without the cha
   expect(text).toContain("echo one\\necho two")
   expect(text).toContain("echo \\u{202e}test\\u{200b}")
   expect(text).toContain("echo éа \u{1f600}")
+
+  // The agent that a file names, and the node that names it, are text from the file as well.
+  const agents = [
+    { id: "a\u001b[2Kb", agent: `autopilot\r  reviewer${String.fromCodePoint(0x202e)}` },
+    { id: "text", agent: "éа \u{1f600}" },
+  ]
+  const named = refusal(status, undefined, { file, commands: [], approvals: [], agents })
+  for (const line of named.split(EOL)) expect(line).not.toMatch(/\p{C}/u)
+  expect(named).toContain("a\\x1b[2Kb")
+  expect(named).toContain("agent: autopilot\\x0d  reviewer\\u{202e}")
+  expect(named).toContain("agent: éа \u{1f600}")
 })
 
 test("the refusal for a command that carries out a file's approvals lists each node with what it sets, with or without shell commands", () => {
@@ -1278,7 +1526,7 @@ test("the refusal for a command that carries out a file's approvals lists each n
     { id: "later", permissions: "{{plan.text}}" },
   ]
 
-  const text = refusal(status, undefined, { file, commands: [], approvals })
+  const text = refusal(status, undefined, { file, commands: [], approvals, agents: [] })
 
   expect(text).toContain(`${repo} is not trusted`)
   expect(text).toContain("this command approves actions without asking you")
@@ -1297,7 +1545,12 @@ test("the refusal for a command that carries out a file's approvals lists each n
   expect(text).not.toContain("holds back")
 
   // A file with commands as well lists both, the commands first, each in a paragraph of its own.
-  const both = refusal(status, undefined, { file, commands: [{ id: "tests", command: "npm test" }], approvals })
+  const both = refusal(status, undefined, {
+    file,
+    commands: [{ id: "tests", command: "npm test" }],
+    approvals,
+    agents: [],
+  })
   expect(both).toContain("this command runs shell commands from the folder")
   expect(both).toContain("It also approves actions without asking you")
   expect(both).toMatch(/^ {2}tests {2}npm test$/m)
@@ -1306,14 +1559,77 @@ test("the refusal for a command that carries out a file's approvals lists each n
 
   // Config that is held back, a home directory and config above the project are named as they are for the other files.
   const withheld = [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }] satisfies TrustStatus["withheld"]
-  const held = refusal({ ...status, withheld }, undefined, { file, commands: [], approvals })
+  const held = refusal({ ...status, withheld }, undefined, { file, commands: [], approvals, agents: [] })
   expect(held).toContain("this command approves actions without asking you")
   expect(held).toContain("The project config it finds also holds back what could run code or reach the network:")
   expect(held).toMatch(/^ {2}orbit\.json\s+hooks$/m)
   expect(held).toContain("Look the file and those files over, then trust the folder")
 
-  const home = refusal({ ...status, persistent: false }, undefined, { file, commands: [], approvals })
+  const home = refusal({ ...status, persistent: false }, undefined, { file, commands: [], approvals, agents: [] })
   expect(home).toContain("this command approves actions without asking you")
+  expect(home).toContain("home directory or a filesystem root")
+  expect(home).toContain("--trust")
+  expect(home).not.toContain("Look the file over")
+})
+
+test("the refusal for a command that runs a file's agents lists each node with the agent it names, with or without commands and approvals", () => {
+  const file = path.join(repo, "flows", "feature.yaml")
+  const status = { directory: repo, trusted: false, persistent: true, withheld: [] } satisfies TrustStatus
+  const agents = [
+    { id: "api", agent: "autopilot" },
+    { id: "api/judge", agent: "reviewer" },
+    { id: "crew/coder", agent: "autopilot" },
+    { id: "later", agent: "{{plan.text}}" },
+  ]
+
+  const text = refusal(status, undefined, { file, commands: [], approvals: [], agents })
+
+  expect(text).toContain(`${repo} is not trusted`)
+  expect(text).toContain("this command lets the file choose which of your agents run its nodes")
+  // The file is named from the folder, as the files that are held back are.
+  expect(text).toContain(`${path.join("flows", "feature.yaml")} names an \`agent\``)
+  expect(text).not.toContain(file)
+  // It says why that matters: the agent's own rules come after the user's and win.
+  expect(text).toContain("an agent's own rules are added after your global rules, where the last match wins")
+  // Each node is listed with the agent it names, as written, in two columns.
+  expect(text).toMatch(/^ {2}api {9}agent: autopilot$/m)
+  expect(text).toMatch(/^ {2}api\/judge {3}agent: reviewer$/m)
+  expect(text).toMatch(/^ {2}crew\/coder {2}agent: autopilot$/m)
+  expect(text).toMatch(/^ {2}later {7}agent: \{\{plan\.text\}\}$/m)
+  expect(text).toContain(
+    "Look the file over, then trust the folder for good with `orb trust`, or for this run only with --trust.",
+  )
+  // The file defines no command or approval and the folder holds nothing back, so none is named.
+  expect(text).not.toContain("shell commands")
+  expect(text).not.toContain("approves actions")
+  expect(text).not.toContain("holds back")
+
+  // A file with commands and approvals as well lists all three, in that order, each in a paragraph of its own.
+  const all = refusal(status, undefined, {
+    file,
+    commands: [{ id: "tests", command: "npm test" }],
+    approvals: [{ id: "api", permissions: "auto" }],
+    agents,
+  })
+  expect(all).toContain("this command runs shell commands from the folder")
+  expect(all).toContain("It also approves actions without asking you")
+  expect(all).toContain("It also lets the file choose which of your agents run its nodes")
+  expect(all).toMatch(/^ {2}tests {2}npm test$/m)
+  expect(all).toMatch(/^ {2}api {2}permissions: auto$/m)
+  expect(all).toMatch(/^ {2}api {9}agent: autopilot$/m)
+  expect(all.indexOf("npm test")).toBeLessThan(all.indexOf("It also approves"))
+  expect(all.indexOf("It also approves")).toBeLessThan(all.indexOf("It also lets the file choose"))
+
+  // Config that is held back, a home directory and config above the project are named as they are for the other files.
+  const withheld = [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }] satisfies TrustStatus["withheld"]
+  const held = refusal({ ...status, withheld }, undefined, { file, commands: [], approvals: [], agents })
+  expect(held).toContain("this command lets the file choose which of your agents run its nodes")
+  expect(held).toContain("The project config it finds also holds back what could run code or reach the network:")
+  expect(held).toMatch(/^ {2}orbit\.json\s+hooks$/m)
+  expect(held).toContain("Look the file and those files over, then trust the folder")
+
+  const home = refusal({ ...status, persistent: false }, undefined, { file, commands: [], approvals: [], agents })
+  expect(home).toContain("this command lets the file choose which of your agents run its nodes")
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("--trust")
   expect(home).not.toContain("Look the file over")
@@ -1340,6 +1656,7 @@ test("the text for a server that cannot say whether the folder is trusted names 
     file,
     commands: [{ id: "tests", command: "npm test" }],
     approvals: [{ id: "api", permissions: "auto" }],
+    agents: [{ id: "api/judge", agent: "autopilot" }],
   })
   expect(defined).toContain(`the server is older than workspace trust, so it cannot say whether ${repo} is trusted`)
   expect(defined).toContain("this command runs shell commands from the folder")
@@ -1347,8 +1664,22 @@ test("the text for a server that cannot say whether the folder is trusted names 
   expect(defined).toMatch(/^ {2}tests {2}npm test$/m)
   expect(defined).toContain("It also approves actions without asking you")
   expect(defined).toMatch(/^ {2}api {2}permissions: auto$/m)
+  expect(defined).toContain("It also lets the file choose which of your agents run its nodes")
+  expect(defined).toMatch(/^ {2}api\/judge {2}agent: autopilot$/m)
   expect(defined).toContain("`orb service restart`")
   expect(defined).not.toContain("is not trusted")
+
+  // A file that only names an agent is enough for such a server to refuse, as it is for a folder known not to be trusted.
+  const named = unanswered(repo, undefined, {
+    file,
+    commands: [],
+    approvals: [],
+    agents: [{ id: "api", agent: "autopilot" }],
+  })
+  expect(named).toContain("this command lets the file choose which of your agents run its nodes")
+  expect(named).toMatch(/^ {2}api {2}agent: autopilot$/m)
+  expect(named).not.toContain("shell commands")
+  expect(named).not.toContain("approves actions")
 })
 
 test("the refusal shows the name of a file it names on one line, as a clone can give its files any name the platform allows", () => {
@@ -1362,14 +1693,16 @@ test("the refusal shows the name of a file it names on one line, as a clone can 
   } satisfies TrustStatus
   const commands = [{ id: "tests", command: "npm test" }]
   const approvals = [{ id: "api", permissions: "auto" }]
+  const agents = [{ id: "api", agent: "autopilot" }]
   const shown = `${path.join("flows", "a")}\\x1b[8m.yaml`
 
   for (const text of [
     refusal(status, hidden),
-    refusal(status, undefined, { file: hidden, commands, approvals: [] }),
-    refusal(status, undefined, { file: hidden, commands: [], approvals }),
+    refusal(status, undefined, { file: hidden, commands, approvals: [], agents: [] }),
+    refusal(status, undefined, { file: hidden, commands: [], approvals, agents: [] }),
+    refusal(status, undefined, { file: hidden, commands: [], approvals: [], agents }),
     unanswered(repo, hidden),
-    unanswered(repo, undefined, { file: hidden, commands, approvals }),
+    unanswered(repo, undefined, { file: hidden, commands, approvals, agents }),
   ]) {
     // No line has a control or format character in it, apart from the end of the line that the text itself is made of.
     for (const line of text.split(EOL)) expect(line).not.toMatch(/\p{C}/u)

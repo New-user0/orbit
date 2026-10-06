@@ -69,21 +69,24 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
 /**
  * What a workflow or suite file asks of its folder's trust before the command loads it, as `requireTrust` takes it. A
  * module is imported, which runs the code in it, so it needs a trusted folder whatever the folder holds back. A YAML or
- * JSON file is only read, which runs nothing, but a run of it executes the shell commands that its check nodes, verify
- * nodes and suite tasks define, which no permission rule is asked about, and approves what the agents of its nodes ask
- * permission for where they set `permissions` to `auto`, which settles the user's own rules in the file's favour. A file
- * that defines either needs a trusted folder as well. One that defines none keeps the check that `orb run` has.
+ * JSON file is only read, which runs nothing, but a run of it carries out three things on the file's own account. It
+ * executes the shell commands that its check nodes, verify nodes and suite tasks define, which no permission rule is
+ * asked about. It approves what the agents of its nodes ask permission for where they set `permissions` to `auto`. And it
+ * runs nodes as the agents it names, in the `agent` of a node, of a team member or of a `judge`, whose own rules are added
+ * after the user's global rules and win. The last two settle the user's own rules in the file's favour. A file that
+ * defines any of the three needs a trusted folder as well. One that defines none keeps the check that `orb run` has.
  */
 export const trustOptions = Effect.fn("cli.flow.trustOptions")(function* (file: string, kind: "workflow" | "suite") {
-  const { importsModule, suiteCommands, workflowApprovals, workflowCommands } = yield* Effect.promise(
-    () => import("@orbit/flow"),
-  )
+  const { importsModule, suiteAgents, suiteCommands, workflowAgents, workflowApprovals, workflowCommands } =
+    yield* Effect.promise(() => import("@orbit/flow"))
   const defines = yield* Effect.tryPromise({
     try: async () => ({
       file,
       commands: await (kind === "workflow" ? workflowCommands(file) : suiteCommands(file)),
       // A suite has no `permissions` to set: each of its tasks runs as a verify node that passes none on.
       approvals: kind === "workflow" ? await workflowApprovals(file) : [],
+      // A suite names an agent only as the `judge` of a task.
+      agents: await (kind === "workflow" ? workflowAgents(file) : suiteAgents(file)),
     }),
     catch: (cause) => cause,
   })

@@ -85,7 +85,7 @@ orb eval <suite> --models a,b
 
 `orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and
 whose own config holds something back, such as hooks or plugins. They also stop, even where the folder holds no config
-at all, when the workflow or suite brings code, commands or approvals that a run would carry out:
+at all, when the workflow or suite brings code, commands, approvals or agents that a run would carry out:
 
 - **A TypeScript or JavaScript workflow or suite**, because loading one runs the code in it. `orb flow replay` stops
   for a workflow module as well.
@@ -101,6 +101,13 @@ at all, when the workflow or suite brings code, commands or approvals that a run
   counts as well, because it is filled in when the node starts and an agent's reply can say `auto`. `--auto` is your
   own flag, so it is not held up, and neither is `orb flow replay`, which calls no model. A suite cannot set
   `permissions`.
+- **A YAML workflow, or a YAML or JSON suite, that names an agent:** the `agent` of an agent or verify node, of a
+  verify node's `judge` or of a member of a team, or the `agent` of a suite task's `judge`. It runs that node as one of
+  your agents, and an agent's own rules are added after your global rules, so the file could pick an agent whose rules
+  allow what yours ask about; see [Permissions](#permissions). The refusal lists each one with the agent as written, a
+  `judge` as `node/judge` and a team member as `team/member`. A value that is a template, such as `{{plan.text}}`,
+  counts as well, because it is filled in when the node starts. A file that names none runs as before, and `orb flow replay`
+  is not stopped, because a replay answers every node from the recording and opens no session.
 
 Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
 [upgrading](upgrading.md).
@@ -109,9 +116,9 @@ A server older than workspace trust, such as a background service that was start
 cannot say whether the folder is trusted. Where the check is only for held-back config, as it is for `orb run` and
 `orb loop`, the command goes ahead with a warning on stderr, because such a server applies a folder's config without
 asking. `orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` stop instead when they would import a
-module, run shell commands or approve actions, because this process would do that itself, and they say so. Restart the
-server (`orb service restart` for the background service), or pass `--standalone`, or `--trust`, which also trusts the
-folder for the run. Both start a current private server.
+module, run shell commands, approve actions or run a node as an agent that a file names, because this process would do
+that itself, and they say so. Restart the server (`orb service restart` for the background service), or pass
+`--standalone`, or `--trust`, which also trusts the folder for the run. Both start a current private server.
 
 ## Writing `orb flow` workflows
 
@@ -184,8 +191,9 @@ output: merge
 - `permissions: auto` on an agent node, a verify node or a member of a team approves what that node's agents ask
   permission for. A workflow that sets it is not run in a folder that is not trusted either, and the refusal lists the
   nodes.
-- `agent` on an agent node, a verify node or a member of a team runs it as one of your agents, with that agent's rules.
-  A folder that is not trusted is not stopped for it; see [Permissions](#permissions).
+- `agent` on an agent node, a verify node, the `judge` of a verify node or a member of a team runs it as one of your
+  agents, with that agent's rules. A workflow that names one is not run in a folder that is not trusted either, and the
+  refusal lists the nodes; see [Permissions](#permissions).
 
 Eval suites can be YAML or JSON as well.
 
@@ -241,9 +249,19 @@ and of a `judge`, in a workflow or in a suite task, names one of your agents. An
 global rules, and the last rule that matches wins. So if you gave an agent rules that allow what your global rules ask
 about, a workflow or suite that names it gets those actions done without asking, and the run's rejection of what is
 asked never comes into play. With Orbit's default rules every agent allows the same, so nothing changes unless you gave
-one agent wider rules than the rest. A folder that is not trusted is not stopped for a file that names an agent, as it
-is for `permissions: "auto"`. If some of your agents have wider rules than the rest, look at the `agent` and `judge`
-entries of a workflow or suite that you did not write before you run it.
+one agent wider rules than the rest.
+
+That is a choice that the file makes for you, as `permissions: "auto"` is, so a folder that is not trusted is stopped
+from running a YAML workflow or a YAML or JSON suite that names an agent, until the folder is trusted or `--trust` is
+passed. The refusal lists each node with the agent it names as written, a `judge` as `node/judge` and a team member as
+`team/member`. An `agent` that is a template, such as `{{plan.text}}`, is listed as well, because it is filled in when
+the node starts and an agent's reply can name one. A TypeScript or JavaScript workflow is stopped whatever it names,
+because loading it runs its code. `orb flow replay` is not stopped, because it opens no session. A suite task's own
+`agent` chooses nothing, because an eval runs each task as a verify node and passes on only the task's `judge`. See the
+note under the `orb flow` commands above.
+
+In a folder that you trust, the file still chooses. If some of your agents have wider rules than the rest, look at the
+`agent` and `judge` entries of a workflow or suite that you did not write before you trust the folder that holds it.
 
 ## Resume
 
@@ -370,8 +388,8 @@ orb eval .orbit/evals/api.ts --models ollama/a,ollama/b --format json
 - Each task is a verify node in its own worktree from the current commit. Models never see each other's work, and
   the checkout is not changed.
 - `maxIterations` defaults to 1, which scores first-try success. Tasks can set `judge` like a verify node. A `judge`'s
-  `agent` runs as one of your agents with its rules, which a folder that is not trusted is not stopped for; see
-  [Permissions](#permissions).
+  `agent` runs as one of your agents with its rules, so in a folder that is not trusted `orb eval` stops for a JSON or
+  YAML suite whose tasks name one, and lists them as `task/judge`; see [Permissions](#permissions).
 - The `checks` are shell commands, so in a folder that is not trusted `orb eval` stops for a JSON or YAML suite whose
   tasks have any, and lists them. It stops for a TypeScript or JavaScript suite whatever it holds, because importing it
   runs its code. Run `orb trust` once, or pass `--trust` for one run. Nearly every suite has `checks`, so in practice a

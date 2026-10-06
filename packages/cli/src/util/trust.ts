@@ -10,13 +10,15 @@ type Withheld = TrustStatus["withheld"][number]
 
 /**
  * What a workflow or suite file defines that a run carries out on its own account, as `@orbit/flow` lists it, each with
- * the node or task that carries it: the shell commands, and the nodes whose agents have every action they ask permission
- * for approved, with the `permissions` they set as written. Either can be none.
+ * the node or task that carries it: the shell commands, the nodes whose agents have every action they ask permission
+ * for approved, with the `permissions` they set as written, and the nodes that run as one of the user's agents because
+ * the file names it, with the `agent` as written. Any of them can be none.
  */
 type Defined = {
   readonly file: string
   readonly commands: ReadonlyArray<{ readonly id: string; readonly command: string }>
   readonly approvals: ReadonlyArray<{ readonly id: string; readonly permissions: string }>
+  readonly agents: ReadonlyArray<{ readonly id: string; readonly agent: string }>
 }
 
 type Options = {
@@ -37,8 +39,9 @@ type Options = {
  * whether or not it is trusted. A command that imports a file from its folder, named by `imports`, is stopped by an
  * untrusted folder whatever it holds back, because importing the file runs its code and there is nothing to leave out
  * of that run. So is one that is about to run what a workflow or suite file defines, named by `defines`: shell commands,
- * which no permission rule is asked about, and nodes that approve what their agents ask permission for, which settles
- * the user's own rules in the file's favour. With `grant` (the `--trust` flag) an untrusted folder is first trusted for
+ * which no permission rule is asked about, nodes that approve what their agents ask permission for, and nodes that run
+ * as an agent the file names, whose own rules are added after the user's global ones and win. The last two settle the
+ * user's own rules in the file's favour. With `grant` (the `--trust` flag) an untrusted folder is first trusted for
  * as long as the serving process lives, which callers make a private one that ends with the run. The folder is the one
  * the run happens in: `directory` unless `session` names a session that exists, which runs in its own folder wherever
  * the command was started. A server older than workspace trust has no such route and holds nothing back, so a command
@@ -57,7 +60,8 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
   const location = { directory: existing?.location.directory ?? directory }
   // A file that defines nothing a run carries out holds nothing up, as a folder that holds nothing back does not.
   const defined =
-    options.defines && (options.defines.commands.length > 0 || options.defines.approvals.length > 0)
+    options.defines &&
+    (options.defines.commands.length > 0 || options.defines.approvals.length > 0 || options.defines.agents.length > 0)
       ? options.defines
       : undefined
   const current = yield* call((signal) => client.location.trust.get({ location }, { signal })).pipe(
@@ -109,8 +113,8 @@ export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: Orbi
 /**
  * What a refusal says: the folder is not trusted, and what that holds up. That is the project config it finds, which
  * holds something back, and, when the command loads a file from the folder, what running that file does: the code
- * it imports (`imports`), or what it defines (`defines`), which is listed: shell commands, and nodes that approve what
- * their agents ask permission for.
+ * it imports (`imports`), or what it defines (`defines`), which is listed: shell commands, nodes that approve what
+ * their agents ask permission for, and nodes that run as an agent the file names.
  */
 export function refusal(status: TrustStatus, imports?: string, defines?: Defined) {
   const own = status.withheld.filter((item) => item.directory === undefined)
@@ -236,8 +240,8 @@ function fromFolder(directory: string, file: string) {
 }
 
 // What the folder's missing trust holds up, first of all: the code the command imports, what the file it reads defines
-// (shell commands, and nodes that approve what their agents ask permission for), or else the config it finds. `heading`
-// is what comes before: why the folder is not enough as it stands.
+// (shell commands, nodes that approve what their agents ask permission for, and nodes that run as an agent the file
+// names), or else the config it finds. `heading` is what comes before: why the folder is not enough as it stands.
 function lead(heading: string, directory: string, imports: string | undefined, defines: Defined | undefined) {
   if (imports !== undefined)
     return [
@@ -262,6 +266,14 @@ function lead(heading: string, directory: string, imports: string | undefined, d
           {
             says: `approves actions without asking you: ${file} sets \`permissions\` on the nodes below to \`auto\`, or to a template that can fill in as \`auto\`, which makes a run say yes, once, to every action their agents ask permission for, where it rejects them otherwise:`,
             rows: defines.approvals.map((item) => [item.id, `permissions: ${item.permissions}`] as const),
+          },
+        ]),
+    ...(defines.agents.length === 0
+      ? []
+      : [
+          {
+            says: `lets the file choose which of your agents run its nodes: ${file} names an \`agent\` for each entry below, and an agent's own rules are added after your global rules, where the last match wins, so the file can pick an agent whose rules allow actions that yours ask about, which a run then does without asking:`,
+            rows: defines.agents.map((item) => [item.id, `agent: ${item.agent}`] as const),
           },
         ]),
   ]
@@ -305,8 +317,8 @@ const grant = Effect.fnUntraced(function* (client: OrbitClient, location: { read
 /**
  * Whether the folder is held to a trust it lacks: untrusted, and either something is held back that a grant would let
  * through, or the command loads a file from it that runs code (a module it imports) or carries out what the file defines
- * (shell commands, and approvals of what agents ask permission for), which a folder that holds nothing back does not
- * excuse.
+ * (shell commands, approvals of what agents ask permission for, and the choice of which agents run), which a folder that
+ * holds nothing back does not excuse.
  */
 const blocked = (status: TrustStatus, imports: string | undefined, defines: Defined | undefined) =>
   !status.trusted && (imports !== undefined || defines !== undefined || status.withheld.length > 0)

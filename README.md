@@ -44,8 +44,9 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   Those commands exit with status 1, doing nothing, in a folder that is not trusted and holds something back. The
   terminal UI asks about such a folder, and `/trust` asks again. `orb flow run`, `orb flow resume` and `orb eval` also
   stop in a folder that is not trusted, whatever it holds back, for a workflow or suite that is a TypeScript or
-  JavaScript module, that defines shell commands, or, for a workflow, that sets `permissions: auto`, and they stop when
-  the server is too old to say whether the folder is trusted. See [docs/upgrading.md](docs/upgrading.md).
+  JavaScript module, that defines shell commands, that names an agent, or, for a workflow, that sets
+  `permissions: auto`, and they stop when the server is too old to say whether the folder is trusted. See
+  [docs/upgrading.md](docs/upgrading.md).
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and
   OS roots. `ORBIT_CLIENT_CERT`, `ORBIT_CLIENT_KEY` and `ORBIT_CLIENT_KEY_PASSPHRASE` add a client certificate.
