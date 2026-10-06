@@ -3,6 +3,7 @@ import { Service } from "@orbit/client/effect/service"
 import { Effect, Option, Schema } from "effect"
 import path from "node:path"
 import { ServerConnection } from "../../../services/server-connection"
+import { plain, progress } from "../../../util/plain"
 import { requireTrust } from "../../../util/trust"
 
 // Shared by `orb flow run` and `orb flow resume`: connect, load the workflow file, and drive the run.
@@ -45,18 +46,19 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
         Option.isSome(input.maxCost) || Option.isSome(input.maxTokens)
           ? { maxCost: Option.getOrUndefined(input.maxCost), maxTokens: Option.getOrUndefined(input.maxTokens) }
           : undefined,
-      log: (line) => process.stderr.write(`${line}\n`),
+      log: (line) => process.stderr.write(`${progress(line)}\n`),
     }),
   )
   if (result.status === "failed") process.exitCode = 1
-  // 2 means the run needs a person: it paused at a gate rather than failing.
+  // 2 means the run needs a person: it paused at a gate rather than failing. The person decides on what the workflow
+  // says at the gate, so the text goes through `plain`, and cannot hide itself with a carriage return or an escape.
   if (result.status === "waiting") {
     process.exitCode = 2
     process.stderr.write(
       [
         "",
         `${result.id} is waiting for a decision:`,
-        ...(result.waiting ?? []).map((item) => `  ${item.gate}: ${item.message}`),
+        ...(result.waiting ?? []).map((item) => `  ${plain(item.gate)}: ${plain(item.message)}`),
         "",
         `Approve with \`orb flow approve ${result.id} <gate>\` (or add --reject), then run \`orb flow resume ${result.id}\`.`,
         "",

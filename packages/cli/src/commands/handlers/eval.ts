@@ -6,7 +6,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { plain } from "../../util/plain"
+import { plain, progress } from "../../util/plain"
 import { requireTrust } from "../../util/trust"
 import { directory, trustOptions } from "./flow/execute"
 
@@ -53,35 +53,37 @@ export default Runtime.handler(
           concurrency: Option.getOrUndefined(input.concurrency),
           permissions: input.auto ? "auto" : "reject",
           resume,
-          log: (line) => process.stderr.write(`${line}${EOL}`),
+          log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
         }),
       catch: (cause) => cause,
     })
     if (!result.scores) {
       process.exitCode = 1
-      return yield* Effect.fail(new Error(`Eval ${result.id} did not finish: ${result.error ?? result.status}`))
+      return yield* Effect.fail(new Error(`Eval ${result.id} did not finish: ${plain(result.error ?? result.status)}`))
     }
     const summary = summarize(result.scores)
     if (input.format === "json")
       return process.stdout.write(JSON.stringify({ run: result.id, summary, scores: result.scores }, null, 2) + EOL)
     const tasks = [...new Set(result.scores.map((score) => score.task))]
-    // A resumed eval takes its models from the run store, a file in the repository that a clone brings along.
+    // The task IDs are text from the suite. A resumed eval takes its models, and what the tasks that it reuses spent,
+    // from the run store. Both are files in the repository that a clone brings along, and the amounts are read with
+    // `Number`, which leaves no text in them.
     const table = [
       ["model", "passed", "rate", "input", "output", "cost", "time"],
       ...summary.map((row) => [
         plain(row.model),
         `${row.passed}/${row.total}`,
         `${Math.round((row.passed / row.total) * 100)}%`,
-        String(row.input),
-        String(row.output),
-        `$${row.cost.toFixed(4)}`,
+        String(Number(row.input)),
+        String(Number(row.output)),
+        `$${Number(row.cost).toFixed(4)}`,
         `${row.seconds}s`,
       ]),
     ]
     const tasksTable = [
       ["task", ...summary.map((row) => plain(row.model))],
       ...tasks.map((task) => [
-        task,
+        plain(task),
         ...summary.map((row) => {
           const score = result.scores?.find((item) => item.model === row.model && item.task === task)
           return score?.passed ? `✓${score.iterations > 1 ? ` (${score.iterations} tries)` : ""}` : "✗"

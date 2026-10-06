@@ -475,3 +475,9 @@ says. It lists and acts on a run only when its ID has the shape that Orbit makes
 and 6 hexadecimal digits), so a row that names a path such as `../..` is not a run and `orb flow clean` never removes
 anything outside `.orbit/worktrees`. `orb flow ls`, `show`, `watch`, `cost` and `trace` write control characters in the
 names and messages it holds out as `\x1b`, so an escape sequence in a workflow's name cannot act on your terminal.
+
+A workflow or a suite is a file in the repository as well, and a clone brings its own. `orb flow run`, `resume` and
+`replay` and `orb eval` write the control characters in what such a file says out in the same way: in the progress they
+print on standard error as the run goes (which is also where a line that a workflow passes to `ctx.log` appears), in the
+gates a run waits at, in the failure of an eval or a replay, and in the task table of an eval. `--format json` and the
+JSON that `orb flow run` prints are not changed, because JSON escapes control characters itself.

@@ -6,6 +6,7 @@ import path from "node:path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
+import { plain, progress } from "../../../util/plain"
 import { requireTrust } from "../../../util/trust"
 import { directory, load } from "./execute"
 
@@ -44,17 +45,19 @@ export default Runtime.handler(
         file,
         directory: directory(),
         replay: recorded.id,
-        log: (line) => process.stderr.write(`${line}${EOL}`),
+        log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
       }),
     )
     if (result.output !== undefined) process.stdout.write(`${JSON.stringify(result.output, null, 2)}${EOL}`)
+    // What a failure and the changed nodes name is text from the workflow file, which a replay takes from the run store
+    // unless it is given one.
     if (result.status !== "succeeded") {
       process.exitCode = 1
-      return yield* Effect.fail(new Error(`Replay ${result.id} ${result.status}: ${result.error ?? ""}`))
+      return yield* Effect.fail(new Error(`Replay ${result.id} ${result.status}: ${plain(result.error ?? "")}`))
     }
     const changed = result.replay?.divergences ?? []
     if (changed.length > 0)
-      process.stderr.write(`Nodes whose inputs changed since the recording: ${changed.join(", ")}${EOL}`)
+      process.stderr.write(`Nodes whose inputs changed since the recording: ${plain(changed.join(", "))}${EOL}`)
     if (!result.replay?.identical) process.exitCode = 1
   }),
 )

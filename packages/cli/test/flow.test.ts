@@ -720,3 +720,136 @@ test("orb flow prints what a run store says without the characters that act on a
   expect(listed.stdout).not.toContain("\u001b")
   expect(JSON.parse(listed.stdout)[0].workflow).toBe(workflow)
 }, 120_000)
+
+// The text of a file is not the person's own: what a suite or a workflow says is printed as the run goes, and a clone
+// brings its own files. No line may hold a character that moves the cursor, sets the title of the window, erases text
+// or reorders it. The ends of the lines are the command's own. What `orb flow run` and `replay` print on standard
+// output is the JSON of the result, for programs, and JSON escapes the control characters itself.
+function expectNoControl(...streams: string[]) {
+  for (const text of streams) for (const line of text.split(/\r?\n/)) expect(line).not.toMatch(/\p{C}/u)
+}
+
+// A suite is a file in the repository, and one with no `checks` and no `judge` agent runs without the trust check. Its
+// task IDs are printed in the table of an eval, in the progress above it and in the message of a run that fails.
+test("orb eval prints the task IDs of a suite without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-eval")
+  const evil = "\u001b]0;pwned\u0007task\u001b[2K\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07task\\x1b[2K\\u{202e}end"
+  const suite = (file: string, ids: string[]) =>
+    Bun.write(
+      path.join(repository, file),
+      JSON.stringify({
+        name: "hostile",
+        models: ["ollama/tiny:1b"],
+        tasks: ids.map((id) => ({ id, prompt: "write t.txt" })),
+      }),
+    )
+  await suite("once.json", [evil])
+  // The same ID twice fails the run, and the failure names the node.
+  await suite("twice.json", [evil, evil])
+
+  const passed = await orb(repository, ["eval", "--standalone", "once.json"])
+
+  expect({ code: passed.code, stderr: passed.code === 0 ? "" : passed.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(passed.stdout, passed.stderr)
+  // What the suite said is still there, written out.
+  expect(passed.stdout).toContain(`${shown}  ✓`)
+  expect(passed.stderr).toContain(`> ollama/tiny:1b.${shown}`)
+
+  // A resumed eval reuses what the run store recorded for a task, and a clone brings its own run store, which can say
+  // that the task spent text.
+  const id = await runID(repository)
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  const node = `ollama/tiny:1b.${evil}#1`
+  const recorded = store.nodes(id).get(node)
+  store.append(id, node, "node.succeeded", {
+    key: recorded?.key,
+    result: { ...recorded?.result, usage: { cost: evil, input: evil, output: evil } },
+  })
+  store.close()
+
+  const resumed = await orb(repository, ["eval", "--standalone", "once.json", "--resume", id])
+
+  expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(resumed.stdout, resumed.stderr)
+  expect(resumed.stderr).toContain(`= ollama/tiny:1b.${shown}#1 (recorded)`)
+
+  const failed = await orb(repository, ["eval", "--standalone", "twice.json"])
+
+  expect(failed.code).toBe(1)
+  expectNoControl(failed.stdout, failed.stderr)
+  expect(failed.stderr).toContain(`did not finish: Node id ollama/tiny:1b.${shown} is used twice`)
+}, 240_000)
+
+// A YAML workflow is data, so one that defines no command, approval or agent runs without the trust check as well. Its
+// node IDs are printed as the run goes, and the person who decides at a gate reads the text that the workflow gives it.
+test("orb flow run prints YAML workflow nodes and gates without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-gate")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}end"
+  const file = path.join(repository, "gated.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: hostile-gate",
+      "nodes:",
+      `  - id: ${JSON.stringify(`work${evil}`)}`,
+      "    prompt: write a.txt",
+      `  - id: ${JSON.stringify(`ship${evil}`)}`,
+      "    type: gate",
+      `    needs: [${JSON.stringify(`work${evil}`)}]`,
+      `    message: ${JSON.stringify(`Merge${evil}?`)}`,
+      "",
+    ].join("\n"),
+  )
+
+  const paused = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+
+  expect(paused.code).toBe(2)
+  expectNoControl(paused.stderr)
+  expect(paused.stderr).toContain(`> work${shown}`)
+  expect(paused.stderr).toContain(`  ship${shown}: Merge${shown}?`)
+}, 180_000)
+
+test("orb flow replay prints the nodes of a YAML workflow without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-replay")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}end"
+  const workflow = (prompt: string, ...more: string[]) =>
+    [
+      "name: hostile-replay",
+      "nodes:",
+      `  - id: ${JSON.stringify(`a${evil}`)}`,
+      `    prompt: ${prompt}`,
+      ...more,
+      "",
+    ].join("\n")
+  const file = path.join(repository, "recorded.yaml")
+  await Bun.write(file, workflow("write a.txt"))
+
+  const recorded = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+
+  expect({ code: recorded.code, stderr: recorded.code === 0 ? "" : recorded.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(recorded.stderr)
+  expect(recorded.stderr).toContain(`> a${shown}`)
+  const id = await runID(repository)
+
+  // A node whose inputs changed since the recording is named, as the replay of an edited workflow goes on.
+  const edited = path.join(repository, "edited.yaml")
+  await Bun.write(edited, workflow("write a.txt carefully"))
+  const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
+
+  expectNoControl(changed.stderr)
+  expect(changed.stderr).toContain(`~ a${shown}: its inputs differ from the recording`)
+  expect(changed.stderr).toContain(`Nodes whose inputs changed since the recording: a${shown}`)
+
+  // A node that the recording lacks stops the replay, and the failure names it.
+  const longer = path.join(repository, "longer.yaml")
+  await Bun.write(longer, workflow("write a.txt", `  - id: ${JSON.stringify(`b${evil}`)}`, "    prompt: write b.txt"))
+  const diverged = await orb(repository, ["flow", "replay", id, "--file", longer])
+
+  expect(diverged.code).toBe(1)
+  expectNoControl(diverged.stderr)
+  expect(diverged.stderr).toContain(`Replay diverged: b${shown} is not in the recording of ${id}`)
+}, 240_000)

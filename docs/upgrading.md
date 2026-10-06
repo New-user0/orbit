@@ -464,10 +464,17 @@ escaping as the trust refusal: control characters and format characters, such as
 out as `\x1b` or `\u{202e}`, and a line break as `\n`. `--format json` is not changed, because JSON escapes control
 characters itself.
 
+A workflow or a suite is a file in the repository too, and `orb flow run`, `resume`, `replay` and `orb eval` printed
+what it says as it was: the node and task IDs in the progress on standard error, the gate that a run waits at, the
+failure of an eval or a replay and the task table of an eval. A JSON or YAML file that defines no command, approval or
+agent needs no trust, so a suite whose task ID held an escape sequence could set the title of the terminal or erase
+lines of a person who ran it in a folder that is not trusted. These commands now write it out in the same way.
+
 **Affects:** a repository whose `.orbit/runs.db` holds a run with another ID: it no longer shows up in `orb flow ls`, the
 terminal UI or the VS Code Runs view, and `orb flow show`, `resume` and `clean` report that there is no such run. Orbit's
 own runs have always had an ID of this shape, so nothing that Orbit made is affected. Scripts that parse the text output
-of `orb flow` see a control character in a name as an escape.
+of `orb flow` and `orb eval`, or the progress they print on standard error, see a control character in a name as an
+escape. So does a line that a workflow passes to `ctx.log` with one in it, such as a colour.
 
 **What to do:** nothing.
 
