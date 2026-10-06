@@ -1,7 +1,7 @@
 export * as ConfigSkillPlugin from "./skill.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
-import type { Entry } from "@orbit/schema/config"
+import type { Directory, Entry } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import path from "path"
@@ -9,6 +9,7 @@ import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
 import { Location } from "../../location.js"
+import { ProjectTrust } from "../../project-trust.js"
 import { AbsolutePath } from "../../schema.js"
 import { Skill } from "../../skill.js"
 import { SkillDiscovery } from "../../skill/discovery.js"
@@ -24,6 +25,7 @@ export const Plugin = define({
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
+    const trust = yield* ProjectTrust.Service
     const watcher = yield* Watcher.Service
     const loaded: { entries: Entry[]; skills: Skill.Info[] } = {
       entries: yield* config.entries(),
@@ -103,7 +105,7 @@ export const Plugin = define({
     }
 
     const load = Effect.fn("ConfigSkillPlugin.load")(function* (source: Source) {
-      const directories =
+      const found =
         source.type === "directory"
           ? [source.path]
           : yield* discovery.pull(source.url).pipe(
@@ -114,6 +116,16 @@ export const Plugin = define({
                 }).pipe(Effect.as([] as AbsolutePath[])),
               ),
             )
+      // The config directory that holds each one, if any. While its folder is not trusted, a folder that a link leads out
+      // of it is neither watched nor scanned, and a skill that a link leads out of it is not read: they are not the
+      // repository's to supply.
+      const supplied = (directory: AbsolutePath, file: string) => {
+        const holder = loaded.entries.find(
+          (entry): entry is Directory => entry.type === "directory" && FSUtil.contains(entry.path, directory),
+        )
+        return holder === undefined ? Effect.succeed(true) : trust.supplies(holder, file)
+      }
+      const directories = yield* Effect.filter(found, (directory) => supplied(directory, directory))
       const roots = (yield* Effect.forEach(directories, watchDirectory)).flat()
       const skills: Skill.Info[] = []
       for (const directory of directories) {
@@ -121,6 +133,7 @@ export const Plugin = define({
           .scan("{*.md,**/SKILL.md}", { cwd: directory, absolute: true, include: "file", symlink: true, dot: true })
           .pipe(Effect.orElseSucceed(() => [] as string[]))
         for (const filepath of files.toSorted()) {
+          if (!(yield* supplied(directory, filepath))) continue
           const resolved = yield* fs.realPath(filepath).pipe(Effect.orElseSucceed(() => filepath))
           if (!roots.some((root) => FSUtil.contains(root, resolved))) yield* watch(path.dirname(resolved), "directory")
           const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))

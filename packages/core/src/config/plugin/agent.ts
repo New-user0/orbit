@@ -10,6 +10,7 @@ import { ConfigTrust } from "../trust.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Permission } from "../../permission.js"
+import { ProjectTrust } from "../../project-trust.js"
 import type { FileAccess } from "../../file-access.js"
 import type { ReadTool } from "../../tool/plugin/read.js"
 import type { EditTool } from "../../tool/plugin/edit.js"
@@ -26,10 +27,12 @@ export const Plugin = define({
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
+    const trust = yield* ProjectTrust.Service
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [entry]
       if (entry.type !== "directory") return []
-      const documents = yield* AgentFile.load(fs, entry.path)
+      // Until the folder is trusted, a file that a link leads out of it is not the repository's to define an agent with.
+      const documents = yield* AgentFile.load(fs, entry.path, (file) => trust.supplies(entry, file))
       return documents.map((document) => inherit(entry, document))
     })
     const load = Effect.fn("ConfigAgentPlugin.load")(function* () {

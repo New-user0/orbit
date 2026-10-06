@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { SystemPart } from "@orbit/ai"
+import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Info } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { Config } from "@orbit/core/config"
@@ -9,14 +10,16 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { OutputStylePlugin } from "@orbit/core/plugin/output-style"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Model } from "@orbit/schema/model"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Logger, Schema } from "effect"
 import { scriptedMarkdown } from "../fixture/front-matter"
+import { untrustedProject } from "../fixture/project-trust"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -130,6 +133,97 @@ describe("OutputStylePlugin", () => {
       expect(text).not.toContain("# Verification")
     }),
   )
+
+  // The setting comes from any config, a repository's included, so a name that climbs out of the directory would read
+  // a file that nothing vouches for, starting from the user's own directory as well.
+  it.live("takes a style name only as one file name, so that it cannot climb out of an output-styles directory", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const directory = (yield* tmpdirScoped()).path
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(directory, "output-styles", "nested"), { recursive: true })
+        await Bun.write(path.join(directory, "output-styles", "terse.md"), "---\nname: Terse\n---\nOne sentence.\n")
+        await Bun.write(path.join(directory, "output-styles", "nested", "deep.md"), "---\nname: Deep\n---\nNested.\n")
+        // Where a name that climbs one folder up would find it.
+        await Bun.write(path.join(directory, "secret.md"), "---\nname: Secret\n---\nTOP SECRET\n")
+      })
+      yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const promptFor = (name: string) =>
+        Effect.gen(function* () {
+          yield* config.setEntries([
+            new Directory({ type: "directory", path: AbsolutePath.make(directory) }),
+            styled(name),
+          ])
+          const event = context()
+          yield* hooks.trigger("session", "context", event)
+          return event.system[0]?.text
+        })
+
+      expect(yield* promptFor("terse")).toEndWith("# Output style: Terse\nOne sentence.")
+      for (const name of ["../secret", "..\\secret", "nested/deep", "nested\\deep", "terse/../terse", "..", "a..b"])
+        expect([name, yield* promptFor(name)]).toEqual([name, base])
+    }),
+  )
+
+  // The repository ships its links, and a clone recreates them. A style's body goes into the system prompt of every
+  // request, so a file that a link in an untrusted folder leads to must not become one. A junction stands for the link,
+  // since it needs no privilege on Windows.
+  for (const place of [
+    { name: "an Orbit config directory", directory: ".orbit", kind: undefined },
+    { name: "a root of another product", directory: CompatNames.vendor.directory, kind: "vendor" },
+  ] as const)
+    it.live(`leaves out a style that a link leads out of ${place.name} that is not trusted, until it is`, () => {
+      const skipped: Array<{ path: unknown; reason: unknown }> = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        if (!Array.isArray(entry.message) || entry.message[0] !== "config file skipped") return
+        skipped.push(entry.message[1])
+      })
+      return Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const project = path.join(tmp, "project")
+        const folder = path.join(project, place.directory)
+        const outside = path.join(tmp, "outside")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(folder, { recursive: true })
+          await Bun.write(path.join(outside, "x.md"), "---\nname: Stolen\n---\nSTOLEN BODY\n")
+          await fs.symlink(outside, path.join(folder, "output-styles"), "junction")
+        })
+        const config =
+          place.kind === undefined
+            ? Config.testLayer([
+                new Directory({ type: "directory", path: AbsolutePath.make(folder), scope: "project", trusted: false }),
+                styled("x"),
+              ])
+            : Config.testLayer([styled("x")], {
+                enabled: true,
+                roots: [{ path: AbsolutePath.make(folder), kind: place.kind, scope: "project", trusted: false }],
+              })
+        yield* Effect.gen(function* () {
+          const hooks = yield* PluginHooks.Service
+          const trust = yield* ProjectTrust.Service
+          yield* OutputStylePlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service)).pipe(
+            Effect.provide(config),
+          )
+          const prompt = Effect.gen(function* () {
+            const event = context()
+            yield* hooks.trigger("session", "context", event)
+            return event.system[0]?.text
+          })
+
+          expect(yield* prompt).toBe(base)
+          expect(yield* prompt).toBe(base)
+          // The file is reported once, however often a request asks for it.
+          expect(skipped).toMatchObject([{ path: path.join(folder, "output-styles", "x.md") }])
+
+          // The decision is read at each request, so a grant and a revoke take effect without a restart.
+          yield* trust.grant({ persist: false, via: "test" })
+          expect(yield* prompt).toEndWith("# Output style: Stolen\nSTOLEN BODY")
+          yield* trust.revoke()
+          expect(yield* prompt).toBe(base)
+        }).pipe(Effect.provide(untrustedProject({ directory: project })))
+      }).pipe(Effect.provide(Logger.layer([logger])))
+    })
 
   it.live("leaves a style unresolved when its front matter is JavaScript, and runs nothing", () =>
     Effect.gen(function* () {

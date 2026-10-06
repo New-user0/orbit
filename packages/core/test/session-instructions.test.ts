@@ -61,7 +61,8 @@ const readToolNode = makeLocationNode({
   ],
 })
 
-const permission = permissionLayer({ assert: () => Effect.void })
+const asserted: Permission.AssertInput[] = []
+const permission = permissionLayer({ assert: (input) => Effect.sync(() => void asserted.push(input)) })
 
 // Every folder is trusted, as the core tests run, unless `trusted` is false.
 const sessionLayer = (config: ReturnType<typeof Config.testLayer>, trusted = true) => {
@@ -433,18 +434,36 @@ describe("SessionInstructions in a project that is not trusted", () => {
       const session = yield* Session.Service
       const registry = yield* Tool.Service
       const trust = yield* ProjectTrust.Service
+      const instructions = yield* SessionInstructions.Service
       const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
 
-      // The walk for instruction files starts where the read really is, outside the project.
+      // A read through the link is outside the project, so it asks about the folder first, and the walk for instruction
+      // files does not start from it: external reads are skipped.
+      asserted.length = 0
       yield* executeTool(registry, readCall(sessionID, "call-linked", "linked/file.txt"))
       yield* executeTool(registry, readCall(sessionID, "call-again", "linked/file.txt"))
+      expect(asserted.map((input) => input.action)).toEqual([
+        "external_directory",
+        "read",
+        "external_directory",
+        "read",
+      ])
+      expect(asserted[0]).toMatchObject({ resources: [path.join(outside, "*").replaceAll("\\", "/")] })
       expect(yield* synthetics(sessionID)).toHaveLength(0)
-      // The file is reported once, however often the model's reads find it.
+      expect(skipped).toEqual([])
+
+      // What that walk would hand over, were the read inside the project, is left out. The file is reported once, however
+      // often the model's reads find it.
+      yield* instructions.load({ sessionID, paths: [outsideFile] })
+      yield* instructions.load({ sessionID, paths: [outsideFile] })
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
       expect(skipped).toMatchObject([{ path: outsideFile, reason: expect.stringContaining("not trusted") }])
 
       // Nothing was recorded for it, so the next read after the grant injects it.
       yield* trust.grant({ persist: false, via: "test" })
+      asserted.length = 0
       yield* executeTool(registry, readCall(sessionID, "call-trusted", "linked/file.txt"))
+      expect(asserted.map((input) => input.action)).toEqual(["read"])
       const injected = yield* synthetics(sessionID)
       expect(injected).toHaveLength(1)
       expect(injected[0]!.text).toBe(`Instructions from: ${outsideFile}\noutside-instructions`)

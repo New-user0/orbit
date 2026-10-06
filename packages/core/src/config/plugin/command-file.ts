@@ -10,15 +10,21 @@ const decodeCommand = Schema.decodeUnknownOption(ConfigCommand.Info)
 
 /**
  * The commands that the Markdown files under `{command,commands}` in a config directory define, in path order. A file
- * that cannot be read, or whose front matter is not a command, defines none. This is read for the commands plugin and
- * for what trust holds back, so both see the same commands. Keep it in sync with `sourceDirectories` in that plugin.
+ * that cannot be read, or whose front matter is not a command, defines none, and neither does one that `supplies` says
+ * may not be read, which is asked before the file is. This is read for the commands plugin and for what trust holds
+ * back, so both see the same commands. Keep it in sync with `sourceDirectories` in that plugin.
  */
-export function load(fs: FSUtil.Interface, directory: string) {
+export function load(
+  fs: FSUtil.Interface,
+  directory: string,
+  supplies: (file: string) => Effect.Effect<boolean> = () => Effect.succeed(true),
+) {
   return Effect.gen(function* () {
-    const files = yield* fs
+    const found = yield* fs
       .scan("{command,commands}/**/*.md", { cwd: directory, absolute: true, dot: true, symlink: true })
       .pipe(Effect.orElseSucceed(() => [] as string[]))
-    return yield* Effect.forEach(files.toSorted(), (filepath) =>
+    const files = yield* Effect.filter(found.toSorted(), supplies)
+    return yield* Effect.forEach(files, (filepath) =>
       fs.readFileStringSafe(filepath).pipe(
         Effect.map((content) => (content === undefined ? undefined : decode(directory, filepath, content))),
         Effect.orElseSucceed(() => undefined),

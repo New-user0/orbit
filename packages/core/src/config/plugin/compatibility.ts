@@ -1,19 +1,24 @@
 export * as ConfigCompatibilityPlugin from "./compatibility.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
+import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import path from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
+import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
+import { ProjectTrust } from "../../project-trust.js"
 import { Skill } from "../../skill.js"
 import { SkillFile } from "./skill-file.js"
 
 export const Plugin = define({
   id: "orbit.config.compatibility",
   effect: Effect.fn(function* (ctx) {
+    const bus = yield* Bus.Service
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
+    const trust = yield* ProjectTrust.Service
     const watcher = yield* Watcher.Service
     const watches = yield* FiberMap.make<string>()
     const changes = yield* PubSub.sliding<string>(1)
@@ -37,16 +42,21 @@ export const Plugin = define({
       function* () {
         yield* FiberMap.clear(watches)
         // Switched off, there are no roots: nothing is watched and no skill loads.
-        const directories = (yield* config.compat()).roots.map((root) => path.join(root.path, "skills"))
+        const roots = (yield* config.compat()).roots
         const loaded = new Map<Skill.ID, Skill.Info>()
-        for (const directory of directories) {
+        for (const root of roots) {
+          const directory = path.join(root.path, "skills")
           const resolved = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))
           if (!resolved) continue
+          // Until the root's folder is trusted, a skills folder that a link leads out of it is not scanned, and neither
+          // is a skill that a link leads out of it: they are not the repository's to supply.
+          if (!(yield* trust.supplies(root, directory))) continue
           yield* watch(resolved, "directory")
           const files = yield* fs
             .scan("{*.md,**/SKILL.md}", { cwd: resolved, absolute: true, include: "file", symlink: true, dot: true })
             .pipe(Effect.orElseSucceed(() => [] as string[]))
           for (const filepath of files.toSorted()) {
+            if (!(yield* trust.supplies(root, filepath))) continue
             const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))
             if (!content) continue
             const parsed = SkillFile.parse(resolved, filepath, content)
@@ -72,6 +82,12 @@ export const Plugin = define({
     // Turning compatibility on or off arrives as a config update, not as a file change.
     yield* ctx.event.subscribe().pipe(
       Stream.filter((event) => event.type === "config.updated"),
+      Stream.runForEach(() => reload),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    // A grant or a revoke changes which skills a link may lead to. The config does not reload for a project that has none
+    // of its own, and a root of another product is no part of it, so this does not wait for a config update.
+    yield* bus.subscribe(Trust.Event.Updated).pipe(
       Stream.runForEach(() => reload),
       Effect.forkScoped({ startImmediately: true }),
     )

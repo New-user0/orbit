@@ -112,7 +112,7 @@ describe("ConfigTrust.sanitize", () => {
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],
       instructions: ["./docs/ARCHITECTURE.md"],
       commands: { review: { template: "Review $ARGUMENTS", description: "Review a change" } },
-      agents: { reviewer: { system: "Review carefully.", model: "acme/fast", steps: 5, mode: "subagent" } },
+      agents: { reviewer: { system: "Review carefully.", model: "acme/fast", steps: 5, color: "#112233" } },
     })
     const result = ConfigTrust.sanitize(inert, place)
     // Nothing was taken out, so nothing was copied.
@@ -169,7 +169,9 @@ describe("ConfigTrust.sanitize", () => {
   })
 
   test("keeps an agent whose request and rules are already harmless as it was", () => {
-    const original = decode({ agents: { reviewer: { system: "Review.", permissions: [] }, plain: { hidden: true } } })
+    const original = decode({
+      agents: { reviewer: { system: "Review.", permissions: [] }, plain: { color: "#112233" } },
+    })
     const result = ConfigTrust.sanitize(original, place)
     expect(result.info).toBe(original)
     expect(result.info.agents?.reviewer).toBe(original.agents?.reviewer)
@@ -311,6 +313,67 @@ describe("ConfigTrust.sanitize", () => {
     expect(result.withheld).toEqual(["commands"])
     expect(result.info).toBe(flagged)
     expect(Object.keys(result.info.commands ?? {})).toEqual(["review", "branch"])
+  })
+
+  // An agent's own rules come after the user's and win, so which agent a command runs as, or which of the user's agents a
+  // repository may turn into a subagent for the model to spawn, is a choice between sets of rules.
+  test("withholds the agent that a command names, and keeps the rest of the command", () => {
+    const input = decode({
+      commands: {
+        setup: { template: "Set up $ARGUMENTS", description: "Set up", agent: "autopilot", subtask: true },
+        plain: { template: "Plain" },
+      },
+    })
+    const result = ConfigTrust.sanitize(input, place)
+    expect(result.withheld).toEqual(["permissions"])
+    expect(result.info.commands?.setup).toBeInstanceOf(ConfigCommand.Info)
+    expect(result.info.commands?.setup).toEqual(
+      new ConfigCommand.Info({ template: "Set up $ARGUMENTS", description: "Set up", subtask: true }),
+    )
+    expect(result.info.commands?.setup).not.toHaveProperty("agent")
+    // A command that names no agent is the one it was.
+    expect(result.info.commands?.plain).toBe(input.commands?.plain)
+  })
+
+  test("reports a command that names an agent and runs a shell snippet under both kinds", () => {
+    const result = sanitize({ commands: { setup: { template: "!`make`", agent: "autopilot" } } })
+    expect(result.withheld).toEqual(["commands", "permissions"])
+    expect(result.info.commands?.setup).toEqual(new ConfigCommand.Info({ template: "!`make`" }))
+  })
+
+  test("cuts the commands of a directory down the same way", () => {
+    const outcome = ConfigTrust.sanitizeCommands(
+      {
+        setup: new ConfigCommand.Info({ template: "Set up", agent: "autopilot" }),
+        plain: new ConfigCommand.Info({ template: "Plain" }),
+      },
+      place,
+    )
+    expect(outcome.withheld).toEqual(["permissions"])
+    expect(outcome.value).toEqual({
+      setup: new ConfigCommand.Info({ template: "Set up" }),
+      plain: new ConfigCommand.Info({ template: "Plain" }),
+    })
+
+    const untouched = { plain: new ConfigCommand.Info({ template: "Plain" }) }
+    expect(ConfigTrust.sanitizeCommands(untouched, place)).toEqual({ value: untouched, withheld: [] })
+    expect(ConfigTrust.sanitizeCommands(untouched, place).value).toBe(untouched)
+  })
+
+  test("withholds the mode and the visibility of an agent, so that a repository cannot choose which of the user's agents run", () => {
+    const result = sanitize({
+      agents: {
+        autopilot: { mode: "all", description: "Mine", steps: 5 },
+        reviewer: { mode: "subagent", system: "Review." },
+        build: { hidden: true, color: "#112233" },
+        plain: { description: "No mode" },
+      },
+    })
+    expect(result.withheld).toEqual(["permissions"])
+    expect(result.info.agents?.autopilot).toEqual(new ConfigAgent.Info({ description: "Mine", steps: 5 }))
+    expect(result.info.agents?.reviewer).toEqual(new ConfigAgent.Info({ system: "Review." }))
+    expect(result.info.agents?.build).toEqual(new ConfigAgent.Info({ color: "#112233" }))
+    expect(result.info.agents?.plain).toEqual(new ConfigAgent.Info({ description: "No mode" }))
   })
 
   test("reports each kind once, in the order of Trust.Kinds", () => {

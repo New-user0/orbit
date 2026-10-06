@@ -8,6 +8,7 @@ import path from "path"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
+import { ProjectTrust } from "./project-trust.js"
 import { AbsolutePath } from "./schema.js"
 import type { SessionErrors } from "./session/error.js"
 import type { Tool } from "./tool.js"
@@ -24,7 +25,10 @@ export type ResolveInput = typeof ResolveInput.Type
 
 export interface ExternalDirectoryAuthorization {
   readonly action: "external_directory"
-  /** Lexical directory used as the external approval boundary. */
+  /**
+   * The directory used as the external approval boundary: the target's own, as it is written, or the real directory
+   * that a link in a project that is not trusted leads the target out to.
+   */
   readonly directory: AbsolutePath
   readonly resource: string
   readonly save: string
@@ -89,6 +93,29 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const permission = yield* Permission.Service
+    const trust = yield* ProjectTrust.Service
+
+    // A target outside the project, or one that a link in an untrusted project leads out to, which is `place`.
+    const external = Effect.fnUntraced(function* (absolute: AbsolutePath, place: string, kind: Kind | undefined) {
+      const type =
+        kind === "directory"
+          ? "Directory"
+          : kind === "file"
+            ? "File"
+            : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
+                ?.type
+      const directory = AbsolutePath.make(type === "Directory" ? place : path.dirname(place))
+      return {
+        absolute,
+        resource: slash(place),
+        externalDirectory: {
+          action: "external_directory",
+          directory,
+          resource: slash(path.join(directory, "*")),
+          save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
+        },
+      } satisfies Target
+    })
 
     const resolve = Effect.fn("FileAccess.resolve")(function* (input: ResolveInput) {
       const absolute = AbsolutePath.make(resolvePath(location.directory, input.path))
@@ -96,29 +123,14 @@ const layer = Layer.effect(
       const internal =
         FSUtil.contains(location.directory, absolute) ||
         (worktree !== path.parse(worktree).root && FSUtil.contains(worktree, absolute))
-      if (internal) {
-        return {
-          absolute,
-          resource: slash(path.relative(location.directory, absolute) || "."),
-        } satisfies Target
-      }
-      const type =
-        input.kind === "directory"
-          ? "Directory"
-          : input.kind === "file"
-            ? "File"
-            : (yield* fs.stat(absolute).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
-                ?.type
-      const directory = AbsolutePath.make(type === "Directory" ? absolute : path.dirname(absolute))
+      if (!internal) return yield* external(absolute, absolute, input.kind)
+      // Until the project is trusted, a link in it that leads out of it does not make the target the project's own: the
+      // repository ships its links, and one to the user's other files would be read or written without a question.
+      const escapes = yield* trust.escapes(absolute)
+      if (escapes !== undefined) return yield* external(absolute, escapes, input.kind)
       return {
         absolute,
-        resource: slash(absolute),
-        externalDirectory: {
-          action: "external_directory",
-          directory,
-          resource: slash(path.join(directory, "*")),
-          save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
-        },
+        resource: slash(path.relative(location.directory, absolute) || "."),
       } satisfies Target
     })
 
@@ -164,4 +176,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [FSUtil.node, Location.node, Permission.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node],
+})
