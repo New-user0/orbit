@@ -474,7 +474,8 @@ lines of a person who ran it in a folder that is not trusted. These commands now
 terminal UI or the VS Code Runs view, and `orb flow show`, `resume` and `clean` report that there is no such run. Orbit's
 own runs have always had an ID of this shape, so nothing that Orbit made is affected. Scripts that parse the text output
 of `orb flow` and `orb eval`, or the progress they print on standard error, see a control character in a name as an
-escape. So does a line that a workflow passes to `ctx.log` with one in it, such as a colour.
+escape. So does a line that a workflow passes to `ctx.log` with one in it, such as a colour, and a message that spans
+lines, such as a failure that git reports, is written on one line with `\n` where it breaks.
 
 **What to do:** nothing.
 
