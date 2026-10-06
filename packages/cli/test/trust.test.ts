@@ -901,6 +901,31 @@ test("a session in a clean folder is not refused for the repository the command 
   }
 }, 240_000)
 
+test("--continue continues the newest session of the folder the command starts in, so that is the folder that is checked", async () => {
+  const repository = await hooked("continue-home")
+  const away = await quiet("continue-away")
+  const kept = path.join(repository, "blocked.txt")
+  const moved = path.join(away, "blocked.txt")
+  // A session in the repository, trusted for that one run. It is the newest session there is, so a --continue that
+  // looked for the newest session anywhere would pick it.
+  succeeded(await orb(repository, ["run", "--trust", "--standalone", "--model", model, "say ok"]))
+  const before = runs
+
+  // Started from a clean folder it finds no session there, begins one of its own, and the write lands in that folder.
+  // The repository, which is untrusted and has a hook that blocks every write, is never touched, so the check on the
+  // folder the command starts in is the check on the folder the continued session lives in. A --continue that went to
+  // another folder would need that folder checked, as --session does.
+  succeeded(await orb(away, ["run", "--continue", "--standalone", "--model", model, "write blocked.txt"]))
+  expect(runs).toBeGreaterThan(before)
+  expect(await Bun.file(moved).exists()).toBe(true)
+  expect(await Bun.file(kept).exists()).toBe(false)
+
+  // From the repository itself it is refused, as it is the folder the continued session would live in.
+  const refused = await orb(repository, ["run", "--continue", "--standalone", "--model", model, "say ok"])
+  expect(refused.code).toBe(1)
+  expect(refused.stderr).toContain(`${repository} is not trusted`)
+}, 240_000)
+
 test("config in a folder above the repository is named with the folder to trust, and trusting the repository does not claim to apply it", async () => {
   const { parent, child } = await layered("above")
   const guarded = path.join(parent, "orbit.json")
