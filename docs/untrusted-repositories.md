@@ -7,16 +7,20 @@ a file or changes how the `orb` binary is built. The one-line rules are in [AGEN
 Repositories". This page holds the reasons, the helpers, the tests and the review questions behind them.
 
 It comes from the first milestone (M1), which made project config, plugins, commands, workflows and the compiled binary
-safe to open in a folder that is not trusted yet. Its reviews and audits had found 160 distinct defects by the time the
-compiled binary was last fixed: one blocker, 36 majors, 114 minors and nine holes that no review had caught first. The
-review of that fix then found a second blocker. 131 of the 160 fall into the fifteen classes below, including the first
-blocker and most of the majors, and most classes came back in a new place after their first fix. Writing the rule once
-for the whole class costs less than finding the next instance in review.
+hold back what a folder supplies until the folder is trusted. It did not close every hole, and [Known gaps](#known-gaps)
+lists the ones that are left. Its reviews and audits had found 160 distinct defects by the time the compiled binary's
+dependency lookups were last fixed (the esprima fix): one blocker, 36 majors, 114 minors and nine holes that no review
+had caught first. The review of that fix then found a second blocker, an executable looked up in the working folder,
+and closing it turned up two more members of the same class (class 10). Those three are not in the counts. 131 of the
+160 fall into the fifteen classes below, including the first blocker and most of the majors, and most classes came back
+in a new place after their first fix. Writing the rule once for the whole class costs less than finding the next
+instance in review.
 
 **The promise.** Until a person trusts a folder, no file that the folder supplies may run code, spend their money, reach
 the network, carry a file of theirs to a model provider or change which of their rules apply. A change that breaks one
-of these on a default path is a defect, whatever else it adds. What users see of this is in [upgrading](upgrading.md),
-under "A project's config waits for its folder to be trusted".
+of these on a default path is a defect, whatever else it adds. M1 did not keep the promise everywhere: each place where
+it does not hold yet is in [Known gaps](#known-gaps), and a change must not widen one. What users see of this is in
+[upgrading](upgrading.md), under "A project's config waits for its folder to be trusted".
 
 Words used here:
 
@@ -28,8 +32,11 @@ Words used here:
   `ProjectTrust` answers for a Location's project.
 - **Held back:** what an untrusted folder's files would have contributed. `ProjectTrust.status` lists it per file with
   its kinds (`Trust.Kind`).
-- **Holder:** the folder whose decision covers a file (`ConfigTrust.holder`): the project's root for a file in the
-  project, and the folder itself for config in a folder above the project.
+- **Holder:** the folder whose decision covers a file. For config inside the project's folders it is the project's
+  canonical root, wherever the file sits (`standing()` in `packages/core/src/config.ts`). For config in a folder above
+  the project it is the folder around the file's `.orbit` directory, or the file's own folder (`ConfigTrust.holder`),
+  and a grant for the project does not reach it. Do not use `ConfigTrust.holder` for a file inside the project: for
+  `repo/sub/.orbit` it answers `repo/sub`, a folder whose grant changes nothing.
 
 How to use the page:
 
@@ -90,9 +97,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/file-access.test.ts`, `test/tool-edit.test.ts`, `test/tool-write.test.ts`.
 - Language servers and formatters: `ProjectTrust.trusted()` in `Lsp` and `Formatter`. Proof: `test/lsp.test.ts`,
   `test/formatter.test.ts`.
-- Executables that Orbit spawns by name (`git`, `rg`, shells, formatters, language servers, the sandbox tool): found
-  through `which` in `packages/core/src/util/which.ts`. No gate yet: on Windows that lookup searches the working folder
-  first (see Known gaps).
+- Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
+  Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
+  working folder. Proof: `test/util/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+- Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, the command of an MCP server, the
+  pager's `cmd /c more`): `CrossSpawnSpawner` in `packages/util/src/cross-spawn-spawner.ts` sets
+  `NoDefaultCurrentDirectoryInExePath` for a bare name on Windows, so that no `cmd.exe` looks in the working folder, and
+  a running process is stopped with the `taskkill.exe` of `System32`. Proof: `test/effect/cross-spawn-spawner.test.ts`
+  and `test/project.test.ts`, which resolves a folder with `.hg` and an `hg.bat`. The language server client, which
+  starts a server through `cross-spawn` directly, and the bare `git` fallback under a Node host are not covered (see
+  Known gaps).
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
@@ -159,12 +173,19 @@ Every class below is tested the same way, and each class adds only what is parti
    stack for core. Core tests trust every folder by default (`packages/core/test/preload.ts` sets
    `ORBIT_TRUST_PROJECT`), so a test of a gate builds `WorkspaceTrust.configured({ implicit: false })`, as
    `untrustedProject` in `packages/core/test/fixture/project-trust.ts` does. Otherwise "nothing ran" passes vacuously.
-3. **Assert the refusal.** The refusal text, exit status 1, the marker absent and the scripted model never asked.
-4. **Add the control.** The same file in the same test with `--trust` or a granted folder, and the marker present. That
-   proves the file is live, so the test cannot pass because the file was never executable.
-5. **Record the mutation.** Remove the gate and watch the test fail, then write that mutation in the PR. The review runs
+3. **Rule out the other vacuous pass.** "Nothing ran" also passes when the environment hides the attack. Some shells
+   set `NoDefaultCurrentDirectoryInExePath=1`, and the shell that agents run in is one of them. It makes `cmd.exe` skip
+   the working folder, so a `.bat` or `.cmd` decoy never runs. A test of a program lookup deletes the variable from the
+   test process first and restores it afterwards (`withCurrentDirectoryOnPath` in
+   `packages/core/test/effect/cross-spawn-spawner.test.ts`).
+4. **Assert the refusal.** The refusal text, exit status 1, the marker absent and the scripted model never asked.
+5. **Add the control.** The same file in the same test with `--trust` or a granted folder, and the marker present. That
+   proves the file is live, so the test cannot pass because the file was never executable. For a program lookup the
+   control is the same decoy started as a shell would start it, by a `cmd.exe` that does search the folder, so that the
+   test fails loudly when the environment still hides the search.
+6. **Record the mutation.** Remove the gate and watch the test fail, then write that mutation in the PR. The review runs
    it again.
-6. **Lift the skips.** Tests that skip on your platform (real symlinks need `canLinkFile`, hook execution skips on
+7. **Lift the skips.** Tests that skip on your platform (real symlinks need `canLinkFile`, hook execution skips on
    win32) run in Git Bash, a Linux container or WSL before the PR, or the PR says they are unverified.
 
 ## The classes
@@ -204,7 +225,9 @@ its gate, before the first trust task. It names every surface that M1 found over
   `Lsp` and `Formatter` do this, `ConfigPluginSource.scan` skips untrusted directories, and `ConfigCommandPlugin` throws
   `UntrustedError` for a command with a shell snippet (`ConfigTrust.shellSnippet`, `hasShellSnippet`) before it scans,
   asks about or runs a span. A file that carries code, such as hooks in front matter, must ask
-  `ProjectTrust.allows(file)` first. Nothing consumes `allows` yet, because those hooks do not exist.
+  `ProjectTrust.allows(file)` first. Nothing consumes `allows` yet, because those hooks do not exist, and it still mixes
+  the live decision with stale stamps for about 100 ms after a grant or a revoke. Fix that (N2 in Known gaps) before
+  the first consumer is written.
 
 - In a command that loads a file from the folder, call `requireTrust` (or `trustRefusal`, when you report the refusal
   yourself) before the load. Pass `imports` for a file that the command imports and `defines` for a file whose commands,
@@ -354,9 +377,10 @@ consumer, including the terminal UI and the CLI, which resolve roots themselves.
 ### 4. Containment is judged by name instead of real path
 
 **Rule:** Decide whether a path is inside a trusted folder from its real path, at the moment of reading: follow links,
-dangling links and not-yet-existing targets, and allow for UNC paths and Windows case and spelling. Use
-`FSUtil.contains` or `path.relative`, never string comparison. Every reader of a file that the repository supplies asks
-`ProjectTrust` and is in the reader list.
+dangling links and not-yet-existing targets, and allow for UNC paths and Windows case and spelling. Ask `ProjectTrust`,
+which follows links down from the nearest ancestor that exists, and use `FSUtil.contains` or `path.relative` only on
+two paths that are already real, never string comparison and never `FSUtil.resolve` or `fs.resolve`. Every reader of a
+file that the repository supplies asks `ProjectTrust` and is in the reader list.
 
 **Why:** A repository ships its links and a clone recreates them. A link named `AGENTS.md` or `.orbit/agents` can point
 at an SSH key whose text then goes to the model provider with the first request, and a write can land outside the
@@ -391,9 +415,16 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 
 - Config references go through `ConfigVariable.substitute` with `within`, which expands no `{env:}`, refuses
   `{file://host/share}` before the disk is touched, and checks the real path of a file.
-- Compare with `FSUtil.contains(parent, child)`, which uses `path.relative` and so ignores case on win32, and resolve
-  with `FSUtil.resolve` or `fs.resolve`, which keep the lexical path for a part that is not there. Never `===`,
-  `startsWith` or `!==` on two paths.
+- Never decide containment with `FSUtil.resolve` or `fs.resolve`. Both return the lexical path for a part that is not
+  there, so a new file under a link is judged to be inside while a write lands outside. With `repo\link` a junction to a
+  folder outside, `FSUtil.resolve("repo\link\new.txt")` returns that same path and `FSUtil.contains` of `repo` and that
+  path is true. Once the file exists, `resolve` follows the link and `contains` is false, which is too late. This was
+  the file-tool hole of #22 round 3. Ask `ProjectTrust` (`escapes`, `reachable` or `supplies`) instead: its `lead`
+  (`packages/core/src/project-trust.ts`) follows links down from the nearest ancestor that exists, and a link that points
+  nowhere leads where it points.
+- Compare with `FSUtil.contains(parent, child)`, which uses `path.relative` and so ignores case on win32, only on two
+  paths that are already real: the answer of `lead` or `fs.resolve` for something that exists, or a folder that you
+  resolved first. Never `===`, `startsWith` or `!==` on two paths.
 - A name that becomes a file name is one plain name (the output style rule in
   `packages/core/src/plugin/output-style.ts`, and the `Name` pattern of the memory tool in
   `packages/core/src/tool/plugin/memory.ts`).
@@ -415,6 +446,8 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Which new reader of repository-supplied bytes does this add, and is it in the reader list?
 - Is containment checked on the real path, for a target that does not exist yet and for a dangling link?
 - Is any path compared as a string (`===`, `startsWith`, `!==`)? On Windows too?
+- Is containment decided by `FSUtil.resolve` or `fs.resolve` followed by `FSUtil.contains`? Both keep the lexical path
+  for a part that is not there, so a new file under a link passes.
 - Does the text go to the model provider, a tool write or the terminal, and what is the worst file a link could point
   at?
 - Is the check made at read time and not once at discovery?
@@ -442,6 +475,11 @@ the store.
 - `Git.clean` and `Git.worktree` refuse anything that is not one plain name (`PLAIN_NAME`, `runFolder`) before
   `git worktree remove` or `add`, `rm` or `branch -D`, and `Git.worktree` refuses a node named `.`, `..` or empty
   (`packages/flow/src/git.ts`). A `*` in an ID would otherwise become a ref pattern that matches other runs' branches.
+  Take the shape check as the model and not the rest of `Git.clean`, which keeps the entries of `git worktree list` with
+  `directory.startsWith(prefix + path.sep)`, the string comparison that class 4 forbids. It compares paths that git
+  printed with a folder that `runFolder` has already made safe, so it is harmless today, but do not copy it.
+  `@orbit/flow` does not depend on `@orbit/util`, so its follow-up is a `path.relative` check, not `FSUtil.contains`
+  (Known gaps).
 - For every identifier in a change, say where it comes from: the runner, the person, or a file that a clone can ship.
   Validate the last at the boundary and pass typed values inward.
 - A command that reads such a store and then acts destructively (`rm`, `git branch -D`, `worktree remove`) needs a trust
@@ -467,27 +505,33 @@ the store.
 
 ### 6. Network egress: URL forms, redirects, address spellings, rebinding and lookup failures
 
-**Rule:** Every request that a repository or a script can influence asks permission per hop, as `webfetch` does, then
-passes `AddressGuard.check`, then connects to the address that was checked, with the name kept only in `Host` and SNI. A
-name that resolves to nothing, fails to resolve or answers with names is refused.
+**Rule:** Only `http:` and `https:` URLs reach `fetch`. Every request that a repository or a script can influence asks
+permission per hop, as `webfetch` does, then passes `AddressGuard.check`, then connects to the address that was checked,
+with the name kept only in `Host` and SNI. A name that resolves to nothing, fails to resolve or answers with names is
+refused.
 
 **Why:** Code Mode `fetch` lets a script choose the method and the headers of its request. One approval of an origin
 then reached other hosts by redirect, loopback, the LAN or a cloud metadata endpoint (credentials), in spellings that a
 URL parser accepts and a string check does not.
 
-**In M1:** a `fetch` to `127.0.0.1` approved once followed a 302 to `localhost` with no second ask (verification round
-1), because #9 had merged with "redirects are not re-authorized" as a known limit. Then one spelling or endpoint per
-round: `*` and trailing dots in host rules (#3), IPv6 forms of IPv4 such as mapped, NAT64, 6to4, Teredo and ISATAP
-(raised in the review of #21), six IPv6 metadata endpoints that were only "private" (#22), DNS rebinding, and a lookup
-error that counted as "no addresses" (verification round 4). Six commits for one class.
+**In M1:** Code Mode `fetch` shipped with no permission check, and Bun's `fetch` also reads `file:`, `data:` and `s3:`
+URLs, so a script could read local files. #9 added `PermissionWeb.request`, which refuses every scheme but `http:` and
+`https:` before anything is asked or sent. A `fetch` to `127.0.0.1` approved once still followed a 302 to `localhost`
+with no second ask (verification round 1), because #9 had merged with "redirects are not re-authorized" as a known
+limit. Then one spelling or endpoint per round: `*` and trailing dots in host rules (#3), IPv6 forms of IPv4 such as
+mapped, NAT64, 6to4, Teredo and ISATAP (raised in the review of #21), six IPv6 metadata endpoints that were only
+"private" (#22), DNS rebinding, and a lookup error that counted as "no addresses" (verification round 4). Six commits
+for one class.
 
 **Ask early:** at the spec for `fetch`, the gate, the per-hop redirect asks and an address guard belong together, and
 one table covers every spelling.
 
 **How to comply:**
 
-- Build the permission request with `PermissionWeb.request` (`packages/core/src/permission/web.ts`). It rejects wildcard
-  hosts, strips trailing dots, validates the method, and returns the resources, the aliases and what "always" saves.
+- Build the permission request with `PermissionWeb.request` (`packages/core/src/permission/web.ts`). It throws for a URL
+  that is not `http:` or `https:`, rejects wildcard hosts, strips trailing dots, validates the method, and returns the
+  resources, the aliases and what "always" saves. Code Mode `fetch` calls it before any ask or I/O, so a `file:`,
+  `data:` or `s3:` URL never reaches Bun's `fetch`, which would read it.
 - `CodeModeWeb.request` (`packages/core/src/codemode/web.ts`) reads the call with the function that authorizes it, so
   what is authorized is what is sent. `fetch` does not let the runtime follow a redirect: it sends with
   `redirect: "manual"`, follows at most 10 hops, and asks about each one like a call of the script's own.
@@ -519,12 +563,17 @@ one table covers every spelling.
   later one that is metadata (the later answer must never be used), a failing lookup, an empty answer, names as answers;
   each redirect hop asks and connects by its own answer; method and credential rewriting; the 10-hop cap; TLS with a
   name-only certificate.
+- The scheme: `file:`, `data:`, `s3:`, `javascript:`, `ftp:`, `blob:` and `ws:` URLs fail with "URL must use http:// or
+  https://" before any ask or I/O (`packages/core/test/permission/web.test.ts`, "rejects a scheme other than http and
+  https", and `packages/core/test/codemode.test.ts`, "fails a URL that is not http(s) before any permission ask or
+  I/O").
 - Mutations: native redirects (11 tests fail), the guard before the ask, the guard removed.
 
 **Review questions:**
 
 - Which URLs or hosts can a script or a repository influence, and does each hop (redirect, import, proxy) ask
   separately?
+- Can a URL with another scheme (`file:`, `data:`, `s3:`) reach `fetch`? Bun's `fetch` reads all three.
 - Is the address that was checked the address that is connected to?
 - What does the code do when the lookup throws, returns nothing or returns a name?
 - Is every private or metadata list a table matched exactly, IPv6 forms and embedded IPv4 included?
@@ -602,9 +651,16 @@ runs" is a permission.
 **How to comply:**
 
 - Classify each new field in `ConfigTrust.classification` (`info`, `agent` and `command`). Ask of every field: does it
-  choose which rules, agent, mode, model or provider apply? Then it is a permission, `withhold("permissions")`, and a
-  permission list keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming`
-  keeps only `false`.
+  choose which rules, agent or mode apply? Then it is a permission, `withhold("permissions")`, and a permission list
+  keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming` keeps only
+  `false`.
+- A field that picks a model, a provider or a step budget is not covered by that rule, and the table does not treat it
+  as a permission: `model` (in the config, in every agent and in every command) and an agent's `steps` are `inert`. An
+  untrusted folder can therefore choose the most expensive of the models that you configured, or another provider that
+  you configured, and raise how many steps an agent takes. It cannot add a provider, because `providers` and an agent's
+  `request` are withheld. Whether that is acceptable is an open decision (Known gaps). Until it is made, do not write
+  "model or provider" into a rule as if it were settled, and ask before you classify a new field of that kind as inert
+  on the example of these.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
   enforced, as `hooks.disabled` has yet to be, read it in policy-authority order and not by value precedence, or a
   repository could switch off the user's guard hooks (#7).
@@ -628,17 +684,19 @@ runs" is a permission.
 
 **Review questions:**
 
-- Does this field choose which rules, agent, mode, model or provider apply? Then it is a permission: where is it
-  classified?
+- Does this field choose which rules, agent or mode apply? Then it is a permission: where is it classified?
+- Does it pick a model, a provider or a step budget? Then it is the open decision above: ask before you call it inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
 - Does a default or fallback name an agent or a mode by constant instead of by configuration?
 
 ### 9. Terminal control characters in printed or stored text
 
-**Rule:** Every string that came from a file, a run store, a workflow or a session and reaches a person (stdout, stderr,
-JSON, a terminal UI frame, a toast, a session title, a commit subject, an exit summary, a splash) passes through
-`plain`, `progress`, `json` or `terminalTitle` at the sink. Keep a sink inventory per command.
+**Rule:** Every string that came from a file, a run store or a workflow, and every session title, that reaches a person
+(stdout, stderr, JSON, a terminal UI frame, a toast, a session title, a commit subject, an exit summary, a splash)
+passes through `plain`, `progress`, `json` or `terminalTitle` at the sink. Keep a sink inventory per command. The text
+of a session's messages is not covered: `plain` trims and writes line breaks out, so it cannot be the sink for a message
+body, and only a sanitizer in the renderer closes that (Known gaps).
 
 **Why:** A clone can name its files and workflows with escape sequences. Printed raw, an OSC sequence sets the window
 title, an erase-line or a carriage return hides the command that a refusal asks the person to look over, and a
@@ -703,14 +761,21 @@ repository text.
 
 **Rule:** Assume that the single binary starts in an untrusted repository before any trust check
 (`orb trust --standalone`, `serve --stdio`). Keep the autoload options off except `package.json`, never resolve a
-package that is not built in by name from inside the binary, replace every bundled dependency lookup that the bundler
-leaves to the runtime, and look executables up on `PATH` only, never in the working folder.
+package that is not built in by name from inside the binary, and replace every bundled dependency lookup that the
+bundler leaves to the runtime. Hold programs to the same rule at the level of every `cmd.exe` that Orbit starts, because
+on Windows it looks in the current folder before `PATH`: find an executable with `which` (`PATH` only), start it through
+`CrossSpawnSpawner`, which keeps the working folder out of the lookups of the `cmd.exe` that it starts, and never hand a
+bare name to `exec`, `cmd /c` or another way of starting a `cmd.exe` yourself.
 
 **Why:** Bun applies the `paths` of a `tsconfig.json` in the start folder to the binary's own imports, resolves any bare
 name that the bundle leaves open from the folder's `node_modules`, and loads a native library from an npm package that
-its lookup finds. A committed file then runs in the server process before the trust gate is asked. Executables are found
-the same way: on Windows a lookup that searches the working folder before `PATH`, as the npm `which` package does, finds
-a `git.exe` or `rg.exe` that the repository ships.
+its lookup finds. A committed file then runs in the server process before the trust gate is asked. Programs are found
+by two lookups on Windows, and the working folder is in both. A library lookup that searches it before `PATH`, as the
+npm `which` package does with no option to skip it, finds a `git.exe` or `rg.exe` that the repository ships. And
+`cmd.exe` looks in the current folder before `PATH` for a program, a `.bat` and a `.cmd` alike: cross-spawn runs every
+`.bat` and `.cmd`, and every name that it cannot resolve, through `cmd.exe /d /s /c`, and `exec` and `cmd /c` start one
+by design. So the class is every `cmd.exe` that Orbit starts, and not one library. Bun's own spawn looks on `PATH` only,
+so for the spawner an `.exe` decoy proves little: it is a `.bat` or `.cmd` that `cmd.exe` runs from the folder.
 
 **In M1:** a repository's `tsconfig.json` `paths` ran at the start of `orb trust --list` (verification round 5), and
 `Provider.loadPackage` resolved a provider by name from the repository's `node_modules` (#22 round 8). The prescribed
@@ -719,14 +784,21 @@ next hole was js-yaml's lazy `var _require = require; _require('esprima')`, whic
 `node_modules/esprima/index.js`. A dynamic probe found it, and a scan for names would not have, because the require is
 aliased. The same probe closed Babel's browserslist lookup and fff's native-library lookup (on Windows the embedded path
 says `~BUN`, not `$bunfs`). Then the review of that fix found one more kind of name: `which` in
-`packages/core/src/util/which.ts` wraps the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
-gathered version control info, and a committed `rg.exe` ran during file search, before any trust. A blocker, and still
-open when this was written (see Known gaps). The earlier holes took four fix commits in three rounds.
+`packages/core/src/util/which.ts` wrapped the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
+gathered version control info (`orb session list --standalone` ran it seven times) and a committed `rg.exe` ran during a
+file search, before any trust. That was the second blocker, and its fix made the lookup read `PATH` only. Closing it
+turned up two more members of the class, both in `CrossSpawnSpawner`. Cross-spawn handed a bare `hg` to `cmd.exe`, so a
+folder with a `.hg` directory and an `hg.bat` ran that file while `Project.resolve` identified the project, before any
+trust check (the pager `cmd /c more`, `git` when it is not on `PATH` and the command of an MCP server are started by
+name as well). And stopping a process ran `taskkill` by name through `exec`, so a `taskkill.exe` or `taskkill.bat` in
+the folder ran instead of the system one. The shell that agents run in sets `NoDefaultCurrentDirectoryInExePath`, which
+makes `cmd.exe` skip the folder, so a decoy test run there passes without testing anything. The earlier holes took four
+fix commits in three rounds, and the executables two more.
 
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust
-check: modules, packages, native libraries and executables. No earlier audit had looked, and M1's rounds found each kind
-in turn.
+check: modules, packages, native libraries, executables, and what each `cmd.exe` that it starts looks up. No earlier
+audit had looked, and M1's rounds found each kind in turn.
 
 **How to comply:**
 
@@ -739,10 +811,26 @@ in turn.
 - `Provider.loadPackage` (`packages/core/src/provider.ts`) fails with `LoadError` inside a compiled binary
   (`Bun.isStandaloneExecutable`) for a package that is not built in. Otherwise it installs with `npm.add` and resolves
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
-- Look executables up on `PATH` only, with `Bun.which(command, { PATH })` or a resolver that you have checked does not
-  search the working folder: the npm `which` package searches it first on Windows. `which` in
-  `packages/core/src/util/which.ts` wraps that package, and it feeds `gitExecutable`, `RipgrepBinary`, `ShellSelect`,
-  the built-in formatters and language servers, the sandbox tool and the Azure CLI check.
+- Find an executable with `which` in `packages/core/src/util/which.ts` and with nothing else. It feeds `gitExecutable`,
+  `RipgrepBinary`, `ShellSelect`, the built-in formatters and language servers, the sandbox tool and the Azure CLI
+  check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder: it looks at each `PATH` entry by
+  its full name, because the npm `which` package that it wraps searches `process.cwd()` first on Windows and has no
+  option to skip it. An empty `PATH` entry, which a shell reads as the current folder, is skipped on every platform, a
+  quoted entry is read without its quotes, `PATHEXT` and the executable bit apply as before, and a name that already has
+  a directory is checked as given. Do not call the npm package yourself or write a second lookup, and do not swap in
+  `Bun.which`: it returns `null` for a quoted `PATH` entry, takes no `PATHEXT`, and the core also runs under Node and
+  workerd, where there is no `Bun`.
+- Start a program through `CrossSpawnSpawner` (`packages/util/src/cross-spawn-spawner.ts`). For a bare name, one with no
+  directory in it and no `shell` option, it puts `NoDefaultCurrentDirectoryInExePath` in the environment on Windows,
+  which makes every `cmd.exe` in that process tree skip the working folder: the one that cross-spawn starts for a `.bat`
+  or `.cmd` or for a name that it cannot resolve, and the one that Orbit starts by name for what it runs, such as the
+  pager's `cmd /c more`. A path to a program, and a command line that is run with `shell` (the start command of a
+  worktree, which its user wrote to be run as typed), are left as written. A `.cmd` that `PATH` holds still starts by
+  name.
+- Never hand a bare name to `exec`, `execSync`, a `shell` option or `cmd /c` outside the spawner: each one starts a
+  `cmd.exe` that looks in the working folder first. Give a system tool its full path. Stopping a process on Windows
+  runs the `taskkill.exe` of `%SystemRoot%\System32` with `execFile`, where it used to run `taskkill` by name through
+  `exec`.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -760,9 +848,25 @@ in turn.
   0, no marker, and that fff finds no library.
 - A control built with each option on, or the plugin off, must write the marker, so the test cannot pass because the
   folder never had a way to run.
-- Executables, on Windows: put a marker-writing `git.exe` and `rg.exe` in the folder and run a command that spawns each,
-  as the review did with `orb session list --standalone` for git and a file search for ripgrep. Assert no marker, with
-  the real executable still found on `PATH`.
+- Executables, on Windows: put marker-writing decoys in the folder that the process starts in, named after programs
+  that Orbit starts by name and that `PATH` also holds: an `.exe` (`git.exe`, `rg.exe`), a `.bat` and a `.cmd`
+  (`hg.bat`, `hg.cmd`, `npx.cmd`), and a `taskkill.exe` and a `taskkill.bat` in the folder of the Orbit process. Run the
+  real thing: `orb session list --standalone` starts git, a file search starts ripgrep, `Project.resolve` on a folder
+  with `.hg` starts `hg`, and stopping a running child runs `taskkill`. Assert no marker, with the real program still
+  found on `PATH`, and a `.cmd` that `PATH` holds still starting by name (`packages/core/test/util/which.test.ts`,
+  `packages/core/test/ripgrep-binary.test.ts`, `packages/core/test/util/git-executable.test.ts`,
+  `packages/core/test/effect/cross-spawn-spawner.test.ts`, `packages/core/test/project.test.ts`). The ones that run a
+  decoy return early off win32, so they have to be run on Windows.
+- Delete `NoDefaultCurrentDirectoryInExePath` from the test process before the run and restore it afterwards
+  (`withCurrentDirectoryOnPath` in `packages/core/test/effect/cross-spawn-spawner.test.ts`). Some shells set it, and the
+  shell that agents run in is one: `cmd.exe` then skips the folder, and a `.bat` or `.cmd` decoy never runs. Add the
+  control from the test recipe, the same decoy started by a `cmd.exe` that does search the folder, so that the test
+  fails loudly when the environment still hides the search. The tests that run a decoy plant `.bat` files
+  (`cross-spawn-spawner.test.ts`, `project.test.ts`), and the lookup tests plant `.cmd` and `.exe` files and check which
+  file is returned (`which.test.ts`, `git-executable.test.ts`, `ripgrep-binary.test.ts`). When you touch one of them,
+  cover the kinds it does not.
+- Mutation: go back to the npm package's own lookup in `which`, take the variable out of the spawner's environment, or
+  run `taskkill` by name through `exec` again, and watch the tests fail on Windows.
 - The build fails if a replacement matched nothing (`packages/cli/test/compile-autoload.test.ts`,
   `packages/cli/test/compile-runtime-requires.test.ts`, `packages/core/test/provider-compiled.test.ts`).
 
@@ -773,8 +877,12 @@ in turn.
 - Does the binary start in a folder that the user chose, before the trust check, and what does the runtime read from it?
 - Was it tested on the real built binary on Windows and on Linux?
 - Is a package ever loaded by name from the working folder instead of from the npm cache?
-- Does it spawn an executable that it finds by name, and does that lookup skip the working folder? Some resolvers search
-  it first on Windows.
+- Does it find an executable by name with `which` and start it through `CrossSpawnSpawner`? Both keep the working
+  folder out of the lookup, and some resolvers, and every `cmd.exe`, search it first on Windows.
+- Does it start a `cmd.exe`, or hand a bare name to something that does (`exec`, `cmd /c`, a `.bat` or `.cmd`, a name
+  that cross-spawn cannot resolve) outside the spawner?
+- Does the test delete `NoDefaultCurrentDirectoryInExePath`, plant `.exe`, `.bat` and `.cmd` decoys, and carry a control
+  that proves the decoy runs where the variable is not set?
 
 ### 11. Parsers whose engines evaluate content
 
@@ -932,8 +1040,8 @@ not create symlinks and CI could not run.
 **In M1:** a mutation that strips `status_message`, `if`, `once`, `shell` and `headers` from every hook passed all the
 hook tests (#7), and `$ARGUMENTS` inside a span passed 52 tests (#6). In the vendor gate (#13) an allowlist entry hid a
 stale name, and the exemption that a review suggested then let `.x-plugin/` through. Hook-executing tests skip on win32
-and the real-symlink tests skip without the privilege, so they ran nowhere, and the known-failures baseline absorbed
-flaky tests although the milestone plan names the idle-egress test as an M1 gate.
+and the real-symlink tests skip without the privilege, so they ran nowhere, and a known-failures baseline that the
+repository does not hold absorbed flaky tests although the milestone plan names the idle-egress test as an M1 gate.
 
 **Ask early:** at authoring time, with a revert of the fix. The first-wave reviews named the practice, and it was not
 applied to gates, allowlists and platform skips.
@@ -949,8 +1057,9 @@ applied to gates, allowlists and platform skips.
   the PR, in a container or WSL, or mark the test unverified.
 - Generated files carry `eol=lf` in `.gitattributes` (`packages/protocol/openapi.json` and the generated client
   directories).
-- A flaky test is named in the baseline or fixed in the PR that meets it. A test that the milestone plan names as a gate
-  must pass, not be "known".
+- A flaky test is fixed in the PR that meets it, or that PR names it and says why it stays: the repository has no list
+  of known failures to put it in yet (Known gaps). A test that the milestone plan names as a gate must pass, not be
+  "known".
 
 **How to test:** run each new test against the sources from before the fix (check out the old file) and record that it
 fails. Test an allowlist with the planted cases above. In M1 the gate suites are
@@ -963,7 +1072,8 @@ fails. Test an allowlist with the planted cases above. In M1 the gate suites are
 - Is any negative assertion ("nothing ran") on a platform, or under a default, where it would pass vacuously?
 - Is this allowlist entry as narrow as its reason? What else does it hide?
 - Which tests skipped on this machine, and who ran them?
-- Is a flaky test named in the baseline, or does it need fixing now?
+- Is a flaky test fixed, or named in the PR with the reason it stays? There is no baseline list in the repository to hide
+  it in.
 
 ### 15. Docs, comments and PR text that outrun the code
 
@@ -972,7 +1082,7 @@ commit list. Each claim names the test that proves it, and the PR body is regene
 
 **Why:** The docs said that the terminal UI loads no plugins from an untrusted folder when it did, that imports from
 `node_modules` "resolve as before" when they did not, and that a rule "never allows a write" when a leading wildcard
-did. The owner merges from the PR body, and it was stale in about a dozen reviews.
+did (Known gaps). The owner merges from the PR body, and it was stale in about a dozen reviews.
 
 **In M1:** #15's docs promised that the terminal UI held plugins back, the `ConfigTrust` header said that every reader
 asks `reachable` (#22 round 3), and the upgrade note said that imports from `node_modules` resolve as before (#22 round
@@ -993,6 +1103,9 @@ final diff.
   promise names the test that fails when it becomes false, or is rewritten to what is true.
 - After every push, regenerate the PR body from the commit list, the test counts and the last gate run. It lists every
   commit and the mutation of every test, and it says: merge only after the review approves the head commit.
+- When the docs or the note name helpers that only another open PR provides, say `depends on #<n>` in the title and the
+  body, check every name against that PR's final head each time it moves, and check them once more on the merge commit.
+  This page's own class 10 went stale that way when #22 changed after the page was written.
 
 **How to test:** for each sentence of the upgrade note and each comment that makes a promise, name the test that fails
 when the sentence becomes false, or rewrite the sentence.
@@ -1011,10 +1124,11 @@ These come from how M1 was run, and they apply to any change in this area.
 - **Fix the class, not the instance.** When a finding lands, list the members of its class from this page (surfaces,
   sinks, spellings, entry points) and close them all in one commit with a table-driven test. In M1 each round closed
   only the reported instance and the next round found the next one: from the merge of #20 to the esprima fix there were
-  five audit and verification rounds, nine review rounds on #22 and 26 commits, about 24 hours, and the review of that
-  fix found another member of the class (an executable found in the working folder, class 10). An audit may report "no
-  holes" only with a table of the surfaces it checked and the evidence for each row. The round-1 audit found nothing
-  where rounds 2 to 4 found five.
+  five audit and verification rounds, nine review rounds on #22 and 26 commits, about 24 hours. The review of that fix
+  then found another member of the class (an executable found in the working folder, class 10), and fixing that turned
+  up two more (a `cmd.exe` that searches the folder, and `taskkill` run by name). An audit may report "no holes" only
+  with a table of the surfaces it checked and the evidence for each row. The round-1 audit found nothing where rounds 2
+  to 4 found five.
 - **What blocks.** A finding blocks only if it breaks the promise at the top of this page on a default or demonstrated
   path. A hole that a clone can demonstrate is not a speculative edge case: fix it in the PR that finds it, and record
   the failure mode, the likelihood and the cost in the PR. Speculative hardening goes on a follow-up list. Waiting for
@@ -1026,39 +1140,75 @@ These come from how M1 was run, and they apply to any change in this area.
   checklist of each task it names, and the review checks it. A decision with no owning task blocks the start. M1's
   decision for language servers, formatters, `{file:}` and `{env:}`, and config above the project had no owner after two
   specs and was found as a major in the review of #14.
-- **Land a stack in order.** Merge bottom-up, and only after the review of the head commit approves. Retarget a child to
-  `main` (`gh pr edit <n> --base main`) before its parent's branch is deleted, because GitHub closes a child whose base
-  is deleted (#17 was closed that way and reopened as #18). #14 merged before #15, so #15's commits never reached `main`
-  and were re-landed as #16. If a PR merged before its review fixes, open the follow-up the same hour (#19 and #20).
+- **Land a stack in order.** Agents never merge a pull request or delete a remote branch: the owner merges, bottom-up,
+  and only after the review of the head commit approves. Retarget a child to `main` (`gh pr edit <n> --base main`)
+  before its parent's branch is deleted, because GitHub closes a child whose base is deleted (#17 was closed that way
+  and reopened as #18). #14 merged before #15, so #15's commits never reached `main` and were re-landed as #16. If a PR
+  merged before its review fixes, open the follow-up the same hour (#19 and #20).
+- **A dependent PR says so.** A PR that names helpers which only another open PR provides has `depends on #<n>` in its
+  title, or stays a draft, because nothing else stops it from merging first. Once the other PR lands, check its names,
+  paths and tests again on the merge commit. This page was written against the head of #22 and is such a PR.
 - **A switch ships with its way back.** A PR that turns a feature off ships with the PR that lets the person turn it
   back on, or the stack lands as one. #14 alone would have switched off project config for every background-service user
   with no way to trust a folder.
-- **Keep the baseline honest.** A flaky test is fixed, or named in a list in the repository, in the PR that meets it. A
-  test that the milestone plan names as a gate must pass. Before a milestone closes, run the tests that skip on the
+- **Keep the baseline honest.** A flaky test is fixed in the PR that meets it, or that PR names it and says why it
+  stays. The repository keeps no list of known failures yet (Known gaps), so a new flake is easy to take for an old one.
+  A test that the milestone plan names as a gate must pass. Before a milestone closes, run the tests that skip on the
   developer's platform somewhere that runs them, or fix the CI that should.
 
 ## Known gaps
 
-Not fixed in M1. Carry each into a task, and do not claim otherwise in docs or in a PR.
+Not fixed in M1. Each entry is a place where the promise at the top of this page does not hold yet, or rests on a
+decision that is still open. Do not claim otherwise in docs or in a PR, and do not widen one. An entry that names a task
+is carried by it, and one that names none has no task yet: give it one. An entry reads `Accepted by the owner until
+<task>` once the owner has said so in writing. None does yet, so until one does, a change that touches that surface
+fixes it or asks.
 
-- **Executables found in the working folder.** On Windows the npm `which` package searches the working folder before
-  `PATH`, so `which` in `packages/core/src/util/which.ts` finds a committed `git.exe` or `rg.exe`, and runs it, before
-  the folder is trusted. The review of the last fix in #22 found it and called it a blocker. Look executables up on
-  `PATH` only, as class 10 says, and drop this entry when that lands.
 - **A holder that is a filesystem root.** `standing()` in `packages/core/src/config.ts` still lets `{file:}` in
   untrusted config read across the drive when the holder of the file is a filesystem root (#14 re-review, N1).
 - **A stale-stamp window.** `ProjectTrust.allows` mixes the live decision with stale stamps for about 100 ms after a
-  grant or a revoke (N2).
+  grant or a revoke (N2). Nothing consumes `allows` yet, so fix this before its first consumer, which class 1 prescribes
+  for a file that carries code.
 - **The formatter gate keys on the Location's project**, not on the folder of an externally edited file (N3).
 - **Advice that cannot be followed.** `Trust.Withheld.directory` can name a folder, such as the middle one of outer,
   middle and inner repositories, that `orb trust` cannot lift, because a grant always goes to `project.canonical`. There
   is no revoke-by-directory route for a deleted folder.
+- **`model` and `steps` are inert.** `ConfigTrust.classification` keeps `model` (in the config, in every agent and in
+  every command) and an agent's `steps` as written while a folder is untrusted. A folder can therefore switch a session
+  to the most expensive model of a provider that you configured, or send your prompts to another provider that you
+  configured, and raise how many steps an agent takes. It cannot add a provider or an endpoint, because `providers` and
+  an agent's `request` are withheld. The promise says that no file may spend your money, and the user-facing note lists
+  `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
+  [upgrading](upgrading.md) note. Until it is made, class 8 calls a field a permission only when it selects which rules,
+  agent or mode apply.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
-  reaches the terminal the same way. Only a sanitizer at the renderer closes it (#22 round 7).
+  reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
+  bodies need a sanitizer in the renderer (#22 round 7).
+- **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
+  `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
+  upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
+  holds only without a leading wildcard. The review of #3 left it to the owner: change what such a pattern matches, or
+  say so in the note.
 - **The `webfetch` tool.** It still follows redirects through `HttpClient` with no per-hop ask and no address guard, and
   a proxy sees the address and not the name (task `file-web-tools-19`, M10).
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
+- **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
+  starts a run without `requireTrust`. Nothing calls it except an import-boundary test, so it is dormant. Whoever wires
+  it in calls `requireTrust` first.
+- **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
+  `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
+  cannot tell a trust refusal from any other failure of a command.
+- **Programs that do not go through the spawner.** The language server client (`packages/core/src/lsp/client.ts`) starts
+  a server through `cross-spawn` directly, so `NoDefaultCurrentDirectoryInExePath` is not set for it. It starts one only
+  for a trusted folder (class 1), so the decision comes first: keep that gate, or move the call to `CrossSpawnSpawner`.
+  And when `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`, which the spawner hands to
+  the host's own spawn. Bun's own spawn looks on `PATH` only, but a Node host has not been checked, and the core also
+  runs under Node.
+- **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
+  `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
+  that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
+  check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
 - **Build checks.** `verifyArtifact` does not fail the build on an import or a `require` of a `#` name or of a stray
   bare name, and `packages/core/test/provider-compiled.test.ts` copies the autoload options instead of importing them.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
@@ -1068,6 +1218,9 @@ Not fixed in M1. Carry each into a task, and do not claim otherwise in docs or i
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.
+- **No list of known failures.** The repository holds no list of the tests that are known to fail or to be flaky. M1's
+  baseline of them lived outside it, so a new flake looked like an old one. Put the list in the repository, one line per
+  test with its reason, before the next milestone starts.
 - **Lint noise.** `bun run lint:effect-patterns` carries 27 standing diagnostics, so a new violation of the AGENTS.md
   style rules (nested service yields, `else`, import aliases) hides among them. Bring it to zero or make it fail on the
   files that a change touches.
@@ -1094,9 +1247,11 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 
 **It reads project files** (loaders, readers, parsers, links, stores)
 
-- [ ] Every reader of repository-supplied bytes asks `ProjectTrust` (`reachable`, `supplies` or `escapes`) and judges
-      containment on the real path, at read time, with `FSUtil.contains` and never by string comparison. Dangling links,
-      targets that do not exist yet, UNC paths and Windows case are covered (4).
+- [ ] Every reader of repository-supplied bytes asks `ProjectTrust` (`reachable`, `supplies` or `escapes`), which judges
+      containment on the real path at read time. `FSUtil.resolve` and `fs.resolve` keep the lexical path for a part that
+      is not there, so they never decide it; `FSUtil.contains` is used only on two paths that are already real, and
+      nothing compares paths as strings. Dangling links, targets that do not exist yet, UNC paths and Windows case are
+      covered (4).
 - [ ] The text goes to the model provider, a tool write or the terminal, and the worst file that a link could point at
       has been considered (4).
 - [ ] Markdown, YAML and JSON go through `ConfigMarkdown` or a parser that cannot evaluate. No library evaluates,
@@ -1107,7 +1262,8 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 - [ ] A data file that reaches a shell, an approval or an agent choice is listed by a reader that shares the runner's
       validator, templates count, and a gate-versus-runner test covers replay, resume and eval (2).
 - [ ] Every config key, agent field and command field is classified in `ConfigTrust.classification`. A field that
-      chooses the rules, agent, mode, model or provider is a permission, and untrusted sources get deny rules only (8).
+      chooses which rules, agent or mode apply is a permission, and untrusted sources get deny rules only. A field that
+      picks a model, a provider or a step budget is the open decision in Known gaps: ask before calling it inert (8).
 
 **It runs commands** (spawns, shell, hooks, plugins, workflow nodes, git)
 
@@ -1115,8 +1271,10 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
       before the gate (1, 12).
 - [ ] Whatever the folder can make this code spawn, approve or choose is listed, whether it is a path, an agent, a model
       or a provider (2, 8).
-- [ ] An executable that is spawned by name is looked up on `PATH` only, and the resolver does not search the working
-      folder first, as the npm `which` package does on Windows (10).
+- [ ] An executable is found with `which` (`PATH` only) and started through `CrossSpawnSpawner`. No bare name goes
+      through `exec`, `cmd /c` or another `cmd.exe` of its own, which look in the working folder first on Windows, and
+      the test deletes `NoDefaultCurrentDirectoryInExePath` and plants `.exe`, `.bat` and `.cmd` decoys with a control
+      (10).
 - [ ] The approver sees the whole thing that is approved: the full span, the method, the URL, the folder (8).
 - [ ] No default or fallback names an agent or a mode by constant instead of by configuration, and whose rules come last
       has been asked (8).
@@ -1125,6 +1283,8 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 
 **It makes network requests** (fetch, redirects, proxies, integrations)
 
+- [ ] Only `http:` and `https:` URLs reach `fetch`: `PermissionWeb.request` throws for any other scheme, and Bun's
+      `fetch` would read `file:`, `data:` and `s3:` (6).
 - [ ] Every URL or host that a script or a repository can influence asks permission per hop, redirects included (6).
 - [ ] The address that was checked is the address that is connected to, and the name is kept only in `Host` and SNI (6).
 - [ ] A lookup that throws, returns nothing or returns a name is refused (6, 7).
@@ -1135,8 +1295,9 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 
 **It prints or stores text** (CLI, terminal UI, titles, commit subjects, logs, JSON)
 
-- [ ] Every place where a string from a file, a store, a workflow or a session can reach a person is listed, and the
-      function that escapes it at that sink is named (9).
+- [ ] Every place where a string from a file, a store or a workflow, or a session title, can reach a person is listed,
+      and the function that escapes it at that sink is named. Message bodies wait for a sanitizer in the renderer (Known
+      gaps) (9).
 - [ ] The text also reaches no title, commit message, log line, toast or failure message that is built before the trust
       check without being escaped (9).
 - [ ] JSON is printed with `json()` and not `JSON.stringify`, numeric columns from a store are read with `Number()`, and
@@ -1156,10 +1317,11 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 
 - [ ] The new tests fail on the code from before the fix, the mutation is in the PR, and a trusted control run proves
       that the hostile file is live (1, 14).
-- [ ] No negative assertion passes vacuously, whether on a platform that skips it or under the default trust of core
-      tests (14).
+- [ ] No negative assertion passes vacuously, whether on a platform that skips it, under the default trust of core
+      tests, or in a shell that sets `NoDefaultCurrentDirectoryInExePath` (14).
 - [ ] Every allowlist entry is as narrow as its reason, and has a planted positive and a planted negative (14).
 - [ ] The tests that skip on the author's machine ran somewhere else, or the PR says they are unverified, and any flaky
       test is fixed or named (14).
 - [ ] The upgrade note says what a user must do, every promise in the docs, comments and PR body names a test or says
-      what is true, and the PR body matches the head commit (15).
+      what is true, the PR body matches the head commit, and a PR that needs another open PR says `depends on #<n>` in
+      its title (15).
