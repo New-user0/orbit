@@ -38,6 +38,17 @@ function same(a: string | null, b: string) {
   expect(a).toBe(b)
 }
 
+// The folder Orbit starts in belongs to the repository it opened, so a lookup run from there must not depend on it.
+function inside<T>(directory: string, run: () => T) {
+  const before = process.cwd()
+  process.chdir(directory)
+  try {
+    return run()
+  } finally {
+    process.chdir(before)
+  }
+}
+
 describe("util.which", () => {
   test("returns null when command is missing", () => {
     expect(which("orbit-missing-command-for-test")).toBeNull()
@@ -96,5 +107,54 @@ describe("util.which", () => {
     const file = await cmd(bin, "mixed")
 
     same(which("mixed", envPath(bin)), file)
+  })
+
+  test("looks only on PATH, never in the working folder", async () => {
+    await using tmp = await tmpdir()
+    const here = path.join(tmp.path, "here")
+    const bin = path.join(tmp.path, "bin")
+    await fs.mkdir(here)
+    await fs.mkdir(bin)
+    await cmd(here, "shadowed")
+    await cmd(here, "only-here")
+    const installed = await cmd(bin, "shadowed")
+
+    inside(here, () => {
+      // The npm `which` package looks in the working folder before PATH on Windows, so a repository could put its own
+      // git.exe or rg.exe in front of the installed one.
+      same(which("shadowed", env(bin)), installed)
+      expect(which("only-here", env(bin))).toBeNull()
+    })
+  })
+
+  test("does not read an empty PATH entry as the working folder", async () => {
+    await using tmp = await tmpdir()
+    const here = path.join(tmp.path, "here")
+    const bin = path.join(tmp.path, "bin")
+    await fs.mkdir(here)
+    await fs.mkdir(bin)
+    await cmd(here, "only-here")
+    const installed = await cmd(bin, "installed")
+
+    inside(here, () => {
+      expect(which("only-here", env([bin, "", bin].join(path.delimiter)))).toBeNull()
+      expect(which("only-here", env(""))).toBeNull()
+      same(which("installed", env([bin, ""].join(path.delimiter))), installed)
+    })
+  })
+
+  test("finds a command in a quoted PATH entry", async () => {
+    await using tmp = await tmpdir()
+    const file = await cmd(tmp.path, "quoted")
+
+    same(which("quoted", env(`"${tmp.path}"`)), file)
+  })
+
+  test("checks a command that names a directory as given", async () => {
+    await using tmp = await tmpdir()
+    const file = await cmd(tmp.path, "direct")
+
+    same(which(file, env("")), file)
+    expect(which(path.join(tmp.path, "absent"), env(tmp.path))).toBeNull()
   })
 })

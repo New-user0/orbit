@@ -588,6 +588,22 @@ embedded.
 
 **What to do:** nothing.
 
+### On Windows, `orb` finds git, ripgrep and its other programs on PATH and never in the folder it starts in
+
+`orb` looks for git, ripgrep, the shell that runs its commands, the formatters and a few other programs by name down
+PATH. On Windows the library that did it searched the current folder before PATH, as `cmd.exe` does, and that folder
+can be a repository that is not trusted yet. A `git.exe` committed to it ran as native code whenever Orbit used git
+there, `orb session list --standalone` among them, and an `rg.exe` ran when the file search of a server that started in
+the folder looked for files, before any trust check. The lookup now reads PATH and Orbit's own `bin` folder and nothing
+else, so what a repository commits is never a candidate. On every platform a PATH entry that is empty, which a shell
+reads as the current folder, is skipped as well. When the program is on PATH the result is the same file as before.
+
+**Affects:** Windows users who keep git, ripgrep or another of these programs in the project folder and not on PATH:
+Orbit no longer finds it there. A repository that commits such a file no longer has it run.
+
+**What to do:** nothing when the program is on PATH. Otherwise put it on PATH. For ripgrep, copying `rg.exe` to Orbit's
+`bin` folder works as well.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
