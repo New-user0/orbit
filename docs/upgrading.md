@@ -103,8 +103,12 @@ rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
-  agent, whose entry goes with it. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out
-  too: a project's value outranks yours, so it would otherwise replace the one in your own config.
+  agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
+  own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
+  model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
+  the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
+  that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours,
+  so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -129,6 +133,24 @@ skipped` and names the file, and it loads when the project is trusted, without a
 is taken away. Instruction files in your own config directory are never held back, and nothing changes once the project
 is trusted, so a symlinked `AGENTS.md` that you rely on works as before.
 
+Everything else that a repository can point at is held to its folder in the same way, because each of these goes to the
+model provider as well. Until the project is trusted, an agent file, a command file, a skill and an output style that a
+link in the project leads out of the project's folders is not read, whether the link is the file or a folder above it:
+`.orbit/agents` pointing at a folder of yours, or a `build.md` that links to a key, no longer replaces the system prompt
+of every session. The same goes for the skills and output styles in another product's root. A config directory in a
+folder above the project is held to that folder, whose own decision applies. Each file that is skipped is logged once,
+as a warning that says `config file skipped` and names the file, and it is read once the folder is trusted, without a
+restart. Your own config directory is never held back. An `output_style` also names one file in an `output-styles`
+directory and nothing else: a name with a path separator or `..` is not found, in any directory, yours included, so a
+config can no longer climb out of the directory to read another file.
+
+The file tools hold a link to the folder in the same way. Until the project is trusted, `read`, `edit`, `write`,
+`patch`, `grep`, `glob`, the shell's working directory and the other tools that take a path count a path that a link in
+the project leads out of the project as outside it, and ask about the folder it leads to (`external_directory`) as for
+any other path outside the project, which a run with nobody to ask rejects. A file that does not exist yet counts by
+where the nearest folder of its path that does exist leads, so a `write` through a link is asked about too. A trusted
+project follows links as before.
+
 Orbit starts no language server and runs no formatter in a folder that is not trusted, the built-in ones and the ones
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
 working as soon as the folder is trusted.
@@ -144,15 +166,25 @@ The files in a project's `.orbit` directory are held to the same decision, becau
 - **Commands:** a command from `.orbit/commands`, or from a `commands` setting of the project, is still listed, and one
   whose template has no shell snippet works as before. One that runs a shell snippet (an exclamation mark and a command
   in backticks) fails with a message that names the command and the folder to trust, which is the folder around the
-  `.orbit` directory or config file that defines it. Nothing is asked about or started first.
+  `.orbit` directory or config file that defines it. Nothing is asked about or started first. A command that names an
+  `agent` runs as the session's current agent instead, as a subtask as well.
 - **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt, model and description, and loses
-  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, and `disabled`, so a file
-  cannot remove one of the agents that are already there.
+  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, `disabled`, `mode` and
+  `hidden`, so a file cannot remove or hide one of the agents that are already there, or make one of them spawnable by
+  the model.
 
-Skills and output styles in a project are text, so they stay available. No Markdown file that Orbit reads from a config
-directory is ever run: front matter written in JavaScript (a file that opens with `---js` or `---javascript`) is
-refused, and the file is skipped. The list of what a folder holds back also names each `.orbit` directory with the
-plugins, commands with shell snippets, and agents with requests or approvals it holds.
+Skills and output styles in a project are text, so they stay available, except through a link that leaves the project
+(see above). No Markdown file that Orbit reads from a config directory is ever run: front matter written in JavaScript
+(a file that opens with `---js` or `---javascript`) is refused, and the file is skipped. The list of what a folder holds
+back also names each `.orbit` directory with the plugins, commands with shell snippets or an agent, and agents with
+requests, approvals, a mode or `hidden` that it holds.
+
+A folder that is a linked worktree of a git repository shares the decision of that repository's main checkout, but only
+when the repository lists the folder as one of its worktrees, which `git worktree add` does. A `.git` file in a folder
+can name any git directory, and that directory can name another repository's as its common directory, which used to
+make that repository the folder's main checkout: a folder from an archive or a download that knew where a repository
+you trust lives took on the decision you made for it, and its config applied in full. Such a folder now has a decision
+of its own.
 
 Your own config, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT` and the server's remote sources are never held back, and neither
 are the Orbit files in your home directory. Trust belongs to the project's root folder, so a repository and its linked
@@ -172,19 +204,27 @@ ignores the variable, because it serves every client and project.
 **Affects:** anyone who opens a repository whose config sets `hooks`, `mcp`, `plugins`, `providers`, `sandbox`,
 `formatter`, `default_agent`, `warming` or `allow` and `ask` permission rules, through the background service (the
 terminal UI, VS Code and the desktop app): those settings now stay off. So do the server's plugins from
-`.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `request` overrides and `allow` rules of
-agents in `.orbit/agents`, and language servers and formatters, in every folder that is not trusted, until it is
-trusted in the terminal UI or with `orb trust` (or, for one run of a headless command, `--trust`). The same goes for SDK
-hosts and servers that leave `trust.implicit` unset, and for tests that write project config and start a server. So do
-the plugins that the terminal UI loads from `.orbit/plugins` itself. Code built on `@orbit/core`: `Config.Document` and
-`Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry
-`trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs
-`FSUtil`, `ProjectTrust.status` also lists `.orbit` directories and gives each file or directory above the project the
-folder to trust for it, as `directory`, `ProjectTrust.allows` says whether a file may run the code it carries (ask it
-before running anything a file carries, such as the hooks in a skill's or an agent's front matter), `ProjectTrust.reachable`
-says whether a file may be read into the prompt (ask it before reading a file that something in the project points at),
-`SessionInstructions` now needs `ProjectTrust`, and a global `trust.updated` event reports each change. Instruction files
-that are a link out of an untrusted project, and the ones in the folders above it, stay unread until it is trusted.
+`.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `agent` of a command, the `request`
+overrides, `mode`, `hidden` and `allow` rules of agents in `.orbit/agents`, and language servers and formatters, in
+every folder that is not trusted, until it is trusted in the terminal UI or with `orb trust` (or, for one run of a
+headless command, `--trust`). The same goes for SDK hosts and servers that leave `trust.implicit` unset, and for tests
+that write project config and start a server. So do the plugins that the terminal UI loads from `.orbit/plugins`
+itself. Code built on `@orbit/core`: `Config.Document` and `Config.Directory` gain `trusted`, `Config.Document` gains
+`withheld`, the roots that `Config.compat` lists can carry `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and
+`Formatter` now need `ProjectTrust`, `ProjectTrust` now needs `FSUtil`, `ProjectTrust.status` also lists `.orbit`
+directories and gives each file or directory above the project the folder to trust for it, as `directory`,
+`ProjectTrust.allows` says whether a file may run the code it carries (ask it before running anything a file carries,
+such as the hooks in a skill's or an agent's front matter), and three more ask what a link in the project may reach,
+which each reader of a file that a repository points at must ask (the readers that do are the instruction plugin and
+`SessionInstructions`, which ask `ProjectTrust.reachable`, the agent, command, skill, compatibility and output style
+plugins, which ask `ProjectTrust.supplies` about the files of a config directory or another product's root, and
+`FileAccess`, which asks `ProjectTrust.escapes` where a path really leads). `FileAccess` and the plugins that read those
+files now need `ProjectTrust`, `SessionInstructions` needs it as well, `AgentFile.load` and `CommandFile.load` take the
+check as an optional argument, and a global `trust.updated` event reports each change. Files that are a link out of an
+untrusted project, and the ones in the folders above it, stay unread until it is trusted, and a path through such a link
+is asked about by the file tools. `ConfigTrust.classification` withholds the `agent` of a command and the `mode` and
+`hidden` of an agent, and `ConfigTrust.sanitizeCommands` cuts the commands of a directory down as it does those of a
+document.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run `orb trust` in it, or
 run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which
