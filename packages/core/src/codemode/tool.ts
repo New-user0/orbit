@@ -74,10 +74,16 @@ const description = [
 // function also asks about what the call does on its own, such as the redirects `fetch` follows, with a call of its own.
 export type Authorize = (call: CodeMode.ExtensionInvocation, context: Context) => Effect.Effect<void, Error>
 
+// Where a request that `fetch` is about to send may go, which it asks for the program's own request and for each redirect
+// after the request is authorized. It fails when the request must not go out, and otherwise answers with the addresses to
+// connect to instead of the host, none for a host that is an address, as `CodeModeWeb.Gate.resolve` takes them.
+export type Resolve = (host: string) => Effect.Effect<ReadonlyArray<string>, Error>
+
 export const create = (
   inventory: Inventory,
   executeTool: (name: string, tool: Info, input: unknown, context: Context) => Effect.Effect<Result, Error>,
   authorize: Authorize,
+  resolve: Resolve,
 ) => {
   return {
     name: "execute",
@@ -88,8 +94,9 @@ export const create = (
       Effect.gen(function* () {
         // Aborts when the execution ends, however it ends, so a fetch that is still asking or sending stops with it.
         const signal = yield* Effect.abortSignal
-        // A redirect is asked about from inside `fetch`, which is plain promise code. Running that ask in this execution's
-        // own context keeps its loggers, minimum log level and tracer, as a new root fiber would drop them.
+        // A redirect is asked about, and the place a request may go is checked, from inside `fetch`, which is plain promise
+        // code. Running those in this execution's own context keeps its loggers, minimum log level and tracer, as a new
+        // root fiber would drop them.
         const run = Effect.runPromiseExitWith(yield* Effect.context())
         const callIndex = yield* Ref.make(0)
         const files = yield* Ref.make<Array<CollectedFiles>>([])
@@ -116,6 +123,13 @@ export const create = (
           )
         const authorized = (call: CodeMode.ExtensionInvocation) =>
           authorize(call, context).pipe(Effect.catchCause(latchDecline))
+        // A decline stops the whole execution the same way as for a call of the program's own, and whatever stops the
+        // request ends the fetch that was following it.
+        const ask = async <A>(effect: Effect.Effect<A, Error>) => {
+          const exit = await run(Effect.andThen(halted, effect), { signal })
+          if (Exit.isFailure(exit)) throw Cause.squash(exit.cause)
+          return exit.value
+        }
         const progress = progressHooks(record, authorized)
         const codeMode = runtime(
           inventory,
@@ -141,18 +155,10 @@ export const create = (
           },
           {
             signal,
-            // A redirect is a request of its own, so it is asked about like a call of the program's own, and a decline
-            // stops the whole execution the same way. Whatever stops the request ends the fetch that was following it.
-            authorize: async (url, method) => {
-              const exit = await run(
-                Effect.andThen(
-                  halted,
-                  authorized({ extension: CodeModeWeb.name, name: "fetch", args: [url, { method }] }),
-                ),
-                { signal },
-              )
-              if (Exit.isFailure(exit)) throw Cause.squash(exit.cause)
-            },
+            // A redirect is a request of its own, so it is asked about like a call of the program's own.
+            authorize: (url, method) =>
+              ask(authorized({ extension: CodeModeWeb.name, name: "fetch", args: [url, { method }] })),
+            resolve: (host) => ask(resolve(host)),
           },
         )
         // The program settles however it likes, but a decline stops it and has the last word, even over a program

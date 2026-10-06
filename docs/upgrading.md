@@ -509,11 +509,26 @@ are the IPv4-mapped (`::ffff:a.b.c.d`), IPv4-compatible and IPv4-translated addr
 `[64:ff9b::a9fe:a9fe]` and `[2002:a9fe:a9fe::]` are refused as the metadata address they lead to. An address that a
 network translates to IPv4 with a prefix of its own is not recognised. A host name is resolved first, and it is refused
 when any address it stands for is one of those; `localhost` and the names under it count as loopback. The script gets an
-error that names the address. A name whose address changes between the check and the connection is not caught.
+error that names the address.
+
+The request then goes to the addresses that were checked, and not to the name. Whatever connects to a name resolves it
+again, and a name with a time to live of 0 can answer with a public address for the check and with `169.254.169.254`
+for the connection (DNS rebinding). A script chooses the method and the headers of its request, so that would reach the
+credentials that a cloud serves from its metadata address, such as those of IMDSv2, Compute Engine and Azure. So `fetch`
+resolves a name once per request, the program's own and each redirect, and connects to an address from that answer. It
+tries the others, in the order they came, only when no connection could be made to the one before, so a name with
+several addresses, such as `localhost`, still reaches a server that listens on one of them. The name stays what the
+request is for: it is sent in the `Host` header, unless the script sets its own, and with `https:` in the TLS handshake,
+where the certificate is checked against the name and not against the address, and it is the name that `response.url`
+reports. A host that is an address is connected to as it is. A name that resolves to no address is refused as well, and
+so is one whose lookup fails, because there is nothing to check and the connection would resolve the name by itself.
+Behind a proxy that `HTTP_PROXY` or `HTTPS_PROXY` names, the proxy is asked to connect to the address and not to the
+name, and an entry of `NO_PROXY`, which matches by name, no longer applies to a request for a name.
 
 **Affects:** Code Mode scripts that call `fetch`. One that follows a redirect while `webfetch` is set to ask or deny gets
 another prompt. One that calls a server on `localhost`, on a private network or at a link-local address now fails, even
-with allow-all rules.
+with allow-all rules. One that calls a name that this machine cannot resolve by itself now gets an error that says so,
+where it used to send the request on to a proxy that resolved the name, if there was one.
 
 **What to do:** approve the extra prompts, or add `webfetch` allow rules for the origins the redirects lead to. To let
 scripts reach local dev servers, set `experimental.allow_local_fetch` to `true` in your own config. It lets `fetch` reach

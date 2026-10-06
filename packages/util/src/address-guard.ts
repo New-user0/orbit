@@ -13,10 +13,26 @@ export * as AddressGuard from "./address-guard.js"
 export type Kind = "loopback" | "private" | "link-local" | "metadata"
 
 export interface Refusal {
-  /** The address that was refused: the host itself when it is an address, otherwise one it resolved to. */
+  /**
+   * The address that was refused: the host itself when it is an address, otherwise one it resolved to, in the form a URL
+   * has it, or the name itself when it resolved to none.
+   */
   readonly address: string
-  readonly kind: Kind
+  /** Which kind of address it is, or `unresolved` for a name that stands for no address, so that there is none to check. */
+  readonly kind: Kind | "unresolved"
 }
+
+/** What `check` decided. */
+export type Checked =
+  | { readonly allowed: false; readonly refusal: Refusal }
+  | {
+      readonly allowed: true
+      /**
+       * The addresses a request to a name must connect to, in the order the resolver gave them and in the form a URL has
+       * them, instead of connecting to the name. Empty for a host that is an address, which a request connects to as it is.
+       */
+      readonly connect: ReadonlyArray<string>
+    }
 
 export interface Options {
   /** Kinds the request may reach after all, such as `loopback` for a dev server. Every other non-public kind is refused. */
@@ -26,34 +42,44 @@ export interface Options {
 }
 
 /**
- * Checks where a request to `host` would go and returns the first address it may not reach, or undefined when it may go
- * ahead. `host` is what a URL calls its hostname: an address in any spelling a URL accepts, such as 2130706433, 0x7f.1 or
- * [::ffff:127.0.0.1], or a name. A name is resolved, and one address that is not public is enough to refuse it, since the
- * request may connect to any of them.
+ * Checks where a request to `host` would go: whether it may go ahead, and where it must connect. `host` is what a URL
+ * calls its hostname: an address in any spelling a URL accepts, such as 2130706433, 0x7f.1 or [::ffff:127.0.0.1], or a
+ * name. A name is resolved, once, and one address that is not public is enough to refuse it, since the request may
+ * connect to any of them.
  *
- * A name that does not resolve is not refused. Nothing here can connect to it, so the request fails by itself, or goes
- * through a proxy that resolves it. The answer can still differ from the one the request gets, because the name is
- * resolved again when it connects; that is not guarded against.
+ * A name that resolves to no address is refused as well, whether the resolver has none for it or fails. There is nothing
+ * to check, and whatever the request then connected to would be a place that nobody looked at: a name can answer with
+ * an error the first time and with the real address the second (DNS rebinding), and a proxy resolves a name by itself.
+ *
+ * What is allowed is the answer that was checked, not the name. The name is resolved again by whatever connects to it,
+ * and a name that expires at once can answer differently each time, so a request that is allowed must connect to the
+ * addresses in `connect`, and send the name only as what it asks for: in its `Host` header and, with TLS, in the
+ * handshake that checks the certificate.
  *
  * Resolving a name is a request to the network, so ask permission for the host before calling this. A string that is not
  * a host, such as one that still has a port or a path on it, is a mistake of the caller and rejects, so that it is never
  * taken for an address that may be reached.
  */
-export async function check(host: string, options: Options = {}): Promise<Refusal | undefined> {
+export async function check(host: string, options: Options = {}): Promise<Checked> {
   const name = canonical(host)
   if (name === undefined) throw new TypeError(`Not a host name or address: ${host}`)
-  // Names under .localhost always resolve to the loopback interface (RFC 6761), whatever a resolver says.
-  const addresses = literal(name)
+  const isAddress = literal(name)
+  // Names under .localhost always resolve to the loopback interface (RFC 6761), whatever a resolver says. A server on
+  // `localhost` can listen on either family, so a request tries both.
+  const addresses = isAddress
     ? [name]
     : name === "localhost" || name.endsWith(".localhost")
-      ? ["127.0.0.1"]
-      : await (options.lookup ?? lookup)(name).catch(() => [])
-  return addresses
+      ? ["127.0.0.1", "[::1]"]
+      : await resolve(name, options.lookup ?? lookup)
+  const refusal = addresses
     .flatMap((address) => {
       const kind = classify(address)
       return kind === undefined || options.allow?.includes(kind) ? [] : [{ address, kind }]
     })
     .at(0)
+  if (refusal !== undefined) return { allowed: false, refusal }
+  if (addresses.length === 0) return { allowed: false, refusal: { address: name, kind: "unresolved" } }
+  return { allowed: true, connect: isAddress ? [] : addresses }
 }
 
 /**
@@ -71,6 +97,21 @@ export function classify(address: string): Kind | undefined {
 async function lookup(name: string) {
   const { lookup } = await import("node:dns/promises")
   return (await lookup(name, { all: true, verbatim: true })).map((entry) => entry.address)
+}
+
+// The addresses a name stands for, in the form a URL has them and without repeats, in the order the resolver gave them. A
+// resolver that fails answers none, and so does one that answers with something that is not an address: a request must
+// never be told to connect to a name.
+async function resolve(name: string, resolver: NonNullable<Options["lookup"]>) {
+  const answered = await resolver(name).catch(() => [])
+  return [
+    ...new Set(
+      answered.flatMap((address) => {
+        const found = canonical(address)
+        return found !== undefined && literal(found) ? [found] : []
+      }),
+    ),
+  ]
 }
 
 // What a URL makes of the host: a numeric IPv4 spelling is written as four decimal parts, an IPv6 literal as its shortest

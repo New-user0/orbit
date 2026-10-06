@@ -1,6 +1,7 @@
 export * as CodeModeWeb from "./web.js"
 
 import { Extension } from "@orbit/codemode"
+import { checkServerIdentity, type PeerCertificate } from "node:tls"
 import { PermissionWeb } from "../permission/web.js"
 
 /** The extension a call to `fetch` names. */
@@ -13,6 +14,8 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization", "host"]
 // The headers that describe a body, which go with it when a redirect turns a request into a GET.
 const BODY_HEADERS = ["content-encoding", "content-language", "content-location", "content-type"]
+// What fetch fails with when it could not connect to an address, so that nothing was sent to it.
+const NOT_CONNECTED = new Set(["ConnectionRefused", "FailedToOpenSocket"])
 
 type Init = {
   readonly method?: string
@@ -27,6 +30,12 @@ export interface Gate {
    * request must not go out, and then the chain ends.
    */
   readonly authorize: (url: URL, method: string) => Promise<void>
+  /**
+   * Checks where a request to `host` may go, which is asked for every request in a chain, the program's own and each
+   * redirect. It answers with the addresses to connect to instead of the host, and with none for a host that is an address
+   * itself. It rejects when the request must not go out.
+   */
+  readonly resolve: (host: string) => Promise<ReadonlyArray<string>>
   /** Aborts when the execution ends, so that a fetch outliving its program asks and sends no more. */
   readonly signal: AbortSignal
 }
@@ -35,7 +44,8 @@ export interface Gate {
  * The `fetch` a program calls. Its own request is authorized before it runs, as any call to a host function is. A
  * redirect is a request of its own, to a place the program never named and the user never approved, so `fetch` does not
  * let the runtime follow one: it hands each one to the gate, which asks about it like any other request, and stops where
- * the gate refuses. It follows at most 10, so that a loop ends quickly.
+ * the gate refuses. It follows at most 10, so that a loop ends quickly. Each request, the first and every redirect, goes
+ * to the addresses that the gate checked and not to the name that stands for them.
  */
 export const extension = (gate: Gate) => {
   // Bun's fetch also reads file:, data: and s3: URLs and takes an array or an object with a url for the URL. Reading the
@@ -55,7 +65,7 @@ async function send(
   headers: Headers,
   redirects: number,
 ): Promise<Reply> {
-  const response = await globalThis.fetch(url, {
+  const response = await connect(gate, url, {
     method,
     headers,
     body,
@@ -64,7 +74,7 @@ async function send(
     signal: AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), gate.signal]),
   })
   const location = response.headers.get("location")
-  if (!REDIRECT_STATUSES.has(response.status) || location === null) return reply(response, redirects > 0)
+  if (!REDIRECT_STATUSES.has(response.status) || location === null) return reply(response, redirects > 0, url)
   // Only the headers of a redirect matter.
   await response.body?.cancel()
   if (redirects === MAX_REDIRECTS) throw new Error(`fetch stopped after following ${MAX_REDIRECTS} redirects`)
@@ -83,12 +93,54 @@ async function send(
   return send(gate, next, nextMethod, toGet ? undefined : body, headers, redirects + 1)
 }
 
-async function reply(response: Response, redirected: boolean) {
+// Sends the request to the addresses that were checked and not to the name, which whatever connects to it would resolve
+// again, and a name can answer differently each time (DNS rebinding). The request is still for the name: it is in the
+// `Host` header, which a program's own `Host` keeps as it is, and over TLS in the handshake and the check of the
+// certificate, so a server and a certificate see the request as they would see one that went to the name. A name with
+// several addresses is tried one after the other, as fetch does itself, moving on only when no connection could be made.
+async function connect(gate: Gate, url: URL, init: BunFetchRequestInit) {
+  const addresses = await gate.resolve(url.hostname)
+  if (addresses.length === 0) return globalThis.fetch(url, init)
+  const name = url.hostname.replace(/\.+$/, "")
+  const headers = new Headers(init.headers)
+  if (!headers.has("host")) headers.set("host", url.host)
+  const attempt = (index: number): Promise<Response> => {
+    const pinned = new URL(url)
+    pinned.hostname = addresses[index]
+    return globalThis
+      .fetch(pinned, {
+        ...init,
+        headers,
+        ...(url.protocol === "https:"
+          ? {
+              tls: {
+                serverName: name,
+                checkServerIdentity: (_: string, certificate: PeerCertificate) =>
+                  checkServerIdentity(name, certificate),
+              },
+            }
+          : {}),
+      })
+      .catch((error: unknown) => {
+        if (index === addresses.length - 1 || !notConnected(error)) throw error
+        return attempt(index + 1)
+      })
+  }
+  return attempt(0)
+}
+
+const notConnected = (error: unknown) =>
+  error instanceof TypeError && "code" in error && typeof error.code === "string" && NOT_CONNECTED.has(error.code)
+
+// `url` is the one the request is for. The response's own is where it was sent, which is an address and not the name.
+async function reply(response: Response, redirected: boolean, url: URL) {
   const bytes = await response.bytes()
   const headers = Object.fromEntries(response.headers)
   const text = () => new TextDecoder().decode(bytes)
+  const shown = new URL(url)
+  shown.hash = ""
   return {
-    url: response.url,
+    url: shown.href,
     status: response.status,
     statusText: response.statusText,
     ok: response.ok,

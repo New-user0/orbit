@@ -17,8 +17,12 @@ const context = {
   progress: () => Effect.void,
 }
 
-const createCodeMode = (tools: ReadonlyMap<string, Info>, authorize: CodeModeTool.Authorize = () => Effect.void) =>
-  CodeModeTool.create({ tools }, (_, tool, input, context) => execute(tool, input, context), authorize)
+// The hosts these tests call are addresses, which a request connects to as they are, so by default nothing is pinned.
+const createCodeMode = (
+  tools: ReadonlyMap<string, Info>,
+  authorize: CodeModeTool.Authorize = () => Effect.void,
+  resolve: CodeModeTool.Resolve = () => Effect.succeed([]),
+) => CodeModeTool.create({ tools }, (_, tool, input, context) => execute(tool, input, context), authorize, resolve)
 
 test("execute describes invariant Code Mode behavior", () => {
   expect(createCodeMode(new Map()).description).toBe(

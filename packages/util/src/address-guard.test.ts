@@ -221,6 +221,11 @@ describe("AddressGuard.check", () => {
   const unreachable = (): Promise<never> => {
     throw new Error("looked up")
   }
+  const refused = (address: string, kind: AddressGuard.Refusal["kind"]) => ({
+    allowed: false as const,
+    refusal: { address, kind },
+  })
+  const allowed = (...connect: ReadonlyArray<string>) => ({ allowed: true as const, connect })
 
   test("refuses an address of every kind, naming the address and why", async () => {
     for (const [host, address, kind] of [
@@ -236,23 +241,20 @@ describe("AddressGuard.check", () => {
       ["fd00:42::42", "[fd00:42::42]", "metadata"],
       ["fe80::1", "[fe80::1]", "link-local"],
     ] as const)
-      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual({ address, kind })
+      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual(refused(address, kind))
   })
 
   test("lets through the kinds it is told to allow, and no others", async () => {
     const allow = ["loopback", "private"] as const
-    expect(await AddressGuard.check("127.0.0.1", { allow })).toBeUndefined()
-    expect(await AddressGuard.check("192.168.1.2", { allow })).toBeUndefined()
-    expect(await AddressGuard.check("[64:ff9b::7f00:1]", { allow })).toBeUndefined()
+    expect(await AddressGuard.check("127.0.0.1", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("192.168.1.2", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("[64:ff9b::7f00:1]", { allow })).toEqual(allowed())
     // The neighbours of the IPv6 metadata endpoints are private networks, which this configuration reaches.
-    expect(await AddressGuard.check("[fd00:a9fe:a9fe::2]", { allow })).toBeUndefined()
-    expect(await AddressGuard.check("[fd00:42::43]", { allow })).toBeUndefined()
-    expect(await AddressGuard.check("169.254.169.254", { allow })).toEqual({
-      address: "169.254.169.254",
-      kind: "metadata",
-    })
-    expect(await AddressGuard.check("169.254.1.1", { allow })).toEqual({ address: "169.254.1.1", kind: "link-local" })
-    expect(await AddressGuard.check("169.254.169.254", { allow: ["metadata"] })).toBeUndefined()
+    expect(await AddressGuard.check("[fd00:a9fe:a9fe::2]", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("[fd00:42::43]", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("169.254.169.254", { allow })).toEqual(refused("169.254.169.254", "metadata"))
+    expect(await AddressGuard.check("169.254.1.1", { allow })).toEqual(refused("169.254.1.1", "link-local"))
+    expect(await AddressGuard.check("169.254.169.254", { allow: ["metadata"] })).toEqual(allowed())
   })
 
   test("keeps every address of a metadata endpoint closed to a configuration that allows local servers", async () => {
@@ -281,24 +283,27 @@ describe("AddressGuard.check", () => {
       "[2002:a9fe:a9fe::]",
       "[2001:0:4136:e378:8000:63bf:5601:5601]",
     ])
-      expect(await AddressGuard.check(host, { allow, lookup: unreachable })).toMatchObject({ kind: "metadata" })
+      expect(await AddressGuard.check(host, { allow, lookup: unreachable })).toMatchObject({
+        allowed: false,
+        refusal: { kind: "metadata" },
+      })
   })
 
-  test("lets a public address through", async () => {
-    expect(await AddressGuard.check("8.8.8.8", { lookup: unreachable })).toBeUndefined()
-    expect(await AddressGuard.check("[2606:4700:4700::1111]", { lookup: unreachable })).toBeUndefined()
-    expect(await AddressGuard.check("[64:ff9b::808:808]", { lookup: unreachable })).toBeUndefined()
+  test("lets a public address through, to be connected to as it is", async () => {
+    expect(await AddressGuard.check("8.8.8.8", { lookup: unreachable })).toEqual(allowed())
+    expect(await AddressGuard.check("[2606:4700:4700::1111]", { lookup: unreachable })).toEqual(allowed())
+    expect(await AddressGuard.check("[64:ff9b::808:808]", { lookup: unreachable })).toEqual(allowed())
   })
 
   test("takes localhost and the names under it for loopback without asking a resolver", async () => {
     for (const host of ["localhost", "LOCALHOST.", "app.localhost", "a.b.localhost"])
-      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual({
-        address: "127.0.0.1",
-        kind: "loopback",
-      })
-    expect(await AddressGuard.check("localhost", { allow: ["loopback"], lookup: unreachable })).toBeUndefined()
+      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual(refused("127.0.0.1", "loopback"))
+    // A server on localhost can listen on either family, so a request that is allowed to go there may try both.
+    expect(await AddressGuard.check("localhost", { allow: ["loopback"], lookup: unreachable })).toEqual(
+      allowed("127.0.0.1", "[::1]"),
+    )
     // Only a label of its own: a name that ends in the same letters is an ordinary name.
-    expect(await AddressGuard.check("notlocalhost", { lookup: async () => ["8.8.8.8"] })).toBeUndefined()
+    expect(await AddressGuard.check("notlocalhost", { lookup: async () => ["8.8.8.8"] })).toEqual(allowed("8.8.8.8"))
   })
 
   test("resolves a name and refuses it when any address it stands for is not public", async () => {
@@ -308,13 +313,15 @@ describe("AddressGuard.check", () => {
       return name.startsWith("rebound") ? ["93.184.216.34", "10.1.2.3"] : ["93.184.216.34", "2606:2800:220:1::1"]
     }
 
-    expect(await AddressGuard.check("rebound.example.com", { lookup })).toEqual({
-      address: "10.1.2.3",
-      kind: "private",
-    })
-    expect(await AddressGuard.check("rebound.example.com", { allow: ["private"], lookup })).toBeUndefined()
-    expect(await AddressGuard.check("Example.COM.", { lookup })).toBeUndefined()
-    // The name that is resolved is the one a URL would connect to, in lowercase and without its trailing dot.
+    expect(await AddressGuard.check("rebound.example.com", { lookup })).toEqual(refused("10.1.2.3", "private"))
+    expect(await AddressGuard.check("rebound.example.com", { allow: ["private"], lookup })).toEqual(
+      allowed("93.184.216.34", "10.1.2.3"),
+    )
+    expect(await AddressGuard.check("Example.COM.", { lookup })).toEqual(
+      allowed("93.184.216.34", "[2606:2800:220:1::1]"),
+    )
+    // The name that is resolved is the one a URL would connect to, in lowercase and without its trailing dot, and each
+    // check resolves it once: what it allowed is what a request must connect to, so nothing asks again.
     expect(asked).toEqual(["rebound.example.com", "rebound.example.com", "example.com"])
   })
 
@@ -322,17 +329,55 @@ describe("AddressGuard.check", () => {
     // What a DNS64 resolver makes of a name whose IPv4 address is the metadata endpoint's.
     const lookup = async () => ["2606:2800:220:1::1", "64:ff9b::a9fe:a9fe"]
 
-    expect(await AddressGuard.check("synthesized.example.com", { lookup })).toEqual({
-      address: "64:ff9b::a9fe:a9fe",
-      kind: "metadata",
-    })
+    expect(await AddressGuard.check("synthesized.example.com", { lookup })).toEqual(
+      refused("[64:ff9b::a9fe:a9fe]", "metadata"),
+    )
   })
 
-  test("does not refuse a name that does not resolve", async () => {
-    const lookup = () => Promise.reject(new Error("no such host"))
-    expect(await AddressGuard.check("gone.example.com", { lookup })).toBeUndefined()
+  test("answers with the addresses to connect to in the form a URL has them, in order and without repeats", async () => {
+    const lookup = async () => [
+      "2606:2800:220:1::1",
+      "93.184.216.34",
+      "2606:2800:0220:0001:0000:0000:0000:0001",
+      "0x5d.0xb8.0xd8.0x22",
+      // A zone says which interface to use and is no part of the address.
+      "2606:4700:4700::1111%eth0",
+    ]
+
+    expect(await AddressGuard.check("many.example.com", { lookup })).toEqual(
+      allowed("[2606:2800:220:1::1]", "93.184.216.34", "[2606:4700:4700::1111]"),
+    )
+  })
+
+  test("never hands out a name to connect to: what a resolver answers that is not an address is dropped", async () => {
+    expect(
+      await AddressGuard.check("cname.example.com", { lookup: async () => ["internal.example.com", "93.184.216.34"] }),
+    ).toEqual(allowed("93.184.216.34"))
+    expect(
+      await AddressGuard.check("cname.example.com", { lookup: async () => ["internal.example.com", "a b", ""] }),
+    ).toEqual(refused("cname.example.com", "unresolved"))
+  })
+
+  // A name that gives no answer is where DNS rebinding starts: it fails the first lookup and answers the second with the
+  // address of the metadata service. A request that went ahead anyway would resolve the name itself when it connected.
+  test("refuses a name that does not resolve, because there is no address to check", async () => {
+    expect(
+      await AddressGuard.check("gone.example.com", { lookup: () => Promise.reject(new Error("no such host")) }),
+    ).toEqual(refused("gone.example.com", "unresolved"))
+    expect(await AddressGuard.check("empty.example.com", { lookup: async () => [] })).toEqual(
+      refused("empty.example.com", "unresolved"),
+    )
+    // Allowing every kind of address does not make a name with none a place to go.
+    expect(
+      await AddressGuard.check("gone.example.com", {
+        allow: ["loopback", "private", "link-local", "metadata"],
+        lookup: async () => [],
+      }),
+    ).toEqual(refused("gone.example.com", "unresolved"))
     // The system resolver answers for a name that cannot exist, which takes as long as the network needs to say so.
-    expect(await AddressGuard.check("orbit-address-guard.invalid")).toBeUndefined()
+    expect(await AddressGuard.check("orbit-address-guard.invalid")).toEqual(
+      refused("orbit-address-guard.invalid", "unresolved"),
+    )
   }, 30_000)
 
   test("rejects what is not a host rather than taking it for an address that may be reached", async () => {
