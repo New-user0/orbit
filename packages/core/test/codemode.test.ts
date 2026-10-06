@@ -829,6 +829,9 @@ describe("CodeMode fetch addresses", () => {
           "http://[fd20:ce::254]/",
           "http://[fd00:c1::a9fe:a9fe]/",
           "http://[fd00:ec2::23]/",
+          // The Akamai (Linode) and Scaleway metadata services, which have an IPv6 address in the same range.
+          "http://[fd00:a9fe:a9fe::1]/v1/token",
+          "http://[fd00:42::42]/conf",
           "http://100.100.100.200/",
           // Oracle Cloud Infrastructure Classic, inside a range that is otherwise only private.
           "http://192.0.0.192/",
@@ -848,6 +851,8 @@ describe("CodeMode fetch addresses", () => {
         "fetch cannot reach [fd20:ce::254]: it is a cloud metadata address.",
         "fetch cannot reach [fd00:c1::a9fe:a9fe]: it is a cloud metadata address.",
         "fetch cannot reach [fd00:ec2::23]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:a9fe:a9fe::1]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:42::42]: it is a cloud metadata address.",
         "fetch cannot reach 100.100.100.200: it is a cloud metadata address.",
         "fetch cannot reach 192.0.0.192: it is a cloud metadata address.",
         "fetch cannot reach [64:ff9b::a9fe:a9fe]: it is a cloud metadata address.",

@@ -123,10 +123,16 @@ function kind6(g: ReadonlyArray<number>): Kind | undefined {
 }
 
 // Where AWS (instance metadata, and the EKS Pod Identity Agent), Compute Engine and Oracle Cloud Infrastructure serve
-// instance credentials over IPv6. Each one is inside the unique local range, which is otherwise only private.
-const metadata6 = ["fd00:ec2::254", "fd00:ec2::23", "fd20:ce::254", "fd00:c1::a9fe:a9fe"].map((address) =>
-  groups(`[${address}]`),
-)
+// instance credentials over IPv6, and where Akamai (Linode) and Scaleway serve their metadata services. Each one is inside
+// the unique local range, which is otherwise only private.
+const metadata6 = [
+  "fd00:ec2::254",
+  "fd00:ec2::23",
+  "fd20:ce::254",
+  "fd00:c1::a9fe:a9fe",
+  "fd00:a9fe:a9fe::1",
+  "fd00:42::42",
+].map((address) => groups(`[${address}]`))
 
 // The kind of the range that an IPv6 address is in, whatever IPv4 address it stands for.
 function range6(g: ReadonlyArray<number>): Kind | undefined {

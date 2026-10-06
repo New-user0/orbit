@@ -58,6 +58,17 @@ describe("AddressGuard.classify", () => {
         "fd00:ce::254",
         "fd00:c1::a9fe:a9ff",
         "fd00:c1:1::a9fe:a9fe",
+        "fd00:a9fe:a9fe::2",
+        "fd00:a9fe:a9fe::",
+        "fd00:a9fe:a9fe:1::1",
+        "fd00:a9fe:a9ff::1",
+        "fd00:a9fe::1",
+        "fd01:a9fe:a9fe::1",
+        "fd00:42::43",
+        "fd00:42::41",
+        "fd00:43::42",
+        "fd00:42:1::42",
+        "fd01:42::42",
       ],
     ],
     [
@@ -76,11 +87,25 @@ describe("AddressGuard.classify", () => {
         "fd00:ec2::23",
         "fd20:ce::254",
         "fd00:c1::a9fe:a9fe",
+        // Where Akamai (Linode) and Scaleway serve their metadata over IPv6, in the same range.
+        "fd00:a9fe:a9fe::1",
+        "fd00:42::42",
         // The same addresses in the other spellings of an IPv6 literal.
         "[fd20:ce::254]",
         "FD20:CE:0:0:0:0:0:254",
         "fd00:0c1:0::a9fe:a9fe",
         "fd00:ec2::23%eth0",
+        "[fd00:a9fe:a9fe::1]",
+        "FD00:A9FE:A9FE::1",
+        "fd00:a9fe:a9fe:0:0:0:0:1",
+        "fd00:a9fe:a9fe:0000:0000:0000:0000:0001",
+        "fd00:a9fe:a9fe::0001",
+        "fd00:a9fe:a9fe::1%eth0",
+        "[fd00:42::42]",
+        "FD00:0042:0:0:0:0:0:0042",
+        "fd00:42:0:0:0:0:0:42",
+        "fd00:0042:0000::0042",
+        "fd00:42::42%eth0",
         "100.100.100.200",
         "168.63.129.16",
         // Where Oracle Cloud Infrastructure Classic serves instance credentials, inside a range that is otherwise private.
@@ -207,6 +232,8 @@ describe("AddressGuard.check", () => {
       ["192.0.0.192", "192.0.0.192", "metadata"],
       ["[64:ff9b::a9fe:a9fe]", "[64:ff9b::a9fe:a9fe]", "metadata"],
       ["2002:a9fe:a9fe::", "[2002:a9fe:a9fe::]", "metadata"],
+      ["[fd00:a9fe:a9fe::1]", "[fd00:a9fe:a9fe::1]", "metadata"],
+      ["fd00:42::42", "[fd00:42::42]", "metadata"],
       ["fe80::1", "[fe80::1]", "link-local"],
     ] as const)
       expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual({ address, kind })
@@ -217,6 +244,9 @@ describe("AddressGuard.check", () => {
     expect(await AddressGuard.check("127.0.0.1", { allow })).toBeUndefined()
     expect(await AddressGuard.check("192.168.1.2", { allow })).toBeUndefined()
     expect(await AddressGuard.check("[64:ff9b::7f00:1]", { allow })).toBeUndefined()
+    // The neighbours of the IPv6 metadata endpoints are private networks, which this configuration reaches.
+    expect(await AddressGuard.check("[fd00:a9fe:a9fe::2]", { allow })).toBeUndefined()
+    expect(await AddressGuard.check("[fd00:42::43]", { allow })).toBeUndefined()
     expect(await AddressGuard.check("169.254.169.254", { allow })).toEqual({
       address: "169.254.169.254",
       kind: "metadata",
@@ -235,6 +265,15 @@ describe("AddressGuard.check", () => {
       "[fd00:ec2::23]",
       "[fd20:ce::254]",
       "[fd00:c1::a9fe:a9fe]",
+      "[fd00:a9fe:a9fe::1]",
+      "[fd00:42::42]",
+      // The other spellings of the two that Akamai (Linode) and Scaleway serve their metadata from.
+      "FD00:A9FE:A9FE:0:0:0:0:1",
+      "fd00:a9fe:a9fe::0001",
+      "[fd00:a9fe:a9fe::1%eth0]",
+      "fd00:0042:0000::0042",
+      "fd00:42:0:0:0:0:0:42",
+      "fd00:42::42%eth0",
       "[::ffff:a9fe:a9fe]",
       "[::ffff:0:a9fe:a9fe]",
       "[64:ff9b::a9fe:a9fe]",
