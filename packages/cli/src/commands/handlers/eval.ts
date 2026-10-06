@@ -22,6 +22,8 @@ export default Runtime.handler(
     })
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
     // Before the suite is loaded, so that a refusal that says no work was done comes before any code of the file runs.
+    // It holds the folder that holds the file to the trust the file needs as well, which can be another project's than
+    // the folder of the run.
     const trust = yield* trustOptions(file, "suite")
     yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })

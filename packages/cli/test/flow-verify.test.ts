@@ -97,6 +97,9 @@ function stream(deltas: unknown[], finish: string) {
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-verify-"))
+// The workflows and suites live in a folder of their own: the root is the home directory of the isolated environment,
+// which no server trusts without a grant, and a command that loads a file needs the folder that holds it trusted.
+const flows = path.join(root, "flows")
 // A check that behaves the same under sh and cmd: Bun runs a script committed to each test repository.
 const check = `${process.execPath} check.js`
 
@@ -115,7 +118,7 @@ afterAll(async () => {
 
 test("a verify loop feeds failed checks back to the author until they pass, then merges", async () => {
   const repository = await repo("verify")
-  const file = path.join(root, "verify.ts")
+  const file = path.join(flows, "verify.ts")
   await Bun.write(
     file,
     `export default {
@@ -163,7 +166,7 @@ test("a verify loop feeds failed checks back to the author until they pass, then
 
 test("a reviewer that never approves fails the node after maxIterations", async () => {
   const repository = await repo("judge")
-  const file = path.join(root, "judge.ts")
+  const file = path.join(flows, "judge.ts")
   await Bun.write(
     file,
     `export default {
@@ -190,7 +193,7 @@ test("a reviewer that never approves fails the node after maxIterations", async 
 
 test("orb eval compares models on a suite, and orb flow clean removes what the runs left", async () => {
   const repository = await repo("eval")
-  const suite = path.join(root, "suite.ts")
+  const suite = path.join(flows, "suite.ts")
   await Bun.write(
     suite,
     `export default {

@@ -515,6 +515,36 @@ imports from their project, that imports through a `paths` alias or an `imports`
 
 **What to do:** import those files by a relative path. Nothing for anyone else.
 
+### `orb flow` and `orb eval` ask about the folder that holds the file as well
+
+`orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` asked whether the folder they run in is trusted,
+and that was the whole check, even when the workflow or suite lay in another folder. Run from a trusted folder,
+`orb flow run ../examples/evil.ts`, `orb flow replay <run> --file <path>` and `orb eval <path>` imported the module, ran
+the shell commands, approved the actions and ran the nodes as the agents of a file from a folder that no one had
+trusted, such as a clone beside the repository, a download or a submodule. So did `orb flow resume` for a run whose row
+in the run store names such a file.
+
+They now ask about the folder that holds the file as well, after the folder they run in, when the file brings what needs
+trust: a TypeScript or JavaScript module, or a YAML or JSON file that defines shell commands, approvals or agents, as
+described in "`orb flow` and `orb eval` need a trusted folder to run a workflow or suite's code, commands, approvals or
+agents" above. A replay is asked only for a module, as before. The question is the one asked for any folder: it is about
+the project that holds the file, so the folders of one git repository and its linked worktrees share a decision, and a
+workflow in a folder of the repository you run in needs nothing new, while a folder outside a git repository is a
+project of its own, as are the folders inside it. The config of that project is not part of it, because the run applies
+none of it: the file is all the run takes from it. The refusal names the folder, lists what the file brings as it does
+for the folder you run in, and gives `orb trust <folder>` for it, because a plain `orb trust` would trust the folder you
+ran in. `--trust` trusts both folders for the run alone. A home directory or a filesystem root is never trusted for
+good, so a file that sits in one needs `--trust` on every run.
+
+**Affects:** scripts and CI that run a workflow or suite file from a folder other than the project they run in, such as
+`orb flow run ~/flows/review.ts` or `orb eval ../evals/suite.json`, when the file is a module or defines commands,
+approvals or agents: they now exit with status 1 until that project is trusted. That includes a file kept directly in a
+home directory, even with `--standalone` and `ORBIT_TRUST_PROJECT=1`, which never trust a home directory. Runs of a file
+in the project they run in, and of a file that only defines nodes that use your own agents and rules, are not affected.
+
+**What to do:** look the file over, then run `orb trust <folder>` once for the folder that holds the files you rely on,
+or pass `--trust` to a single run, or keep the files in the repository you run in. Move files out of a home directory.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

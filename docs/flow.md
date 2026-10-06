@@ -109,6 +109,14 @@ at all, when the workflow or suite brings code, commands, approvals or agents th
   counts as well, because it is filled in when the node starts. A file that names none runs as before, and `orb flow replay`
   is not stopped, because a replay answers every node from the recording and opens no session.
 
+The folder that holds the file is asked as well, after the folder you run in, because the file is all that a run takes
+from it. A workflow or suite file that lies in another project than the one you run in, as in
+`orb flow run ../examples/review.ts`, or that the run store names for `orb flow resume`, needs that project trusted too
+before its module is imported or its commands, approvals or agents are carried out, whatever config the project holds.
+The folders of one git repository share a decision, so a workflow in a folder of the repository you run in needs
+nothing more. The refusal names the folder and gives `orb trust <folder>` for it, and `--trust` trusts both folders for
+the run. A home directory is never trusted for good, so a file kept in one needs `--trust` on every run.
+
 Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
 [upgrading](upgrading.md).
 

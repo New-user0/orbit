@@ -4,7 +4,7 @@ import os, { EOL } from "node:os"
 import path from "node:path"
 import type { TrustStatus } from "@orbit/client/promise"
 import { SessionID } from "@orbit/schema/session-id"
-import { refusal, unanswered } from "../src/util/trust"
+import { holderRefusal, quoted, refusal, unanswered } from "../src/util/trust"
 import { isolatedEnv } from "./fixture/environment"
 
 // `orb run` and its siblings against a real private server and a scripted model, in repositories that hold something
@@ -1066,6 +1066,210 @@ test("a YAML workflow or a suite whose checks are empty defines no command, so i
   expect(runs).toBe(after)
 }, 360_000)
 
+// The code, the commands, the approvals and the agents are the file's, and the file can sit in a folder that the command
+// does not run in: a clone beside the repository, a download, a submodule. Each project is trusted on its own, so the
+// folder that holds the file is asked after the folder the command runs in, which is trusted for good here.
+async function trustedFolder(name: string) {
+  const directory = await bare(name)
+  succeeded(await orb(directory, ["trust", "--standalone"]))
+  return directory
+}
+
+test("a workflow or suite module from another project's folder is not imported by a command that runs in a trusted one, and runs with --trust", async () => {
+  const home = await trustedFolder("holder-modules-run")
+  const away = await bare("holder-modules-files")
+  const flowModule = await traced(away, "workflow.ts", noop)
+  const suiteModule = await traced(away, "suite.ts", oneTask)
+  const before = runs
+
+  const started = await orb(home, ["flow", "run", "--standalone", flowModule.file])
+  const evaluated = await orb(home, ["eval", suiteModule.file, "--standalone"])
+
+  for (const [result, module] of [
+    [started, flowModule],
+    [evaluated, suiteModule],
+  ] as const) {
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    // It is the folder that holds the file that is not trusted, and the command that trusts that one is named in full: a
+    // plain `orb trust` would trust the folder that the command runs in, which is trusted already.
+    expect(result.stderr).toContain(`${away} is not trusted`)
+    expect(result.stderr).not.toContain(`${home} is not trusted`)
+    expect(result.stderr).toContain("runs code from the folder")
+    expect(result.stderr).toContain(`it imports ${path.basename(module.file)},`)
+    expect(result.stderr).toContain(`\`orb trust ${quoted(away)}\``)
+    expect(result.stderr).toContain("--trust")
+    // The code in the file never ran.
+    expect(await Bun.file(module.marker).exists()).toBe(false)
+  }
+  expect(runs).toBe(before)
+
+  // --trust is the explicit grant for one run, for the folder that holds the file too: the modules are imported and run.
+  succeeded(await orb(home, ["flow", "run", "--trust", "--standalone", flowModule.file]))
+  expect(await Bun.file(flowModule.marker).exists()).toBe(true)
+  succeeded(await orb(home, ["eval", suiteModule.file, "--trust", "--standalone"]))
+  expect(await Bun.file(suiteModule.marker).exists()).toBe(true)
+  expect(runs).toBeGreaterThan(before)
+
+  // Nothing was stored, so the next plain run stops again, until the folder is trusted as the refusal says.
+  const listed = await orb(home, ["trust", "--standalone", "--list"])
+  succeeded(listed)
+  expect(listed.stdout).not.toContain(away)
+  await fs.rm(flowModule.marker)
+  const again = await orb(home, ["flow", "run", "--standalone", flowModule.file])
+  expect(again.code).toBe(1)
+  expect(again.stderr).toContain(`${away} is not trusted`)
+  expect(await Bun.file(flowModule.marker).exists()).toBe(false)
+  succeeded(await orb(home, ["trust", "--standalone", away]))
+  succeeded(await orb(home, ["flow", "run", "--standalone", flowModule.file]))
+  expect(await Bun.file(flowModule.marker).exists()).toBe(true)
+}, 480_000)
+
+test("a workflow or suite that defines commands, approvals or agents in another project's folder is not run by a command that runs in a trusted one, and runs with --trust", async () => {
+  const home = await trustedFolder("holder-defines-run")
+  const away = await bare("holder-defines-files")
+  const check = marked("holder-check")
+  const task = marked("holder-task")
+  const flowing = (file: string, flags: string[] = []) => ["flow", "run", "--standalone", ...flags, file]
+  const evaluating = (file: string, flags: string[] = []) => ["eval", file, "--standalone", ...flags]
+  const files = [
+    {
+      file: path.join(away, "check.yaml"),
+      text: `name: check\nnodes:\n  - id: tests\n    type: check\n    command: ${check.quoted}\n`,
+      command: flowing,
+      says: "runs shell commands from the folder",
+      row: `  tests  ${check.command}`,
+    },
+    {
+      file: path.join(away, "auto.yaml"),
+      text: `name: auto\nnodes:\n  - id: work\n    prompt: say ok\n    model: ${model}\n    permissions: auto\n`,
+      command: flowing,
+      says: "approves actions without asking you",
+      row: "  work  permissions: auto",
+    },
+    {
+      file: path.join(away, "agent.yaml"),
+      text: `name: agent\nnodes:\n  - id: work\n    prompt: say ok\n    model: ${model}\n    agent: autopilot\n`,
+      command: flowing,
+      says: "lets the file choose which of your agents run its nodes",
+      row: "  work  agent: autopilot",
+    },
+    {
+      file: path.join(away, "suite.json"),
+      text: JSON.stringify({
+        name: "away",
+        models: [model],
+        tasks: [{ id: "task", prompt: "say ok", checks: [task.command] }],
+      }),
+      command: evaluating,
+      says: "runs shell commands from the folder",
+      row: `  task  ${task.command}`,
+    },
+    {
+      file: path.join(away, "judge.json"),
+      text: JSON.stringify({
+        name: "judge",
+        models: [model],
+        tasks: [{ id: "task", prompt: "say ok", checks: [], judge: { agent: "reviewer" } }],
+      }),
+      command: evaluating,
+      says: "lets the file choose which of your agents run its nodes",
+      row: "  task/judge  agent: reviewer",
+    },
+  ]
+  for (const item of files) await Bun.write(item.file, item.text)
+  const before = runs
+
+  // Reading these files runs nothing, and the folder that the command runs in is trusted, but a run of each carries out
+  // what the file defines, from a folder that no one has trusted.
+  for (const item of files) {
+    const result = await orb(home, item.command(item.file), user)
+
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain(`${away} is not trusted`)
+    expect(result.stderr).not.toContain(`${home} is not trusted`)
+    expect(result.stderr).toContain(item.says)
+    expect(result.stderr).toContain(`${path.basename(item.file)} `)
+    expect(result.stderr).toContain(item.row)
+    expect(result.stderr).toContain(`\`orb trust ${quoted(away)}\``)
+    expect(result.stderr).toContain("--trust")
+  }
+  // No command ran and no agent did any work.
+  for (const command of [check, task]) expect(await Bun.file(command.marker).exists()).toBe(false)
+  expect(runs).toBe(before)
+
+  // --trust is the explicit grant for one run, for the folder that holds the file too.
+  for (const item of files) succeeded(await orb(home, item.command(item.file, ["--trust"]), user))
+  for (const command of [check, task]) expect(await Bun.file(command.marker).exists()).toBe(true)
+  expect(runs).toBeGreaterThan(before)
+
+  // A file that defines none of these is only read, so it keeps the check that the folder of the run gets, here a pass.
+  const plain = path.join(away, "plain.yaml")
+  await Bun.write(
+    plain,
+    `name: plain\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    model: ${model}\n    checks: []\n`,
+  )
+  succeeded(await orb(home, flowing(plain), user))
+}, 600_000)
+
+test("resume and replay do not import a module from another project's folder, that the run store or --file names, until that folder is trusted", async () => {
+  const home = await trustedFolder("holder-recorded-run")
+  const away = await bare("holder-recorded-files")
+  const recorded = await traced(away, "workflow.ts", noop)
+  const copy = await traced(away, "copy.ts", noop)
+  succeeded(await orb(home, ["flow", "run", "--trust", "--standalone", recorded.file]))
+  // The run store, which sits in the folder of the run, names the module in the other folder.
+  const id: string = JSON.parse((await orb(home, ["flow", "ls", "--format", "json"])).stdout)[0].id
+  await fs.rm(recorded.marker)
+
+  const resumed = await orb(home, ["flow", "resume", "--standalone", id])
+  const replayed = await orb(home, ["flow", "replay", "--standalone", id])
+  const named = await orb(home, ["flow", "replay", "--standalone", id, "--file", copy.file])
+
+  for (const result of [resumed, replayed, named]) {
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain(`${away} is not trusted`)
+    expect(result.stderr).not.toContain(`${home} is not trusted`)
+    expect(result.stderr).toContain("runs code from the folder")
+    expect(result.stderr).toContain(`\`orb trust ${quoted(away)}\``)
+  }
+  expect(await Bun.file(recorded.marker).exists()).toBe(false)
+  expect(await Bun.file(copy.marker).exists()).toBe(false)
+
+  succeeded(await orb(home, ["flow", "resume", "--trust", "--standalone", id]))
+  expect(await Bun.file(recorded.marker).exists()).toBe(true)
+  const trustedReplay = await orb(home, ["flow", "replay", "--trust", "--standalone", id, "--file", copy.file])
+  succeeded(trustedReplay)
+  expect(trustedReplay.stderr).toContain(`replay matches the recorded output of ${id}`)
+  expect(await Bun.file(copy.marker).exists()).toBe(true)
+}, 480_000)
+
+test("a workflow in another folder of the trusted project, or in the home directory, is held to the trust of the project it is in", async () => {
+  // A git repository shares one decision between its folders, so a workflow in a folder of it needs nothing more.
+  const repository = await bare("holder-same-project")
+  // A run starts from the commit that is checked out, so the repository has one.
+  for (const args of [
+    ["init", "--quiet"],
+    ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "--quiet", "-m", "init"],
+  ])
+    expect(Bun.spawnSync(["git", ...args], { cwd: repository }).exitCode).toBe(0)
+  succeeded(await orb(repository, ["trust", "--standalone"]))
+  const inside = await traced(path.join(repository, "flows"), "workflow.ts", noop)
+  succeeded(await orb(repository, ["flow", "run", "--standalone", inside.file]))
+  expect(await Bun.file(inside.marker).exists()).toBe(true)
+
+  // The home directory is never trusted for good, so a file in it needs --trust each time, and the refusal says so.
+  const refused = await orb(repository, ["flow", "run", "--standalone", workflow])
+  expect(refused.code).toBe(1)
+  expect(refused.stderr).toContain(`${root} is not trusted`)
+  expect(refused.stderr).toContain("home directory or a filesystem root")
+  expect(refused.stderr).toContain("--trust")
+  expect(refused.stderr).not.toContain("Look the file over")
+  succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", workflow]))
+}, 360_000)
+
 test("a session is checked and trusted in the folder it lives in, wherever the command starts", async () => {
   const repository = await hooked("session-home")
   const away = await quiet("session-away")
@@ -1633,6 +1837,59 @@ test("the refusal for a command that runs a file's agents lists each node with t
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("--trust")
   expect(home).not.toContain("Look the file over")
+})
+
+test("the refusal for the folder that holds the file names that folder to trust and what the file brings, and none of its config", () => {
+  const module = path.join(outer, "flows", "plan.ts")
+  const file = path.join(outer, "flows", "feature.yaml")
+  const withheld = [{ path: path.join(outer, "orbit.json"), kinds: ["hooks"] }] satisfies TrustStatus["withheld"]
+  const status = { directory: outer, trusted: false, persistent: true, withheld } satisfies TrustStatus
+
+  const imports = holderRefusal(status, module)
+
+  expect(imports).toContain(`${outer} is not trusted`)
+  expect(imports).toContain("this command runs code from the folder")
+  // The file is named from the folder, as it is in the other refusals.
+  expect(imports).toContain(`it imports ${path.join("flows", "plan.ts")},`)
+  // The folder of the run is trusted already, so a plain `orb trust` would not help: the command names the folder.
+  expect(imports).toContain("The file is in another project than the one the command runs in")
+  expect(imports).toContain(`trust its folder for good with \`orb trust ${outer}\`, or for this run only with --trust.`)
+  // The run applies none of the config of that folder, so it is not listed.
+  expect(imports).not.toContain("orbit.json")
+  expect(imports).not.toContain("holds back")
+
+  const defined = holderRefusal(status, undefined, {
+    file,
+    commands: [{ id: "tests", command: "npm test" }],
+    approvals: [{ id: "api", permissions: "auto" }],
+    agents: [{ id: "api/judge", agent: "autopilot" }],
+  })
+  expect(defined).toContain(`${outer} is not trusted`)
+  expect(defined).toContain("this command runs shell commands from the folder")
+  expect(defined).toContain(`${path.join("flows", "feature.yaml")} defines them`)
+  expect(defined).toMatch(/^ {2}tests {2}npm test$/m)
+  expect(defined).toContain("It also approves actions without asking you")
+  expect(defined).toContain("It also lets the file choose which of your agents run its nodes")
+  expect(defined).toContain(`\`orb trust ${outer}\``)
+  expect(defined).not.toContain("holds back")
+
+  // A folder with a space in its name is quoted as a shell takes it as one argument.
+  const spaced = path.resolve("/trust spaced")
+  expect(holderRefusal({ ...status, directory: spaced }, path.join(spaced, "plan.ts"))).toContain(
+    `\`orb trust "${spaced}"\``,
+  )
+
+  // A home directory or a filesystem root cannot be trusted for good, so only --trust is offered.
+  const home = holderRefusal({ ...status, persistent: false }, module)
+  expect(home).toContain("home directory or a filesystem root")
+  expect(home).toContain("`orb trust` refuses it")
+  expect(home).toContain("--trust")
+  expect(home).not.toContain("trust its folder for good")
+
+  // What the file says is shown on one line, as it is for the folder of the run.
+  const hidden = holderRefusal(status, path.join(outer, "flows", "a\u001b[8m.ts"))
+  for (const line of hidden.split(EOL)) expect(line).not.toMatch(/\p{C}/u)
+  expect(hidden).toContain(`${path.join("flows", "a")}\\x1b[8m.ts`)
 })
 
 test("the text for a server that cannot say whether the folder is trusted names what the command brings and every way to get an answer", () => {

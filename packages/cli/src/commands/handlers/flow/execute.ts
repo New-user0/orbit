@@ -28,7 +28,8 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
   })
   const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
   // Before the workflow is loaded, so that a refusal that says no work was done comes before any code of the file runs.
-  // For a resumed run the file is the one the repository's run store names.
+  // It holds the folder that holds the file to the trust the file needs as well, which can be another project's than the
+  // folder of the run. For a resumed run the file is the one the repository's run store names.
   const trust = yield* trustOptions(file, "workflow")
   yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
   const workflow = yield* Effect.tryPromise({ try: () => load(file), catch: (cause) => cause })

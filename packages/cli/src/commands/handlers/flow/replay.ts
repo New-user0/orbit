@@ -18,15 +18,16 @@ export default Runtime.handler(
     const recorded = store.run(input.run)
     store.close()
     if (!recorded) return yield* Effect.fail(new Error(`No run ${input.run} in this repository`))
-    const file = Option.match(input.file, {
-      onNone: () => recorded.file,
-      onSome: (value) => path.resolve(directory(), value),
-    })
+    const file = path.resolve(
+      directory(),
+      Option.getOrElse(input.file, () => recorded.file),
+    )
     // A replay runs on no server, but a module workflow is code that runs here as it does for `orb flow run`, and the
     // file is the one the repository's run store names unless --file says otherwise. So before it is loaded the folder
-    // has to be trusted, which only a server can say. A YAML workflow is only read, and connects to nothing: a replay
-    // answers every check from the recording, so the shell commands that the workflow defines never run here. It answers
-    // every agent from the recording as well, which opens no session, so the agents that the workflow names, and the
+    // has to be trusted, which only a server can say, and so does the folder that holds the file when that belongs to
+    // another project, as for `orb flow run`. A YAML workflow is only read, and connects to nothing: a replay answers
+    // every check from the recording, so the shell commands that the workflow defines never run here. It answers every
+    // agent from the recording as well, which opens no session, so the agents that the workflow names, and the
     // approvals it sets, choose nothing.
     if (importsModule(file)) {
       const server = yield* ServerConnection.resolve({

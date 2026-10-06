@@ -95,7 +95,10 @@ function stream(chunks: Array<{ delta: unknown; finish: string }>) {
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-"))
-const workflow = path.join(root, "three.ts")
+// The workflows and suites live in a folder of their own: the root is the home directory of the isolated environment,
+// which no server trusts without a grant, and a command that loads a file needs the folder that holds it trusted.
+const flows = path.join(root, "flows")
+const workflow = path.join(flows, "three.ts")
 
 beforeAll(async () => {
   await fs.mkdir(path.join(root, "config"), { recursive: true })
@@ -232,7 +235,7 @@ async function orb(directory: string, args: string[]) {
 
 test("a failing model is retried, then the fallback model completes the node", async () => {
   const repository = await repo("fallback")
-  const file = path.join(root, "fallback.ts")
+  const file = path.join(flows, "fallback.ts")
   await Bun.write(
     file,
     `export default {
@@ -273,7 +276,7 @@ test("a failing model is retried, then the fallback model completes the node", a
 
 test("a merge conflict is reported and leaves the checkout clean", async () => {
   const repository = await repo("conflict")
-  const file = path.join(root, "conflict.ts")
+  const file = path.join(flows, "conflict.ts")
   await Bun.write(
     file,
     `export default {
@@ -301,7 +304,7 @@ test("a merge conflict is reported and leaves the checkout clean", async () => {
 
 test("a gate pauses the run until a person approves it, then resume continues past it", async () => {
   const repository = await repo("gate")
-  const file = path.join(root, "gate.ts")
+  const file = path.join(flows, "gate.ts")
   await Bun.write(
     file,
     `export default {
@@ -343,7 +346,7 @@ test("a gate pauses the run until a person approves it, then resume continues pa
 
 test("a budget pauses the run before it overspends, and cost reports spend by node", async () => {
   const repository = await repo("budget")
-  const file = path.join(root, "budget.ts")
+  const file = path.join(flows, "budget.ts")
   await Bun.write(
     file,
     `export default {
@@ -381,7 +384,7 @@ test("a budget pauses the run before it overspends, and cost reports spend by no
 
 test("a model that does not exist is named in the error, and the fallback model runs", async () => {
   const repository = await repo("missing-model")
-  const file = path.join(root, "missing.ts")
+  const file = path.join(flows, "missing.ts")
   await Bun.write(
     file,
     `export default {
@@ -448,14 +451,14 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   expect(requests.length).toBe(calls)
   expect(await fs.readdir(path.join(repository, ".orbit", "worktrees"))).toEqual(worktrees)
 
-  const edited = path.join(root, "three-edited.ts")
+  const edited = path.join(flows, "three-edited.ts")
   await Bun.write(edited, (await Bun.file(workflow).text()).replace("write ${node}.txt", "write ${node}.txt carefully"))
   const changed = await orb(repository, ["flow", "replay", "--standalone", id, "--file", edited])
   expect(changed.code).toBe(0)
   expect(changed.stderr).toContain("~ a: its inputs differ from the recording")
   expect(changed.stderr).toContain("Nodes whose inputs changed since the recording: a, b, c")
 
-  const longer = path.join(root, "three-longer.ts")
+  const longer = path.join(flows, "three-longer.ts")
   await Bun.write(longer, (await Bun.file(workflow).text()).replace('["a", "b", "c"]', '["a", "b", "c", "d"]'))
   const diverged = await orb(repository, ["flow", "replay", "--standalone", id, "--file", longer])
   expect(diverged.code).toBe(1)
@@ -470,7 +473,7 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
 
 test("a YAML workflow runs nodes as their needs finish, fills templates, and pauses at its gate", async () => {
   const repository = await repo("yaml")
-  const file = path.join(root, "flow.yaml")
+  const file = path.join(flows, "flow.yaml")
   await Bun.write(
     file,
     `name: yaml-flow
@@ -530,7 +533,7 @@ output: merge
 
 test("ctx.map runs an agent for every item", async () => {
   const repository = await repo("map")
-  const file = path.join(root, "map.ts")
+  const file = path.join(flows, "map.ts")
   await Bun.write(
     file,
     `export default {
@@ -555,7 +558,7 @@ test("a model whose breaker is open is skipped for its fallback", async () => {
   for (const run of ["run_x", "run_y", "run_z"])
     store.append(run, "n", "attempt.ended", { model: "ollama/tiny:1b", error: { class: "transient" } })
   store.close()
-  const file = path.join(root, "breaker.ts")
+  const file = path.join(flows, "breaker.ts")
   await Bun.write(
     file,
     `export default {
@@ -582,7 +585,7 @@ test("a model whose breaker is open is skipped for its fallback", async () => {
 
 test("orb flow trace shows a timeline, prints OTLP, and sends it only to a collector it is given", async () => {
   const repository = await repo("trace")
-  const file = path.join(root, "trace.ts")
+  const file = path.join(flows, "trace.ts")
   await Bun.write(
     file,
     `export default {
