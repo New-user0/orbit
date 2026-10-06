@@ -7,6 +7,7 @@ import { Script } from "@orbit/script"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import type { BunPlugin } from "bun"
 import pkg from "../package.json"
+import { autoload } from "./autoload"
 import { verifyArtifact, verifySimulationGraph } from "./verify-artifact"
 
 const dir = path.resolve(import.meta.dirname, "..")
@@ -96,10 +97,7 @@ for (const item of targets) {
     sourcemap: Script.channel === "dev" || Script.channel === "local" ? "inline" : "none",
     splitting: true,
     compile: {
-      autoloadBunfig: false,
-      autoloadDotenv: false,
-      autoloadTsconfig: true,
-      autoloadPackageJson: true,
+      ...autoload,
       target: target.replace(binary, "bun") as Bun.Build.CompileTarget,
       executablePath,
       outfile: path.join(outdir, name, "bin", binary),

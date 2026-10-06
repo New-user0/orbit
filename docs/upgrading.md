@@ -495,6 +495,26 @@ above changes. A session or a commit that an earlier release made for a workflow
 
 **What to do:** nothing.
 
+### The `orb` binary no longer reads the `tsconfig.json` and `package.json` of the folder it starts in
+
+The single-file `orb` was built to load the `tsconfig.json` and `package.json` of the folder it runs in, and Bun applied
+the `paths` of the first and the `imports` of the second to the module resolution of the binary itself. A repository that
+was not trusted yet could commit a `tsconfig.json` whose `paths` map every import to a file of its own, and that file
+ran when the binary started in the repository's folder, before any trust check: `orb trust --standalone --list` did
+it, in the server process that it starts there, and so would any other `orb` process that starts in the folder. The
+binary now loads neither file, nor `bunfig.toml` and `.env`, which it already left alone, so none of them is applied in
+any folder.
+
+Imports by a relative path and from `node_modules` resolve as before. A module that the binary imports from your project,
+such as a workflow or suite file, and that imports through a `paths` alias of the project's `tsconfig.json` or an
+`imports` entry (`#name`) of its `package.json`, no longer resolves and fails with `Cannot find package`. Running Orbit
+from its source is not affected.
+
+**Affects:** people who run `orb` from a release build on a workflow or suite module, or another module that the binary
+imports from their project, that imports through a `paths` alias or an `imports` entry.
+
+**What to do:** import those files by a relative path. Nothing for anyone else.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
