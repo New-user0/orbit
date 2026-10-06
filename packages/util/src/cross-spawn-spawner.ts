@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node.js"
 import { filesystem, path } from "./effect/app-node-platform.js"
+import { ProgramLookup } from "./program-lookup.js"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
@@ -107,14 +108,10 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     return path.resolve(opts.cwd)
   })
 
-  const env = (command: ChildProcess.StandardCommand) => {
-    const base = command.options.extendEnv ? { ...globalThis.process.env, ...command.options.env } : command.options.env
-    // cross-spawn runs a .cmd or .bat file through cmd.exe, which looks in the working folder before PATH, so a folder
-    // could put its own hg.bat in front of the installed hg. cmd.exe skips the folder when this is set. A path to a
-    // program and a command line run with `shell` resolve as written, so only a bare program name gets it.
-    if (process.platform !== "win32" || command.options.shell || /[\\/]/.test(command.command)) return base
-    return { ...(base ?? globalThis.process.env), NoDefaultCurrentDirectoryInExePath: "1" }
-  }
+  // cmd.exe runs a .cmd or .bat file however it was started, and looks in the working folder before PATH for what the
+  // file runs by name, so every child gets the variable that stops it, not only one that was started by a bare name.
+  const env = (opts: ChildProcess.CommandOptions) =>
+    ProgramLookup.environment(opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env)
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x
@@ -291,6 +288,10 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     Effect.callback<Spawned, PlatformError.PlatformError>((resume) => {
       const closed = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const exited = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
+      // Bun's spawn, Node's and cross-spawn look in the working folder before PATH for a name they are given, unless the
+      // process that spawns has this variable. The environment of the child does not count. Every Orbit entry sets it, and
+      // so does this, so nothing that starts a program through the spawner depends on an entry having done it.
+      ProgramLookup.install()
       const proc = launch(command.command, command.args, opts)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
@@ -441,7 +442,7 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
           const [proc, closed, exited, stopOutput] = yield* Effect.acquireRelease(
             spawn(command, {
               cwd: dir,
-              env: env(command),
+              env: env(command.options),
               stdio: stdios(sin, sout, serr, extra),
               detached: command.options.detached ?? process.platform !== "win32",
               shell: command.options.shell,

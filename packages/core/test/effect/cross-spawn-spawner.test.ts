@@ -6,6 +6,7 @@ import { Deferred, Effect, Exit, PlatformError, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { plant, withCurrentDirectoryOnPath } from "../fixture/decoy"
 import { testEffect } from "../lib/effect"
 
 const live = LayerNode.compile(CrossSpawnSpawner.node)
@@ -493,24 +494,9 @@ describe("cross-spawn spawner", () => {
       }),
     )
 
-    // cmd.exe skips the working folder when this variable is set, and the shell that runs the tests may set it, which
-    // would hide what the tests below are about from the processes they start.
-    const withCurrentDirectoryOnPath = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      Effect.acquireUseRelease(
-        Effect.sync(() => {
-          const before = process.env.NoDefaultCurrentDirectoryInExePath
-          delete process.env.NoDefaultCurrentDirectoryInExePath
-          return before
-        }),
-        () => effect,
-        (before) =>
-          Effect.sync(() => {
-            if (before !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = before
-          }),
-      )
-
     // cross-spawn runs a .bat file through cmd.exe, which looks in the working folder before PATH, and a program that is
-    // itself cmd.exe, as the pager of `orb session list` is, looks up what it runs the same way.
+    // itself cmd.exe, as the pager of `orb session list` is, looks up what it runs the same way. The variable that stops
+    // cmd.exe from doing it is removed from the test process first, because the shell that runs the tests may set it.
     for (const [name, command, args] of [
       ["a command it was given only a name for", "planted", []],
       ["a program that cmd.exe finds by name", "cmd", ["/c", "planted"]],
@@ -536,6 +522,121 @@ describe("cross-spawn spawner", () => {
           )
 
           expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+        }),
+      )
+    }
+
+    // A .exe is not found the way a .bat is. Bun's spawn, and Node's under Bun, look in the working folder of the child
+    // before PATH for a program they only have a name for, and what stops them is NoDefaultCurrentDirectoryInExePath in the
+    // environment of the process that starts the program: the environment of the child is not consulted. So these decoys
+    // are real .exe files, and they stand for what Orbit starts by name: `hg` when it identifies a folder that has a
+    // `.hg`, `node` for an MCP server, and `cmd` for the pager of `orb session list`.
+    for (const [name, args] of [
+      ["hg", ["log", "-r", "roots(all())", "-T", "{node}\n"]],
+      ["node", ["-e", ""]],
+      ["cmd", ["/c", "more"]],
+    ] as const) {
+      fx.effect(
+        `does not run a ${name}.exe that its working folder holds`,
+        Effect.gen(function* () {
+          if (process.platform !== "win32") return
+
+          const tmp = yield* Effect.acquireRelease(
+            Effect.promise(() => tmpdir()),
+            (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+          )
+          const ran = yield* Effect.promise(() => plant(tmp.path, name))
+
+          yield* withCurrentDirectoryOnPath(
+            ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
+              // Mercurial is not installed everywhere, so whether the spawn works does not matter, only what it ran.
+              Effect.exit(
+                svc.exitCode(ChildProcess.make(name, args, { cwd: tmp.path, extendEnv: true, stdin: "ignore" })),
+              ),
+            ),
+          )
+
+          expect(yield* Effect.promise(ran)).toEqual([])
+        }),
+        // The test compiles its decoy program, which takes longer on a slow disk.
+        30_000,
+      )
+    }
+
+    fx.effect(
+      "starts a planted program when it is given the path of the program",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const ran = yield* Effect.promise(() => plant(tmp.path, "hg"))
+
+        yield* withCurrentDirectoryOnPath(
+          ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
+            svc.exitCode(ChildProcess.make(path.join(tmp.path, "hg.exe"), ["log"], { cwd: tmp.path, extendEnv: true })),
+          ),
+        )
+
+        // Without this, the tests above would pass with a decoy that cannot run.
+        expect(yield* Effect.promise(ran)).toEqual(["hg.exe log"])
+      }),
+      30_000,
+    )
+
+    // A .cmd file that is started by its path runs in a cmd.exe, which looks up what the file runs by name in the working
+    // folder before PATH, so a program started by its path needs the variable in its environment as well.
+    fx.effect(
+      "does not run what a .cmd file that it started by its path looks up by name in its working folder",
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        const bin = path.join(tmp.path, "bin")
+        const work = path.join(tmp.path, "work")
+        const marker = path.join(tmp.path, "ran.txt")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(bin)
+          await fs.mkdir(work)
+          await fs.writeFile(path.join(bin, "tool.cmd"), "@echo off\r\nplanted\r\n")
+          await fs.writeFile(path.join(work, "planted.bat"), `@echo off\r\necho ran> "${marker}"\r\n`)
+        })
+
+        yield* withCurrentDirectoryOnPath(
+          ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
+            svc.exitCode(ChildProcess.make(path.join(bin, "tool.cmd"), [], { cwd: work, extendEnv: true })),
+          ),
+        )
+
+        expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+      }),
+    )
+
+    // Whatever environment a program is handed, the variable is in it, so a program that is started with a few variables
+    // only, by its path or as a command line that is run with a shell, does not look in the working folder either.
+    const root = process.env.SystemRoot ?? "C:\\Windows"
+    const show = "echo %NoDefaultCurrentDirectoryInExePath%"
+    for (const [name, command, args, shell] of [
+      ["a path to a program", path.join(root, "System32", "cmd.exe"), ["/c", show], false],
+      ["a command line that is run with a shell", show, [], true],
+    ] as const) {
+      fx.effect(
+        `gives ${name} an environment in which cmd.exe skips the working folder`,
+        Effect.gen(function* () {
+          if (process.platform !== "win32") return
+
+          const out = yield* withCurrentDirectoryOnPath(
+            ChildProcessSpawner.ChildProcessSpawner.use((svc) =>
+              svc.string(ChildProcess.make(command, args, { shell, env: { SystemRoot: root }, extendEnv: false })),
+            ),
+          )
+
+          expect(out.trim()).toBe("1")
         }),
       )
     }

@@ -606,18 +606,28 @@ Orbit no longer finds it there. A repository that commits such a file no longer 
 
 ### On Windows, `orb` starts a program it only has a name for without looking in the folder first
 
-Orbit starts some programs by name and not by path: Mercurial's `hg`, `git` when it is not on PATH, the pager of
-`orb session list`, which is `cmd /c more`, and the command of an MCP server, for example. On Windows `cmd.exe` runs a
-`.bat` or `.cmd` file and finds a program by looking in the current folder before PATH, and that folder can be a
-repository that is not trusted yet: a folder with a `.hg` directory and an `hg.bat` ran that file while Orbit
-identified the project, before any trust check. A program that Orbit starts by name now gets
-`NoDefaultCurrentDirectoryInExePath` in its environment, which makes `cmd.exe` skip the current folder, so what it finds
-is on PATH. Orbit also stops a process with the `taskkill.exe` of the Windows folder. It used to run `taskkill` by name
-through `cmd.exe`, so a `taskkill.exe` in the folder it started in ran instead. A path to a program, and a command line
-that is run through a shell, are looked up as written, as before.
+Orbit starts some programs by name and not by path: Mercurial's `hg`, `git` when it is not on PATH, `node` or `uvx` for an
+MCP server, a language server, your editor, the pager of `orb session list`, which is `cmd /c more`, and the command of a
+status line, for example. On Windows such a name is looked for in the working folder before PATH, by Bun and Node as well
+as by `cmd.exe`, and that folder can be a repository that is not trusted yet. A folder with a `.hg` directory and an
+`hg.exe` or an `hg.bat` ran that file while Orbit identified the project, before any trust check, and a `cmd.exe` in the
+folder ran as the pager.
 
-**Affects:** Windows users whose project starts a program by a bare name that exists only in the project folder, such as
-an MCP server whose `command` is `server.bat`: it is no longer found there.
+Every Orbit process now sets `NoDefaultCurrentDirectoryInExePath` in its own environment before it starts anything:
+`orb`, the launcher that npm installs as `orb`, a server that is started without `orb`, and the SDK's embedded host.
+Orbit's own process spawner sets it before every program it starts as well. The lookup of a program reads the variable
+from the process that starts it, not from the program, so it has to be set there. The program gets the variable too, so
+a `cmd.exe` that it is or runs skips the working folder as well. The launcher that npm installs asked PowerShell by name
+which processor features it has, so a `powershell.exe` in the folder ran when `orb` was typed there. Orbit also stops a
+process with the `taskkill.exe` of the Windows folder. It used to run `taskkill` by name through `cmd.exe`, so a
+`taskkill.exe` in the folder it started in ran instead. A path to a program is used as written, as before.
+
+**Affects:** Windows users whose project starts a program by a bare name that exists only in the working folder, such as
+an MCP server whose `command` is `server.exe` or `server.bat`: it is no longer found there. The same goes for what runs
+through `cmd.exe` in the working folder, such as a project's start command, a workflow `command` node or a status line
+command: `build.cmd` no longer finds a file of the folder. Everything Orbit starts inherits the variable. An application
+that embeds the SDK has it set in its own process once it creates the host, so its own programs that it starts by name
+skip the working folder too.
 
 **What to do:** nothing for programs on PATH. For one that you keep in the folder, write `.\server.bat` or its full
 path.

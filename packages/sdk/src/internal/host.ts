@@ -8,6 +8,7 @@ import { WorkspaceDriver } from "@orbit/core/workspace/driver"
 import { createEmbeddedRoutes } from "@orbit/server/routes"
 import type { ServerOptions } from "@orbit/server/options"
 import type { LayerNode } from "@orbit/util/effect/layer-node"
+import { ProgramLookup } from "@orbit/util/program-lookup"
 import { Context, Effect, Layer, ManagedRuntime, Scope } from "effect"
 import { HttpEffect, HttpRouter, HttpServer, HttpServerRequest } from "effect/unstable/http"
 import { context, layer, type LogOptions } from "../logging"
@@ -29,6 +30,8 @@ export const create = Effect.fn("EmbeddedHost.create")(function* <R = never>(
   options: CreateOptions<R> = {},
   embed: EmbedOptions = {},
 ) {
+  // The host runs in the process of whoever embeds it and starts programs by name in the folders it is pointed at.
+  ProgramLookup.install()
   const { log, workspaceProviders, instances, ...server } = options
   const selector = instances ? SdkInstances.provide(instances, yield* Effect.context<R>()) : undefined
   const runtime = ManagedRuntime.make(

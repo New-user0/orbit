@@ -63,6 +63,7 @@ import { advance, drain } from "./lib/clock"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
+import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { hostEnvironmentLayer, recordingEnvironmentLayer } from "./fixture/environment"
@@ -781,6 +782,36 @@ test("joins concurrent stdio transport closes", async () => {
     ),
   )
 })
+
+// A server is started in the folder of its project, which can be a clone that is not trusted yet, and its command is
+// usually a bare name such as `node`, `uvx` or `docker`. Windows would start a .exe of that name from the folder.
+testEffect(hostEnvironmentLayer).live(
+  "starts an MCP server that is given only a name from PATH and never from its working folder",
+  Effect.gen(function* () {
+    if (process.platform !== "win32") return
+
+    const tmp = yield* tmpdirScoped()
+    const ran = yield* Effect.promise(() => plant(tmp.path, "node"))
+
+    yield* withCurrentDirectoryOnPath(
+      Effect.gen(function* () {
+        const transport = yield* McpStdio.make({
+          server: "bare-name",
+          command: "node",
+          args: ["-e", ""],
+          cwd: tmp.path,
+          environment: {},
+        })
+        yield* Effect.promise(() => transport.start())
+        yield* Effect.promise(() => transport.close())
+      }),
+    )
+
+    expect(yield* Effect.promise(ran)).toEqual([])
+  }),
+  // The test compiles its decoy program, which takes longer on a slow disk.
+  30_000,
+)
 
 const testMcpDescendants =
   process.platform === "win32" ? testEffect(hostEnvironmentLayer).live.skip : testEffect(hostEnvironmentLayer).live

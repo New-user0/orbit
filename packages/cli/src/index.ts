@@ -17,6 +17,11 @@ import { EffectFlock } from "@orbit/util/effect-flock"
 import { Heap } from "./heap"
 import { CpuProfile } from "./cpu-profile"
 import { Network } from "@orbit/util/network"
+import { ProgramLookup } from "@orbit/util/program-lookup"
+
+// Before anything starts a program: this process can be started in a repository that is not trusted yet, and on Windows
+// it would look in that folder before PATH for every program it starts by name. See ProgramLookup.
+ProgramLookup.install()
 
 // Custom CA bundles and client certificates apply to every request, so install them before anything connects.
 Network.install()

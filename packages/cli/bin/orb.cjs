@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// On Windows a program that is started by a bare name is looked for in the working folder before PATH, and `orb` can be
+// typed in a repository that is not trusted yet. The lookup reads this variable from the environment of the process that
+// starts the program, so it is set before the PowerShell check below starts anything. This file ships alone, so it cannot
+// share ProgramLookup in @orbit/util, which the other entries call.
+if (process.platform === "win32") process.env.NoDefaultCurrentDirectoryInExePath = "1"
+
 const childProcess = require("child_process")
 const fs = require("fs")
 const path = require("path")

@@ -8,6 +8,7 @@ import { hasPtyConnectTicketURL } from "@orbit/protocol/groups/pty"
 import { hasPersistentPtyConnectTicketURL } from "@orbit/protocol/groups/persistent-pty"
 import { isPairingConnectURL } from "@orbit/protocol/groups/server"
 import { Global } from "@orbit/util/global"
+import { ProgramLookup } from "@orbit/util/program-lookup"
 import { Cause, Context, Effect, Exit, Latch, Layer, Option, Ref, Scope } from "effect"
 import { HttpMiddleware, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { createServer } from "node:http"
@@ -48,6 +49,8 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   lifecycle?: Lifecycle<E, R>,
   transform?: Transform,
 ) {
+  // The server starts programs by name in the folders it is pointed at, whoever started the process. See ProgramLookup.
+  ProgramLookup.install()
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
   const hostname = options.hostname ?? "127.0.0.1"

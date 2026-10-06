@@ -12,6 +12,7 @@ import { ProjectSchema } from "@orbit/core/project/schema"
 import { ProjectTable } from "@orbit/core/project/sql"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Hash } from "@orbit/util/hash"
+import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -569,19 +570,36 @@ describe("Project.resolve", () => {
       const project = yield* Project.Service
 
       // The project is identified before the user is asked about trusting its folder. cmd.exe skips the working folder
-      // when this variable is set, and the shell that runs the tests may set it, which would hide what is tested.
-      const before = process.env.NoDefaultCurrentDirectoryInExePath
-      delete process.env.NoDefaultCurrentDirectoryInExePath
-      yield* project.resolve(abs(tmp.path)).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (before !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = before
-          }),
-        ),
-      )
+      // when NoDefaultCurrentDirectoryInExePath is set, and the shell that runs the tests may set it.
+      yield* withCurrentDirectoryOnPath(project.resolve(abs(tmp.path)))
 
       expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
     }),
+  )
+
+  it.live(
+    "resolving a mercurial folder does not run an hg.exe that the folder holds",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, ".hg")))
+        const ran = yield* Effect.promise(() => plant(tmp.path, "hg"))
+        const project = yield* Project.Service
+
+        // The project is identified before the user is asked about trusting its folder. Bun looks in the working folder
+        // before PATH for an .exe that it only has a name for, unless the process has NoDefaultCurrentDirectoryInExePath,
+        // which is removed first because the shell that runs the tests may set it.
+        yield* withCurrentDirectoryOnPath(project.resolve(abs(tmp.path)))
+
+        expect(yield* Effect.promise(ran)).toEqual([])
+      }),
+    // The test compiles its decoy program, which takes longer on a slow disk.
+    30_000,
   )
 
   it.live("returns global id for unreadable mercurial metadata", () =>
