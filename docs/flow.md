@@ -474,10 +474,20 @@ running or waiting; `orb flow clean <run>` for one run. The run history in `.orb
 says. It lists and acts on a run only when its ID has the shape that Orbit makes (`run_`, a timestamp of 14 digits, `_`
 and 6 hexadecimal digits), so a row that names a path such as `../..` is not a run and `orb flow clean` never removes
 anything outside `.orbit/worktrees`. `orb flow ls`, `show`, `watch`, `cost` and `trace` write control characters in the
-names and messages it holds out as `\x1b`, so an escape sequence in a workflow's name cannot act on your terminal.
+names and messages it holds out as `\x1b`, so an escape sequence in a workflow's name cannot act on your terminal. The
+`/runs` dialog of the terminal UI does the same, as the terminal UI writes text to the terminal as it is.
 
 A workflow or a suite is a file in the repository as well, and a clone brings its own. `orb flow run`, `resume` and
 `replay` and `orb eval` write the control characters in what such a file says out in the same way: in the progress they
 print on standard error as the run goes (which is also where a line that a workflow passes to `ctx.log` appears), in the
-gates a run waits at, in the failure of an eval or a replay, and in the task table of an eval. `--format json` and the
-JSON that `orb flow run` prints are not changed, because JSON escapes control characters itself.
+gates a run waits at, in the failure of an eval or a replay, and in the task table of an eval. So does the failure of
+any `orb` command, which keeps the line breaks of its message and writes out the rest. That covers the problems of an
+invalid workflow, which lists its node IDs and types, and the file that the run store names for a run you resume or
+replay. The title of each session that a run opens, `<workflow name> · <node>`, stays in your session database, and
+the message of the commit that records a node's work, `orbit <run>: <node>`, stays in your repository, where `git log`
+prints it as it is, so both are written out as well, and `orb session list` writes out whatever a title holds.
+
+The JSON that these commands print for programs (`--format json` and `--format otlp`, and the result of `orb flow run`,
+`resume` and `replay`) keeps every character. `JSON.stringify` escapes only U+0000 to U+001F, so DEL, the C1 controls
+(U+009B and U+009D act like `ESC [` and `ESC ]` on a terminal that takes 8-bit controls) and format characters such as
+a right-to-left override are written as `\u009b` or `\u202e`. `JSON.parse` turns them back into the same text.
