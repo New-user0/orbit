@@ -1,12 +1,12 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { ServerConnection } from "../../../services/server-connection"
-import { plain, progress } from "../../../util/plain"
 import { requireTrust } from "../../../util/trust"
 import { directory, load } from "./execute"
 
@@ -48,7 +48,8 @@ export default Runtime.handler(
         log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
       }),
     )
-    if (result.output !== undefined) process.stdout.write(`${JSON.stringify(result.output, null, 2)}${EOL}`)
+    // The node results of a replay come from the run store, which a clone brings, and are keyed by the IDs of the nodes.
+    if (result.output !== undefined) process.stdout.write(`${json(result.output)}${EOL}`)
     // What a failure and the changed nodes name is text from the workflow file, which a replay takes from the run store
     // unless it is given one.
     if (result.status !== "succeeded") {

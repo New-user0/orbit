@@ -1,11 +1,11 @@
 import { ClientError, type OrbitClient, type TrustStatus } from "@orbit/client/promise"
+import { plain } from "@orbit/flow/plain"
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
 import { UI } from "../run/ui"
 import { findSession } from "../session-target"
 import { errorMessage } from "./error"
-import { plain } from "./plain"
 
 type Withheld = TrustStatus["withheld"][number]
 

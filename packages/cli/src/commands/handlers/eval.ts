@@ -1,12 +1,12 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
-import { plain, progress } from "../../util/plain"
 import { requireTrust } from "../../util/trust"
 import { directory, trustOptions } from "./flow/execute"
 
@@ -62,8 +62,9 @@ export default Runtime.handler(
       return yield* Effect.fail(new Error(`Eval ${result.id} did not finish: ${plain(result.error ?? result.status)}`))
     }
     const summary = summarize(result.scores)
+    // The scores name the tasks of the suite, and a resumed eval takes its models from the run store: text from files.
     if (input.format === "json")
-      return process.stdout.write(JSON.stringify({ run: result.id, summary, scores: result.scores }, null, 2) + EOL)
+      return process.stdout.write(json({ run: result.id, summary, scores: result.scores }) + EOL)
     const tasks = [...new Set(result.scores.map((score) => score.task))]
     // The task IDs are text from the suite. A resumed eval takes its models, and what the tasks that it reuses spent,
     // from the run store. Both are files in the repository that a clone brings along, and the amounts are read with

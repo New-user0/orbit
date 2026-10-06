@@ -1,8 +1,8 @@
+import { json, plain } from "@orbit/flow/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
-import { plain } from "../../../util/plain"
 import { directory } from "./execute"
 
 export default Runtime.handler(
@@ -36,10 +36,10 @@ export default Runtime.handler(
       return process.stdout.write(`Sent ${all.length} spans of ${run.id} to ${url}${EOL}`)
     }
     // The names of the spans are text from the run store, a file in the repository that a clone brings along, so the
-    // timeline shows them through `plain`. The OTLP output is JSON, which escapes them.
+    // timeline shows them through `plain`, and the OTLP output through `json`.
     process.stdout.write(
       (input.format === "otlp"
-        ? JSON.stringify(otlp(run, all), null, 2)
+        ? json(otlp(run, all))
         : timeline(all.map((span) => ({ ...span, name: plain(span.name) })))) + EOL,
     )
   }),

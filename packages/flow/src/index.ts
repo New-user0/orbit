@@ -12,6 +12,7 @@ export {
   workflowApprovals,
   workflowCommands,
 } from "./load.js"
+export { json, plain, progress } from "./plain.js"
 export { otlp, spans, timeline, type Span } from "./trace.js"
 export { compile, validate, type NodeSpec, type Spec } from "./yaml.js"
 export type * from "./workflow.js"

@@ -1,9 +1,9 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option, Schema } from "effect"
 import path from "node:path"
 import { ServerConnection } from "../../../services/server-connection"
-import { plain, progress } from "../../../util/plain"
 import { requireTrust } from "../../../util/trust"
 
 // Shared by `orb flow run` and `orb flow resume`: connect, load the workflow file, and drive the run.
@@ -65,7 +65,8 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
       ].join("\n"),
     )
   }
-  if (result.output !== undefined) process.stdout.write(`${JSON.stringify(result.output, null, 2)}\n`)
+  // The result is keyed by node ID, and the IDs are text from the workflow file. JSON for programs, escaped by `json`.
+  if (result.output !== undefined) process.stdout.write(`${json(result.output)}\n`)
 })
 
 /**

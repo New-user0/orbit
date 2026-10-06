@@ -669,10 +669,11 @@ test("orb flow clean in a clone whose run store names runs like paths leaves eve
 test("orb flow prints what a run store says without the characters that act on a terminal", async () => {
   const repository = await repo("hostile-text")
   const id = "run_20260101000006_0a1b2c"
-  // An operating system command that sets the title of the window, a sequence that erases the line and a right-to-left
-  // override: a clone's run store can carry them in any text it holds, and a carriage return in the workflow's name.
-  const evil = "\u001b]0;pwned\u0007name\u001b[2K‮end"
-  const shown = "\\x1b]0;pwned\\x07name\\x1b[2K\\u{202e}end"
+  // An operating system command that sets the title of the window, a sequence that erases the line, a C1 control
+  // sequence introducer, DEL and a right-to-left override: a clone's run store can carry them in any text it holds, and a
+  // carriage return in the workflow's name.
+  const evil = "\u001b]0;pwned\u0007name\u001b[2K\u009b\u007f\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07name\\x1b[2K\\x9b\\x7f\\u{202e}end"
   const workflow = `${evil}\rreturn`
   const { Store } = await import("@orbit/flow")
   const store = Store.at(repository)
@@ -715,16 +716,40 @@ test("orb flow prints what a run store says without the characters that act on a
   expect(outputs[3].stdout).toContain(`model${shown}`)
   expect(outputs[4].stdout).toContain(`run ${shown}\\x0dreturn`)
 
-  // JSON is for programs, and it escapes the control characters itself.
-  const listed = await orb(repository, ["flow", "ls", "--format", "json"])
-  expect(listed.stdout).not.toContain("\u001b")
-  expect(JSON.parse(listed.stdout)[0].workflow).toBe(workflow)
-}, 120_000)
+  // JSON is for programs, so it keeps every character: the ones that `JSON.stringify` leaves raw are written as \u
+  // escapes, and the same text comes back out of `JSON.parse`.
+  const formats = []
+  for (const args of [
+    ["ls", "--format", "json"],
+    ["show", id, "--format", "json"],
+    ["cost", id, "--format", "json"],
+    ["trace", id, "--format", "otlp"],
+  ])
+    formats.push(await orb(repository, ["flow", ...args]))
+  for (const [index, output] of formats.entries()) {
+    expect({ index, code: output.code, stderr: output.code === 0 ? "" : output.stderr }).toEqual({
+      index,
+      code: 0,
+      stderr: "",
+    })
+    expectNoControl(output.stdout)
+  }
+  const [listed, details, spent, traced] = formats.map((output) => JSON.parse(output.stdout))
+  expect(listed[0].workflow).toBe(workflow)
+  expect(listed[0].id).toBe(id)
+  expect(details.run.workflow).toBe(workflow)
+  expect(details.nodes.map((node: { id: string }) => node.id)).toContain(`node${evil}`)
+  expect(spent.rows[0]).toMatchObject({ node: `node${evil}`, model: `model${evil}` })
+  expect(traced.resourceSpans[0].scopeSpans[0].spans.map((span: { name: string }) => span.name)).toContain(
+    `run ${workflow}`,
+  )
+}, 180_000)
 
 // The text of a file is not the person's own: what a suite or a workflow says is printed as the run goes, and a clone
 // brings its own files. No line may hold a character that moves the cursor, sets the title of the window, erases text
-// or reorders it. The ends of the lines are the command's own. What `orb flow run` and `replay` print on standard
-// output is the JSON of the result, for programs, and JSON escapes the control characters itself.
+// or reorders it. The ends of the lines are the command's own. That holds for standard output as well, where `orb flow
+// run` and `replay` print the JSON of the result: JSON for programs keeps every character, and writes the ones that
+// `JSON.stringify` would leave raw as \u escapes.
 function expectNoControl(...streams: string[]) {
   for (const text of streams) for (const line of text.split(/\r?\n/)) expect(line).not.toMatch(/\p{C}/u)
 }
@@ -733,8 +758,8 @@ function expectNoControl(...streams: string[]) {
 // task IDs are printed in the table of an eval, in the progress above it and in the message of a run that fails.
 test("orb eval prints the task IDs of a suite without the characters that act on a terminal", async () => {
   const repository = await repo("hostile-eval")
-  const evil = "\u001b]0;pwned\u0007task\u001b[2K\u{202e}end"
-  const shown = "\\x1b]0;pwned\\x07task\\x1b[2K\\u{202e}end"
+  const evil = "\u001b]0;pwned\u0007task\u001b[2K\u009b\u007f\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07task\\x1b[2K\\x9b\\x7f\\u{202e}end"
   const suite = (file: string, ids: string[]) =>
     Bun.write(
       path.join(repository, file),
@@ -775,6 +800,13 @@ test("orb eval prints the task IDs of a suite without the characters that act on
   expectNoControl(resumed.stdout, resumed.stderr)
   expect(resumed.stderr).toContain(`= ollama/tiny:1b.${shown}#1 (recorded)`)
 
+  // The JSON of an eval is for programs, so it keeps the task ID, and parses back to it.
+  const asJson = await orb(repository, ["eval", "--standalone", "once.json", "--resume", id, "--format", "json"])
+
+  expect({ code: asJson.code, stderr: asJson.code === 0 ? "" : asJson.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(asJson.stdout, asJson.stderr)
+  expect(JSON.parse(asJson.stdout).scores.map((score: { task: string }) => score.task)).toEqual([evil])
+
   const failed = await orb(repository, ["eval", "--standalone", "twice.json"])
 
   expect(failed.code).toBe(1)
@@ -814,8 +846,10 @@ test("orb flow run prints YAML workflow nodes and gates without the characters t
 
 test("orb flow replay prints the nodes of a YAML workflow without the characters that act on a terminal", async () => {
   const repository = await repo("hostile-replay")
-  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}end"
-  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}end"
+  // The C1 controls U+009B and U+009D start the escape sequences that ESC [ and ESC ] do, on a terminal that takes 8-bit
+  // controls, and `JSON.stringify` leaves them and DEL as they are.
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009d\u009c\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9d\\x9c\\x9b\\x7fend"
   const workflow = (prompt: string, ...more: string[]) =>
     [
       "name: hostile-replay",
@@ -831,8 +865,11 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   const recorded = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
 
   expect({ code: recorded.code, stderr: recorded.code === 0 ? "" : recorded.stderr }).toEqual({ code: 0, stderr: "" })
-  expectNoControl(recorded.stderr)
+  expectNoControl(recorded.stdout, recorded.stderr)
   expect(recorded.stderr).toContain(`> a${shown}`)
+  // The result of a run is keyed by node ID. It is printed as JSON for programs, which gets the node ID back whole.
+  expect(Object.keys(JSON.parse(recorded.stdout))).toEqual([`a${evil}`])
+  expect(JSON.parse(recorded.stdout)[`a${evil}`].id).toBe(`a${evil}`)
   const id = await runID(repository)
 
   // A node whose inputs changed since the recording is named, as the replay of an edited workflow goes on.
@@ -840,9 +877,11 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   await Bun.write(edited, workflow("write a.txt carefully"))
   const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
 
-  expectNoControl(changed.stderr)
+  expectNoControl(changed.stdout, changed.stderr)
   expect(changed.stderr).toContain(`~ a${shown}: its inputs differ from the recording`)
   expect(changed.stderr).toContain(`Nodes whose inputs changed since the recording: a${shown}`)
+  // A replay takes the results of its nodes from the run store, so what it prints holds the node IDs the store has.
+  expect(Object.keys(JSON.parse(changed.stdout))).toEqual([`a${evil}`])
 
   // A node that the recording lacks stops the replay, and the failure names it.
   const longer = path.join(repository, "longer.yaml")
@@ -853,3 +892,55 @@ test("orb flow replay prints the nodes of a YAML workflow without the characters
   expectNoControl(diverged.stderr)
   expect(diverged.stderr).toContain(`Replay diverged: b${shown} is not in the recording of ${id}`)
 }, 240_000)
+
+// The failure of a command names text from a file as well. An invalid workflow lists its node IDs and types in the
+// message, and it is read before the trust check, so a clone only has to ship one.
+test("orb flow run prints the failure of an invalid workflow without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-invalid")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9b\\x7fend"
+  const file = path.join(repository, "bad.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: bad",
+      "nodes:",
+      `  - id: ${JSON.stringify(`a${evil}`)}`,
+      `    type: ${JSON.stringify(`t${evil}`)}`,
+      "    prompt: write a.txt",
+      "",
+    ].join("\n"),
+  )
+
+  const failed = await orb(repository, ["flow", "run", "--standalone", file])
+
+  expect(failed.code).toBe(1)
+  expectNoControl(failed.stdout, failed.stderr)
+  // What the file said is still there, written out, and the lines of the message stay apart.
+  expect(failed.stderr).toContain("is not a valid workflow:")
+  expect(failed.stderr).toContain(`- a${shown}: unknown type t${shown}`)
+}, 120_000)
+
+// A resumed or replayed run loads the file that its row in the run store names, and a clone brings its own run store.
+test("orb flow resume and replay print the failure for a workflow file that the run store names without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-file")
+  const id = "run_20260101000010_0a1b2c"
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9b\\x7fend"
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  store.create({ id, workflow: "w", file: `w${evil}.yaml`, directory: repository, input: {} })
+  store.status(id, "failed")
+  store.close()
+
+  // A replay of a YAML workflow connects to no server, so nothing at all stands in front of its failure. They run one
+  // after the other, as processes that open the same store at once can find it locked.
+  const replayed = await orb(repository, ["flow", "replay", id])
+  const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
+
+  for (const output of [replayed, resumed]) {
+    expect(output.code).toBe(1)
+    expectNoControl(output.stdout, output.stderr)
+    expect(output.stderr).toContain(`w${shown}.yaml`)
+  }
+}, 180_000)

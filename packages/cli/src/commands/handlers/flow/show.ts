@@ -1,15 +1,15 @@
+import type { Event, NodeState, Run } from "@orbit/flow"
+import { json, plain } from "@orbit/flow/plain"
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
-import { plain } from "../../../util/plain"
-import type { Event, NodeState, Run } from "@orbit/flow"
 import { directory } from "./execute"
 
 /**
  * A run, its nodes and team conversations, as `orb flow show` prints them. The run store is a file in the repository, so
  * a clone brings its own and what it says is text from an untrusted file: every piece of text is printed through
- * `plain`, and the amounts are read with `Number`, which leaves no text in them.
+ * `plain` (or `json`, for programs), and the amounts are read with `Number`, which leaves no text in them.
  */
 export function render(run: Run, nodes: ReadonlyArray<NodeState>, events: ReadonlyArray<Event>) {
   const lines = [
@@ -56,7 +56,7 @@ export default Runtime.handler(
     const events = store.events(input.run)
     store.close()
     if (!run) return yield* Effect.fail(new Error(`No run ${input.run} in this repository`))
-    if (input.format === "json") return process.stdout.write(JSON.stringify({ run, nodes, events }, null, 2) + EOL)
+    if (input.format === "json") return process.stdout.write(json({ run, nodes, events }) + EOL)
     process.stdout.write(render(run, nodes, events) + EOL)
   }),
 )

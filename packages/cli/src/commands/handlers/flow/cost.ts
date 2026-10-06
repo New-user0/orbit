@@ -1,8 +1,8 @@
+import { json, plain } from "@orbit/flow/plain"
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
-import { plain } from "../../../util/plain"
 import { directory } from "./execute"
 
 export default Runtime.handler(
@@ -32,7 +32,7 @@ export default Runtime.handler(
       output: rows.reduce((sum, row) => sum + row.output, 0),
       cost: rows.reduce((sum, row) => sum + row.cost, 0),
     }
-    if (input.format === "json") return process.stdout.write(JSON.stringify({ rows, total }, null, 2) + EOL)
+    if (input.format === "json") return process.stdout.write(json({ rows, total }) + EOL)
     const table = [
       ["node", "model", "attempts", "input", "output", "cost"],
       // The names are text from the run store, a file in the repository that a clone brings along.
