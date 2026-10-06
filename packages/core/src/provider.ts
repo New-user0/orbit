@@ -98,12 +98,24 @@ const builtins = new Map<string, () => Promise<unknown>>([
   ["@orbit/ai/providers/zai-coding-plan/responses", () => import("@orbit/ai/providers/zai-coding-plan/responses")],
 ])
 
+// A compiled binary has no node_modules of its own, so Bun looks a name that the binary does not bundle up in the folder
+// it was started in, which can be a repository that is not trusted. The binary never loads a provider from there.
+const compiled = typeof Bun !== "undefined" && Bun.isStandaloneExecutable
+
 export const loadPackage = Effect.fn("Provider.loadPackage")(function* (input: string, npm?: Npm.Interface) {
   const specifier = packageName(input)
   const builtin = builtins.get(specifier)
   if (builtin) return yield* importPackage(specifier, specifier, builtin)
+  if (specifier.startsWith("file://")) return yield* importPackage(specifier, specifier)
+  if (specifier.startsWith("@orbit/ai/")) {
+    if (!compiled) return yield* importPackage(specifier, specifier)
+    return yield* new LoadError({
+      package: specifier,
+      cause: new Error(`Provider package ${specifier} is not built in`),
+    })
+  }
   const resolved = yield* Effect.sync(() => {
-    if (specifier.startsWith("file://") || specifier.startsWith("@orbit/ai/")) return specifier
+    if (compiled) return undefined
     try {
       return import.meta.resolve(specifier)
     } catch {

@@ -545,6 +545,26 @@ in the project they run in, and of a file that only defines nodes that use your 
 **What to do:** look the file over, then run `orb trust <folder>` once for the folder that holds the files you rely on,
 or pass `--trust` to a single run, or keep the files in the repository you run in. Move files out of a home directory.
 
+### The `orb` binary does not look for a provider package in the folder it starts in
+
+A provider's `package` names the code that talks to its API. For a name that Orbit does not include, the single-file
+`orb` first looked it up in the `node_modules` of the folder it started in, and installed it from npm into Orbit's own
+cache only when it was not there. A name under `@orbit/ai/` that Orbit does not include was imported from that folder
+too. That folder can be a repository that is not trusted yet, so when your own config named such a package, a
+`node_modules/<package>/index.js` committed there ran in the server process that `orb` starts in the folder, which is
+the case with `--standalone`, with `--bare` and with the background service off. The binary now installs such a package
+from npm and loads it from Orbit's cache, whatever folder it starts in, as it already did for `aisdk:` packages, and
+never looks for one in the folder. A name under `@orbit/ai/` that Orbit does not include fails with "is not built in".
+A plain file path, which an earlier build loaded too, no longer loads: write it as a `file://` URL. The providers that
+Orbit includes and `file://` URLs load as before, and so does running Orbit from its source.
+
+**Affects:** people who run `orb` from a release build with a provider `package` that is a bare npm name that they keep
+in the `node_modules` of their project, or that is a plain file path: Orbit now installs the first from npm, which needs
+the registry, and loads the latest version, and no longer loads the second.
+
+**What to do:** nothing for the providers that Orbit includes. To use a copy that you keep yourself, point `package` at
+its entry file with a `file://` URL.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
