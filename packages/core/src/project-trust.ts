@@ -36,6 +36,15 @@ export interface Interface {
    * file that something would execute. Callers must ask this before running any such code; see `ConfigTrust.allows`.
    */
   readonly allows: (file: string) => Effect.Effect<boolean>
+  /**
+   * Whether the text of a file may go into the prompt as part of this project, such as an instruction file. Any file may
+   * while the project is trusted. Until then only a file inside the project's folders whose real path is inside them too
+   * may: a link that leaves them is not the repository's to supply, and what it points at, such as an SSH key or a cloud
+   * credentials file, would go to the model provider with the first request. A `{file:path}` reference in the config of
+   * an untrusted folder is held to the same rule. A file in a folder above the project is outside it, so it waits for
+   * the project to be trusted as well.
+   */
+  readonly reachable: (file: string) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ProjectTrust") {}
@@ -51,6 +60,8 @@ const layer = Layer.effect(
     const root = location.project.canonical
     // The folders that decision covers.
     const folders = [...new Set([location.directory, location.project.directory, location.project.canonical])]
+    // Those folders as the disk has them, for comparing a real path with them however the Location was reached.
+    const real = yield* Effect.forEach(folders, fs.resolve)
 
     // What a config directory holds that an untrusted folder may not use: its plugins, a command that runs a shell
     // snippet, and whatever its agents ask for beyond deny rules. Finding out reads the directory, so the answer is kept
@@ -131,6 +142,11 @@ const layer = Layer.effect(
           trusted: state.trusted,
           compat: compat.roots,
         })
+      }),
+      reachable: Effect.fn("ProjectTrust.reachable")(function* (file) {
+        if ((yield* trust.status(root)).trusted) return true
+        const within = (candidate: string) => [...folders, ...real].some((folder) => FSUtil.contains(folder, candidate))
+        return within(file) && within(yield* fs.resolve(file))
       }),
     })
   }),

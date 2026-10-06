@@ -22,6 +22,10 @@ import { FSUtil } from "@orbit/util/fs-util"
 // are text, so they stay available: `ConfigMarkdown` reads front matter as YAML or JSON and refuses JavaScript, so no
 // Markdown file runs just by being read. Anything else that would run what a file carries, such as the hooks in the
 // front matter of a skill or an agent, must ask `allows` first.
+//
+// What a file points at is held to the folder as well. A `{file:}` reference in the config is read only inside it
+// (`ConfigVariable`), and so is an instruction file: whatever reads one into the prompt asks `ProjectTrust.reachable`
+// first, so that a link in a repository does not carry a file of the user's to the model provider.
 
 /** What is left of a value once what an untrusted folder may not supply is taken out, and the kinds of what went. */
 interface Outcome<V> {

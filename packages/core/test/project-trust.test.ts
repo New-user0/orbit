@@ -1,3 +1,4 @@
+import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Schedule, Stream } from "effect"
@@ -348,6 +349,62 @@ describe("ProjectTrust.allows", () => {
         expect(yield* Effect.forEach(Object.values(own), project.allows)).toEqual(Object.values(own).map(() => false))
         expect(yield* Effect.forEach(Object.values(mine), project.allows)).toEqual(Object.values(mine).map(() => true))
       }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+describe("ProjectTrust.reachable", () => {
+  it.live("reads only what is inside an untrusted project, for real, until the project is trusted", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const secret = path.join(folders.root, "outside", "secret.txt")
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.repo, "notes.md"), "notes"),
+          write(path.join(folders.work, "AGENTS.md"), "shared"),
+          write(secret, "secret"),
+          // A junction reads as a symlink to a directory, and needs no privilege on Windows.
+        ]).then(() => fs.symlink(path.dirname(secret), path.join(folders.repo, "linked"), "junction")),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const answers = () =>
+          Effect.forEach(
+            [
+              path.join(folders.repo, "notes.md"),
+              // A file that is not there yet is inside by its name, and so it is by where it would be.
+              path.join(folders.repo, "later.md"),
+              // Inside by its name, and outside for real.
+              path.join(folders.repo, "linked", "secret.txt"),
+              secret,
+              // A folder above the project is not the repository's, so it waits for the project to be trusted too.
+              path.join(folders.work, "AGENTS.md"),
+              path.join(folders.home, "AGENTS.md"),
+            ],
+            project.reachable,
+          )
+
+        expect(yield* answers()).toEqual([true, true, false, false, false, false])
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* answers()).toEqual([true, true, true, true, true, true])
+        yield* project.revoke()
+        expect(yield* answers()).toEqual([true, true, false, false, false, false])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("counts the main checkout of a linked worktree as inside, since one decision covers both", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const main = path.join(folders.root, "main")
+      yield* Effect.promise(() =>
+        Promise.all([write(path.join(main, "AGENTS.md"), "main"), write(path.join(folders.root, "AGENTS.md"), "root")]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        expect(yield* project.reachable(path.join(main, "AGENTS.md"))).toBe(true)
+        expect(yield* project.reachable(path.join(folders.root, "AGENTS.md"))).toBe(false)
+      }).pipe(Effect.provide(loader(folders, main)))
     }),
   )
 })

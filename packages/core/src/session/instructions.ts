@@ -6,6 +6,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Location } from "../location.js"
+import { ProjectTrust } from "../project-trust.js"
 import { SessionEvent } from "./event.js"
 import { MessageDecodeError } from "./error.js"
 import { SessionMessage } from "./message.js"
@@ -32,6 +33,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const store = yield* SessionStore.Service
     const location = yield* Location.Service
+    const trust = yield* ProjectTrust.Service
     // Resolved once for the Location layer; the synthetic text and dedup ledger keep
     // absolute paths, but the human-facing description shows paths relative to the project
     // root so opening a subdirectory still describes paths from the project root.
@@ -42,6 +44,21 @@ const layer = Layer.effect(
     // so paths whose synthetics drop out of model-visible history (compaction, revert)
     // are re-discovered and re-injected instead of staying silently lost.
     const inFlight = yield* Ref.make<Map<SessionSchema.ID, Set<string>>>(new Map())
+    // Files already reported as skipped, so that one the model's reads keep finding is reported once.
+    const skipped = new Set<string>()
+
+    // Until the project is trusted it supplies only what is inside it. The paths here are real, so a file that a link in
+    // the repository points at, such as a key or a credentials file, is left out before it can go into the conversation.
+    const reachable = Effect.fnUntraced(function* (path: string) {
+      if (yield* trust.reachable(path)) return true
+      if (skipped.has(path)) return false
+      skipped.add(path)
+      yield* Effect.logWarning("instruction file skipped", {
+        path,
+        reason: "outside the project, which is not trusted",
+      })
+      return false
+    })
 
     const load = Effect.fn("SessionInstructions.load")(function* (input: Parameters<Interface["load"]>[0]) {
       const claimed = yield* Ref.modify(inFlight, (map) => {
@@ -55,7 +72,10 @@ const layer = Layer.effect(
       if (claimed.length === 0) return
       yield* Effect.gen(function* () {
         const alreadyInjected = yield* previouslyInjected(store, input.sessionID)
-        const toInject = claimed.filter((path) => !alreadyInjected.has(path))
+        const toInject = yield* Effect.filter(
+          claimed.filter((path) => !alreadyInjected.has(path)),
+          reachable,
+        )
         if (toInject.length === 0) return
         const files = yield* Effect.forEach(
           toInject,
@@ -121,5 +141,5 @@ function describePath(root: string, path: string) {
 export const node = makeLocationNode({
   name: "session-instructions",
   layer,
-  deps: [Bus.node, FSUtil.node, Location.node, SessionStore.node],
+  deps: [Bus.node, FSUtil.node, Location.node, ProjectTrust.node, SessionStore.node],
 })

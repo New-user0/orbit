@@ -119,6 +119,16 @@ it and never on a network share, so a repository cannot pull a secret or another
 model provider. A reference that is not expanded stays in the text as it was written, and expands once the folder is
 trusted.
 
+Instruction files are held to the folder in the same way. While the project is untrusted, `ORBIT.md`, `AGENTS.md` and
+another product's instruction file load only when the file, and the file it links to, are inside the project's folders.
+A repository that ships `AGENTS.md` as a symlink to an SSH key or a credentials file used to have it read into the
+first request to your model provider; the link is now skipped. So is an instruction file in a folder above the project,
+because the project does not vouch for what surrounds it, and one that the model's reads find in a folder of the
+project, whose link leads out of it. Each file that is skipped is logged once, as a warning that says `instruction file
+skipped` and names the file, and it loads when the project is trusted, without a restart, and goes again when the trust
+is taken away. Instruction files in your own config directory are never held back, and nothing changes once the project
+is trusted, so a symlinked `AGENTS.md` that you rely on works as before.
+
 Orbit starts no language server and runs no formatter in a folder that is not trusted, the built-in ones and the ones
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
 working as soon as the folder is trusted.
@@ -171,8 +181,10 @@ the plugins that the terminal UI loads from `.orbit/plugins` itself. Code built 
 `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs
 `FSUtil`, `ProjectTrust.status` also lists `.orbit` directories and gives each file or directory above the project the
 folder to trust for it, as `directory`, `ProjectTrust.allows` says whether a file may run the code it carries (ask it
-before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and a global
-`trust.updated` event reports each change.
+before running anything a file carries, such as the hooks in a skill's or an agent's front matter), `ProjectTrust.reachable`
+says whether a file may be read into the prompt (ask it before reading a file that something in the project points at),
+`SessionInstructions` now needs `ProjectTrust`, and a global `trust.updated` event reports each change. Instruction files
+that are a link out of an untrusted project, and the ones in the folders above it, stay unread until it is trusted.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run `orb trust` in it, or
 run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which
