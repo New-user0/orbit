@@ -360,6 +360,12 @@ the commands it found by node or task and the nodes that approve with their `per
 that defines none of these, such as one whose `checks` are empty, is only read, so it keeps the check it had: an
 untrusted folder stops it when the folder's config holds something back, and not otherwise.
 
+The check does not look at which agent a node names. The `agent` of a node, of a team member and of a `judge`, in a
+workflow or in a suite task, picks one of the user's agents, and an agent's own rules are added after the user's global
+rules, with the last match winning. A user who gave one agent wider rules than the rest therefore has a file that names
+it get those actions done without a question, and the folder does not have to be trusted for that. With the default
+rules every agent allows the same and nothing changes. `docs/flow.md` says so under Permissions.
+
 `orb flow replay` loads the same files, from the run store or with `--file`, and used to check nothing, because a replay
 calls no model and connects to no server. It now makes the check for a module. To ask, it connects to a server, which
 for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust` as

@@ -184,6 +184,8 @@ output: merge
 - `permissions: auto` on an agent node, a verify node or a member of a team approves what that node's agents ask
   permission for. A workflow that sets it is not run in a folder that is not trusted either, and the refusal lists the
   nodes.
+- `agent` on an agent node, a verify node or a member of a team runs it as one of your agents, with that agent's rules.
+  A folder that is not trusted is not stopped for it; see [Permissions](#permissions).
 
 Eval suites can be YAML or JSON as well.
 
@@ -233,6 +235,15 @@ the folder brings, so it is not held up. See the note under the `orb flow` comma
 
 The commands of `check` nodes and of `checks` are not agent actions, so no permission rule is asked about them. A folder
 that is not trusted is stopped from running them instead; see the same note.
+
+Which agent runs a node decides which rules apply to it, and a file can choose. The `agent` of a node, of a team member
+and of a `judge`, in a workflow or in a suite task, names one of your agents. An agent's own rules are added after your
+global rules, and the last rule that matches wins. So if you gave an agent rules that allow what your global rules ask
+about, a workflow or suite that names it gets those actions done without asking, and the run's rejection of what is
+asked never comes into play. With Orbit's default rules every agent allows the same, so nothing changes unless you gave
+one agent wider rules than the rest. A folder that is not trusted is not stopped for a file that names an agent, as it
+is for `permissions: "auto"`. If some of your agents have wider rules than the rest, look at the `agent` and `judge`
+entries of a workflow or suite that you did not write before you run it.
 
 ## Resume
 
@@ -358,7 +369,9 @@ orb eval .orbit/evals/api.ts --models ollama/a,ollama/b --format json
 
 - Each task is a verify node in its own worktree from the current commit. Models never see each other's work, and
   the checkout is not changed.
-- `maxIterations` defaults to 1, which scores first-try success. Tasks can set `judge` like a verify node.
+- `maxIterations` defaults to 1, which scores first-try success. Tasks can set `judge` like a verify node. A `judge`'s
+  `agent` runs as one of your agents with its rules, which a folder that is not trusted is not stopped for; see
+  [Permissions](#permissions).
 - The `checks` are shell commands, so in a folder that is not trusted `orb eval` stops for a JSON or YAML suite whose
   tasks have any, and lists them. It stops for a TypeScript or JavaScript suite whatever it holds, because importing it
   runs its code. Run `orb trust` once, or pass `--trust` for one run. Nearly every suite has `checks`, so in practice a
