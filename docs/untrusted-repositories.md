@@ -11,10 +11,11 @@ hold back what a folder supplies until the folder is trusted. It did not close e
 lists the ones that are left. Its reviews and audits had found 160 distinct defects by the time the compiled binary's
 dependency lookups were last fixed (the esprima fix): one blocker, 36 majors, 114 minors and nine holes that no review
 had caught first. The review of that fix then found a second blocker, an executable looked up in the working folder,
-and closing it turned up two more members of the same class (class 10). Those three are not in the counts. 131 of the
-160 fall into the fifteen classes below, including the first blocker and most of the majors, and most classes came back
-in a new place after their first fix. Writing the rule once for the whole class costs less than finding the next
-instance in review.
+and closing it turned up two more members of the same class (class 10). The review of this page then found a third
+blocker in that class, a bare name's `.exe` that Bun's own spawn finds in the working folder, which no test had planted.
+Those four are not in the counts. 131 of the 160 fall into the fifteen classes below, including the first blocker and
+most of the majors, and most classes came back in a new place after their first fix. Writing the rule once for the whole
+class costs less than finding the next instance in review.
 
 **The promise.** Until a person trusts a folder, no file that the folder supplies may run code, spend their money, reach
 the network, carry a file of theirs to a model provider or change which of their rules apply. A change that breaks one
@@ -101,14 +102,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
   `test/util/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
-- Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, the command of an MCP server, the
-  pager's `cmd /c more`): `CrossSpawnSpawner` in `packages/util/src/cross-spawn-spawner.ts` sets
-  `NoDefaultCurrentDirectoryInExePath` for a bare name on Windows, so that no `cmd.exe` that it starts looks in the
-  working folder, and a running process is stopped with the `taskkill.exe` of `System32`. Proof:
-  `test/effect/cross-spawn-spawner.test.ts` and `test/project.test.ts`, which resolves a folder with `.hg` and an
-  `hg.bat`. A bare name only: a `.cmd` or `.bat` started by its full path, one that `which` returned included, is not
-  covered, and neither are the language server client, which starts a server through `cross-spawn` directly, and the
-  bare `git` fallback under a Node host (see Known gaps).
+- Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
+  MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working
+  folder before `PATH` for a bare name, unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`.
+  Every Orbit process sets it in its own environment first (`ProgramLookup.install()` in
+  `packages/util/src/program-lookup.ts`, called at the start of each entry, see class 10). `CrossSpawnSpawner` in
+  `packages/util/src/cross-spawn-spawner.ts` installs it again before every launch, gives every child the variable too,
+  a `.cmd` started by its full path included, and stops a running process with the `taskkill.exe` of `System32`. Proof:
+  `packages/util/src/program-lookup.test.ts`, `test/effect/cross-spawn-spawner.test.ts`, `test/project.test.ts` (a
+  folder with `.hg` and an `hg.exe`) and `test/mcp.test.ts`, and the `test/program-lookup.test.ts` of `packages/cli`,
+  `packages/sdk` and `packages/server`. They delete the variable from `process.env` first, and those that run a decoy
+  plant real `.exe` files. No test of its own covers the language server client, which starts a server through
+  `cross-spawn` directly, or the bare `git` fallback (see Known gaps).
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
@@ -176,15 +181,20 @@ Every class below is tested the same way, and each class adds only what is parti
    `ORBIT_TRUST_PROJECT`), so a test of a gate builds `WorkspaceTrust.configured({ implicit: false })`, as
    `untrustedProject` in `packages/core/test/fixture/project-trust.ts` does. Otherwise "nothing ran" passes vacuously.
 3. **Rule out the other vacuous pass.** "Nothing ran" also passes when the environment hides the attack. Some shells
-   set `NoDefaultCurrentDirectoryInExePath=1`, and the shell that agents run in is one of them. It makes `cmd.exe` skip
-   the working folder, so a `.bat` or `.cmd` decoy never runs. A test of a program lookup deletes the variable from the
-   test process first and restores it afterwards (`withCurrentDirectoryOnPath` in
-   `packages/core/test/effect/cross-spawn-spawner.test.ts`).
+   set `NoDefaultCurrentDirectoryInExePath=1`, and the shell that agents run in is one of them. It makes Windows skip
+   the working folder when it looks up a program, so no decoy runs, neither a `.bat` or `.cmd` that `cmd.exe` finds nor
+   an `.exe` that Bun's spawn finds. A test of a program lookup deletes the variable from `process.env` of the test
+   process first and restores it afterwards (`currentDirectoryOnPath`, and `withCurrentDirectoryOnPath` for an effect,
+   in `packages/core/test/fixture/decoy.ts`). It also plants a real `.exe` decoy (`plant` in the same file) next to the
+   `.bat`: `cmd.exe` reads the variable from the environment of the child, and a spawn reads it from the process that
+   starts the program, so a `.bat` decoy says nothing about an `.exe`.
 4. **Assert the refusal.** The refusal text, exit status 1, the marker absent and the scripted model never asked.
 5. **Add the control.** The same file in the same test with `--trust` or a granted folder, and the marker present. That
    proves the file is live, so the test cannot pass because the file was never executable. For a program lookup the
-   control is the same decoy started as a shell would start it, by a `cmd.exe` that does search the folder, so that the
-   test fails loudly when the environment still hides the search.
+   control is the same decoy started by its full path (an `.exe`) or as a shell would start it, by a `cmd.exe` that does
+   search the folder (a `.bat`), so that the test fails loudly when the decoy cannot run. The `.exe` control is "starts
+   a planted program when it is given the path of the program" in
+   `packages/core/test/effect/cross-spawn-spawner.test.ts`.
 6. **Record the mutation.** Remove the gate and watch the test fail, then write that mutation in the PR. The review runs
    it again.
 7. **Lift the skips.** Tests that skip on your platform (real symlinks need `canLinkFile`, hook execution skips on
@@ -764,26 +774,34 @@ repository text.
 **Rule:** Assume that the single binary starts in an untrusted repository before any trust check
 (`orb trust --standalone`, `serve --stdio`). Keep the autoload options off except `package.json`, never resolve a
 package that is not built in by name from inside the binary, and replace each lookup that a bundled dependency leaves to
-the runtime and that can load code. Hold programs to the same rule at the level of every `cmd.exe` that Orbit starts,
-because on Windows it looks in the current folder before `PATH`: find an executable with `which` (`PATH` only, unless
-`PATH` itself names the folder), start it through `CrossSpawnSpawner`, and never hand a bare name to `exec`, `cmd /c` or
-another way of starting a `cmd.exe` yourself outside the spawner. The spawner covers a bare name only: a `.cmd` or
-`.bat` that is started by its full path, one that `which` returned included, still runs in a `cmd.exe` that searches the
-working folder for whatever its script starts by name (Known gaps).
+the runtime and that can load code. Hold programs to the same rule. On Windows a program that is started by a bare name
+is looked up in the working folder before `PATH`, by Bun, Node, cross-spawn and every `cmd.exe`, unless the process that
+starts it has `NoDefaultCurrentDirectoryInExePath` in its own environment. So call `ProgramLookup.install()`
+(`packages/util/src/program-lookup.ts`) first in every process entry, find an executable with `which` (`PATH` only,
+unless `PATH` itself names the folder), and start it through `CrossSpawnSpawner`, which gives every child the variable
+too, a `.cmd` started by its full path included. Never hand a bare name to `exec`, `cmd /c` or another way of starting a
+`cmd.exe` yourself outside the spawner.
 
 **Why:** Bun applies the `paths` of a `tsconfig.json` in the start folder to the binary's own imports, resolves any bare
 name that the bundle leaves open from the folder's `node_modules`, and loads a native library from an npm package that
 its lookup finds. A committed file then runs in the server process before the trust gate is asked. Programs are found
-by two lookups on Windows, and the working folder is in both. A library lookup that searches it before `PATH`, as the
-npm `which` package does with no option to skip it, finds a `git.exe` or `rg.exe` that the repository ships. And
-`cmd.exe` looks in the current folder before `PATH` for a program, a `.bat` and a `.cmd` alike: cross-spawn runs every
-`.bat` and `.cmd`, and every name that it cannot resolve, through `cmd.exe /d /s /c`, and `exec` and `cmd /c` start one
-by design. That `cmd.exe` also looks in the folder for each name that a script starts by name, and not only for the one
-that Orbit passes: the command wrappers that npm installs globally start `node` by name unless a `node.exe` sits beside
-them, which it usually does not, so a `node.bat` in the working folder runs in its place even when the wrapper itself
-was started by its full path. So the class is every `cmd.exe` that Orbit starts, and not one library. Bun's own spawn
-looks on `PATH` only, so for the spawner an `.exe` decoy proves little: it is a `.bat` or `.cmd` that `cmd.exe` runs
-from the folder.
+by three lookups on Windows, and the working folder is in all of them. A library lookup that searches it before `PATH`,
+as the npm `which` package does with no option to skip it, finds a `git.exe` or `rg.exe` that the repository ships.
+Bun's spawn, `node:child_process` under Bun, the lookup that cross-spawn makes and Node's `execFile` look in the working
+folder of the child before `PATH` for a bare name's `.exe` or `.com`, so a clone that commits an `hg.exe` ran it while
+`Project.resolve` identified a folder with a `.hg`, and one that commits a `cmd.exe` ran it as the pager of
+`orb session list`. And `cmd.exe` looks in the current folder before `PATH` for a program, a `.bat` and a `.cmd` alike:
+cross-spawn runs every `.bat` and `.cmd`, and every name that it cannot resolve, through `cmd.exe /d /s /c`, and `exec`
+and `cmd /c` start one by design. That `cmd.exe` also looks in the folder for each name that a script starts by name,
+and not only for the one that Orbit passes: the command wrappers that npm installs globally start `node` by name unless
+a `node.exe` sits beside them, which it usually does not, so a `node.bat` in the working folder runs in its place even
+when the wrapper itself was started by its full path.
+
+One variable stops the last two lookups, and it has to be in two places. The lookup of a spawn reads
+`NoDefaultCurrentDirectoryInExePath` from the environment of the process that starts the program, and never from the
+environment that it hands to the child. A variable that only the child has stops the `.bat` that a `cmd.exe` would find
+and lets the `.exe` run. A `cmd.exe` that the child is or runs reads its own environment, so the child needs the
+variable too. So the class is every lookup of every program that Orbit starts, and not one library.
 
 **In M1:** a repository's `tsconfig.json` `paths` ran at the start of `orb trust --list` (verification round 5), and
 `Provider.loadPackage` resolved a provider by name from the repository's `node_modules` (#22 round 8). The prescribed
@@ -800,13 +818,22 @@ folder with a `.hg` directory and an `hg.bat` ran that file while `Project.resol
 trust check (the pager `cmd /c more`, `git` when it is not on `PATH` and the command of an MCP server are started by
 name as well). And stopping a process ran `taskkill` by name through `exec`, so a `taskkill.exe` or `taskkill.bat` in
 the folder ran instead of the system one. The shell that agents run in sets `NoDefaultCurrentDirectoryInExePath`, which
-makes `cmd.exe` skip the folder, so a decoy test run there passes without testing anything. The earlier holes took four
-fix commits in three rounds, and the executables two more.
+makes `cmd.exe` skip the folder, so a decoy test run there passes without testing anything. The fix for `hg.bat` gave
+the child the variable, and the review of this page found that this was half of the answer: a bare name's `.exe` still
+ran through Bun's spawn, which reads the variable from the process that starts the program and ignores the child's copy.
+`Project.resolve` ran an `hg.exe` of the folder, and `orb session list` ran its `cmd.exe` as the pager. The spawner's
+tests had planted `.bat` decoys only, which `cmd.exe` finds through the child's environment, so they said nothing about
+an `.exe`. The fix is `ProgramLookup` (#22, `9b79fd1`): every Orbit process installs the variable in its own environment
+first, and the spawner installs it again and gives it to every child. It is half of the answer again for a plain
+`Bun.spawn`, which hands its child the environment that the process started with, so the `cmd.exe` of the terminal UI's
+status line still has no variable (Known gaps). The earlier holes took four fix commits in three rounds, and the
+executables three more.
 
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust
-check: modules, packages, native libraries, executables, and what each `cmd.exe` that it starts looks up. No earlier
-audit had looked, and M1's rounds found each kind in turn.
+check: modules, packages, native libraries, executables, and what each lookup that finds a program does (a library's,
+the spawn of Bun and Node, and every `cmd.exe` that it starts). No earlier audit had looked, and M1's rounds found each
+kind in turn.
 
 **How to comply:**
 
@@ -816,8 +843,10 @@ audit had looked, and M1's rounds found each kind in turn.
 - `runtimeRequires(replaced)` and `verifyRuntimeRequires(replaced)` in `packages/cli/script/runtime-requires.ts` are
   three `onLoad` replacements (js-yaml's `js/function` type, Babel's `resolve-targets`, fff-bun's download module), and
   the build fails when a replacement matched no module. Add one when a dependency leaves a name to the runtime and the
-  lookup can load code. Two names that the bundle leaves to the runtime are not replaced, because nothing loads code
-  through either today (`bufferutil` and `node-gyp`, in Known gaps under "Build checks").
+  lookup can load code. Two names are not replaced, because nothing loads code through either today (Known gaps, under
+  "Build checks"): `node-gyp`, which the bundle leaves to the runtime and npm only looks up, and `bufferutil`, which is
+  not in the bundle today and would be left to the runtime, and resolve from the working folder, if a change ever
+  bundled the npm `ws`.
 - `Provider.loadPackage` (`packages/core/src/provider.ts`) fails with `LoadError` inside a compiled binary
   (`Bun.isStandaloneExecutable`) for a package that is not built in. Otherwise it installs with `npm.add` and resolves
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
@@ -831,29 +860,51 @@ audit had looked, and M1's rounds found each kind in turn.
   a directory is checked as given. Do not call the npm package yourself or write a second lookup, and do not swap in
   `Bun.which`: it returns `null` for a quoted `PATH` entry, takes no `PATHEXT`, and the core also runs under Node and
   workerd, where there is no `Bun`.
-- Start a program through `CrossSpawnSpawner` (`packages/util/src/cross-spawn-spawner.ts`). For a bare name, one with no
-  directory in it and no `shell` option, it puts `NoDefaultCurrentDirectoryInExePath` in the environment on Windows,
-  which makes every `cmd.exe` in that process tree skip the working folder: the one that cross-spawn starts for a `.bat`
-  or `.cmd` or for a name that it cannot resolve, and the one that Orbit starts by name for what it runs, such as the
-  pager's `cmd /c more`. A path to a program, and a command line that is run with `shell` (the start command of a
-  worktree, which its user wrote to be run as typed), are left as written. That includes the path of a `.cmd` or
-  `.bat`, one that `which` returned too: its `cmd.exe` still searches the working folder for whatever the script starts
-  by name, and npm's global command wrappers start `node` by name (Known gaps). A `.cmd` that `PATH` holds still starts
-  by name.
+- Call `ProgramLookup.install()` (`@orbit/util/program-lookup`, `packages/util/src/program-lookup.ts`) first in every
+  process entry, before anything starts a program. It sets `NoDefaultCurrentDirectoryInExePath=1` in the process's own
+  environment on Windows, and does nothing elsewhere. Bun's spawn, `node:child_process`, cross-spawn's lookup and Node's
+  `execFile` read the variable from the process that starts the program and ignore the one in the child's environment,
+  so a variable that only the child has stops `.bat` decoys and lets an `.exe` run. The entries that call it are the
+  `orb` CLI (`packages/cli/src/index.ts`, which also runs the server, the terminal UI, the services and the flow
+  runner), `ServerProcess.start` (`packages/server/src/process.ts`), `EmbeddedHost.create`
+  (`packages/sdk/src/internal/host.ts`) and the npm launcher `packages/cli/bin/orb.cjs`, which has the line inline
+  because the file ships alone. A new entry (a binary, a worker host, an embedding) adds its own call. A process that is
+  not one of these does not have the variable. The VS Code extension host is the open case (Known gaps). An application
+  that embeds `@orbit/client` and starts its default service command, a bare `orb`, has to set it itself, as the SDK
+  host does. And the `.cmd` shim that npm writes for a global install starts `node` by name in a `cmd.exe` before
+  `orb.cjs` runs: it is npm's file, and no Orbit code reaches it.
+- Start a program through `CrossSpawnSpawner` (`packages/util/src/cross-spawn-spawner.ts`). It calls
+  `ProgramLookup.install()` before every launch, so nothing that goes through it depends on an entry having run, and on
+  Windows it gives every child `NoDefaultCurrentDirectoryInExePath` in its environment (`ProgramLookup.environment()`):
+  a program started by a bare name, by its path or as a command line run with `shell`, whatever environment it is
+  handed. So every `cmd.exe` in that process tree skips the working folder: the one that cross-spawn starts for a `.bat`
+  or `.cmd` or for a name that it cannot resolve, the one that Orbit starts by name for what it runs, such as the
+  pager's `cmd /c more`, and the one that runs a `.cmd` started by its full path, a `which` result included, which looks
+  up by name whatever its script starts, as npm's global command wrappers start `node`. A `.cmd` that `PATH` holds still
+  starts by name. A bare name in a command line that the spawner runs with `shell` no longer finds a file that only the
+  working folder holds, and `.\build.cmd` still works ([upgrading](upgrading.md)).
 - Never hand a bare name to `exec`, `execSync`, a `shell` option or `cmd /c` outside the spawner: each one starts a
-  `cmd.exe` that looks in the working folder first. Give a system tool its full path. Stopping a process on Windows
-  runs the `taskkill.exe` of `%SystemRoot%\System32` with `execFile`, where it used to run `taskkill` by name through
-  `exec`.
-- Five members of the class are still open, and Known gaps lists each with its task or planned fix: a `.cmd` or `.bat`
-  started by its full path, a relative `PATH` entry, the terminal UI's status line and its external editor, and the VS
-  Code extension's `orbit.executable`. A change must not widen one.
+  `cmd.exe`, and only the spawner makes sure that the program gets the variable whatever environment it is handed. Give
+  a system tool its full path. Stopping a process on Windows runs the `taskkill.exe` of `%SystemRoot%\System32` with
+  `execFile`, where it used to run `taskkill` by name through `exec`.
+- A `Bun.spawn` without an `env` hands its child the environment that the process started with, and not a variable that
+  `install()` set after that. `ProgramLookup.install()` stops Bun from finding a `cmd.exe` of the working folder, but
+  the `cmd.exe` that it starts has no variable and looks in the folder for what it runs by name (measured with Bun 1.4.2
+  on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
+  `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
+  `env: ProgramLookup.environment(undefined)` or goes through the spawner.
+- Three members of the class are still open: a relative `PATH` entry, the terminal UI's status line and the VS Code
+  extension's `orbit.executable`. Three more rest on `ProgramLookup.install()` alone, with no test of their own: the
+  language server client, the bare `git` fallback and the terminal UI's external editor. Known gaps lists each with its
+  task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
   When the set of dependencies changes, probe the build rather than reading it: put a marker-writing decoy in
   `node_modules` for each package name in `bun.lock` and see which ones run.
 - Finish with the real binary, built with `bun run build --single --skip-install` in `packages/cli` and started with an
-  isolated home, on Windows and on Linux.
+  isolated home, on Windows (from a shell where `NoDefaultCurrentDirectoryInExePath` is deleted, in a folder that holds
+  decoys) and on Linux.
 
 **How to test:**
 
@@ -865,26 +916,39 @@ audit had looked, and M1's rounds found each kind in turn.
 - A control built with each option on, or the plugin off, must write the marker, so the test cannot pass because the
   folder never had a way to run.
 - Executables, on Windows: put marker-writing decoys in the folder that the process starts in, named after programs
-  that Orbit starts by name and that `PATH` also holds: an `.exe` (`git.exe`, `rg.exe`), a `.bat` and a `.cmd`
-  (`hg.bat`, `hg.cmd`, `npx.cmd`), and a `taskkill.exe` and a `taskkill.bat` in the folder of the Orbit process. For a
-  script that Orbit starts by its full path, put a `node.bat` in that folder and start a copy of a global npm command
-  wrapper by its full path, as a user-configured MCP server does. That test fails until the Known gap closes. Run the
-  real thing: `orb session list --standalone` starts git, a file search starts ripgrep, `Project.resolve` on a folder
-  with `.hg` starts `hg`, and stopping a running child runs `taskkill`. Assert no marker, with the real program still
-  found on `PATH`, and a `.cmd` that `PATH` holds still starting by name (`packages/core/test/util/which.test.ts`,
+  that Orbit starts by name and that `PATH` also holds: real `.exe` files (`hg.exe`, `cmd.exe`, `node.exe`, `git.exe`,
+  `rg.exe`), a `.bat` and a `.cmd` (`hg.bat`, `hg.cmd`, `npx.cmd`), and a `taskkill.exe` and a `taskkill.bat` in the
+  folder of the Orbit process. `plant` in `packages/core/test/fixture/decoy.ts` compiles each `.exe` with `Bun.build`, no
+  compiler needed, and the program writes `ran.txt` with its own file name and arguments, so a failure names what ran.
+  For a script that Orbit starts by its full path, start a `.cmd` by its full path that runs a name which only a `.bat`
+  of the working folder holds, or a copy of a global npm command wrapper, which starts `node` by name, with a `node.bat`
+  in the folder, as a user-configured MCP server does. Run the real thing: `orb session list --standalone` starts git,
+  its pager starts `cmd /c more`, a file search starts ripgrep, `Project.resolve` on a folder with `.hg` starts `hg`, an
+  MCP server starts its command, `orb flow clean` starts git outside the spawner, the npm launcher starts `powershell`,
+  and stopping a running child runs `taskkill`. Assert no marker, with the real program still found on `PATH`, and a
+  `.cmd` that `PATH` holds still starting by name (`packages/core/test/util/which.test.ts`,
   `packages/core/test/ripgrep-binary.test.ts`, `packages/core/test/util/git-executable.test.ts`,
-  `packages/core/test/effect/cross-spawn-spawner.test.ts`, `packages/core/test/project.test.ts`). The ones that run a
-  decoy return early off win32, so they have to be run on Windows.
-- Delete `NoDefaultCurrentDirectoryInExePath` from the test process before the run and restore it afterwards
-  (`withCurrentDirectoryOnPath` in `packages/core/test/effect/cross-spawn-spawner.test.ts`). Some shells set it, and the
-  shell that agents run in is one: `cmd.exe` then skips the folder, and a `.bat` or `.cmd` decoy never runs. Add the
-  control from the test recipe, the same decoy started by a `cmd.exe` that does search the folder, so that the test
-  fails loudly when the environment still hides the search. The tests that run a decoy plant `.bat` files
-  (`cross-spawn-spawner.test.ts`, `project.test.ts`), and the lookup tests plant `.cmd` and `.exe` files and check which
-  file is returned (`which.test.ts`, `git-executable.test.ts`, `ripgrep-binary.test.ts`). When you touch one of them,
-  cover the kinds it does not.
-- Mutation: go back to the npm package's own lookup in `which`, take the variable out of the spawner's environment, or
-  run `taskkill` by name through `exec` again, and watch the tests fail on Windows.
+  `packages/core/test/effect/cross-spawn-spawner.test.ts`, `packages/core/test/project.test.ts`,
+  `packages/core/test/mcp.test.ts` and `packages/cli/test/program-lookup.test.ts`). The ones that run a decoy return
+  early off win32, so they have to be run on Windows.
+- Test each entry that sets the variable: start it with the variable removed and check that it is set before anything
+  starts a program (`packages/sdk/test/program-lookup.test.ts` for `EmbeddedHost.create`,
+  `packages/server/test/program-lookup.test.ts` for `ServerProcess.start`), or that a decoy of the working folder does
+  not run (`packages/cli/test/program-lookup.test.ts`, for the `orb` CLI through `orb flow clean` and for the launcher
+  `orb.cjs` under Node). `packages/util/src/program-lookup.test.ts` covers `ProgramLookup` itself.
+- Delete `NoDefaultCurrentDirectoryInExePath` from `process.env` of the test process before the run and restore it
+  afterwards (`currentDirectoryOnPath`, and `withCurrentDirectoryOnPath` for an effect, in
+  `packages/core/test/fixture/decoy.ts`). Some shells set it, and the shell that agents run in is one: Windows then
+  skips the folder, no decoy runs, and the test passes whether or not the code is right. Giving the child an `env`
+  without it changes nothing for an `.exe`, because a spawn reads the variable from the process that starts the program.
+  Add the control from the test recipe, the same decoy started by its full path, so that the test fails loudly when the
+  decoy cannot run. When you touch a test of a lookup, plant the kinds it does not: the tests that run a decoy plant
+  `.exe` files (`cross-spawn-spawner.test.ts`, `project.test.ts`, `mcp.test.ts`, the CLI's `program-lookup.test.ts`) and
+  `.bat` files (`cross-spawn-spawner.test.ts`, `project.test.ts`), and the lookup tests plant `.cmd` and `.exe` files and
+  check which file is returned (`which.test.ts`, `git-executable.test.ts`, `ripgrep-binary.test.ts`).
+- Mutation: go back to the npm package's own lookup in `which`, take `ProgramLookup.install()` out of an entry or the
+  spawner, take the variable out of the spawner's child environment, or run `taskkill` by name through `exec` again, and
+  watch the tests fail on Windows.
 - The build fails if a replacement matched nothing (`packages/cli/test/compile-autoload.test.ts`,
   `packages/cli/test/compile-runtime-requires.test.ts`, `packages/core/test/provider-compiled.test.ts`).
 
@@ -895,16 +959,16 @@ audit had looked, and M1's rounds found each kind in turn.
 - Does the binary start in a folder that the user chose, before the trust check, and what does the runtime read from it?
 - Was it tested on the real built binary on Windows and on Linux?
 - Is a package ever loaded by name from the working folder instead of from the npm cache?
-- Does it find an executable by name with `which` and start a bare name through `CrossSpawnSpawner`? Some resolvers, and
-  every `cmd.exe`, search the working folder first on Windows. `which` keeps it out unless `PATH` itself names it, and
-  the spawner keeps it out for a bare name only.
+- Does it find an executable by name with `which` and start a program through `CrossSpawnSpawner`? Bun's spawn, Node's,
+  some resolvers and every `cmd.exe` search the working folder first on Windows. `which` keeps it out unless `PATH`
+  itself names it, and the spawner keeps it out for every program that it starts, a bare name and a full path alike.
+- Does the code run in a process whose entry called `ProgramLookup.install()` first? A new entry (a binary, a worker
+  host, an embedding) adds the call, and a program that a process without it starts looks in the working folder.
 - Does it start a `cmd.exe`, or hand a bare name to something that does (`exec`, `cmd /c`, a `.bat` or `.cmd`, a name
   that cross-spawn cannot resolve) outside the spawner?
-- Does it start a `.cmd` or `.bat` by its full path, one that `which` returned included? Its `cmd.exe` searches the
-  working folder for whatever the script starts by name (Known gaps).
-- Does the test delete `NoDefaultCurrentDirectoryInExePath`, plant `.exe`, `.bat` and `.cmd` decoys, and a `node.bat`
-  beside a wrapper that is started by its full path, and carry a control that proves the decoy runs where the variable
-  is not set?
+- Does the test delete `NoDefaultCurrentDirectoryInExePath` from `process.env`, plant `.exe` decoys (`hg.exe`,
+  `cmd.exe`, `node.exe`) as well as `.bat` and `.cmd` ones, start a `.cmd` by its full path, and carry a control that
+  proves the decoy runs where the variable is not set?
 
 ### 11. Parsers whose engines evaluate content
 
@@ -1053,17 +1117,22 @@ Protocol change was declined as out of scope (#15).
 
 **Rule:** A test counts only if it fails on the code from before the fix, so record the mutation in the PR. A heuristic
 or an allowlist ships with planted positives and negatives and an audit of each entry. A test that skips on the
-developer's platform gets a local run with the skip lifted before the PR.
+developer's platform gets a local run with the skip lifted before the PR. A negative test also has to see the attack in
+its own environment: a program-lookup test deletes `NoDefaultCurrentDirectoryInExePath` from `process.env` and plants an
+`.exe` decoy, or it passes vacuously.
 
 **Why:** Mutations survived, allowlists hid more than their reason, a generated-file check reported a current file as
-stale on Windows, and the real-symlink and POSIX hook tests never ran anywhere, because the developer's account could
-not create symlinks and CI could not run.
+stale on Windows, a decoy test could not see the lookup that it was written for, and the real-symlink and POSIX hook
+tests never ran anywhere, because the developer's account could not create symlinks and CI could not run.
 
 **In M1:** a mutation that strips `status_message`, `if`, `once`, `shell` and `headers` from every hook passed all the
 hook tests (#7), and `$ARGUMENTS` inside a span passed 52 tests (#6). In the vendor gate (#13) an allowlist entry hid a
 stale name, and the exemption that a review suggested then let `.x-plugin/` through. Hook-executing tests skip on win32
 and the real-symlink tests skip without the privilege, so they ran nowhere, and a known-failures baseline that the
-repository does not hold absorbed flaky tests although the milestone plan names the idle-egress test as an M1 gate.
+repository does not hold absorbed flaky tests although the milestone plan names the idle-egress test as an M1 gate. The
+spawner's program-lookup tests planted `.bat` decoys only, which `cmd.exe` finds through the child's environment, so they
+said nothing about an `.exe`, and a bare name's `.exe` in the working folder ran through Bun's spawn until the review of
+this page planted one (class 10).
 
 **Ask early:** at authoring time, with a revert of the fix. The first-wave reviews named the practice, and it was not
 applied to gates, allowlists and platform skips.
@@ -1075,6 +1144,11 @@ applied to gates, allowlists and platform skips.
   `files.ts` and `tokens.ts`). Add planted positives and negatives (an allowed spelling, a forbidden one, a lookalike),
   an audit that removes each entry and shows its hits, and a run on an export without `.git`.
 - A build guard fails loudly: `verifyRuntimeRequires` fails the build when a replacement matched nothing.
+- A program-lookup test deletes `NoDefaultCurrentDirectoryInExePath` from `process.env` first (`currentDirectoryOnPath` in
+  `packages/core/test/fixture/decoy.ts`), because a shell that sets it hides the search and the test then passes whether
+  or not the code is right. It plants a real `.exe` decoy (`plant`: `hg.exe`, `cmd.exe`, `node.exe`) as well as a `.bat`,
+  because each kind is found by a different lookup, and it carries a control that starts the decoy by its path (class
+  10).
 - Platform skips: `canLinkFile` skips the real-symlink tests with a reason. Lift the skip on Linux or in Git Bash before
   the PR, in a container or WSL, or mark the test unverified.
 - Generated files carry `eol=lf` in `.gitattributes` (`packages/protocol/openapi.json` and the generated client
@@ -1092,6 +1166,8 @@ fails. Test an allowlist with the planted cases above. In M1 the gate suites are
 
 - Revert the fix: does the new test fail? Which mutation did you try?
 - Is any negative assertion ("nothing ran") on a platform, or under a default, where it would pass vacuously?
+- Does a program-lookup test delete `NoDefaultCurrentDirectoryInExePath` from `process.env` and plant an `.exe` decoy as
+  well as a `.bat`? Without the delete, or with `.bat` decoys only, it passes whether or not the code is right.
 - Is this allowlist entry as narrow as its reason? What else does it hide?
 - Which tests skipped on this machine, and who ran them?
 - Is a flaky test fixed, or named in the PR with the reason it stays? There is no baseline list in the repository to hide
@@ -1148,9 +1224,11 @@ These come from how M1 was run, and they apply to any change in this area.
   only the reported instance and the next round found the next one: from the merge of #20 to the esprima fix there were
   five audit and verification rounds, nine review rounds on #22 and 26 commits, about 24 hours. The review of that fix
   then found another member of the class (an executable found in the working folder, class 10), and fixing that turned
-  up two more (a `cmd.exe` that searches the folder, and `taskkill` run by name). An audit may report "no holes" only
-  with a table of the surfaces it checked and the evidence for each row. The round-1 audit found nothing where rounds 2
-  to 4 found five.
+  up two more (a `cmd.exe` that searches the folder, and `taskkill` run by name). The review of this page found a
+  fourth, because the fix for the `cmd.exe` search had closed one lookup of the class and not the others: Bun's spawn,
+  Node's and cross-spawn still found a bare name's `.exe` in the folder. Before you call a class closed, list every
+  lookup that can find what it names and plant a decoy for each. An audit may report "no holes" only with a table of the
+  surfaces it checked and the evidence for each row. The round-1 audit found nothing where rounds 2 to 4 found five.
 - **What blocks.** A finding blocks only if it breaks the promise at the top of this page on a default or demonstrated
   path. A hole that a clone can demonstrate is not a speculative edge case: fix it in the PR that finds it, and record
   the failure mode, the likelihood and the cost in the PR. Speculative hardening goes on a follow-up list. Waiting for
@@ -1212,7 +1290,7 @@ fixes it or asks.
   holds only without a leading wildcard. The review of #3 left it to the owner: change what such a pattern matches, or
   say so in the note.
 - **The `webfetch` tool.** It still follows redirects through `HttpClient` with no per-hop ask and no address guard, and
-  a proxy sees the address and not the name (task `file-web-tools-19`, M10).
+  a proxy sees the address and not the name (task `file-web-tools-19`, M3).
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
@@ -1221,52 +1299,56 @@ fixes it or asks.
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.
-- **Programs that do not go through the spawner.** The language server client (`packages/core/src/lsp/client.ts`) starts
-  a server through `cross-spawn` directly, so `NoDefaultCurrentDirectoryInExePath` is not set for it. It starts one only
-  for a trusted folder (class 1), so the decision comes first: keep that gate, or move the call to `CrossSpawnSpawner`.
-  And when `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`, which the spawner hands to
-  the host's own spawn. Bun's own spawn looks on `PATH` only, but a Node host has not been checked, and the core also
-  runs under Node.
-- **A `.cmd` or `.bat` started by its full path.** `CrossSpawnSpawner` sets `NoDefaultCurrentDirectoryInExePath` for a
-  bare name only, and `which` returns a full path, so a script that Orbit starts by that path runs in a `cmd.exe` that
-  looks in the working folder first for whatever the script starts by name. npm's global command wrappers
-  (`%AppData%\npm`) start `node` by name unless a `node.exe` sits beside them, which it usually does not, so a
-  `node.bat` in the working folder runs instead of Node. A user-configured MCP server whose command is the full path of
-  such a wrapper reaches it today, whether or not the folder is trusted, because MCP servers start with the Location's
-  folder as their working folder (`packages/core/src/mcp/client.ts`). So does any other global npm tool that Orbit
-  starts by the path that `which` returned, wherever that happens before the folder is trusted. The review of this page
-  reproduced it with a copy of a real wrapper, and no test pins it yet. Planned fix: `CrossSpawnSpawner` sets
-  `NoDefaultCurrentDirectoryInExePath` for every child process on Windows, with a decoy test that starts a wrapper by
-  its full path. It lands as a small follow-up PR right after #22.
+- **The language server client and the bare `git` fallback.** The language server client
+  (`packages/core/src/lsp/client.ts`) starts a server through `cross-spawn` directly. It hands `process.env` to the
+  server, so the variable that each entry sets reaches it, but it has neither the spawner's `ProgramLookup.install()`
+  before the launch nor `ProgramLookup.environment()`, and no test starts it against a decoy. It starts one only for a
+  trusted folder (class 1), so keep that gate and move the call to `CrossSpawnSpawner` (task `file-web-tools-7`). And
+  when `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`. That goes through the
+  spawner, which sets the variable before it launches. The spawner's tests run under Bun, and the core also runs under
+  Node, where only the launcher's test shows that Node's own spawn honors the variable, so a test that plants a
+  `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
 - **A relative `PATH` entry.** `which` skips an empty `PATH` entry but resolves a relative one, such as `.` or `bin`,
   against the working folder with `path.resolve`, so it still finds the `git.exe` or `rg.exe` that a repository ships.
   It needs the person's own `PATH` to name a relative folder, which is rare, so it is a follow-up and not a blocker
   (task `foundations-17`).
 - **The terminal UI's status line.** `createStatusLine` in `packages/tui/src/util/status-line.ts` runs the user's
   `status_line.command` as `cmd /c <command>` on Windows every few seconds (5 by default), in the working folder of the
-  terminal UI and outside the spawner, so a `.bat` or `.cmd` in that folder that is named after a program the command
-  runs is found first. Its `firstLine` strips color codes only, so any other escape sequence that the command prints
-  reaches the screen (class 9). The command is the user's own setting (task `clients-ux-10`).
+  terminal UI and outside the spawner, with a plain `Bun.spawn`. The `orb` process has set
+  `NoDefaultCurrentDirectoryInExePath`, which stops Bun from finding a `cmd.exe` of that folder, but `Bun.spawn` hands its
+  child the environment that the process started with, so the `cmd.exe` that runs the command has no variable and still
+  looks in the folder first: a `.bat`, `.cmd` or `.exe` there that is named after the head of the command runs instead
+  (measured with Bun 1.4.2 on Windows, and no test pins it yet). Its `firstLine` strips color codes only, so any other
+  escape sequence that the command prints reaches the screen (class 9). The command is the user's own setting. Pass
+  `env: ProgramLookup.environment(undefined)` or start it through the spawner, and plant a decoy in the test (task
+  `clients-ux-10`).
 - **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
-  on Windows, in the folder of the session's project, so the `cmd.exe` that runs it looks in that folder before `PATH`:
-  a `vim.bat` that a repository ships runs instead of `vim` (task `clients-ux-14`).
+  on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
+  `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a
+  `vim.bat` that a repository ships is not found before `PATH` (measured with Bun 1.4.2 on Windows), but no test starts
+  the editor against a decoy (task `clients-ux-14`).
 - **The VS Code extension's `orbit.executable`.** The setting has window scope, so the settings of a workspace can set
   it, the extension declares no `untrustedWorkspaces` capability, and `packages/vscode/src/runs.ts` starts the bare
-  default `orb` with the workspace folder as its working directory, where Windows looks first. VS Code's Restricted Mode
-  keeps the extension off in an untrusted workspace by default, which is what holds this today (task `clients-ux-45`).
+  default `orb` with the workspace folder as its working directory, where Windows looks first. The extension host is not
+  an Orbit process, so `ProgramLookup.install()` does not reach it. VS Code's Restricted Mode keeps the extension off,
+  but only while workspace trust is on and the person has not trusted the workspace in VS Code, which is a decision of
+  its own and not Orbit's. Once they have, or with workspace trust off, the clone's `.vscode/settings.json` chooses the
+  program that the extension version-checks and starts as the service (`packages/vscode/src/endpoint.ts`) and the text
+  that `orbit.openTerminal` types into a terminal (`packages/vscode/src/extension.ts`), and the bare default is looked
+  up in the workspace folder, all before Orbit's own trust is asked (task `clients-ux-45`).
 - **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
   check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
 - **Build checks.** `verifyArtifact` does not fail the build on an import or a `require` of a `#` name or of a stray
   bare name, and `packages/core/test/provider-compiled.test.ts` copies the autoload options instead of importing them.
-  Two names that the bundle leaves to the runtime are not replaced in `packages/cli/script/runtime-requires.ts`,
-  because nothing loads code through either today. `bufferutil`, which the npm `ws` package asks for when it loads,
-  would resolve from the working folder's `node_modules` and run from there if anything imported that package, and
-  nothing does: the server uses the `ws` that Bun carries, and Bun carries `utf-8-validate` but not `bufferutil`.
-  `node-gyp/bin/node-gyp.js` is only a path that npm looks up with `require.resolve` and does not load, and Orbit
-  installs with scripts off. Replace the first before the binary imports the npm `ws`, and re-check the second before
-  Orbit installs with scripts on.
+  Two names are not replaced in `packages/cli/script/runtime-requires.ts`, because nothing loads code through either
+  today. `bufferutil` is not in the bundle: the server uses the `ws` that Bun carries, and Bun carries `utf-8-validate`
+  but not `bufferutil`, so nothing asks for it. The npm `ws` package asks for it when it loads, so if a change ever
+  bundled that package, `bufferutil` would be left to the runtime, resolve from the working folder's `node_modules` and
+  run from there. `node-gyp/bin/node-gyp.js`, which the bundle does leave to the runtime, is only a path that npm looks
+  up with `require.resolve` and does not load, and Orbit installs with scripts off. Replace the first before the binary
+  imports the npm `ws`, and re-check the second before Orbit installs with scripts on.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
   saved "always allow" approvals.
 - **Git in the folder.** Orbit runs git in a folder to resolve its project, and git applies that folder's own
@@ -1327,11 +1409,12 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
       before the gate (1, 12).
 - [ ] Whatever the folder can make this code spawn, approve or choose is listed, whether it is a path, an agent, a model
       or a provider (2, 8).
-- [ ] An executable is found with `which` (`PATH` only, unless `PATH` itself names the folder) and a bare name is
-      started through `CrossSpawnSpawner`. No bare name goes through `exec`, `cmd /c` or another `cmd.exe` of its own
-      outside it, which look in the working folder first on Windows. A `.cmd` or `.bat` started by its full path is not
-      covered (Known gaps). The test deletes `NoDefaultCurrentDirectoryInExePath` and plants `.exe`, `.bat` and `.cmd`
-      decoys, and a `node.bat` beside a wrapper started by its full path, with a control (10).
+- [ ] An executable is found with `which` (`PATH` only, unless `PATH` itself names the folder) and a program is
+      started through `CrossSpawnSpawner`, in a process whose entry called `ProgramLookup.install()` first. No bare name
+      goes through `exec`, `cmd /c` or another `cmd.exe` of its own outside the spawner: Bun, Node and `cmd.exe` all look
+      in the working folder first on Windows. The test deletes `NoDefaultCurrentDirectoryInExePath` from `process.env`
+      and plants `.exe` (`hg.exe`, `cmd.exe`, `node.exe`), `.bat` and `.cmd` decoys, and starts a `.cmd` by its full
+      path, with a control (10).
 - [ ] The approver sees the whole thing that is approved: the full span, the method, the URL, the folder (8).
 - [ ] No default or fallback names an agent or a mode by constant instead of by configuration, and whose rules come last
       has been asked (8).
@@ -1375,7 +1458,8 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 - [ ] The new tests fail on the code from before the fix, the mutation is in the PR, and a trusted control run proves
       that the hostile file is live (1, 14).
 - [ ] No negative assertion passes vacuously, whether on a platform that skips it, under the default trust of core
-      tests, or in a shell that sets `NoDefaultCurrentDirectoryInExePath` (14).
+      tests, or in a shell that sets `NoDefaultCurrentDirectoryInExePath` (the test deletes it from `process.env` and
+      plants an `.exe` decoy as well as a `.bat`) (14).
 - [ ] Every allowlist entry is as narrow as its reason, and has a planted positive and a planted negative (14).
 - [ ] The tests that skip on the author's machine ran somewhere else, or the PR says they are unverified, and any flaky
       test is fixed or named (14).
