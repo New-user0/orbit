@@ -14,6 +14,7 @@ import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { tempGlobalLayer } from "../fixture/global"
@@ -22,14 +23,16 @@ import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
 const llmLayer = TestLLM.testLayer({ fallback: TestLLM.text("Review complete", "review") })
-const it = testEffect(
+// Every folder is trusted, as the core tests run, unless a test builds the stack for a folder that is not.
+const stack = (trusted: boolean) =>
   Layer.merge(
     llmLayer,
-    AppNodeBuilder.build(LayerNode.group([Session.node, LocationServiceMap.node]), [
+    AppNodeBuilder.build(LayerNode.group([Session.node, LocationServiceMap.node, Global.node]), [
       Global.node.replace(tempGlobalLayer),
       offlineModels,
       Watcher.node.replace(Watcher.configured({ enabled: false })),
       LayerNodePlatform.llmClient.replace(llmLayer),
+      ...(trusted ? [] : [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]),
       SessionRunnerModel.node.replace(
         Layer.succeed(SessionRunnerModel.Service, {
           resolve: (session) =>
@@ -46,8 +49,9 @@ const it = testEffect(
         }),
       ),
     ]),
-  ),
-)
+  )
+const it = testEffect(stack(true))
+const untrusted = testEffect(stack(false))
 
 const parentModel = Model.Ref.make({ id: Model.ID.make("parent"), providerID: Provider.ID.make("test") })
 
@@ -123,6 +127,87 @@ describe("command subagents", () => {
     }),
   )
 })
+
+// An agent's own rules come after the user's and win, so which agent a command runs as is a choice between sets of
+// rules, which a folder that is not trusted does not get to make, as it does not for `default_agent`. The user's config
+// asks before every edit, and has an agent that allows them.
+describe("the agent of a command from a folder that is not trusted", () => {
+  const folders = [
+    { name: "a folder that is not trusted", harness: untrusted, agent: "build", child: "build" },
+    { name: "a trusted folder", harness: it, agent: "autopilot", child: "autopilot" },
+  ] as const
+
+  for (const folder of folders)
+    folder.harness.live(`runs a command file in ${folder.name} as ${folder.agent}`, () =>
+      Effect.gen(function* () {
+        const parent = yield* setup(["agent: autopilot"])
+        const sessions = yield* Session.Service
+        yield* sessions.command({ sessionID: parent.id, command: "setup", text: "" })
+        yield* sessions.wait(parent.id)
+        expect(yield* sessions.get(parent.id)).toMatchObject({ agent: folder.agent })
+        expect((yield* sessions.list({ parentID: parent.id })).data).toEqual([])
+        expect((yield* sessions.context(parent.id)).filter((message) => message.type === "user")).toMatchObject([
+          { text: "Set up the project" },
+        ])
+      }),
+    )
+
+  for (const folder of folders)
+    folder.harness.live(`runs a command's subtask in ${folder.name} as ${folder.child}`, () =>
+      Effect.gen(function* () {
+        const parent = yield* setup(["agent: autopilot", "subtask: true"])
+        const sessions = yield* Session.Service
+        const llm = yield* TestLLM.Test
+        yield* sessions.command({ sessionID: parent.id, command: "setup", text: "" })
+        yield* llm.wait(1)
+        const children = (yield* sessions.list({ parentID: parent.id })).data
+        expect(children.map((child) => child.agent)).toEqual([Agent.ID.make(folder.child)])
+        expect(yield* sessions.get(parent.id)).toMatchObject({ agent: "build" })
+      }),
+    )
+
+  // The commands of the folder's `orbit.json` are cut down in the same way.
+  untrusted.live("runs a command of the folder's config as the current agent too", () =>
+    Effect.gen(function* () {
+      const parent = yield* setup([], { commands: { setup: { template: "Set up the project", agent: "autopilot" } } })
+      const sessions = yield* Session.Service
+      yield* sessions.command({ sessionID: parent.id, command: "setup", text: "" })
+      yield* sessions.wait(parent.id)
+      expect(yield* sessions.get(parent.id)).toMatchObject({ agent: "build" })
+    }),
+  )
+})
+
+// A project with `setup` as a command file that has the given front matter, and a session of the build agent. The user's
+// own config asks before every edit and defines `autopilot`, which allows them.
+function setup(frontmatter: string[], settings: Record<string, unknown> = {}) {
+  return Effect.gen(function* () {
+    const global = yield* Global.Service
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.promise(async () => {
+      await Bun.write(
+        path.join(global.config, "orbit.json"),
+        JSON.stringify({
+          permissions: [{ action: "edit", resource: "*", effect: "ask" }],
+          agents: { autopilot: { permissions: [{ action: "edit", resource: "*", effect: "allow" }] } },
+        }),
+      )
+      await Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify(settings))
+      if (frontmatter.length > 0)
+        await Bun.write(
+          path.join(tmp.path, ".orbit/commands/setup.md"),
+          ["---", "description: Set up", ...frontmatter, "---", "Set up the project"].join("\n"),
+        )
+    })
+    const sessions = yield* Session.Service
+    return yield* sessions.create({
+      location: { directory: AbsolutePath.make(tmp.path) },
+      title: "Parent session",
+      agent: Agent.ID.make("build"),
+      model: parentModel,
+    })
+  })
+}
 
 function project(
   command: { agent?: string; model?: string; subagent?: boolean; subtask?: boolean },

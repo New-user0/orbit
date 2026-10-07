@@ -80,6 +80,9 @@ function title(text: string | undefined, mono = false): string {
       continue
     }
 
+    // The splash is written to the terminal as it is, and a title can come from a model or from an older workflow run.
+    if (/\p{C}/u.test(char)) continue
+
     if (gap && value.length > 0) {
       value += " "
     }

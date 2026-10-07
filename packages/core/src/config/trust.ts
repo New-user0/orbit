@@ -17,11 +17,23 @@ import { FSUtil } from "@orbit/util/fs-util"
 // cannot do any of that is kept as written. A few fields are kept in part: a deny rule only tightens what is allowed.
 //
 // The files in a config directory are held to the same decision, each where it is read. The config stamps the directory
-// `trusted: false`, and then a plugin file is not loaded (`ConfigPluginSource`), a command runs no shell snippet
-// (`ConfigCommandPlugin`), and an agent file is cut down with `sanitize` (`ConfigAgentPlugin`). Skills and output styles
-// are text, so they stay available: `ConfigMarkdown` reads front matter as YAML or JSON and refuses JavaScript, so no
-// Markdown file runs just by being read. Anything else that would run what a file carries, such as the hooks in the
-// front matter of a skill or an agent, must ask `allows` first.
+// `trusted: false`, and then a plugin file is not loaded (`ConfigPluginSource`), a command runs no shell snippet and
+// names no agent (`ConfigCommandPlugin`), and an agent file is cut down with `sanitize` (`ConfigAgentPlugin`). Skills and
+// output styles are text, so they stay available: `ConfigMarkdown` reads front matter as YAML or JSON and refuses
+// JavaScript, so no Markdown file runs just by being read. Anything else that would run what a file carries, such as the
+// hooks in the front matter of a skill or an agent, must ask `allows` first.
+//
+// What a file points at is held to the folder as well, so that a link in a repository does not carry a file of the user's
+// to the model provider, or have a tool write one. A `{file:}` reference in the config is read only inside it
+// (`ConfigVariable`). Every other reader of a file that the repository supplies asks `ProjectTrust` before it reads one,
+// and these are the readers, so that the next one added has a list to join:
+//
+// - `reachable`: an instruction file (`ConfigInstructionPlugin`, `SessionInstructions`);
+// - `supplies`: a file of a config directory, or of another product's root, which is the agents of `ConfigAgentPlugin`,
+//   the commands of `ConfigCommandPlugin`, the skills of `ConfigSkillPlugin` and `ConfigCompatibilityPlugin`, and the
+//   output styles of `OutputStylePlugin`;
+// - `escapes`: the path that a file tool is given (`FileAccess`), which asks about the folder a link leads to, as for any
+//   path outside the project.
 
 /** What is left of a value once what an untrusted folder may not supply is taken out, and the kinds of what went. */
 interface Outcome<V> {
@@ -136,13 +148,28 @@ function agents(
   }
 }
 
-function commands(
+/**
+ * What an untrusted folder's commands keep: the template, which only a later step refuses to run when it holds a shell
+ * snippet, and what only describes the command. The agent a command names is taken out, so that running it leaves the
+ * session as it is. The commands of a document and those of the files in a `.orbit` directory are cut down alike.
+ */
+export function sanitizeCommands(
   value: Readonly<Record<string, ConfigCommand.Info>>,
   place: Place,
 ): Outcome<Readonly<Record<string, ConfigCommand.Info>>> {
-  // No command field is withheld, so a command is never rebuilt: its snippets are only reported.
-  const results = Object.values(value).map((command) => walk(command, classification.command, place, () => command))
-  return { value, withheld: results.flatMap((result) => result.withheld) }
+  const results = Object.entries(value).map(([name, command]) => ({
+    name,
+    command,
+    result: walk(
+      command,
+      classification.command,
+      place,
+      (fields) => new ConfigCommand.Info({ ...fields, template: command.template }),
+    ),
+  }))
+  const withheld = results.flatMap((item) => item.result.withheld)
+  if (results.every((item) => item.result.value === item.command)) return { value, withheld }
+  return { value: Object.fromEntries(results.map((item) => [item.name, item.result.value])), withheld }
 }
 
 /**
@@ -176,7 +203,7 @@ export const classification = {
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.
     compatibility: inert,
     skills: withhold("settings"),
-    commands: filter(commands),
+    commands: filter(sanitizeCommands),
     instructions: filter(instructionPaths),
     references: withhold("settings"),
     websearch: filter(webSearch),
@@ -192,8 +219,13 @@ export const classification = {
     request: withhold("providers"),
     system: inert,
     description: inert,
-    mode: inert,
-    hidden: inert,
+    // What an agent may be used for decides which rules apply to the work: a primary agent is out of the model's reach
+    // as a subagent, and a repository that changed this for an agent of the user's would put it there.
+    mode: withhold("permissions"),
+    // A session that names no agent starts as the first one that is neither a subagent nor hidden, so a repository that
+    // hid the agents ahead of one of the user's would start every session as that one. It also decides which subagents
+    // the model is told about.
+    hidden: withhold("permissions"),
     color: inert,
     steps: inert,
     // Removing an agent also removes the rules the user attached to it, and an agent defined afterwards starts from
@@ -205,7 +237,9 @@ export const classification = {
     // A snippet runs a command, and a later step refuses to; the rest of the template is only text.
     template: flag("commands", hasShellSnippet),
     description: inert,
-    agent: inert,
+    // Which agent a command runs as decides which permission rules apply to it, as `default_agent` does for a session: an
+    // agent's own rules come after the user's and win. The template runs as the session's current agent instead.
+    agent: withhold("permissions"),
     model: inert,
     subagent: inert,
     subtask: inert,

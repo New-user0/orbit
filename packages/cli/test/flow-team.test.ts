@@ -96,6 +96,9 @@ function stream(deltas: unknown[], finish: string) {
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-team-"))
+// The workflows live in a folder of their own: the root is the home directory of the isolated environment, which no
+// server trusts without a grant, and a command that loads a file needs the folder that holds it trusted.
+const flows = path.join(root, "flows")
 
 beforeAll(async () => {
   await fs.mkdir(path.join(root, "config"), { recursive: true })
@@ -112,7 +115,7 @@ afterAll(async () => {
 
 test("a team's lead assigns work, members message each other, and the lead finishes", async () => {
   const repository = await repo("team")
-  const file = path.join(root, "team.ts")
+  const file = path.join(flows, "team.ts")
   await Bun.write(
     file,
     `export default {
@@ -161,7 +164,8 @@ test("a team's lead assigns work, members message each other, and the lead finis
   expect(shown.stdout).toContain("feature: lead → coder: Write 42 into answer.txt.")
   expect(shown.stdout).toContain("feature: lead noted plan:")
   const calls = turns.length
-  const replayed = await orb(repository, ["flow", "replay", await runID(repository)])
+  // A replay calls no model, but it asks a server whether the folder is trusted before it loads the workflow module.
+  const replayed = await orb(repository, ["flow", "replay", "--standalone", await runID(repository)])
   expect({ code: replayed.code, stderr: replayed.code === 0 ? "" : replayed.stderr }).toEqual({ code: 0, stderr: "" })
   expect(replayed.stderr).toContain("replay matches the recorded output")
   expect(turns.length).toBe(calls)
@@ -169,7 +173,7 @@ test("a team's lead assigns work, members message each other, and the lead finis
 
 test("a team stops when nobody has anything to do and the lead does not finish", async () => {
   const repository = await repo("stall")
-  const file = path.join(root, "stall.ts")
+  const file = path.join(flows, "stall.ts")
   await Bun.write(
     file,
     `export default {
@@ -231,7 +235,7 @@ async function orb(directory: string, args: string[]) {
 
 test("a resumed team reuses the turns that ran and continues from the failed one", async () => {
   const repository = await repo("team-resume")
-  const file = path.join(root, "team-resume.ts")
+  const file = path.join(flows, "team-resume.ts")
   await Bun.write(
     file,
     `export default {

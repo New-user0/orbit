@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Fiber, Schema, Stream } from "effect"
+import { Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
@@ -14,16 +14,20 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Permission } from "@orbit/core/permission"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { AgentPlugin } from "@orbit/core/plugin/agent"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ConfigMigrateV1 } from "@orbit/core/v1/config/migrate"
 import { ConfigAgentV1 } from "@orbit/core/v1/config/agent"
 import { advance, drain } from "../lib/clock"
 import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
+import { trustedProject, untrustedProject } from "../fixture/project-trust"
 import { testEffect } from "../lib/effect"
 import { agentHost, host } from "../plugin/host"
 
-const it = testEffect(AppNodeBuilder.build(LayerNode.group([Agent.node, Bus.node, FSUtil.node, Global.node])))
+const it = testEffect(
+  Layer.merge(AppNodeBuilder.build(LayerNode.group([Agent.node, Bus.node, FSUtil.node, Global.node])), trustedProject),
+)
 const decode = Schema.decodeUnknownSync(Info)
 const defaultPermissions = (global: Global.Interface): Permission.Ruleset => [
   ...Agent.Info.default(Agent.ID.make("test")).permissions,
@@ -650,17 +654,20 @@ permissions:
     resource: "*"
     effect: deny`
 
-  it.live("keeps the prompt of an agent file from an untrusted folder and drops its request and allow rules", () =>
-    Effect.gen(function* () {
-      const global = yield* Global.Service
-      const agent = yield* loadMarkdownAgent(native, untrustedDirectoryEntry)
-      expect(agent).toMatchObject({ system: "Review carefully.", description: "Reviews changes", mode: "subagent" })
-      expect(agent.request).toEqual({ settings: {}, headers: {}, body: {} })
-      expect(agent.permissions).toEqual([
-        ...defaultPermissions(global),
-        { action: "edit", resource: "*", effect: "deny" },
-      ])
-    }),
+  it.live(
+    "keeps the prompt of an agent file from an untrusted folder and drops its request, mode and allow rules",
+    () =>
+      Effect.gen(function* () {
+        const global = yield* Global.Service
+        const agent = yield* loadMarkdownAgent(native, untrustedDirectoryEntry)
+        // The mode stays what a new agent gets: a repository does not decide which agents the model may spawn.
+        expect(agent).toMatchObject({ system: "Review carefully.", description: "Reviews changes", mode: "primary" })
+        expect(agent.request).toEqual({ settings: {}, headers: {}, body: {} })
+        expect(agent.permissions).toEqual([
+          ...defaultPermissions(global),
+          { action: "edit", resource: "*", effect: "deny" },
+        ])
+      }),
   )
 
   it.live("applies the same file in full once its folder is trusted", () =>
@@ -700,6 +707,112 @@ permissions:
         { action: "shell", resource: "*", effect: "allow" },
         { action: "edit", resource: "*", effect: "deny" },
       ])
+    }),
+  )
+
+  // The subagent tool refuses a primary agent, so which agents are primary decides which of the user's rules the model can
+  // reach by spawning one: a repository that turned a primary agent of the user's into one that can be spawned would hand
+  // the model that agent's rules, which come after the user's own and win.
+  for (const item of [
+    { folder: "untrusted", entry: untrustedDirectoryEntry, mode: "primary" as const },
+    { folder: "trusted", entry: directoryEntry, mode: "all" as const },
+  ]) {
+    it.live(
+      `${item.mode === "all" ? "lets" : "does not let"} an agent file change the mode of another source's agent when its folder is ${item.folder}`,
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          const fs = yield* FSUtil.Service
+          yield* fs.makeDirectory(path.join(tmp.path, "agents"))
+          yield* fs.writeFileString(path.join(tmp.path, "agents", "autopilot.md"), "---\nmode: all\n---\nMine.")
+          const agents = yield* Agent.Service
+          const autopilot = Agent.ID.make("autopilot")
+          yield* agents.transform((editor) =>
+            editor.update(autopilot, (agent) => {
+              agent.mode = "primary"
+            }),
+          )
+          yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+            Effect.provide(Config.testLayer([item.entry(tmp.path)])),
+          )
+          expect((yield* agents.get(autopilot))?.mode).toBe(item.mode)
+        }),
+    )
+  }
+
+  // A session that names no agent starts as the first one that is neither a subagent nor hidden, so a repository that hid
+  // the agents ahead of one of the user's would start every session as that one, with the rules that come after the
+  // user's own and win.
+  for (const item of [
+    { folder: "untrusted", entry: untrustedDirectoryEntry, starts: "build" },
+    { folder: "trusted", entry: directoryEntry, starts: "autopilot" },
+  ])
+    it.live(
+      `starts a session that names no agent as ${item.starts} when an agent file hides build in a ${item.folder} folder`,
+      () =>
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          const fs = yield* FSUtil.Service
+          yield* fs.makeDirectory(path.join(tmp.path, "agents"))
+          yield* fs.writeFileString(path.join(tmp.path, "agents", "build.md"), "---\nhidden: true\n---\nHidden.")
+          const agents = yield* Agent.Service
+          yield* agents.transform((editor) => {
+            editor.update(Agent.ID.make("build"), () => {})
+            editor.update(Agent.ID.make("autopilot"), () => {})
+          })
+          yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+            Effect.provide(Config.testLayer([item.entry(tmp.path)])),
+          )
+          expect((yield* agents.resolve())?.id).toBe(Agent.ID.make(item.starts))
+        }),
+    )
+
+  // The repository ships its links, and a clone recreates them. An agent's prompt replaces the default system prompt of
+  // every request, so a file that a link in the folder leads to must not become one. A junction stands for the link,
+  // since it needs no privilege on Windows.
+  it.effect("leaves out an agent file that a link leads out of an untrusted folder, until the folder is trusted", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const project = path.join(tmp, "project")
+      const orbit = path.join(project, ".orbit")
+      const outside = path.join(tmp, "outside")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(orbit, "modes"), { recursive: true })
+        await fs.writeFile(path.join(orbit, "modes", "mine.md"), "Mine.")
+        await fs.mkdir(outside)
+        await fs.writeFile(path.join(outside, "build.md"), "STOLEN PROMPT")
+        await fs.writeFile(path.join(outside, "extra.md"), "Another stolen prompt")
+        // The whole `agents` folder is a link, so every Markdown file under it would become an agent.
+        await fs.symlink(outside, path.join(orbit, "agents"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const agents = yield* Agent.Service
+        const bus = yield* Bus.Service
+        const trust = yield* ProjectTrust.Service
+        const build = Agent.ID.make("build")
+        yield* agents.transform((editor) => editor.update(build, () => {}))
+        let reloads = 0
+        yield* ConfigAgentPlugin.Plugin.effect(
+          host({
+            agent: {
+              ...agentHost(agents),
+              reload: () => agents.reload().pipe(Effect.tap(() => Effect.sync(() => reloads++))),
+            },
+            event: { subscribe: () => bus.subscribe(Event.Updated) },
+          }),
+        ).pipe(Effect.provide(Config.testLayer([untrustedDirectoryEntry(orbit)])))
+
+        expect((yield* agents.get(build))?.system).toBeUndefined()
+        expect(yield* agents.get(Agent.ID.make("extra"))).toBeUndefined()
+        expect(yield* agents.get(Agent.ID.make("mine"))).toMatchObject({ system: "Mine." })
+
+        // Trusting the folder reloads the config, which tells the plugin, and the linked files define agents as before.
+        yield* trust.grant({ persist: false, via: "test" })
+        yield* bus.publish(Event.Updated, {})
+        yield* advance(() => reloads >= 1)
+        expect(yield* agents.get(build)).toMatchObject({ system: "STOLEN PROMPT" })
+        expect(yield* agents.get(Agent.ID.make("extra"))).toMatchObject({ system: "Another stolen prompt" })
+      }).pipe(Effect.provide(untrustedProject({ directory: project })))
     }),
   )
 

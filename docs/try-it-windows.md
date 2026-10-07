@@ -484,6 +484,7 @@ orb flow clean $RUN               # or of one run
 | The chat never uses the workflow tool                  | Say "use a workflow" in the prompt, or use a stronger model.                                                |
 | Cost shows `$0.0000`                                   | The provider reports no price; add `cost` for the model in `orbit.json`.                                    |
 | `Orbit stopped before doing any work`                  | The folder is not trusted: run `orb trust` in it after looking its config over, or pass `--trust` once.     |
+| `the server is older than workspace trust`             | Run `orb service restart`, or pass `--standalone` or `--trust` for one run.                                 |
 
 ## 9. VS Code (optional)
 

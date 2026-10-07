@@ -26,6 +26,7 @@ import { PersistentPty } from "@orbit/core/persistent-pty"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Permission } from "@orbit/core/permission"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Reference } from "@orbit/core/reference"
 import { Rpc } from "@orbit/core/rpc"
 import { Skill } from "@orbit/core/skill"
@@ -39,6 +40,7 @@ import { WorktreeStrategies } from "@orbit/core/worktree/strategies"
 import { Effect, Layer } from "effect"
 import { tempLocationLayer } from "../fixture/location"
 import { emptyMcpLayer } from "../fixture/mcp"
+import { trustedProject } from "../fixture/project-trust"
 
 const npmLayer = Layer.succeed(
   Npm.Service,
@@ -92,6 +94,7 @@ export const PluginTestLayer = AppNodeBuilder.build(
     PersistentPty.node,
     LocationServiceMap.node,
     Permission.node,
+    ProjectTrust.node,
     PluginHooks.node,
     Reference.node,
     Rpc.node,
@@ -111,5 +114,6 @@ export const PluginTestLayer = AppNodeBuilder.build(
     Mcp.node.replace(emptyMcpLayer),
     Generate.node.replace(generateLayer),
     Permission.node.replace(permissionLayer),
+    ProjectTrust.node.replace(trustedProject),
   ],
 )

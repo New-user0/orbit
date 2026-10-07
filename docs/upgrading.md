@@ -103,8 +103,12 @@ rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
-  agent, whose entry goes with it. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out
-  too: a project's value outranks yours, so it would otherwise replace the one in your own config.
+  agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
+  own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
+  model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
+  the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
+  that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours,
+  so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -118,6 +122,34 @@ What these files refer to is held to the folder too. Their `{env:VAR}` reference
 it and never on a network share, so a repository cannot pull a secret or another file into a value that is sent to a
 model provider. A reference that is not expanded stays in the text as it was written, and expands once the folder is
 trusted.
+
+Instruction files are held to the folder in the same way. While the project is untrusted, `ORBIT.md`, `AGENTS.md` and
+another product's instruction file load only when the file, and the file it links to, are inside the project's folders.
+A repository that ships `AGENTS.md` as a symlink to an SSH key or a credentials file used to have it read into the
+first request to your model provider; the link is now skipped. So is an instruction file in a folder above the project,
+because the project does not vouch for what surrounds it, and one that the model's reads find in a folder of the
+project, whose link leads out of it. Each file that is skipped is logged once, as a warning that says `instruction file
+skipped` and names the file, and it loads when the project is trusted, without a restart, and goes again when the trust
+is taken away. Instruction files in your own config directory are never held back, and nothing changes once the project
+is trusted, so a symlinked `AGENTS.md` that you rely on works as before.
+
+Everything else that a repository can point at is held to its folder in the same way, because each of these goes to the
+model provider as well. Until the project is trusted, an agent file, a command file, a skill and an output style that a
+link in the project leads out of the project's folders is not read, whether the link is the file or a folder above it:
+`.orbit/agents` pointing at a folder of yours, or a `build.md` that links to a key, no longer replaces the system prompt
+of every session. The same goes for the skills and output styles in another product's root. A config directory in a
+folder above the project is held to that folder, whose own decision applies. Each file that is skipped is logged once,
+as a warning that says `config file skipped` and names the file, and it is read once the folder is trusted, without a
+restart. Your own config directory is never held back. An `output_style` also names one file in an `output-styles`
+directory and nothing else: a name with a path separator or `..` is not found, in any directory, yours included, so a
+config can no longer climb out of the directory to read another file.
+
+The file tools hold a link to the folder in the same way. Until the project is trusted, `read`, `edit`, `write`,
+`patch`, `grep`, `glob`, the shell's working directory and the other tools that take a path count a path that a link in
+the project leads out of the project as outside it, and ask about the folder it leads to (`external_directory`) as for
+any other path outside the project, which a run with nobody to ask rejects. A file that does not exist yet counts by
+where the nearest folder of its path that does exist leads, so a `write` through a link is asked about too. A trusted
+project follows links as before.
 
 Orbit starts no language server and runs no formatter in a folder that is not trusted, the built-in ones and the ones
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
@@ -134,15 +166,25 @@ The files in a project's `.orbit` directory are held to the same decision, becau
 - **Commands:** a command from `.orbit/commands`, or from a `commands` setting of the project, is still listed, and one
   whose template has no shell snippet works as before. One that runs a shell snippet (an exclamation mark and a command
   in backticks) fails with a message that names the command and the folder to trust, which is the folder around the
-  `.orbit` directory or config file that defines it. Nothing is asked about or started first.
+  `.orbit` directory or config file that defines it. Nothing is asked about or started first. A command that names an
+  `agent` runs as the session's current agent instead, as a subtask as well.
 - **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt, model and description, and loses
-  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, and `disabled`, so a file
-  cannot remove one of the agents that are already there.
+  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, `disabled`, `mode` and
+  `hidden`, so a file cannot remove or hide one of the agents that are already there, or make one of them spawnable by
+  the model.
 
-Skills and output styles in a project are text, so they stay available. No Markdown file that Orbit reads from a config
-directory is ever run: front matter written in JavaScript (a file that opens with `---js` or `---javascript`) is
-refused, and the file is skipped. The list of what a folder holds back also names each `.orbit` directory with the
-plugins, commands with shell snippets, and agents with requests or approvals it holds.
+Skills and output styles in a project are text, so they stay available, except through a link that leaves the project
+(see above). No Markdown file that Orbit reads from a config directory is ever run: front matter written in JavaScript
+(a file that opens with `---js` or `---javascript`) is refused, and the file is skipped. The list of what a folder holds
+back also names each `.orbit` directory with the plugins, commands with shell snippets or an agent, and agents with
+requests, approvals, a mode or `hidden` that it holds.
+
+A folder that is a linked worktree of a git repository shares the decision of that repository's main checkout, but only
+when the repository lists the folder as one of its worktrees, which `git worktree add` does. A `.git` file in a folder
+can name any git directory, and that directory can name another repository's as its common directory, which used to
+make that repository the folder's main checkout: a folder from an archive or a download that knew where a repository
+you trust lives took on the decision you made for it, and its config applied in full. Such a folder now has a decision
+of its own.
 
 Your own config, `ORBIT_CONFIG`, `ORBIT_CONFIG_CONTENT` and the server's remote sources are never held back, and neither
 are the Orbit files in your home directory. Trust belongs to the project's root folder, so a repository and its linked
@@ -162,17 +204,27 @@ ignores the variable, because it serves every client and project.
 **Affects:** anyone who opens a repository whose config sets `hooks`, `mcp`, `plugins`, `providers`, `sandbox`,
 `formatter`, `default_agent`, `warming` or `allow` and `ask` permission rules, through the background service (the
 terminal UI, VS Code and the desktop app): those settings now stay off. So do the server's plugins from
-`.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `request` overrides and `allow` rules of
-agents in `.orbit/agents`, and language servers and formatters, in every folder that is not trusted, until it is
-trusted in the terminal UI or with `orb trust` (or, for one run of a headless command, `--trust`). The same goes for SDK
-hosts and servers that leave `trust.implicit` unset, and for tests that write project config and start a server. So do
-the plugins that the terminal UI loads from `.orbit/plugins` itself. Code built on `@orbit/core`: `Config.Document` and
-`Config.Directory` gain `trusted`, `Config.Document` gains `withheld`, the roots that `Config.compat` lists can carry
-`trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and `Formatter` now need `ProjectTrust`, `ProjectTrust` now needs
-`FSUtil`, `ProjectTrust.status` also lists `.orbit` directories and gives each file or directory above the project the
-folder to trust for it, as `directory`, `ProjectTrust.allows` says whether a file may run the code it carries (ask it
-before running anything a file carries, such as the hooks in a skill's or an agent's front matter), and a global
-`trust.updated` event reports each change.
+`.orbit/plugins`, the shell snippets in the commands of `.orbit/commands`, the `agent` of a command, the `request`
+overrides, `mode`, `hidden` and `allow` rules of agents in `.orbit/agents`, and language servers and formatters, in
+every folder that is not trusted, until it is trusted in the terminal UI or with `orb trust` (or, for one run of a
+headless command, `--trust`). The same goes for SDK hosts and servers that leave `trust.implicit` unset, and for tests
+that write project config and start a server. So do the plugins that the terminal UI loads from `.orbit/plugins`
+itself. Code built on `@orbit/core`: `Config.Document` and `Config.Directory` gain `trusted`, `Config.Document` gains
+`withheld`, the roots that `Config.compat` lists can carry `trusted`, `Config` now needs `WorkspaceTrust`, `Lsp` and
+`Formatter` now need `ProjectTrust`, `ProjectTrust` now needs `FSUtil`, `ProjectTrust.status` also lists `.orbit`
+directories and gives each file or directory above the project the folder to trust for it, as `directory`,
+`ProjectTrust.allows` says whether a file may run the code it carries (ask it before running anything a file carries,
+such as the hooks in a skill's or an agent's front matter), and three more ask what a link in the project may reach,
+which each reader of a file that a repository points at must ask (the readers that do are the instruction plugin and
+`SessionInstructions`, which ask `ProjectTrust.reachable`, the agent, command, skill, compatibility and output style
+plugins, which ask `ProjectTrust.supplies` about the files of a config directory or another product's root, and
+`FileAccess`, which asks `ProjectTrust.escapes` where a path really leads). `FileAccess` and the plugins that read those
+files now need `ProjectTrust`, `SessionInstructions` needs it as well, `AgentFile.load` and `CommandFile.load` take the
+check as an optional argument, and a global `trust.updated` event reports each change. Files that are a link out of an
+untrusted project, and the ones in the folders above it, stay unread until it is trusted, and a path through such a link
+is asked about by the file tools. `ConfigTrust.classification` withholds the `agent` of a command and the `mode` and
+`hidden` of an agent, and `ConfigTrust.sanitizeCommands` cuts the commands of a directory down as it does those of a
+document.
 
 **What to do:** nothing for config you keep in your own files. For a repository you trust, run `orb trust` in it, or
 run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit: true }` to the host you embed, which
@@ -224,9 +276,13 @@ to trust the folder, and exit with status 1. `orb run --format json`, `stream-js
 error that any failure before a session exists produces, instead of text, and does the same when the request itself
 fails. They used to carry on without those settings, which for a script meant a run without the repository's hooks and
 plugins and nothing to say so. A folder that holds nothing back runs as before, trusted or not, and so does one on a
-server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`). `orb flow` and `orb eval` load
-the workflow or suite file only after the check, because loading it runs its code. `orb acp` cannot stop, because the
-editor chooses the folders, so it writes a warning to stderr about the folder it started in.
+server that trusts it without a grant (`--standalone` with `ORBIT_TRUST_PROJECT=1`), except that a workflow or suite
+that is a TypeScript or JavaScript module, that defines shell commands, that names an agent, or, for a workflow, that
+sets `permissions: auto`, needs a trusted folder either way (see "`orb flow` and `orb eval` need a trusted folder to run
+a workflow or suite's code, commands, approvals or agents" under Clients).
+`orb flow` and `orb eval` import a workflow or suite module only after the check, because importing it runs its code.
+`orb acp` cannot stop, because the editor chooses the folders, so it writes a warning to stderr about the folder it
+started in.
 
 Config in a folder above the project, such as an `orbit.json` in a folder that holds several repositories, follows the
 decision for the folder that holds it, so trusting a repository does not apply it. The refusal lists those files apart
@@ -243,10 +299,11 @@ files.
   the next flag, or the terminal UI, which offers to trust it until Orbit restarts. The server finds a grant through the
   project of its folder, so `--revoke` for a folder that has been deleted says so: create the folder again, revoke, and
   remove it.
-- **`--trust`** on those five commands trusts the folder for that run alone. It starts a private server for the run,
-  as `--standalone` does, and the grant lives only in that server, so it ends with the run and never reaches the
-  background service. Because it is explicit it also works in a home directory. It cannot be combined with `--server`,
-  because the grant would stay with a server that other runs share; use `orb trust --server <url>` there.
+- **`--trust`** on those five commands, and on `orb flow replay`, trusts the folder for that run alone. It starts a
+  private server for the run, as `--standalone` does, and the grant lives only in that server, so it ends with the run
+  and never reaches the background service. Because it is explicit it also works in a home directory. It cannot be
+  combined with `--server`, because the grant would stay with a server that other runs share; use
+  `orb trust --server <url>` there.
 
 The grants are made through new routes: `GET /api/location/trust` (`client.location.trust.get`) reports whether a
 location's project is trusted and what it holds back, `POST /api/location/trust` (`client.location.trust.update`) with
@@ -257,8 +314,11 @@ location's project is trusted and what it holds back, `POST /api/location/trust`
 holds something back (hooks, MCP servers, plugins, providers and the other kinds listed above), through the background
 service, which is the default: they now exit with status 1. Commands run with `--standalone` or `--server` against a
 server that trusts the folder are not affected. A background service that was not restarted after the upgrade does not
-have the new routes: `orb trust` fails against it until it is restarted, while the headless commands carry on without
-the check and say so on stderr. Code that implements the server API gains three routes.
+have the new routes: `orb trust` fails against it until it is restarted, while `orb run` and `orb loop` carry on without
+the check and say so on stderr. So do `orb flow` and `orb eval`, unless they would import a module, run shell commands,
+approve actions or run a node as an agent that a file names: they stop then, because that server cannot say whether the
+folder is trusted (see "`orb flow` and `orb eval` need a trusted folder to run a workflow or suite's code, commands,
+approvals or agents" under Clients). Code that implements the server API gains three routes.
 
 **What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
 `ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
@@ -314,6 +374,264 @@ the folder is trusted, and everyone who now sees the dialog. Code that calls `lo
 choose "Trust until Orbit restarts", or pass `--trust` to a headless command. For config in a folder above a repository,
 run `orb trust <folder>` for the folder that holds it.
 
+### `orb flow` and `orb eval` need a trusted folder to run a workflow or suite's code, commands, approvals or agents
+
+A workflow or eval suite can act on what the folder brings in four ways. One written in TypeScript or JavaScript is
+loaded by importing it, which runs the code at the top of the file. A YAML workflow or a YAML or JSON suite can define
+shell commands: a `check` node, a `verify` node's `checks`, and a suite task's `checks`. A run executes those through
+the platform shell, in the CLI process, and no permission rule is asked about them. A YAML workflow can set
+`permissions: auto` on an agent or verify node, or on a member of a team, which makes the run approve, once, every
+action that the node's agents ask permission for. A run rejects those by default, so a node that is set to `auto`
+answers the `ask` rules of the user's own config with a yes, as `--auto` does when the user passes it, while the file
+writes the node's prompt.
+
+And a YAML workflow or a YAML or JSON suite can name the agent that runs a node: the `agent` of an agent or verify node,
+of a team member and of a `judge`, which in a suite is the `judge` of a task. That picks one of the user's agents, and an
+agent's own rules are added after the user's global rules, with the last match winning. A user who gave one agent wider
+rules than the rest, say `edit: allow` on one agent where the global rules say `ask`, therefore has a file that names
+it get those actions done without a question, and the run's rejection of them never comes into play. With the default
+rules every agent allows the same and nothing changes.
+
+`orb flow run`, `orb flow resume` and `orb eval` stopped for an untrusted folder only when its project config held
+something back (see "The headless commands stop in an untrusted folder, and `orb trust` trusts one" above), so a fresh
+clone that brought nothing but a `workflow.ts`, a `workflow.yaml` with a check node, with `permissions: auto` or with
+an `agent`, or a `suite.json` with checks or with a `judge` that names an agent, ran its own code, commands, approvals
+or choice of agents without ever being trusted. For `orb flow resume`, the file is the one that the repository's own
+run store names.
+
+They now stop for an untrusted folder, whether or not it holds anything back, when the file is a module, when the YAML
+or JSON file defines any such command, when the YAML workflow sets a node's `permissions` to `auto`, or when the file
+names an agent. A `permissions` that is a template, such as `{{plan.text}}`, counts as well, because it is filled in
+when the node starts and the reply of an agent can say `auto`; any other value is a rejection to the runner and does
+not count. An `agent` that is a template counts for the same reason. A suite cannot set `permissions`, and a suite
+task's own `agent` chooses nothing, because `orb eval` runs each task as a verify node and passes on only the task's
+`judge`. `--auto`, which is the user's own flag, is not held up.
+
+The command stops before it imports or runs anything. It says that it runs code, shell commands, approvals or agents
+from the folder, names the file, lists the commands it found by node or task, the nodes that approve with their
+`permissions` as written, and the nodes that name an agent with it as written (a team member as `team/member`, a
+`judge` as `node/judge` or, in a suite, `task/judge`), and gives `orb trust` and `--trust` as the ways to go on, as for
+held-back config. A workflow or suite that defines none of these, such as one whose `checks` are empty and that names
+no agent, is only read, so it keeps the check it had: an untrusted folder stops it when the folder's config holds
+something back, and not otherwise.
+
+`orb flow replay` loads the same files, from the run store or with `--file`, and used to check nothing, because a replay
+calls no model and connects to no server. It now makes the check for a module. To ask, it connects to a server, which
+for the background service starts it when it is not running, and it takes `--standalone`, `--server` and `--trust` as
+the other `orb flow` commands do. A replay answers every node from the recording, runs no command, asks no model and
+opens no session, so a YAML workflow is not stopped for the commands, approvals or agents it defines, and replaying one
+still connects to no server.
+
+These commands ask the background service as it is, without replacing one that is older than the client, so a service
+that was started before an upgrade and not restarted can lack the trust routes. They used to go ahead with a warning on
+stderr when the server answered that it had none, because such a server applies a folder's config without asking. They
+still do where only the config that is held back is at stake, as `orb run` and `orb loop` do. But when they would import
+a module, run shell commands, approve actions or run a node as an agent that a file names, which this process does
+itself, they now stop: the text says that the server is older than workspace trust and cannot say whether the folder is
+trusted, names the file and what it brings, and gives `orb service restart`, `--standalone` and `--trust` as the ways to
+get an answer. The last two start a current private server for the run, and `--trust` also trusts the folder for it.
+
+**Affects:** scripts and CI that run `orb flow run`, `orb flow resume`, `orb flow replay` or `orb eval` on a TypeScript
+or JavaScript file, or `orb flow run`, `orb flow resume` or `orb eval` on a YAML workflow that sets `permissions: auto`,
+on a YAML workflow or a YAML or JSON suite that defines shell commands, or on one that names an agent, in a folder that
+is not trusted, through the background service, which is the default: they now exit with status 1 even where the folder
+holds no project config.
+That is nearly every eval, because nearly every suite has checks. The same commands against a server that is older than
+workspace trust, such as a background service that was not restarted after the upgrade, now exit with status 1 whether
+or not the folder is trusted. A replay of a module workflow now connects to a server, and starts the background service
+if that is the server it uses and it is not running. Commands run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or
+against a server that trusts the folder, are not affected.
+
+**What to do:** run `orb trust` once in each repository you trust, or pass `--trust` to a single run, or set
+`ORBIT_TRUST_PROJECT=1` and `--standalone` in CI. Restart the background service after upgrading (`orb service
+restart`). Look over a workflow or suite that you did not write, and the commands, nodes and agents that the refusal
+lists, before you trust the folder that holds it, because trusting the folder lets it run.
+
+### `orb flow` treats the run store of a repository as untrusted text
+
+The run store is `.orbit/runs.db`, a file in the repository, so a clone can bring one of its own. `orb flow clean` took
+the ID of every finished run in it and removed `.orbit/worktrees/<run>` and the branches under `orbit/<run>/`, and
+resumed runs made their worktrees the same way, so a row whose ID was a path, such as `../../../x` or `../..`, led them
+out of the repository: a clone could have the command delete a folder beside the repository or the repository itself,
+without being trusted. `orb flow ls`, `show`, `watch`, `cost` and `trace` also printed the names, messages and files
+that the store holds as they were, so an escape sequence in a workflow's name could set the title of the terminal or
+erase the lines above it.
+
+The store now lists and returns only runs whose ID has the shape that Orbit makes, `run_` and 14 digits of timestamp,
+`_` and 6 hexadecimal digits, and ignores any other row. `orb flow clean` and the worktrees of a run refuse an ID that is
+not one plain name, and a node named `.` or `..`. The five commands print what the store says through the same
+escaping as the trust refusal: control characters and format characters, such as a right-to-left override, are written
+out as `\x1b` or `\u{202e}`, and a line break as `\n`. The `/runs` dialog of the terminal UI shows what the store says
+in the same way, because the terminal UI writes text to the terminal as it is. In `--format json` and `--format otlp`
+every character stays, but `JSON.stringify` writes only U+0000 to U+001F as escapes and leaves DEL, the C1 controls
+(U+009B and U+009D start escape sequences on a terminal that takes 8-bit controls) and format characters as they are, so
+the commands write those as `\u009b` or `\u202e` too, which `JSON.parse` turns back into the same text.
+
+A workflow or a suite is a file in the repository too, and `orb flow run`, `resume`, `replay` and `orb eval` printed
+what it says as it was: the node and task IDs in the progress on standard error, the gate that a run waits at, the
+failure of an eval or a replay and the task table of an eval, and, on standard output, the JSON of the result of a run
+or an eval, which is keyed by node ID. A JSON or YAML file that defines no command, approval or agent needs no trust, so
+a suite whose task ID held an escape sequence could set the title of the terminal or erase lines of a person who ran it
+in a folder that is not trusted. These commands now write it out in the same way.
+
+The failure of a command can name such text as well: an invalid workflow lists its node IDs and types, and a run that
+is resumed or replayed loads the file that its row in the run store names. These fail before any trust check, so a
+clone only had to ship an invalid workflow. Every error that `orb` prints now has its control and format characters
+written out, and keeps the line breaks of the message and its stack. The title of a session that a workflow opens is
+`<workflow name> · <node>`, and it stays in your session database. The message of the commit that records the work of a
+node, `orbit <run>: <node>`, stays in your repository, where `git log` prints it as it is. The runner writes out the
+control characters of both. `orb session list` also writes out a title that holds any (a model can make one). The
+terminal UI and Mini leave them out of the title of the window, and the summary that the terminal UI prints when you
+leave writes them out, while the one of Mini leaves them out.
+
+**Affects:** a repository whose `.orbit/runs.db` holds a run with another ID: it no longer shows up in `orb flow ls`, the
+terminal UI or the VS Code Runs view, and `orb flow show`, `resume` and `clean` report that there is no such run. Orbit's
+own runs have always had an ID of this shape, so nothing that Orbit made is affected. Scripts that parse the text output
+of `orb flow` and `orb eval`, the progress they print on standard error or the error text of an `orb` command, see a
+control character in a name as an escape. So does a line that a workflow passes to `ctx.log` with one in it, such as a
+colour, and a message that spans lines, such as a failure that git reports, is written on one line with `\n` where it
+breaks (an error keeps its lines). Scripts that parse JSON see the same values, as only the spelling of the characters
+above changes. A session or a commit that an earlier release made for a workflow keeps the title or message it was given.
+
+**What to do:** nothing.
+
+### The `orb` binary no longer reads the `tsconfig.json` of the folder it starts in
+
+The single-file `orb` was built to load the `tsconfig.json` of the folder it runs in, and Bun applied its `paths` to the
+module resolution of the binary itself. A repository that was not trusted yet could commit a `tsconfig.json` whose
+`paths` map every import to a file of its own, and that file ran when the binary started in the repository's folder,
+before any trust check: `orb trust --standalone --list` did it, in the server process that it starts there, and so would
+any other `orb` process that starts in the folder. The binary now loads no `tsconfig.json`, so no `paths` apply in any
+folder. It still loads no `bunfig.toml` and no `.env`, as before, and it still reads `package.json` files, which it
+needs to find the entry of a package that names it with `main` or `exports`.
+
+Imports by a relative path and from `node_modules` resolve as before, and so do the `imports` entries (`#name`) of a
+`package.json`. A module that the binary imports from your project, such as a workflow or suite file, and that imports
+through a `paths` alias of the project's `tsconfig.json`, no longer resolves and fails with `Cannot find package`.
+Running Orbit from its source is not affected.
+
+**Affects:** people who run `orb` from a release build on a workflow or suite module, or another module that the binary
+imports from their project, that imports through a `paths` alias.
+
+**What to do:** import those files by a relative path. Nothing for anyone else.
+
+### `orb flow` and `orb eval` ask about the folder that holds the file as well
+
+`orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` asked whether the folder they run in is trusted,
+and that was the whole check, even when the workflow or suite lay in another folder. Run from a trusted folder,
+`orb flow run ../examples/evil.ts`, `orb flow replay <run> --file <path>` and `orb eval <path>` imported the module, ran
+the shell commands, approved the actions and ran the nodes as the agents of a file from a folder that no one had
+trusted, such as a clone beside the repository, a download or a submodule. So did `orb flow resume` for a run whose row
+in the run store names such a file.
+
+They now ask about the folder that holds the file as well, after the folder they run in, when the file brings what needs
+trust: a TypeScript or JavaScript module, or a YAML or JSON file that defines shell commands, approvals or agents, as
+described in "`orb flow` and `orb eval` need a trusted folder to run a workflow or suite's code, commands, approvals or
+agents" above. A replay is asked only for a module, as before. The question is the one asked for any folder: it is about
+the project that holds the file, so the folders of one git repository and its linked worktrees share a decision, and a
+workflow in a folder of the repository you run in needs nothing new, while a folder outside a git repository is a
+project of its own, as are the folders inside it. The config of that project is not part of it, because the run applies
+none of it: the file is all the run takes from it. The refusal names the folder, lists what the file brings as it does
+for the folder you run in, and gives `orb trust <folder>` for it, because a plain `orb trust` would trust the folder you
+ran in. `--trust` trusts both folders for the run alone. A home directory or a filesystem root is never trusted for
+good, so a file that sits in one needs `--trust` on every run.
+
+**Affects:** scripts and CI that run a workflow or suite file from a folder other than the project they run in, such as
+`orb flow run ~/flows/review.ts` or `orb eval ../evals/suite.json`, when the file is a module or defines commands,
+approvals or agents: they now exit with status 1 until that project is trusted. That includes a file kept directly in a
+home directory, even with `--standalone` and `ORBIT_TRUST_PROJECT=1`, which never trust a home directory. Runs of a file
+in the project they run in, and of a file that only defines nodes that use your own agents and rules, are not affected.
+
+**What to do:** look the file over, then run `orb trust <folder>` once for the folder that holds the files you rely on,
+or pass `--trust` to a single run, or keep the files in the repository you run in. Move files out of a home directory.
+
+### The `orb` binary does not look for a provider package in the folder it starts in
+
+A provider's `package` names the code that talks to its API. For a name that Orbit does not include, the single-file
+`orb` first looked it up in the `node_modules` of the folder it started in, and installed it from npm into Orbit's own
+cache only when it was not there. A name under `@orbit/ai/` that Orbit does not include was imported from that folder
+too. That folder can be a repository that is not trusted yet, so when your own config named such a package, a
+`node_modules/<package>/index.js` committed there ran in the server process that `orb` starts in the folder, which is
+the case with `--standalone`, with `--bare` and with the background service off. The binary now installs such a package
+from npm and loads it from Orbit's cache, whatever folder it starts in, as it already did for `aisdk:` packages, and
+never looks for one in the folder. A name under `@orbit/ai/` that Orbit does not include fails with "is not built in".
+A plain file path, which an earlier build loaded too, no longer loads: write it as a `file://` URL. The providers that
+Orbit includes and `file://` URLs load as before, and so does running Orbit from its source.
+
+**Affects:** people who run `orb` from a release build with a provider `package` that is a bare npm name that they keep
+in the `node_modules` of their project, or that is a plain file path: Orbit now installs the first from npm, which needs
+the registry, and loads the latest version, and no longer loads the second.
+
+**What to do:** nothing for the providers that Orbit includes. To use a copy that you keep yourself, point `package` at
+its entry file with a `file://` URL.
+
+### The `orb` binary does not look for what its dependencies ask for in the folder it starts in
+
+The single-file `orb` carries its dependencies, but three of them looked up a name while they ran, in a way that the
+bundler cannot follow, and Bun resolves such a name from the folder the binary starts in. That folder can be a
+repository that is not trusted yet. js-yaml, which reads the front matter of every Markdown file, looked for `esprima`
+for its `!!js/function` type as soon as it loaded, so a `node_modules/esprima/index.js` committed to a repository ran
+when `orb` started there, before any trust check: `orb trust --standalone --list` did it, in the server process that it
+starts in the folder, and so did `orb models`, `orb run` and the other commands that start one. Babel, which transforms
+the source of a terminal UI plugin, handed the browserslist config of the folder to browserslist, so a `package.json`
+with `"browserslist": ["extends browserslist-config-x"]` ran `node_modules/browserslist-config-x` when the terminal UI
+loaded a plugin source file. On Windows, where fff is off unless `ORBIT_DISABLE_FFF=0` turns it on, the file finder
+looked for its native library in an npm package before it used the embedded one, and found
+`node_modules/@ff-labs/fff-bin-win32-x64` of the folder, so a library committed there was loaded as native code. The
+build now replaces the `!!js/function` type with one that matches nothing, Babel's lookup with its browser build, which
+reads no config, and the lookup of fff with one that finds nothing, so the embedded library is the one that loads. A
+build that cannot do any of these fails. Nothing that worked changes: front matter is read with the safe YAML schema,
+which never had that type, nothing that Orbit transforms reads browserslist targets, and the library of fff is always
+embedded.
+
+**Affects:** nobody who works in a folder of their own. A repository that commits those files no longer gets them run.
+
+**What to do:** nothing.
+
+### On Windows, `orb` finds git, ripgrep and its other programs on PATH and never in the folder it starts in
+
+`orb` looks for git, ripgrep, the shell that runs its commands, the formatters and a few other programs by name down
+PATH. On Windows the library that did it searched the current folder before PATH, as `cmd.exe` does, and that folder
+can be a repository that is not trusted yet. A `git.exe` committed to it ran as native code whenever Orbit used git
+there, `orb session list --standalone` among them, and an `rg.exe` ran when the file search of a server that started in
+the folder looked for files, before any trust check. The lookup now reads PATH and Orbit's own `bin` folder and nothing
+else, so what a repository commits is never a candidate. On every platform a PATH entry that is empty, which a shell
+reads as the current folder, is skipped as well. When the program is on PATH the result is the same file as before.
+
+**Affects:** Windows users who keep git, ripgrep or another of these programs in the project folder and not on PATH:
+Orbit no longer finds it there. A repository that commits such a file no longer has it run.
+
+**What to do:** nothing when the program is on PATH. Otherwise put it on PATH. For ripgrep, copying `rg.exe` to Orbit's
+`bin` folder works as well.
+
+### On Windows, `orb` starts a program it only has a name for without looking in the folder first
+
+Orbit starts some programs by name and not by path: Mercurial's `hg`, `git` when it is not on PATH, `node` or `uvx` for an
+MCP server, a language server, your editor, the pager of `orb session list`, which is `cmd /c more`, and the command of a
+status line, for example. On Windows such a name is looked for in the working folder before PATH, by Bun and Node as well
+as by `cmd.exe`, and that folder can be a repository that is not trusted yet. A folder with a `.hg` directory and an
+`hg.exe` or an `hg.bat` ran that file while Orbit identified the project, before any trust check, and a `cmd.exe` in the
+folder ran as the pager.
+
+Every Orbit process now sets `NoDefaultCurrentDirectoryInExePath` in its own environment before it starts anything:
+`orb`, the launcher that npm installs as `orb`, a server that is started without `orb`, and the SDK's embedded host.
+Orbit's own process spawner sets it before every program it starts as well. The lookup of a program reads the variable
+from the process that starts it, not from the program, so it has to be set there. The program gets the variable too, so
+a `cmd.exe` that it is or runs skips the working folder as well. The launcher that npm installs asked PowerShell by name
+which processor features it has, so a `powershell.exe` in the folder ran when `orb` was typed there. Orbit also stops a
+process with the `taskkill.exe` of the Windows folder. It used to run `taskkill` by name through `cmd.exe`, so a
+`taskkill.exe` in the folder it started in ran instead. A path to a program is used as written, as before.
+
+**Affects:** Windows users whose project starts a program by a bare name that exists only in the working folder, such as
+an MCP server whose `command` is `server.exe` or `server.bat`: it is no longer found there. The same goes for what runs
+through `cmd.exe` in the working folder, such as a project's start command, a workflow `command` node or a status line
+command: `build.cmd` no longer finds a file of the folder. Everything Orbit starts inherits the variable. An application
+that embeds the SDK has it set in its own process once it creates the host, so its own programs that it starts by name
+skip the working folder too.
+
+**What to do:** nothing for programs on PATH. For one that you keep in the folder, write `.\server.bat` or its full
+path.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -357,16 +675,45 @@ for the address it names, like the first request, and a decline or a deny stops 
 10 redirects. "Always allow" for an origin covers the redirects inside it, and a "once" approval covers only the request
 it was given for.
 
-`fetch` also refuses addresses that are not public, after the permission step and whatever the rules say: loopback
-(127.0.0.0/8, `::1`, `0.0.0.0`), private networks (10/8, 172.16/12, 192.168/16, `fc00::/7`, 100.64/10), link-local
-addresses (169.254/16, `fe80::/10`) and cloud metadata addresses (169.254.169.254, `fd00:ec2::254`, 100.100.100.200,
-168.63.129.16). A host name is resolved first, and it is refused when any address it stands for is one of those;
-`localhost` and the names under it count as loopback. The script gets an error that names the address. A name whose
-address changes between the check and the connection is not caught.
+`fetch` also refuses addresses that are not public, after the permission step and whatever the rules say:
+
+- **Loopback:** 127.0.0.0/8, all of 0.0.0.0/8, which reaches this machine too, and `::` and `::1`.
+- **Private networks:** 10/8, 172.16/12, 192.168/16, the shared address space 100.64/10, the benchmarking range
+  198.18/15, the IETF protocol assignments 192.0.0.0/24, `fc00::/7`, the deprecated site-local `fec0::/10`, and the
+  NAT64 prefix for local use `64:ff9b:1::/48`.
+- **Link-local addresses:** 169.254/16 and `fe80::/10`.
+- **Cloud metadata addresses:** 169.254.169.254, 100.100.100.200, 168.63.129.16 and 192.0.0.192, and the IPv6 endpoints
+  that sit in the unique local range `fc00::/7`: `fd00:ec2::254` (AWS instance metadata), `fd00:ec2::23` (the EKS Pod
+  Identity Agent's credentials), `fd20:ce::254` (Compute Engine), `fd00:c1::a9fe:a9fe` (Oracle Cloud Infrastructure),
+  `fd00:a9fe:a9fe::1` (the Akamai, formerly Linode, Metadata service) and `fd00:42::42` (the Scaleway metadata API).
+  Only these exact addresses are metadata; the rest of `fc00::/7` is a private network.
+
+An IPv6 address that stands for an IPv4 one is refused when that IPv4 address is any of these. The forms that carry one
+are the IPv4-mapped (`::ffff:a.b.c.d`), IPv4-compatible and IPv4-translated addresses, NAT64 (`64:ff9b::/96` and
+`64:ff9b:1::/48`), 6to4 (`2002::/16`), Teredo (`2001::/32`, whose client address is stored inverted) and ISATAP, so
+`[64:ff9b::a9fe:a9fe]` and `[2002:a9fe:a9fe::]` are refused as the metadata address they lead to. An address that a
+network translates to IPv4 with a prefix of its own is not recognised. A host name is resolved first, and it is refused
+when any address it stands for is one of those; `localhost` and the names under it count as loopback. The script gets an
+error that names the address.
+
+The request then goes to the addresses that were checked, and not to the name. Whatever connects to a name resolves it
+again, and a name with a time to live of 0 can answer with a public address for the check and with `169.254.169.254`
+for the connection (DNS rebinding). A script chooses the method and the headers of its request, so that would reach the
+credentials that a cloud serves from its metadata address, such as those of IMDSv2, Compute Engine and Azure. So `fetch`
+resolves a name once per request, the program's own and each redirect, and connects to an address from that answer. It
+tries the others, in the order they came, only when no connection could be made to the one before, so a name with
+several addresses, such as `localhost`, still reaches a server that listens on one of them. The name stays what the
+request is for: it is sent in the `Host` header, unless the script sets its own, and with `https:` in the TLS handshake,
+where the certificate is checked against the name and not against the address, and it is the name that `response.url`
+reports. A host that is an address is connected to as it is. A name that resolves to no address is refused as well, and
+so is one whose lookup fails, because there is nothing to check and the connection would resolve the name by itself.
+Behind a proxy that `HTTP_PROXY` or `HTTPS_PROXY` names, the proxy is asked to connect to the address and not to the
+name, and an entry of `NO_PROXY`, which matches by name, no longer applies to a request for a name.
 
 **Affects:** Code Mode scripts that call `fetch`. One that follows a redirect while `webfetch` is set to ask or deny gets
 another prompt. One that calls a server on `localhost`, on a private network or at a link-local address now fails, even
-with allow-all rules.
+with allow-all rules. One that calls a name that this machine cannot resolve by itself now gets an error that says so,
+where it used to send the request on to a proxy that resolved the name, if there was one.
 
 **What to do:** approve the extra prompts, or add `webfetch` allow rules for the origins the redirects lead to. To let
 scripts reach local dev servers, set `experimental.allow_local_fetch` to `true` in your own config. It lets `fetch` reach

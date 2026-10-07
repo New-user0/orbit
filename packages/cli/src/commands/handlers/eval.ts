@@ -1,5 +1,6 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { json, plain, progress } from "@orbit/flow/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
@@ -7,7 +8,7 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { requireTrust } from "../../util/trust"
-import { directory } from "./flow/execute"
+import { directory, trustOptions } from "./flow/execute"
 
 export default Runtime.handler(
   Commands.commands.eval,
@@ -20,9 +21,11 @@ export default Runtime.handler(
       trust: input.trust,
     })
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-    // Before the suite is loaded: loading imports the file, whose top-level code then runs here, so a refusal that says
-    // no work was done has to come before it.
-    yield* requireTrust(client, directory(), { grant: input.trust })
+    // Before the suite is loaded, so that a refusal that says no work was done comes before any code of the file runs.
+    // It holds the folder that holds the file to the trust the file needs as well, which can be another project's than
+    // the folder of the run.
+    const trust = yield* trustOptions(file, "suite")
+    yield* requireTrust(client, directory(), { grant: input.trust, ...trust })
     const suite = yield* Effect.tryPromise({ try: () => loadSuite(file), catch: (cause) => cause })
     const resume = Option.getOrUndefined(input.resume)
     // A resumed eval compares the models it started with.
@@ -52,34 +55,38 @@ export default Runtime.handler(
           concurrency: Option.getOrUndefined(input.concurrency),
           permissions: input.auto ? "auto" : "reject",
           resume,
-          log: (line) => process.stderr.write(`${line}${EOL}`),
+          log: (line) => process.stderr.write(`${progress(line)}${EOL}`),
         }),
       catch: (cause) => cause,
     })
     if (!result.scores) {
       process.exitCode = 1
-      return yield* Effect.fail(new Error(`Eval ${result.id} did not finish: ${result.error ?? result.status}`))
+      return yield* Effect.fail(new Error(`Eval ${result.id} did not finish: ${plain(result.error ?? result.status)}`))
     }
     const summary = summarize(result.scores)
+    // The scores name the tasks of the suite, and a resumed eval takes its models from the run store: text from files.
     if (input.format === "json")
-      return process.stdout.write(JSON.stringify({ run: result.id, summary, scores: result.scores }, null, 2) + EOL)
+      return process.stdout.write(json({ run: result.id, summary, scores: result.scores }) + EOL)
     const tasks = [...new Set(result.scores.map((score) => score.task))]
+    // The task IDs are text from the suite. A resumed eval takes its models, and what the tasks that it reuses spent,
+    // from the run store. Both are files in the repository that a clone brings along, and the amounts are read with
+    // `Number`, which leaves no text in them.
     const table = [
       ["model", "passed", "rate", "input", "output", "cost", "time"],
       ...summary.map((row) => [
-        row.model,
+        plain(row.model),
         `${row.passed}/${row.total}`,
         `${Math.round((row.passed / row.total) * 100)}%`,
-        String(row.input),
-        String(row.output),
-        `$${row.cost.toFixed(4)}`,
+        String(Number(row.input)),
+        String(Number(row.output)),
+        `$${Number(row.cost).toFixed(4)}`,
         `${row.seconds}s`,
       ]),
     ]
     const tasksTable = [
-      ["task", ...summary.map((row) => row.model)],
+      ["task", ...summary.map((row) => plain(row.model))],
       ...tasks.map((task) => [
-        task,
+        plain(task),
         ...summary.map((row) => {
           const score = result.scores?.find((item) => item.model === row.model && item.task === task)
           return score?.passed ? `✓${score.iterations > 1 ? ` (${score.iterations} tries)` : ""}` : "✗"

@@ -13,6 +13,7 @@ import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
 import { Location } from "../../location.js"
 import { Permission } from "../../permission.js"
+import { ProjectTrust } from "../../project-trust.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentJob } from "../../session/subagent-job.js"
@@ -35,15 +36,25 @@ export const Plugin = define({
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
+    const projectTrust = yield* ProjectTrust.Service
     // The commands of an entry, and whether its folder lets them run shell snippets: only a project or local entry that
     // config stamped untrusted does not. Plain templates are only text, so they run either way. The folder is the one
-    // that has to be trusted, which a refusal names.
+    // that has to be trusted, which a refusal names. A command file that a link leads out of an untrusted folder is not
+    // read, so it is not the repository's to put into the prompt.
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       const trust = { trusted: entry.trusted !== false, folder: ConfigTrust.covered(entry) }
       if (entry.type === "document") return [{ commands: entry.info.commands, ...trust }]
       if (entry.type !== "directory") return []
-      const commands = yield* CommandFile.load(fs, entry.path)
-      return [{ commands: Object.fromEntries(commands.map((command) => [command.name, command.info])), ...trust }]
+      const files = yield* CommandFile.load(fs, entry.path, (file) => projectTrust.supplies(entry, file))
+      const commands = Object.fromEntries(files.map((command) => [command.name, command.info]))
+      if (entry.trusted !== false) return [{ commands, ...trust }]
+      // Cut down like the commands of the folder's documents: a command does not choose which of the user's agents runs.
+      // A command names no paths, so what matters about the place is only the folder it belongs to.
+      const sanitized = ConfigTrust.sanitizeCommands(commands, {
+        roots: [ConfigTrust.holder(entry.path)],
+        directory: entry.path,
+      })
+      return [{ commands: sanitized.value, ...trust }]
     })
     const location = yield* Location.Service
     const processes = yield* AppProcess.Service

@@ -24,15 +24,17 @@ import { AppProcess } from "@orbit/util/process"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { Permission } from "@orbit/core/permission"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "../fixture/mcp"
 import { location } from "../fixture/location"
-import { tmpdir } from "../fixture/tmpdir"
+import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { tempGlobalLayer } from "../fixture/global"
 import { offlineModels } from "../fixture/models"
+import { trustedProject, untrustedProject } from "../fixture/project-trust"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
 
@@ -58,9 +60,11 @@ const it = testEffect(
       Session.node,
       Job.node,
       Agent.node,
+      ProjectTrust.node,
     ]),
     [
       Mcp.node.replace(emptyMcpLayer),
+      ProjectTrust.node.replace(trustedProject),
       Config.node.replace(emptyConfigLayer),
       Location.node.replace(testLocationLayer),
       ShellSelect.node.replace(shellLayer),
@@ -246,6 +250,61 @@ Review files`,
         }),
       ),
     ),
+  )
+
+  // The repository ships its links, and a clone recreates them. A command's template goes into the prompt when the command
+  // is used, so a file that a link in an untrusted folder leads to must not become one. A junction stands for the link,
+  // since it needs no privilege on Windows.
+  it.effect("leaves out a command file that a link leads out of an untrusted folder, until the folder is trusted", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const project = path.join(tmp, "project")
+      const orbit = path.join(project, ".orbit")
+      const outside = path.join(tmp, "outside")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(orbit, "commands"), { recursive: true })
+        await fs.writeFile(path.join(orbit, "commands", "mine.md"), "Mine")
+        await fs.mkdir(path.join(outside, "nested"), { recursive: true })
+        await fs.writeFile(path.join(outside, "stolen.md"), "STOLEN TEXT")
+        await fs.writeFile(path.join(outside, "nested", "deeper.md"), "More stolen text")
+        // A link to a folder inside the commands folder, so that every Markdown file under it would become a command.
+        await fs.symlink(outside, path.join(orbit, "commands", "linked"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const command = yield* Command.Service
+        const bus = yield* Bus.Service
+        const trust = yield* ProjectTrust.Service
+        let reloads = 0
+        yield* ConfigCommandPlugin.Plugin.effect(
+          host({
+            command: {
+              list: () => Effect.die("unused command.list"),
+              transform: command.transform,
+              reload: () => command.reload().pipe(Effect.tap(() => Effect.sync(() => reloads++))),
+            },
+            event: { subscribe: () => bus.subscribe(Event.Updated) },
+          }),
+        ).pipe(
+          Effect.provide(
+            Config.testLayer([
+              new Directory({ type: "directory", path: AbsolutePath.make(orbit), scope: "project", trusted: false }),
+            ]),
+          ),
+        )
+
+        expect((yield* command.list()).map((item) => item.name)).toEqual(["mine"])
+
+        // Trusting the folder reloads the config, which tells the plugin, and the linked files are commands as before.
+        yield* trust.grant({ persist: false, via: "test" })
+        yield* bus.publish(Event.Updated, {})
+        yield* advance(() => reloads >= 1)
+        expect((yield* command.list()).map((item) => item.name).toSorted()).toEqual([
+          "linked/nested/deeper",
+          "linked/stolen",
+          "mine",
+        ])
+      }).pipe(Effect.provide(untrustedProject({ directory: project })))
+    }),
   )
 
   for (const testCase of sourceCases()) {

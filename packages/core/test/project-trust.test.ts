@@ -1,24 +1,32 @@
+import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Schedule, Stream } from "effect"
+import { Effect, Fiber, Layer, Logger, Schedule, Stream } from "effect"
 import { CompatNames } from "@orbit/compat/names"
 import { Event } from "@orbit/schema/config"
+import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
+import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
+import { ConfigSkillPlugin } from "@orbit/core/config/plugin/skill"
 import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
 import { ProjectTrust } from "@orbit/core/project-trust"
+import { Skill } from "@orbit/core/skill"
+import { SkillDiscovery } from "@orbit/core/skill/discovery"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { agentHost, host } from "./plugin/host"
 
 const it = testEffect(Layer.empty)
 
@@ -35,21 +43,49 @@ interface Folders {
 // on its own. The watcher is the test one, so that a test can say that a file changed.
 // With `canonical`, the project is a linked worktree of a main checkout kept there.
 function loader(folders: Folders, canonical?: string) {
+  return Layer.mergeAll(
+    AppNodeBuilder.build(
+      LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]),
+      replacements(folders, canonical),
+    ),
+    Watcher.testLayer,
+  )
+}
+
+// The same, with the registries that the config plugins write to, and what they read the files with.
+function pluginLoader(folders: Folders) {
+  return Layer.mergeAll(
+    AppNodeBuilder.build(
+      LayerNode.group([
+        Config.node,
+        Bus.node,
+        WorkspaceTrust.node,
+        ProjectTrust.node,
+        Agent.node,
+        Skill.node,
+        FSUtil.node,
+        Global.node,
+        Location.node,
+      ]),
+      replacements(folders),
+    ),
+    Watcher.testLayer,
+  )
+}
+
+function replacements(folders: Folders, canonical?: string) {
   const here = location({ directory: AbsolutePath.make(folders.repo) })
   const placed =
     canonical === undefined ? here : { ...here, project: { ...here.project, canonical: AbsolutePath.make(canonical) } }
-  return Layer.mergeAll(
-    AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]), [
-      Config.node.replace(Config.configured()),
-      WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
-      Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(placed))),
-      Global.node.replace(Global.layerWith({ config: folders.globalConfig, home: folders.home })),
-      Credential.node.replace(emptyCredentialNode),
-      WellKnown.node.replace(emptyWellknownNode),
-      Watcher.node.replace(Watcher.testLayer),
-    ]),
-    Watcher.testLayer,
-  )
+  return [
+    Config.node.replace(Config.configured()),
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+    Location.node.replace(Layer.succeed(Location.Service, Location.Service.of(placed))),
+    Global.node.replace(Global.layerWith({ config: folders.globalConfig, home: folders.home })),
+    Credential.node.replace(emptyCredentialNode),
+    WellKnown.node.replace(emptyWellknownNode),
+    Watcher.node.replace(Watcher.testLayer),
+  ] satisfies LayerNode.Replacements
 }
 
 const write = (file: string, contents: unknown) =>
@@ -167,6 +203,43 @@ describe("ProjectTrust.status", () => {
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
         expect(yield* project.status()).toMatchObject({ trusted: false, withheld: [] })
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("lists a command that names an agent, and an agent that sets its mode, as held back", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.repo, ".orbit", "commands", "setup.md"), "---\nagent: autopilot\n---\nSet up."),
+          write(path.join(folders.work, ".orbit", "agents", "autopilot.md"), "---\nmode: all\n---\nMine."),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        // Which agent a command runs as, and which agents the model may spawn, are choices between sets of rules.
+        expect<unknown>(held(folders.root, yield* project.status())).toEqual([
+          [path.join("work", ".orbit"), ["permissions"]],
+          [path.join("work", "repo", ".orbit"), ["permissions"]],
+        ])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("does not read a file that a link leads out of the project to say what a config directory holds back", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const outside = path.join(folders.root, "outside")
+      yield* Effect.promise(async () => {
+        // An agent that allows everything, which would be listed if it were read.
+        await write(path.join(outside, "ops.md"), allowsEverything)
+        await write(path.join(folders.repo, ".orbit", "commands", "plain.md"), "Plain")
+        await fs.symlink(outside, path.join(folders.repo, ".orbit", "agents"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        expect((yield* project.status()).withheld).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -348,6 +421,334 @@ describe("ProjectTrust.allows", () => {
         expect(yield* Effect.forEach(Object.values(own), project.allows)).toEqual(Object.values(own).map(() => false))
         expect(yield* Effect.forEach(Object.values(mine), project.allows)).toEqual(Object.values(mine).map(() => true))
       }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+describe("ProjectTrust.reachable", () => {
+  it.live("reads only what is inside an untrusted project, for real, until the project is trusted", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const secret = path.join(folders.root, "outside", "secret.txt")
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.repo, "notes.md"), "notes"),
+          write(path.join(folders.work, "AGENTS.md"), "shared"),
+          write(secret, "secret"),
+          // A junction reads as a symlink to a directory, and needs no privilege on Windows.
+        ]).then(() => fs.symlink(path.dirname(secret), path.join(folders.repo, "linked"), "junction")),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const answers = () =>
+          Effect.forEach(
+            [
+              path.join(folders.repo, "notes.md"),
+              // A file that is not there yet is inside by its name, and so it is by where it would be.
+              path.join(folders.repo, "later.md"),
+              // Inside by its name, and outside for real.
+              path.join(folders.repo, "linked", "secret.txt"),
+              secret,
+              // A folder above the project is not the repository's, so it waits for the project to be trusted too.
+              path.join(folders.work, "AGENTS.md"),
+              path.join(folders.home, "AGENTS.md"),
+            ],
+            project.reachable,
+          )
+
+        expect(yield* answers()).toEqual([true, true, false, false, false, false])
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* answers()).toEqual([true, true, true, true, true, true])
+        yield* project.revoke()
+        expect(yield* answers()).toEqual([true, true, false, false, false, false])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("counts the main checkout of a linked worktree as inside, since one decision covers both", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const main = path.join(folders.root, "main")
+      yield* Effect.promise(() =>
+        Promise.all([write(path.join(main, "AGENTS.md"), "main"), write(path.join(folders.root, "AGENTS.md"), "root")]),
+      )
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        expect(yield* project.reachable(path.join(main, "AGENTS.md"))).toBe(true)
+        expect(yield* project.reachable(path.join(folders.root, "AGENTS.md"))).toBe(false)
+      }).pipe(Effect.provide(loader(folders, main)))
+    }),
+  )
+
+  it.live("counts a file that is not there yet by where a link in its path would put it", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const outside = path.join(folders.root, "outside")
+      yield* Effect.promise(async () => {
+        await write(path.join(outside, "keep.txt"), "x")
+        await fs.mkdir(folders.repo, { recursive: true })
+        await fs.symlink(outside, path.join(folders.repo, "linked"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        expect(
+          yield* Effect.forEach(
+            [path.join(folders.repo, "later.md"), path.join(folders.repo, "linked", "later.md")],
+            project.reachable,
+          ),
+        ).toEqual([true, false])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+// What the file tools ask before they count a path as inside the project: a link that the repository ships can lead
+// anywhere, and a write through one creates the file there.
+describe("ProjectTrust.escapes", () => {
+  it.live("says where a link in an untrusted project leads, for a file that is there and for one that is not yet", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const outside = path.join(folders.root, "outside")
+      const inside = path.join(folders.repo, "docs")
+      yield* Effect.promise(async () => {
+        await write(path.join(folders.repo, "notes.md"), "notes")
+        await write(path.join(inside, "guide.md"), "guide")
+        await write(path.join(outside, "secret.txt"), "secret")
+        // A junction reads as a symlink to a directory, and needs no privilege on Windows.
+        await fs.symlink(outside, path.join(folders.repo, "linked"), "junction")
+        await fs.symlink(inside, path.join(folders.repo, "shortcut"), "junction")
+        // A link that points nowhere leads where it points, which is where a write through it would land.
+        await fs.symlink(path.join(outside, "missing"), path.join(folders.repo, "dangling"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const answers = () =>
+          Effect.forEach(
+            [
+              path.join(folders.repo, "notes.md"),
+              // Not there yet, in a folder that is.
+              path.join(folders.repo, "later.md"),
+              path.join(folders.repo, "docs", "later.md"),
+              // A link that stays inside the project.
+              path.join(folders.repo, "shortcut", "guide.md"),
+              // Leaves the project, for a file that is there, one that is not and one whose folder is not either.
+              path.join(folders.repo, "linked", "secret.txt"),
+              path.join(folders.repo, "linked", "later.txt"),
+              path.join(folders.repo, "linked", "deeper", "later.txt"),
+              path.join(folders.repo, "dangling", "later.txt"),
+              // Outside by its name.
+              path.join(folders.work, "AGENTS.md"),
+            ],
+            project.escapes,
+          )
+        const leaving = [
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          path.join(outside, "secret.txt"),
+          path.join(outside, "later.txt"),
+          path.join(outside, "deeper", "later.txt"),
+          path.join(outside, "missing", "later.txt"),
+          path.join(folders.work, "AGENTS.md"),
+        ]
+
+        expect(yield* answers()).toEqual(leaving)
+        // Trusting the project follows links as before, and ending the trust holds them again.
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* answers()).toEqual(leaving.map(() => undefined))
+        yield* project.revoke()
+        expect(yield* answers()).toEqual(leaving)
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("ends in a loop of links that points nowhere, and counts it as where it is", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const first = path.join(folders.repo, "first")
+      const second = path.join(folders.repo, "second")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(folders.repo, { recursive: true })
+        await fs.symlink(second, first, "junction")
+        await fs.symlink(first, second, "junction")
+      })
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        // Nothing can be opened through such a loop, so there is nothing to ask about.
+        expect(yield* project.escapes(path.join(first, "later.txt"))).toBeUndefined()
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+// What the plugins that read agents, commands, skills and output styles ask: a repository's config directory holds
+// files, and a link among them must not carry a file of the user's into the prompt.
+describe("ProjectTrust.supplies", () => {
+  const skippedNotices = () => {
+    const skipped: Array<{ path: unknown; reason: unknown }> = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "config file skipped") return
+      skipped.push(entry.message[1])
+    })
+    return { skipped, logger: Logger.layer([logger]) }
+  }
+
+  it.live(
+    "reads from an untrusted project's config directory only what stays inside it, and follows the decision",
+    () => {
+      const { skipped, logger } = skippedNotices()
+      return Effect.gen(function* () {
+        const folders = yield* bare
+        const outside = path.join(folders.root, "outside")
+        const orbit = path.join(folders.repo, ".orbit")
+        yield* Effect.promise(async () => {
+          await write(path.join(orbit, "agents", "own.md"), "own")
+          await write(path.join(folders.repo, "shared", "kept.md"), "kept")
+          await write(path.join(outside, "stolen.md"), "stolen")
+          await fs.symlink(path.join(folders.repo, "shared"), path.join(orbit, "skills"), "junction")
+          await fs.symlink(outside, path.join(orbit, "commands"), "junction")
+        })
+        const own = path.join(orbit, "agents", "own.md")
+        const kept = path.join(orbit, "skills", "kept.md")
+        const stolen = path.join(orbit, "commands", "stolen.md")
+        // The stamp of the config that was loaded before the decision, as the plugins see it.
+        const source = { path: orbit, scope: "project", trusted: false } as const
+
+        yield* Effect.gen(function* () {
+          const project = yield* ProjectTrust.Service
+          const answers = () => Effect.forEach([own, kept, stolen], (file) => project.supplies(source, file))
+
+          expect(yield* answers()).toEqual([true, true, false])
+          expect(yield* answers()).toEqual([true, true, false])
+          // The file is reported once, however often it is asked for.
+          expect(skipped).toMatchObject([{ path: stolen, reason: expect.stringContaining("not trusted") }])
+
+          // The project's own decision counts at once, before the config has reloaded and dropped the stamp.
+          yield* project.grant({ persist: false, via: "test" })
+          expect(yield* answers()).toEqual([true, true, true])
+          yield* project.revoke()
+          expect(yield* answers()).toEqual([true, true, false])
+          expect(skipped).toHaveLength(1)
+        }).pipe(Effect.provide(loader(folders)))
+      }).pipe(Effect.provide(logger))
+    },
+  )
+
+  it.live("does not hold what the user owns, or what its folder has been trusted for", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const outside = path.join(folders.root, "outside")
+      yield* Effect.promise(async () => {
+        await write(path.join(outside, "elsewhere.md"), "elsewhere")
+        await fs.mkdir(folders.repo, { recursive: true })
+        await fs.symlink(outside, path.join(folders.globalConfig, "skills"), "junction")
+        await fs.symlink(outside, path.join(folders.repo, ".orbit"), "junction")
+      })
+      const file = (...parts: string[]) => path.join(...parts, "elsewhere.md")
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        // The user's own config directory may be a link to wherever they keep it. So may a project's, once its folder is
+        // trusted, which is a stamp that says so, and a directory that no scope speaks for.
+        expect(
+          yield* Effect.forEach(
+            [
+              [{ path: folders.globalConfig, scope: "user" as const }, file(folders.globalConfig, "skills")],
+              [{ path: path.join(folders.repo, ".orbit"), scope: "project" as const }, file(folders.repo, ".orbit")],
+              [{ path: path.join(folders.repo, ".orbit") }, file(folders.repo, ".orbit")],
+            ] as const,
+            ([source, target]) => project.supplies(source, target),
+          ),
+        ).toEqual([true, false, true])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("holds a folder above the project to that folder, and to its own decision rather than the project's", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const outside = path.join(folders.root, "outside")
+      const above = path.join(folders.work, ".orbit")
+      yield* Effect.promise(async () => {
+        await write(path.join(above, "agents", "shared.md"), "shared")
+        await write(path.join(folders.repo, "notes.md"), "notes")
+        await write(path.join(outside, "stolen.md"), "stolen")
+        // A link that goes down into the project stays inside the folder around it. One that goes out of it does not.
+        await fs.symlink(folders.repo, path.join(above, "skills"), "junction")
+        await fs.symlink(outside, path.join(above, "commands"), "junction")
+      })
+      const files = [
+        path.join(above, "agents", "shared.md"),
+        path.join(above, "skills", "notes.md"),
+        path.join(above, "commands", "stolen.md"),
+      ]
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const untrusted = { path: above, scope: "project", trusted: false } as const
+        const answers = (source: Parameters<typeof project.supplies>[0]) =>
+          Effect.forEach(files, (file) => project.supplies(source, file))
+
+        expect(yield* answers(untrusted)).toEqual([true, true, false])
+        // Trusting the project does not trust the folder around it, whose stamp is what decides.
+        yield* project.grant({ persist: false, via: "test" })
+        expect(yield* answers(untrusted)).toEqual([true, true, false])
+        // Once the folder is trusted, its stamp says so.
+        expect(yield* answers({ path: above, scope: "project" })).toEqual([true, true, true])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+// The plugins that read a config directory take part in the decision through the config that stamps it: a grant reloads
+// the config, which publishes `config.updated`, and they read the files again. Nothing here says that the config has
+// reloaded, so this is the whole path, from a junction in a project that nothing trusts to the agent and the skill it
+// leads to.
+describe("the config plugins over the real configuration loader", () => {
+  it.live("pick up what a link leads to as soon as the project is trusted, without a restart", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const outside = path.join(folders.root, "outside")
+      yield* Effect.promise(async () => {
+        await write(path.join(outside, "agents", "linked.md"), "Prompt from outside.")
+        await write(path.join(outside, "skills", "far", "SKILL.md"), "---\nname: far\n---\nSkill from outside.")
+        await write(path.join(folders.repo, ".orbit", "agents", "near.md"), "Prompt from inside.")
+        await fs.symlink(path.join(outside, "agents"), path.join(folders.repo, ".orbit", "agents", "out"), "junction")
+        await fs.symlink(path.join(outside, "skills"), path.join(folders.repo, ".orbit", "skills"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const agents = yield* Agent.Service
+        const bus = yield* Bus.Service
+        const project = yield* ProjectTrust.Service
+        const skills = yield* Skill.Service
+        const events = { subscribe: () => bus.subscribe(Event.Updated) }
+        yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents), event: events }))
+        yield* ConfigSkillPlugin.Plugin.effect(
+          host({
+            skill: { list: () => Effect.die("unused skill.list"), transform: skills.transform, reload: skills.reload },
+            event: events,
+          }),
+        ).pipe(
+          Effect.provideService(SkillDiscovery.Service, SkillDiscovery.Service.of({ pull: () => Effect.succeed([]) })),
+        )
+        const what = Effect.gen(function* () {
+          return [
+            (yield* agents.get(Agent.ID.make("near")))?.system,
+            (yield* agents.get(Agent.ID.make("out/linked")))?.system,
+            (yield* skills.list()).map((skill) => skill.id),
+          ]
+        })
+
+        expect(yield* what).toEqual(["Prompt from inside.", undefined, []])
+        yield* project.grant({ persist: false, via: "test" })
+        yield* what.pipe(
+          Effect.filterOrFail(
+            (found) => found[1] !== undefined && found[2]?.length === 1,
+            () => "the plugins have not read the files again",
+          ),
+          Effect.retry({ times: 100, schedule: Schedule.spaced("50 millis") }),
+        )
+        expect(yield* what).toEqual(["Prompt from inside.", "Prompt from outside.", [Skill.ID.make("far")]])
+      }).pipe(Effect.provide(pluginLoader(folders)))
     }),
   )
 })

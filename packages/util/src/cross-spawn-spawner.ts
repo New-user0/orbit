@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node.js"
 import { filesystem, path } from "./effect/app-node-platform.js"
+import { ProgramLookup } from "./program-lookup.js"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
@@ -107,8 +108,10 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     return path.resolve(opts.cwd)
   })
 
+  // cmd.exe runs a .cmd or .bat file however it was started, and looks in the working folder before PATH for what the
+  // file runs by name, so every child gets the variable that stops it, not only one that was started by a bare name.
   const env = (opts: ChildProcess.CommandOptions) =>
-    opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env
+    ProgramLookup.environment(opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env)
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x
@@ -285,6 +288,10 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     Effect.callback<Spawned, PlatformError.PlatformError>((resume) => {
       const closed = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const exited = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
+      // Bun's spawn, Node's and cross-spawn look in the working folder before PATH for a name they are given, unless the
+      // process that spawns has this variable. The environment of the child does not count. Every Orbit entry sets it, and
+      // so does this, so nothing that starts a program through the spawner depends on an entry having done it.
+      ProgramLookup.install()
       const proc = launch(command.command, command.args, opts)
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
@@ -352,8 +359,10 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     signal: NodeJS.Signals,
   ) => {
     if (globalThis.process.platform === "win32") {
+      // Run by name through a shell, taskkill would be looked for in the working folder before the system folder.
+      const taskkill = path.join(globalThis.process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
-        NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
+        NodeChildProcess.execFile(taskkill, ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true }, (err) => {
           if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
           resume(Effect.void)
         })

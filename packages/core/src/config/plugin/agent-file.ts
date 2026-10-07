@@ -21,12 +21,16 @@ const agentKeys = new Set(["variant", ...Object.keys(ConfigAgent.Info.fields)])
 
 /**
  * The agents that the Markdown files under `{agent,agents,mode,modes}` in a config directory define, as one document
- * each, in path order within each pattern. A file that cannot be read or decoded defines none. This is read for the
- * agents plugin and for what trust holds back, so both see the same agents. Keep it in sync with `sourceDirectories` in
- * that plugin.
+ * each, in path order within each pattern. A file that cannot be read or decoded defines none, and neither does one that
+ * `supplies` says may not be read, which is asked before the file is. This is read for the agents plugin and for what
+ * trust holds back, so both see the same agents. Keep it in sync with `sourceDirectories` in that plugin.
  */
-export const load = Effect.fn("AgentFile.load")(function* (fs: FSUtil.Interface, directory: string) {
-  const files = yield* discover(fs, directory)
+export const load = Effect.fn("AgentFile.load")(function* (
+  fs: FSUtil.Interface,
+  directory: string,
+  supplies: (file: string) => Effect.Effect<boolean> = () => Effect.succeed(true),
+) {
+  const files = yield* Effect.filter(yield* discover(fs, directory), (file) => supplies(file.filepath))
   const documents = yield* Effect.forEach(files, (file) =>
     fs.readFileStringSafe(file.filepath).pipe(
       Effect.map((content) => (content ? decode(file, content) : undefined)),

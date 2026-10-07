@@ -2,15 +2,18 @@ export * as ConfigInstructionPlugin from "./instruction.js"
 
 import { CompatInstructions } from "@orbit/compat/instructions"
 import { define } from "@orbit/plugin/effect/plugin"
+import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { dirname, join, relative } from "path"
 import { Effect, PubSub, Semaphore, Stream } from "effect"
+import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
 import { InstructionDiscovery } from "../../instruction-discovery.js"
 import { Instructions } from "../../instructions/index.js"
 import { Location } from "../../location.js"
+import { ProjectTrust } from "../../project-trust.js"
 import { AbsolutePath } from "../../schema.js"
 
 type Loaded =
@@ -25,10 +28,12 @@ export const Plugin = define({
     // are disabled; skip the resolves, the watcher fiber, and the transform.
     if (!discovery.project && !discovery.global) return
     yield* Effect.gen(function* () {
+      const bus = yield* Bus.Service
       const config = yield* Config.Service
       const fs = yield* FSUtil.Service
       const global = yield* Global.Service
       const location = yield* Location.Service
+      const trust = yield* ProjectTrust.Service
       const watcher = yield* Watcher.Service
       const changes = yield* PubSub.sliding<string>(1)
       const lock = Semaphore.makeUnsafe(1)
@@ -86,10 +91,23 @@ export const Plugin = define({
         globalFiles: readonly string[],
       ) {
         if (!project) return []
-        const walked = yield* Effect.forEach(
-          yield* fs.up({ targets: [...names], start, stop, type: "file" }),
-          fs.resolve,
+        // Until the project is trusted it supplies only what is inside it. A link in a repository to a key or a
+        // credentials file would otherwise put that file into the first request, and the folders above the project are
+        // not the repository's to vouch for. A file that is left out is as good as absent, so the next name in its
+        // directory takes its place.
+        const found = yield* Effect.filter(yield* fs.up({ targets: [...names], start, stop, type: "file" }), (file) =>
+          trust.reachable(file).pipe(
+            Effect.tap((reachable) =>
+              reachable
+                ? Effect.void
+                : Effect.logWarning("instruction file skipped", {
+                    path: file,
+                    reason: "outside the project, which is not trusted",
+                  }),
+            ),
+          ),
         )
+        const walked = yield* Effect.forEach(found, fs.resolve)
         const discovered = new Set(
           walked
             .filter((file, index) => walked.findIndex((other) => dirname(other) === dirname(file)) === index)
@@ -143,6 +161,12 @@ export const Plugin = define({
       // Turning compatibility on or off arrives as a config update, not as a file change.
       yield* ctx.event.subscribe().pipe(
         Stream.filter((event) => event.type === "config.updated"),
+        Stream.runForEach(() => refresh().pipe(Effect.andThen(discovery.reload()))),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      // A grant or a revoke changes what the project may supply. The config does not reload for a project that has none
+      // of its own, so this does not wait for a config update.
+      yield* bus.subscribe(Trust.Event.Updated).pipe(
         Stream.runForEach(() => refresh().pipe(Effect.andThen(discovery.reload()))),
         Effect.forkScoped({ startImmediately: true }),
       )

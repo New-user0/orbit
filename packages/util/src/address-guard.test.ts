@@ -39,12 +39,36 @@ describe("AddressGuard.classify", () => {
         "100.127.255.255",
         "198.18.0.1",
         "198.19.255.255",
+        // The IETF protocol assignments, apart from 192.0.0.192 below.
+        "192.0.0.0",
         "192.0.0.8",
+        "192.0.0.191",
+        "192.0.0.193",
+        "192.0.0.255",
         "fc00::1",
         "fd12:3456:789a::1",
         "fec0::1",
         "::ffff:10.1.2.3",
         "::ffff:c0a8:101",
+        // Next to the IPv6 metadata endpoints below, which are only these exact addresses of the unique local range.
+        "fd00:ec2::253",
+        "fd00:ec2::24",
+        "fd00:ec2:1::254",
+        "fd20:ce::253",
+        "fd00:ce::254",
+        "fd00:c1::a9fe:a9ff",
+        "fd00:c1:1::a9fe:a9fe",
+        "fd00:a9fe:a9fe::2",
+        "fd00:a9fe:a9fe::",
+        "fd00:a9fe:a9fe:1::1",
+        "fd00:a9fe:a9ff::1",
+        "fd00:a9fe::1",
+        "fd01:a9fe:a9fe::1",
+        "fd00:42::43",
+        "fd00:42::41",
+        "fd00:43::42",
+        "fd00:42:1::42",
+        "fd01:42::42",
       ],
     ],
     [
@@ -57,9 +81,36 @@ describe("AddressGuard.classify", () => {
         "169.254.169.254",
         "[::ffff:169.254.169.254]",
         "::ffff:a9fe:a9fe",
+        // Where AWS, Compute Engine and Oracle Cloud Infrastructure serve instance credentials over IPv6, and where the EKS
+        // Pod Identity Agent serves its own. All of them are inside the unique local range, which is otherwise private.
         "fd00:ec2::254",
+        "fd00:ec2::23",
+        "fd20:ce::254",
+        "fd00:c1::a9fe:a9fe",
+        // Where Akamai (Linode) and Scaleway serve their metadata over IPv6, in the same range.
+        "fd00:a9fe:a9fe::1",
+        "fd00:42::42",
+        // The same addresses in the other spellings of an IPv6 literal.
+        "[fd20:ce::254]",
+        "FD20:CE:0:0:0:0:0:254",
+        "fd00:0c1:0::a9fe:a9fe",
+        "fd00:ec2::23%eth0",
+        "[fd00:a9fe:a9fe::1]",
+        "FD00:A9FE:A9FE::1",
+        "fd00:a9fe:a9fe:0:0:0:0:1",
+        "fd00:a9fe:a9fe:0000:0000:0000:0000:0001",
+        "fd00:a9fe:a9fe::0001",
+        "fd00:a9fe:a9fe::1%eth0",
+        "[fd00:42::42]",
+        "FD00:0042:0:0:0:0:0:0042",
+        "fd00:42:0:0:0:0:0:42",
+        "fd00:0042:0000::0042",
+        "fd00:42::42%eth0",
         "100.100.100.200",
         "168.63.129.16",
+        // Where Oracle Cloud Infrastructure Classic serves instance credentials, inside a range that is otherwise private.
+        "192.0.0.192",
+        "::ffff:192.0.0.192",
       ],
     ],
   ]
@@ -69,6 +120,64 @@ describe("AddressGuard.classify", () => {
       test(`${address} is ${kind}`, () => {
         expect(AddressGuard.classify(address)).toBe(kind)
       })
+
+  // An IPv6 address that stands for an IPv4 one, in a form that a translator or a tunnel delivers to that IPv4 host, is
+  // that host's kind, so that no form is a way past the IPv4 checks. A row is a form with the addresses that carry
+  // 127.0.0.1, 10.0.0.1, 169.254.0.1 and 169.254.169.254 in it, in that order.
+  const embeddings: ReadonlyArray<readonly [string, string, string, string, string]> = [
+    // Mapped, compatible and translated (SIIT, RFC 2765) addresses carry it in their last 32 bits, and so does NAT64
+    // (RFC 6052) with its well-known prefix.
+    ["mapped", "::ffff:7f00:1", "::ffff:a00:1", "::ffff:a9fe:1", "::ffff:169.254.169.254"],
+    ["compatible", "::7f00:1", "::a00:1", "::a9fe:1", "::a9fe:a9fe"],
+    ["translated", "::ffff:0:7f00:1", "::ffff:0:a00:1", "::ffff:0:a9fe:1", "::ffff:0:169.254.169.254"],
+    ["NAT64", "64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::a9fe:1", "64:ff9b::169.254.169.254"],
+    // 6to4 carries it in the 32 bits after its 2002::/16 prefix.
+    ["6to4", "2002:7f00:1::", "2002:a00:1::", "2002:a9fe:1::", "2002:a9fe:a9fe::"],
+    // Teredo (RFC 4380) carries the client's address in the last 32 bits, with every bit of it inverted.
+    [
+      "Teredo",
+      "2001:0:4136:e378:8000:63bf:80ff:fffe",
+      "2001:0:4136:e378:8000:63bf:f5ff:fffe",
+      "2001:0:4136:e378:8000:63bf:5601:fffe",
+      "2001:0:4136:e378:8000:63bf:5601:5601",
+    ],
+    // ISATAP (RFC 5214) carries it after a fixed interface identifier, under any prefix.
+    [
+      "ISATAP",
+      "2001:db8::5efe:7f00:1",
+      "2001:db8::5efe:a00:1",
+      "2001:db8::200:5efe:a9fe:1",
+      "2001:db8::200:5efe:a9fe:a9fe",
+    ],
+  ]
+
+  for (const [form, ...addresses] of embeddings)
+    test(`a ${form} address is the kind of the IPv4 address it carries`, () => {
+      expect(addresses.map(AddressGuard.classify)).toEqual(["loopback", "private", "link-local", "metadata"])
+    })
+
+  test("takes a NAT64 address of the local-use prefix for private, and stricter when it carries such an address", () => {
+    // The operator picks the length of the prefix used inside 64:ff9b:1::/48, which decides which bits of the address
+    // hold the IPv4 address (RFC 6052, section 2.2). These carry 169.254.169.254 as a /96, /64, /56 and /48 prefix would.
+    for (const address of [
+      "64:ff9b:1::a9fe:a9fe",
+      "64:ff9b:1:0:a9:fea9:fe00:0",
+      "64:ff9b:1:a9:fe:a9fe::",
+      "64:ff9b:1:a9fe:a9:fe00::",
+    ])
+      expect(AddressGuard.classify(address)).toBe("metadata")
+    expect(AddressGuard.classify("64:ff9b:1::a9fe:1")).toBe("link-local")
+    // The prefix is not routed beyond the local network, so even a public address in it is not a public one.
+    for (const address of ["64:ff9b:1::", "64:ff9b:1::808:808", "64:ff9b:1::a00:1", "64:ff9b:1::7f00:1"])
+      expect(AddressGuard.classify(address)).toBe("private")
+  })
+
+  test("takes the strictest kind when an address is one kind and carries another", () => {
+    // Link-local by its prefix, and a metadata address by what it carries.
+    expect(AddressGuard.classify("fe80::5efe:a9fe:a9fe")).toBe("metadata")
+    // A configuration can allow loopback addresses but never link-local ones, so the strictest is the one reported.
+    expect(AddressGuard.classify("fe80::5efe:7f00:1")).toBe("link-local")
+  })
 
   test("leaves public addresses and names alone", () => {
     for (const address of [
@@ -82,9 +191,21 @@ describe("AddressGuard.classify", () => {
       "198.17.255.255",
       "198.20.0.0",
       "169.253.255.255",
+      // Next to 192.0.0.0/24, which is private.
+      "191.255.255.255",
+      "192.0.1.1",
       "2606:4700:4700::1111",
       "::ffff:8.8.8.8",
       "2001:db8::1",
+      // A public IPv4 address in each form that carries one is as public as it is itself.
+      "::ffff:0:8.8.8.8",
+      "64:ff9b::8.8.8.8",
+      "2002:808:808::",
+      "2001:0:4136:e378:8000:63bf:f7f7:f7f7",
+      "2001:db8::5efe:808:808",
+      // Next to the prefixes that carry one: only the /96 of 64:ff9b::/32, and 2001::/32 for Teredo.
+      "64:ff9b:2::1",
+      "2001:1::1",
       // A name stands for no address until it is resolved, localhost included.
       "example.com",
       "localhost",
@@ -100,6 +221,11 @@ describe("AddressGuard.check", () => {
   const unreachable = (): Promise<never> => {
     throw new Error("looked up")
   }
+  const refused = (address: string, kind: AddressGuard.Refusal["kind"]) => ({
+    allowed: false as const,
+    refusal: { address, kind },
+  })
+  const allowed = (...connect: ReadonlyArray<string>) => ({ allowed: true as const, connect })
 
   test("refuses an address of every kind, naming the address and why", async () => {
     for (const [host, address, kind] of [
@@ -108,37 +234,76 @@ describe("AddressGuard.check", () => {
       ["[::1]", "[::1]", "loopback"],
       ["10.0.0.5", "10.0.0.5", "private"],
       ["169.254.169.254", "169.254.169.254", "metadata"],
+      ["192.0.0.192", "192.0.0.192", "metadata"],
+      ["[64:ff9b::a9fe:a9fe]", "[64:ff9b::a9fe:a9fe]", "metadata"],
+      ["2002:a9fe:a9fe::", "[2002:a9fe:a9fe::]", "metadata"],
+      ["[fd00:a9fe:a9fe::1]", "[fd00:a9fe:a9fe::1]", "metadata"],
+      ["fd00:42::42", "[fd00:42::42]", "metadata"],
       ["fe80::1", "[fe80::1]", "link-local"],
     ] as const)
-      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual({ address, kind })
+      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual(refused(address, kind))
   })
 
   test("lets through the kinds it is told to allow, and no others", async () => {
     const allow = ["loopback", "private"] as const
-    expect(await AddressGuard.check("127.0.0.1", { allow })).toBeUndefined()
-    expect(await AddressGuard.check("192.168.1.2", { allow })).toBeUndefined()
-    expect(await AddressGuard.check("169.254.169.254", { allow })).toEqual({
-      address: "169.254.169.254",
-      kind: "metadata",
-    })
-    expect(await AddressGuard.check("169.254.1.1", { allow })).toEqual({ address: "169.254.1.1", kind: "link-local" })
-    expect(await AddressGuard.check("169.254.169.254", { allow: ["metadata"] })).toBeUndefined()
+    expect(await AddressGuard.check("127.0.0.1", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("192.168.1.2", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("[64:ff9b::7f00:1]", { allow })).toEqual(allowed())
+    // The neighbours of the IPv6 metadata endpoints are private networks, which this configuration reaches.
+    expect(await AddressGuard.check("[fd00:a9fe:a9fe::2]", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("[fd00:42::43]", { allow })).toEqual(allowed())
+    expect(await AddressGuard.check("169.254.169.254", { allow })).toEqual(refused("169.254.169.254", "metadata"))
+    expect(await AddressGuard.check("169.254.1.1", { allow })).toEqual(refused("169.254.1.1", "link-local"))
+    expect(await AddressGuard.check("169.254.169.254", { allow: ["metadata"] })).toEqual(allowed())
   })
 
-  test("lets a public address through", async () => {
-    expect(await AddressGuard.check("8.8.8.8", { lookup: unreachable })).toBeUndefined()
-    expect(await AddressGuard.check("[2606:4700:4700::1111]", { lookup: unreachable })).toBeUndefined()
+  test("keeps every address of a metadata endpoint closed to a configuration that allows local servers", async () => {
+    const allow = ["loopback", "private"] as const
+    for (const host of [
+      "169.254.169.254",
+      "192.0.0.192",
+      "100.100.100.200",
+      "[fd00:ec2::254]",
+      "[fd00:ec2::23]",
+      "[fd20:ce::254]",
+      "[fd00:c1::a9fe:a9fe]",
+      "[fd00:a9fe:a9fe::1]",
+      "[fd00:42::42]",
+      // The other spellings of the two that Akamai (Linode) and Scaleway serve their metadata from.
+      "FD00:A9FE:A9FE:0:0:0:0:1",
+      "fd00:a9fe:a9fe::0001",
+      "[fd00:a9fe:a9fe::1%eth0]",
+      "fd00:0042:0000::0042",
+      "fd00:42:0:0:0:0:0:42",
+      "fd00:42::42%eth0",
+      "[::ffff:a9fe:a9fe]",
+      "[::ffff:0:a9fe:a9fe]",
+      "[64:ff9b::a9fe:a9fe]",
+      "[64:ff9b:1::a9fe:a9fe]",
+      "[2002:a9fe:a9fe::]",
+      "[2001:0:4136:e378:8000:63bf:5601:5601]",
+    ])
+      expect(await AddressGuard.check(host, { allow, lookup: unreachable })).toMatchObject({
+        allowed: false,
+        refusal: { kind: "metadata" },
+      })
+  })
+
+  test("lets a public address through, to be connected to as it is", async () => {
+    expect(await AddressGuard.check("8.8.8.8", { lookup: unreachable })).toEqual(allowed())
+    expect(await AddressGuard.check("[2606:4700:4700::1111]", { lookup: unreachable })).toEqual(allowed())
+    expect(await AddressGuard.check("[64:ff9b::808:808]", { lookup: unreachable })).toEqual(allowed())
   })
 
   test("takes localhost and the names under it for loopback without asking a resolver", async () => {
     for (const host of ["localhost", "LOCALHOST.", "app.localhost", "a.b.localhost"])
-      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual({
-        address: "127.0.0.1",
-        kind: "loopback",
-      })
-    expect(await AddressGuard.check("localhost", { allow: ["loopback"], lookup: unreachable })).toBeUndefined()
+      expect(await AddressGuard.check(host, { lookup: unreachable })).toEqual(refused("127.0.0.1", "loopback"))
+    // A server on localhost can listen on either family, so a request that is allowed to go there may try both.
+    expect(await AddressGuard.check("localhost", { allow: ["loopback"], lookup: unreachable })).toEqual(
+      allowed("127.0.0.1", "[::1]"),
+    )
     // Only a label of its own: a name that ends in the same letters is an ordinary name.
-    expect(await AddressGuard.check("notlocalhost", { lookup: async () => ["8.8.8.8"] })).toBeUndefined()
+    expect(await AddressGuard.check("notlocalhost", { lookup: async () => ["8.8.8.8"] })).toEqual(allowed("8.8.8.8"))
   })
 
   test("resolves a name and refuses it when any address it stands for is not public", async () => {
@@ -148,21 +313,71 @@ describe("AddressGuard.check", () => {
       return name.startsWith("rebound") ? ["93.184.216.34", "10.1.2.3"] : ["93.184.216.34", "2606:2800:220:1::1"]
     }
 
-    expect(await AddressGuard.check("rebound.example.com", { lookup })).toEqual({
-      address: "10.1.2.3",
-      kind: "private",
-    })
-    expect(await AddressGuard.check("rebound.example.com", { allow: ["private"], lookup })).toBeUndefined()
-    expect(await AddressGuard.check("Example.COM.", { lookup })).toBeUndefined()
-    // The name that is resolved is the one a URL would connect to, in lowercase and without its trailing dot.
+    expect(await AddressGuard.check("rebound.example.com", { lookup })).toEqual(refused("10.1.2.3", "private"))
+    expect(await AddressGuard.check("rebound.example.com", { allow: ["private"], lookup })).toEqual(
+      allowed("93.184.216.34", "10.1.2.3"),
+    )
+    expect(await AddressGuard.check("Example.COM.", { lookup })).toEqual(
+      allowed("93.184.216.34", "[2606:2800:220:1::1]"),
+    )
+    // The name that is resolved is the one a URL would connect to, in lowercase and without its trailing dot, and each
+    // check resolves it once: what it allowed is what a request must connect to, so nothing asks again.
     expect(asked).toEqual(["rebound.example.com", "rebound.example.com", "example.com"])
   })
 
-  test("does not refuse a name that does not resolve", async () => {
-    const lookup = () => Promise.reject(new Error("no such host"))
-    expect(await AddressGuard.check("gone.example.com", { lookup })).toBeUndefined()
+  test("refuses a name that a resolver answers with an IPv6 address for a metadata endpoint", async () => {
+    // What a DNS64 resolver makes of a name whose IPv4 address is the metadata endpoint's.
+    const lookup = async () => ["2606:2800:220:1::1", "64:ff9b::a9fe:a9fe"]
+
+    expect(await AddressGuard.check("synthesized.example.com", { lookup })).toEqual(
+      refused("[64:ff9b::a9fe:a9fe]", "metadata"),
+    )
+  })
+
+  test("answers with the addresses to connect to in the form a URL has them, in order and without repeats", async () => {
+    const lookup = async () => [
+      "2606:2800:220:1::1",
+      "93.184.216.34",
+      "2606:2800:0220:0001:0000:0000:0000:0001",
+      "0x5d.0xb8.0xd8.0x22",
+      // A zone says which interface to use and is no part of the address.
+      "2606:4700:4700::1111%eth0",
+    ]
+
+    expect(await AddressGuard.check("many.example.com", { lookup })).toEqual(
+      allowed("[2606:2800:220:1::1]", "93.184.216.34", "[2606:4700:4700::1111]"),
+    )
+  })
+
+  test("never hands out a name to connect to: what a resolver answers that is not an address is dropped", async () => {
+    expect(
+      await AddressGuard.check("cname.example.com", { lookup: async () => ["internal.example.com", "93.184.216.34"] }),
+    ).toEqual(allowed("93.184.216.34"))
+    expect(
+      await AddressGuard.check("cname.example.com", { lookup: async () => ["internal.example.com", "a b", ""] }),
+    ).toEqual(refused("cname.example.com", "unresolved"))
+  })
+
+  // A name that gives no answer is where DNS rebinding starts: it fails the first lookup and answers the second with the
+  // address of the metadata service. A request that went ahead anyway would resolve the name itself when it connected.
+  test("refuses a name that does not resolve, because there is no address to check", async () => {
+    expect(
+      await AddressGuard.check("gone.example.com", { lookup: () => Promise.reject(new Error("no such host")) }),
+    ).toEqual(refused("gone.example.com", "unresolved"))
+    expect(await AddressGuard.check("empty.example.com", { lookup: async () => [] })).toEqual(
+      refused("empty.example.com", "unresolved"),
+    )
+    // Allowing every kind of address does not make a name with none a place to go.
+    expect(
+      await AddressGuard.check("gone.example.com", {
+        allow: ["loopback", "private", "link-local", "metadata"],
+        lookup: async () => [],
+      }),
+    ).toEqual(refused("gone.example.com", "unresolved"))
     // The system resolver answers for a name that cannot exist, which takes as long as the network needs to say so.
-    expect(await AddressGuard.check("orbit-address-guard.invalid")).toBeUndefined()
+    expect(await AddressGuard.check("orbit-address-guard.invalid")).toEqual(
+      refused("orbit-address-guard.invalid", "unresolved"),
+    )
   }, 30_000)
 
   test("rejects what is not a host rather than taking it for an address that may be reached", async () => {

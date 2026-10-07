@@ -17,6 +17,7 @@ import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdir, withTempDir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
@@ -83,6 +84,8 @@ const withTool = <A, E, R>(
   directory: string,
   fixture: ReturnType<typeof makeEditFixture>,
   body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
+  // The core tests trust every folder, unless the project is untrusted.
+  untrusted = false,
 ) => {
   const activeLocation = Layer.succeed(
     Location.Service,
@@ -110,6 +113,7 @@ const withTool = <A, E, R>(
         Location.node.replace(activeLocation),
         Formatter.node.replace(fixture.formatter),
         Permission.node.replace(fixture.permission),
+        ...(untrusted ? untrustedProjectNodes : []),
       ]),
     ),
   )
@@ -296,6 +300,84 @@ describe("EditTool", () => {
           ),
         )
       },
+      ([active, outside]) =>
+        Effect.promise(() =>
+          Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+        ),
+    ),
+  )
+
+  // The repository ships its links, and a clone recreates them. In a project that is not trusted a link that leads out
+  // of it is outside like any other path, so the edit asks about the folder it would reach and changes nothing when that
+  // is refused. A junction stands for the link, since it needs no privilege on Windows.
+  for (const item of [
+    { project: "untrusted", untrusted: true, actions: ["external_directory", "edit"] },
+    { project: "trusted", untrusted: false, actions: ["edit"] },
+  ])
+    it.live(
+      `${item.untrusted ? "asks" : "does not ask"} about the folder a link leads to in a ${item.project} project`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+          ([active, outside]) =>
+            Effect.gen(function* () {
+              const target = path.join(outside.path, "notes.md")
+              yield* Effect.promise(async () => {
+                await fs.writeFile(target, "before")
+                await fs.symlink(outside.path, path.join(active.path, "docs"), "junction")
+              })
+              const edit = makeEditFixture()
+              const result = yield* withTool(
+                active.path,
+                edit,
+                (registry) =>
+                  executeTool(registry, call({ path: "docs/notes.md", oldString: "before", newString: "after" })),
+                item.untrusted,
+              )
+              expect(result.status).toBe("completed")
+              expect(edit.assertions.map((input) => input.action)).toEqual(item.actions)
+              if (item.untrusted) {
+                const real = yield* Effect.promise(() => fs.realpath(outside.path))
+                expect(edit.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
+              }
+              expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after")
+            }),
+          ([active, outside]) =>
+            Effect.promise(() =>
+              Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+            ),
+        ),
+    )
+
+  it.live("changes nothing through a link out of an untrusted project when the approval is denied", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      ([active, outside]) =>
+        Effect.gen(function* () {
+          const target = path.join(outside.path, "notes.md")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(target, "before")
+            await fs.symlink(outside.path, path.join(active.path, "docs"), "junction")
+          })
+          const edit = makeEditFixture()
+          edit.denyAction = "external_directory"
+          expect(
+            yield* withTool(
+              active.path,
+              edit,
+              (registry) =>
+                executeTool(registry, call({ path: "docs/notes.md", oldString: "before", newString: "after" })),
+              true,
+            ),
+          ).toEqual({
+            status: "error",
+            error: { type: "permission.rejected", message: "Permission denied: external_directory" },
+          })
+          expect(edit.assertions.map((input) => input.action)).toEqual(["external_directory"])
+          expect(edit.reads).toBe(0)
+          expect(edit.writes).toEqual([])
+          expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+        }),
       ([active, outside]) =>
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),

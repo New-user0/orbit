@@ -33,7 +33,7 @@ export interface Editor {
   readonly update: (id: string, update: (tool: Types.Mutable<Tool.Info>) => void) => void
   readonly remove: (id: string) => void
   /** Settings for `fetch` in Code Mode. */
-  readonly web: (settings: { readonly allowLocal?: boolean }) => void
+  readonly web: (settings: { readonly allowLocal?: boolean; readonly lookup?: AddressGuard.Options["lookup"] }) => void
 }
 
 type Data = {
@@ -43,6 +43,8 @@ type Data = {
   web: {
     /** Whether `fetch` may reach loopback and private-network addresses, such as a local dev server. */
     allowLocal: boolean
+    /** Resolves the name of a host to its addresses, in place of the system resolver. */
+    lookup?: AddressGuard.Options["lookup"]
   }
 }
 
@@ -165,13 +167,22 @@ const layer = Layer.effect(
     })
 
     // Where a request may go whatever the permission rules say: not to this machine or the networks around it, unless the
-    // configuration allows local servers, and never to a link-local or cloud metadata address.
-    const reachable = (host: string) =>
+    // configuration allows local servers, and never to a link-local or cloud metadata address. `fetch` asks once a
+    // request is authorized and not before, because resolving a name is a request to the network and nobody approved the
+    // host until then. The answer is the addresses that were checked, which the request connects to instead of the
+    // host: the host would be resolved again when it connects, and a name can answer differently each time. A name that
+    // resolves to nothing has no place to check, so it is refused too.
+    const resolve: CodeModeTool.Resolve = (host) =>
       Effect.promise(() =>
-        AddressGuard.check(host, { allow: state.get().web.allowLocal ? ["loopback", "private"] : [] }),
+        AddressGuard.check(host, {
+          allow: state.get().web.allowLocal ? ["loopback", "private"] : [],
+          lookup: state.get().web.lookup,
+        }),
       ).pipe(
-        Effect.flatMap((refusal) =>
-          refusal === undefined ? Effect.void : Effect.fail(new Tool.Error({ message: refusedMessage(host, refusal) })),
+        Effect.flatMap((checked) =>
+          checked.allowed
+            ? Effect.succeed(checked.connect)
+            : Effect.fail(new Tool.Error({ message: refusedMessage(host, checked.refusal) })),
         ),
       )
 
@@ -204,8 +215,6 @@ const layer = Layer.effect(
                     message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
                   }),
               ),
-              // Only after the ask: resolving the host is a request to the network, and nobody approved this host before.
-              Effect.andThen(reachable(new URL(web.metadata.url).hostname)),
             ),
         ),
       )
@@ -261,6 +270,7 @@ const layer = Layer.effect(
         },
         web: (settings) => {
           if (settings.allowLocal !== undefined) editor.web.allowLocal = settings.allowLocal
+          if (settings.lookup !== undefined) editor.web.lookup = settings.lookup
         },
       }),
       notify: (value) => {
@@ -304,6 +314,7 @@ const layer = Layer.effect(
                     Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
                   ),
                 authorize,
+                resolve,
               )
             : undefined
           const names = Array.from(codeModeTools.keys()).join("\0")
@@ -366,6 +377,7 @@ const addressKinds = {
 
 // The program sees this as the error of its fetch, so it names the way out for the kinds that have one.
 function refusedMessage(host: string, refusal: AddressGuard.Refusal) {
+  if (refusal.kind === "unresolved") return `fetch cannot reach ${host}: it does not resolve to an address.`
   const named = refusal.address === host ? host : `${host} (${refusal.address})`
   const hint =
     refusal.kind === "loopback" || refusal.kind === "private"

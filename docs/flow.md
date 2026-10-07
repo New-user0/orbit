@@ -83,9 +83,50 @@ orb flow trace <run> [--format otlp] [--otlp <collector url>]
 orb eval <suite> --models a,b
 ```
 
-`orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and whose
-own config holds something back, such as hooks or plugins. Run `orb trust` in the folder to trust it for good, or pass
-`--trust` to trust it for that run alone; see [upgrading](upgrading.md).
+`orb flow run`, `orb flow resume` and `orb eval` stop, before they do any work, in a folder that is not trusted and
+whose own config holds something back, such as hooks or plugins. They also stop, even where the folder holds no config
+at all, when the workflow or suite brings code, commands, approvals or agents that a run would carry out:
+
+- **A TypeScript or JavaScript workflow or suite**, because loading one runs the code in it. `orb flow replay` stops
+  for a workflow module as well.
+- **A YAML workflow, or a YAML or JSON suite, that defines shell commands:** a `check` node, a `verify` node's
+  `checks`, or a suite task's `checks`. A run executes them through the platform shell with no permission step in
+  front of them, and a fresh clone can bring such a file. The refusal lists the commands it found. A file that defines
+  none, such as a `verify` node whose `checks` are empty, runs as before. `orb flow replay` is not stopped for commands,
+  because a replay answers every check from the recording and runs none.
+- **A YAML workflow that sets `permissions: auto`** on an agent or verify node, or on a member of a team. A run then
+  approves, once, every action the agents of that node ask permission for, where it rejects them otherwise, so the
+  file would answer your own `ask` rules for you; see [Permissions](#permissions). The refusal lists each such node,
+  a team member as `team/member`, with the value as written. A value that is a template, such as `{{plan.text}}`,
+  counts as well, because it is filled in when the node starts and an agent's reply can say `auto`. `--auto` is your
+  own flag, so it is not held up, and neither is `orb flow replay`, which calls no model. A suite cannot set
+  `permissions`.
+- **A YAML workflow, or a YAML or JSON suite, that names an agent:** the `agent` of an agent or verify node, of a
+  verify node's `judge` or of a member of a team, or the `agent` of a suite task's `judge`. It runs that node as one of
+  your agents, and an agent's own rules are added after your global rules, so the file could pick an agent whose rules
+  allow what yours ask about; see [Permissions](#permissions). The refusal lists each one with the agent as written, a
+  `judge` as `node/judge` and a team member as `team/member`. A value that is a template, such as `{{plan.text}}`,
+  counts as well, because it is filled in when the node starts. A file that names none runs as before, and `orb flow replay`
+  is not stopped, because a replay answers every node from the recording and opens no session.
+
+The folder that holds the file is asked as well, after the folder you run in, because the file is all that a run takes
+from it. A workflow or suite file that lies in another project than the one you run in, as in
+`orb flow run ../examples/review.ts`, or that the run store names for `orb flow resume`, needs that project trusted too
+before its module is imported or its commands, approvals or agents are carried out, whatever config the project holds.
+The folders of one git repository share a decision, so a workflow in a folder of the repository you run in needs
+nothing more. The refusal names the folder and gives `orb trust <folder>` for it, and `--trust` trusts both folders for
+the run. A home directory is never trusted for good, so a file kept in one needs `--trust` on every run.
+
+Run `orb trust` in the folder to trust it for good, or pass `--trust` to trust it for that run alone; see
+[upgrading](upgrading.md).
+
+A server older than workspace trust, such as a background service that was started before an upgrade and not restarted,
+cannot say whether the folder is trusted. Where the check is only for held-back config, as it is for `orb run` and
+`orb loop`, the command goes ahead with a warning on stderr, because such a server applies a folder's config without
+asking. `orb flow run`, `orb flow resume`, `orb flow replay` and `orb eval` stop instead when they would import a
+module, run shell commands, approve actions or run a node as an agent that a file names, because this process would do
+that itself, and they say so. Restart the server (`orb service restart` for the background service), or pass
+`--standalone`, or `--trust`, which also trusts the folder for the run. Both start a current private server.
 
 ## Writing `orb flow` workflows
 
@@ -152,6 +193,15 @@ output: merge
 - The output is the result of the `output` node, or every node's result by id.
 - The file is checked before anything runs: unique ids, known types, required options, `needs` that exist, no
   cycles, and templates, `in` and `branches` naming only upstream nodes.
+- A `check` node, and a `verify` node that has `checks`, run shell commands. In a folder that is not trusted, a
+  workflow that has one is not run until the folder is trusted or `--trust` is passed, and the refusal lists the
+  commands; see the note under the `orb flow` commands above.
+- `permissions: auto` on an agent node, a verify node or a member of a team approves what that node's agents ask
+  permission for. A workflow that sets it is not run in a folder that is not trusted either, and the refusal lists the
+  nodes.
+- `agent` on an agent node, a verify node, the `judge` of a verify node or a member of a team runs it as one of your
+  agents, with that agent's rules. A workflow that names one is not run in a folder that is not trusted either, and the
+  refusal lists the nodes; see [Permissions](#permissions).
 
 Eval suites can be YAML or JSON as well.
 
@@ -190,6 +240,36 @@ With `onError: "fail"` (the default) a failed node fails the run, after its para
 A run is unattended. When an agent asks to do something that needs approval, the run rejects it and tells the agent
 to continue without it (`permissions: "reject"`, the default). Use `permissions: "auto"` on a node, or `orb flow run
 --auto`, to approve such requests once. Rules you configured as `deny` stay denied either way.
+
+A node's own `permissions` wins over `--auto`, and a node that is set to `auto` answers every request that your own
+`ask` rules lead to with a yes. So a workflow file that you did not write could approve what you meant to be asked
+about, and a folder that is not trusted is stopped from running one that sets `permissions: "auto"` on an agent or
+verify node, or on a member of a team, until the folder is trusted or `--trust` is passed. The refusal lists each such
+node, a team member as `team/member`. A `permissions` that is a template, such as `{{plan.text}}`, is listed as well,
+because it is filled in when the node starts and an agent's reply can say `auto`. `--auto` is your own flag and nothing
+the folder brings, so it is not held up. See the note under the `orb flow` commands above.
+
+The commands of `check` nodes and of `checks` are not agent actions, so no permission rule is asked about them. A folder
+that is not trusted is stopped from running them instead; see the same note.
+
+Which agent runs a node decides which rules apply to it, and a file can choose. The `agent` of a node, of a team member
+and of a `judge`, in a workflow or in a suite task, names one of your agents. An agent's own rules are added after your
+global rules, and the last rule that matches wins. So if you gave an agent rules that allow what your global rules ask
+about, a workflow or suite that names it gets those actions done without asking, and the run's rejection of what is
+asked never comes into play. With Orbit's default rules every agent allows the same, so nothing changes unless you gave
+one agent wider rules than the rest.
+
+That is a choice that the file makes for you, as `permissions: "auto"` is, so a folder that is not trusted is stopped
+from running a YAML workflow or a YAML or JSON suite that names an agent, until the folder is trusted or `--trust` is
+passed. The refusal lists each node with the agent it names as written, a `judge` as `node/judge` and a team member as
+`team/member`. An `agent` that is a template, such as `{{plan.text}}`, is listed as well, because it is filled in when
+the node starts and an agent's reply can name one. A TypeScript or JavaScript workflow is stopped whatever it names,
+because loading it runs its code. `orb flow replay` is not stopped, because it opens no session. A suite task's own
+`agent` chooses nothing, because an eval runs each task as a verify node and passes on only the task's `judge`. See the
+note under the `orb flow` commands above.
+
+In a folder that you trust, the file still chooses. If some of your agents have wider rules than the rest, look at the
+`agent` and `judge` entries of a workflow or suite that you did not write before you trust the folder that holds it.
 
 ## Resume
 
@@ -315,7 +395,13 @@ orb eval .orbit/evals/api.ts --models ollama/a,ollama/b --format json
 
 - Each task is a verify node in its own worktree from the current commit. Models never see each other's work, and
   the checkout is not changed.
-- `maxIterations` defaults to 1, which scores first-try success. Tasks can set `judge` like a verify node.
+- `maxIterations` defaults to 1, which scores first-try success. Tasks can set `judge` like a verify node. A `judge`'s
+  `agent` runs as one of your agents with its rules, so in a folder that is not trusted `orb eval` stops for a JSON or
+  YAML suite whose tasks name one, and lists them as `task/judge`; see [Permissions](#permissions).
+- The `checks` are shell commands, so in a folder that is not trusted `orb eval` stops for a JSON or YAML suite whose
+  tasks have any, and lists them. It stops for a TypeScript or JavaScript suite whatever it holds, because importing it
+  runs its code. Run `orb trust` once, or pass `--trust` for one run. Nearly every suite has `checks`, so in practice a
+  suite needs the trust.
 - `--concurrency n` runs n tasks at once (default 1).
 - The report has passed tasks, pass rate, tokens, cost and time per model, and a task-by-model grid.
 - An eval is a run like any other: `orb flow show` and `orb flow cost` work on it, and `orb eval <suite> --resume
@@ -362,8 +448,10 @@ How it runs:
 `orb flow watch [<run>]` redraws a run's nodes and team conversation every second until it stops; without a run it
 watches the newest.
 
-`orb flow replay <run>` re-runs a finished run as a new run from its recorded results: no model calls, worktrees,
-merges or server connection. Every node returns what the recording holds for its id. Uses:
+`orb flow replay <run>` re-runs a finished run as a new run from its recorded results: no model calls, worktrees or
+merges. Every node returns what the recording holds for its id. It connects to a server only to ask whether the folder
+is trusted, before it loads a workflow module, and takes `--standalone`, `--server` and `--trust` as `orb flow run` does;
+a YAML workflow needs no server. Uses:
 
 - **Debugging a workflow's logic:** pass an edited copy with `--file`. Nodes whose inputs changed are reported
   (`~ node: its inputs differ from the recording`) and still return the recorded result. A node the recording lacks
@@ -389,3 +477,25 @@ sends traces nowhere unless you give that flag.
 
 Worktrees and branches stay after a run for inspection. `orb flow clean` removes them for every run that is not
 running or waiting; `orb flow clean <run>` for one run. The run history in `.orbit/runs.db` stays.
+
+`.orbit/runs.db` is a file in the repository, so a clone brings one of its own, and `orb flow` does not trust what it
+says. It lists and acts on a run only when its ID has the shape that Orbit makes (`run_`, a timestamp of 14 digits, `_`
+and 6 hexadecimal digits), so a row that names a path such as `../..` is not a run and `orb flow clean` never removes
+anything outside `.orbit/worktrees`. `orb flow ls`, `show`, `watch`, `cost` and `trace` write control characters in the
+names and messages it holds out as `\x1b`, so an escape sequence in a workflow's name cannot act on your terminal. The
+`/runs` dialog of the terminal UI does the same, as the terminal UI writes text to the terminal as it is.
+
+A workflow or a suite is a file in the repository as well, and a clone brings its own. `orb flow run`, `resume` and
+`replay` and `orb eval` write the control characters in what such a file says out in the same way: in the progress they
+print on standard error as the run goes (which is also where a line that a workflow passes to `ctx.log` appears), in the
+gates a run waits at, in the failure of an eval or a replay, and in the task table of an eval. So does the failure of
+any `orb` command, which keeps the line breaks of its message and writes out the rest. That covers the problems of an
+invalid workflow, which lists its node IDs and types, and the file that the run store names for a run you resume or
+replay. The title of each session that a run opens, `<workflow name> · <node>`, stays in your session database, and
+the message of the commit that records a node's work, `orbit <run>: <node>`, stays in your repository, where `git log`
+prints it as it is, so both are written out as well, and `orb session list` writes out whatever a title holds.
+
+The JSON that these commands print for programs (`--format json` and `--format otlp`, and the result of `orb flow run`,
+`resume` and `replay`) keeps every character. `JSON.stringify` escapes only U+0000 to U+001F, so DEL, the C1 controls
+(U+009B and U+009D act like `ESC [` and `ESC ]` on a terminal that takes 8-bit controls) and format characters such as
+a right-to-left override are written as `\u009b` or `\u202e`. `JSON.parse` turns them back into the same text.

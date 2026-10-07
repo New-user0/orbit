@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { Effect } from "effect"
 import { Provider } from "@orbit/core/provider"
+import { tmpdir } from "./fixture/tmpdir"
 
 describe("Provider", () => {
   test("loads bundled native provider entrypoints", async () => {
@@ -26,6 +29,21 @@ describe("Provider", () => {
       const loaded = await Effect.runPromise(Provider.loadPackage(specifier))
       expect(loaded.model).toBeFunction()
     }
+  })
+
+  // provider-compiled.test.ts covers the same specifiers inside a compiled binary, where a name is never looked up.
+  test("loads a package from a file: URL and reports a name that is neither built in nor installed", async () => {
+    await using directory = await tmpdir()
+    const file = path.join(directory.path, "provider.mjs")
+    await Bun.write(file, "export const model = () => ({})\n")
+
+    const loaded = await Effect.runPromise(Provider.loadPackage(pathToFileURL(file).href))
+    expect(loaded.model).toBeFunction()
+
+    const missing = await Effect.runPromise(
+      Provider.loadPackage("orbit-provider-that-is-not-installed").pipe(Effect.flip),
+    )
+    expect(String(missing.cause)).toBe("Error: Provider package orbit-provider-that-is-not-installed is not installed")
   })
 
   test("passes flat settings to native packages without Core settings", () => {

@@ -2,11 +2,13 @@ export * as OutputStylePlugin from "./output-style.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
+import type { Directory } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect } from "effect"
 import path from "path"
 import { Config } from "../config.js"
 import { ConfigMarkdown } from "../config/markdown.js"
+import { ProjectTrust } from "../project-trust.js"
 import type { PluginInternal } from "./internal.js"
 
 /**
@@ -15,6 +17,9 @@ import type { PluginInternal } from "./internal.js"
  * another agent product's root; the file's body is appended to the system prompt. Frontmatter
  * `keep-coding-instructions: false` also drops the coding sections of Orbit's default prompt, for styles meant for
  * work other than writing code.
+ *
+ * The name is one file name, so a repository's config cannot make it climb out of the directory, and a file in a
+ * directory whose folder is not trusted is read only when its real path is inside that folder (`ProjectTrust.supplies`).
  */
 
 interface Style {
@@ -55,19 +60,28 @@ export const Plugin = define({
   effect: Effect.fn("OutputStylePlugin")(function* (ctx) {
     const config = yield* Config.Service
     const fs = yield* FSUtil.Service
+    const trust = yield* ProjectTrust.Service
 
     const load = Effect.fn("OutputStylePlugin.load")(function* (name: string) {
       const builtIn = BUILT_IN[name.toLowerCase()]
       if (builtIn) return builtIn
+      // A style is a file in an output-styles directory, so its name is one file name. The setting comes from any config,
+      // a repository's included, and must not name a file outside the directory it is looked up in.
+      if (/[/\\]/.test(name) || name.includes("..")) {
+        yield* Effect.logWarning("output style not found", { name, reason: "the name is not one file name" })
+        return
+      }
       const entries = yield* config.entries()
       const roots = (yield* config.compat()).roots.filter((root) => root.kind === "vendor")
       // Highest-priority config directories first, then the compatibility roots.
-      const directories = [
-        ...entries.flatMap((entry) => (entry.type === "directory" ? [entry.path] : [])).toReversed(),
-        ...roots.map((root) => root.path),
+      const sources = [
+        ...entries.filter((entry): entry is Directory => entry.type === "directory").toReversed(),
+        ...roots,
       ]
-      for (const directory of directories) {
-        const content = yield* fs.readFileStringSafe(path.join(directory, "output-styles", `${name}.md`))
+      for (const source of sources) {
+        const file = path.join(source.path, "output-styles", `${name}.md`)
+        if (!(yield* trust.supplies(source, file))) continue
+        const content = yield* fs.readFileStringSafe(file)
         if (content === undefined) continue
         const markdown = ConfigMarkdown.parseOption(content)
         if (!markdown) continue

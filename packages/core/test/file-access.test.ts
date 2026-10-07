@@ -1,16 +1,18 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { FileAccess } from "@orbit/core/file-access"
 import { Location } from "@orbit/core/location"
 import { Permission } from "@orbit/core/permission"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
 import { AbsolutePath } from "@orbit/core/schema"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { tempLocationLayer } from "./fixture/location"
+import { location, tempLocationLayer } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -174,5 +176,117 @@ describe("FileAccess.authorizeRead", () => {
       expect(requests[1].resources).toEqual([slash(path.join(git, "nested", "*"))])
       expect(Object.hasOwn(requests[1], "metadata")).toBe(false)
     }).pipe(provide(requests))
+  })
+})
+
+// The repository ships its links, and a clone recreates them. Until the project is trusted a link in it that leads out
+// does not make its target the project's own: reading or writing through one asks first, as for any file outside, where
+// the default rules ask about the folder. A junction stands for the link, since it needs no privilege on Windows.
+describe("FileAccess in a project that is not trusted", () => {
+  const provideProject = (directory: string, requests: Permission.AssertInput[], trusted: boolean) =>
+    Effect.provide(
+      AppNodeBuilder.build(LayerNode.group([FileAccess.node, Location.node, ProjectTrust.node]), [
+        Location.node.replace(
+          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+        ),
+        Permission.node.replace(permissionLayer({ assert: (input) => Effect.sync(() => void requests.push(input)) })),
+        ...(trusted ? [] : untrustedProjectNodes),
+      ]),
+    )
+
+  // A project with a file of its own, and a folder inside it that is a link to a folder outside.
+  const layout = Effect.gen(function* () {
+    const tmp = (yield* tmpdirScoped()).path
+    const project = path.join(tmp, "project")
+    const outside = path.join(tmp, "outside")
+    yield* Effect.promise(async () => {
+      await fs.mkdir(project)
+      await fs.mkdir(path.join(outside, "sub"), { recursive: true })
+      await fs.writeFile(path.join(project, "own.md"), "own")
+      await fs.writeFile(path.join(outside, "notes.md"), "outside")
+      await fs.symlink(outside, path.join(project, "docs"), "junction")
+    })
+    return { project, outside }
+  })
+
+  it.live(
+    "counts a target that a link leads out of the project as outside, with the real folder as the resource",
+    () => {
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const { project, outside } = yield* layout
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          const trust = yield* ProjectTrust.Service
+          const outsideAt = (target: FileAccess.Target, file: string, directory: string, resource: string) => {
+            expect(target.absolute).toBe(AbsolutePath.make(path.join(project, ...file.split("/"))))
+            expect(target.resource).toBe(slash(path.join(outside, resource)))
+            expect(target.externalDirectory).toMatchObject({
+              action: "external_directory",
+              directory: path.join(outside, directory),
+              resource: slash(path.join(outside, directory, "*")),
+            })
+          }
+          const paths = () =>
+            Effect.all([
+              access.resolve({ path: "own.md" }),
+              access.resolve({ path: "docs/notes.md" }),
+              // A file that is not there yet, which a write would create beside the others, and one in a folder that is not.
+              access.resolve({ path: "docs/new.txt", kind: "file" }),
+              access.resolve({ path: "docs/deeper/new.txt", kind: "file" }),
+              access.resolve({ path: "docs/sub", kind: "directory" }),
+              access.resolve({ path: "docs" }),
+            ])
+
+          const untrusted = yield* paths()
+          expect(untrusted[0]).toEqual({
+            absolute: AbsolutePath.make(path.join(project, "own.md")),
+            resource: "own.md",
+          })
+          outsideAt(untrusted[1], "docs/notes.md", ".", "notes.md")
+          outsideAt(untrusted[2], "docs/new.txt", ".", "new.txt")
+          outsideAt(untrusted[3], "docs/deeper/new.txt", "deeper", path.join("deeper", "new.txt"))
+          outsideAt(untrusted[4], "docs/sub", "sub", "sub")
+          outsideAt(untrusted[5], "docs", ".", ".")
+
+          // Trusting the project follows links as before, and ending the trust holds them again.
+          yield* trust.grant({ persist: false, via: "test" })
+          const trusted = yield* paths()
+          for (const target of trusted) expect(target.externalDirectory).toBeUndefined()
+          expect(trusted[1].resource).toBe("docs/notes.md")
+          yield* trust.revoke()
+          expect((yield* paths())[1].externalDirectory).toBeDefined()
+        }).pipe(provideProject(project, requests, false))
+      })
+    },
+  )
+
+  it.live("asks about the outside folder before a read through a link, and not once the project is trusted", () => {
+    const requests: Permission.AssertInput[] = []
+    return Effect.gen(function* () {
+      const { project, outside } = yield* layout
+      yield* Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        yield* access.authorizeRead("docs/notes.md", invocation)
+        expect(requests).toMatchObject([
+          { action: "external_directory", resources: [slash(path.join(outside, "*"))] },
+          { action: "read", resources: [slash(path.join(outside, "notes.md"))] },
+        ])
+
+        yield* access.authorizeExternal([yield* access.resolve({ path: "docs/new.txt", kind: "file" })], invocation)
+        expect(requests.at(-1)).toMatchObject({
+          action: "external_directory",
+          resources: [slash(path.join(outside, "*"))],
+        })
+      }).pipe(provideProject(project, requests, false))
+
+      requests.length = 0
+      yield* Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        yield* access.authorizeRead("docs/notes.md", invocation)
+        yield* access.authorizeExternal([yield* access.resolve({ path: "docs/new.txt", kind: "file" })], invocation)
+        expect(requests).toMatchObject([{ action: "read", resources: ["docs/notes.md"] }])
+      }).pipe(provideProject(project, requests, true))
+    })
   })
 })

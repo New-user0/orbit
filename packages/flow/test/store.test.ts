@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -9,30 +10,34 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-store-"))
 
 afterAll(() => fs.rm(root, { recursive: true, force: true }))
 
+// IDs in the shape that the runner makes.
+const first = "run_20260101000001_a1b2c3"
+const second = "run_20260101000002_d4e5f6"
+
 test("node state is folded from the event log", () => {
   const store = Store.at(root)
-  store.create({ id: "run_1", workflow: "w", file: "w.ts", directory: root, input: { task: "t" } }, { base: "abc" })
-  store.append("run_1", "a", "node.started", { key: "k1" })
-  store.append("run_1", "a", "attempt.started", { attempt: 1 })
-  store.append("run_1", "a", "attempt.started", { attempt: 2 })
-  store.append("run_1", "a", "node.succeeded", { key: "k1", result: { text: "done" } })
-  store.append("run_1", "b", "node.started", { key: "k2" })
-  store.append("run_1", "b", "attempt.started", { attempt: 1 })
-  store.append("run_1", "b", "node.failed", { error: { class: "invalid", message: "no" } })
-  store.status("run_1", "failed", { error: "b failed" })
+  store.create({ id: first, workflow: "w", file: "w.ts", directory: root, input: { task: "t" } }, { base: "abc" })
+  store.append(first, "a", "node.started", { key: "k1" })
+  store.append(first, "a", "attempt.started", { attempt: 1 })
+  store.append(first, "a", "attempt.started", { attempt: 2 })
+  store.append(first, "a", "node.succeeded", { key: "k1", result: { text: "done" } })
+  store.append(first, "b", "node.started", { key: "k2" })
+  store.append(first, "b", "attempt.started", { attempt: 1 })
+  store.append(first, "b", "node.failed", { error: { class: "invalid", message: "no" } })
+  store.status(first, "failed", { error: "b failed" })
 
-  const nodes = store.nodes("run_1")
+  const nodes = store.nodes(first)
   expect(nodes.get("a")).toMatchObject({ status: "succeeded", key: "k1", attempts: 2, result: { text: "done" } })
   expect(nodes.get("b")).toMatchObject({ status: "failed", key: "k2", attempts: 1, error: { class: "invalid" } })
-  expect(store.run("run_1")).toMatchObject({ status: "failed", input: { task: "t" } })
-  expect(store.events("run_1")[0]).toMatchObject({ type: "run.started", data: { base: "abc", workflow: "w" } })
-  expect(store.runs().map((run) => run.id)).toEqual(["run_1"])
+  expect(store.run(first)).toMatchObject({ status: "failed", input: { task: "t" } })
+  expect(store.events(first)[0]).toMatchObject({ type: "run.started", data: { base: "abc", workflow: "w" } })
+  expect(store.runs().map((run) => run.id)).toEqual([first])
   store.close()
 })
 
 test("a recorded run survives reopening the store", () => {
   const store = Store.at(root)
-  expect(store.nodes("run_1").get("a")?.status).toBe("succeeded")
+  expect(store.nodes(first).get("a")?.status).toBe("succeeded")
   store.close()
 })
 
@@ -55,26 +60,26 @@ test("model references need a provider", () => {
 
 test("a gate waits until decided, and can only be decided once", () => {
   const store = Store.at(root)
-  store.create({ id: "run_2", workflow: "w", file: "w.ts", directory: root, input: {} })
-  store.append("run_2", "ship", "gate.pending", { message: "Ship it?" })
-  expect(store.nodes("run_2").get("ship")).toMatchObject({ status: "waiting", message: "Ship it?" })
-  expect(store.decide("run_2", "missing", true)).toBe("No gate missing in run run_2")
+  store.create({ id: second, workflow: "w", file: "w.ts", directory: root, input: {} })
+  store.append(second, "ship", "gate.pending", { message: "Ship it?" })
+  expect(store.nodes(second).get("ship")).toMatchObject({ status: "waiting", message: "Ship it?" })
+  expect(store.decide(second, "missing", true)).toBe(`No gate missing in run ${second}`)
 
-  expect(store.decide("run_2", "ship", false, "not yet")).toBeUndefined()
+  expect(store.decide(second, "ship", false, "not yet")).toBeUndefined()
 
-  expect(store.nodes("run_2").get("ship")).toMatchObject({
+  expect(store.nodes(second).get("ship")).toMatchObject({
     status: "succeeded",
     result: { approved: false, note: "not yet" },
   })
-  expect(store.decide("run_2", "ship", true)).toBe("ship is not waiting for a decision")
+  expect(store.decide(second, "ship", true)).toBe("ship is not waiting for a decision")
   store.close()
 })
 
 test("spend lists every attempt with its model, tokens and cost", () => {
   const store = Store.at(root)
-  store.append("run_2", "a", "attempt.ended", { model: "ollama/x", cost: 0.5, input: 10, output: 2 })
-  store.append("run_2", "a", "attempt.ended", { model: "tachyon/y", input: 4, output: 1, error: { class: "invalid" } })
-  expect(store.spend("run_2")).toEqual([
+  store.append(second, "a", "attempt.ended", { model: "ollama/x", cost: 0.5, input: 10, output: 2 })
+  store.append(second, "a", "attempt.ended", { model: "tachyon/y", input: 4, output: 1, error: { class: "invalid" } })
+  expect(store.spend(second)).toEqual([
     { node: "a", model: "ollama/x", cost: 0.5, input: 10, output: 2 },
     { node: "a", model: "tachyon/y", cost: 0, input: 4, output: 1 },
   ])
@@ -99,5 +104,44 @@ test("a model's breaker opens after three recent passing failures in a row, acro
   // Failures older than the window do not count.
   for (const run of ["run_g", "run_h", "run_i"]) failure(run, "ollama/w", "transient")
   expect(store.breaker("ollama/w", 3, -1)).toBe(false)
+  store.close()
+})
+
+// The run store is a file in the repository, so a clone brings its own, and what it holds is not to be trusted: an ID
+// that leads out of the folder where worktrees live must never be taken for a run, whoever wrote it in the file.
+test("a row whose ID is not one the runner makes is not a run", async () => {
+  const directory = await fs.mkdtemp(path.join(root, "hostile-"))
+  const valid = "run_20260101000003_0a1b2c"
+  const hostile = [
+    "../../../victim",
+    "../..",
+    "..",
+    ".",
+    "",
+    "run_1",
+    "run_20260101000003_0A1B2C",
+    "run_20260101000003_0a1b2cd",
+    "run_2026010100003_0a1b2c",
+    "run_20260101000003_0a1b2c/../..",
+    "run_20260101000003_0a1b2c\n",
+    " run_20260101000003_0a1b2c",
+  ]
+  Store.at(directory).close()
+  // Written as another tool would write them, and newer than the real run, so that they come first.
+  const db = new Database(path.join(directory, ".orbit", "runs.db"))
+  const insert = db.query(
+    "INSERT INTO run (id, workflow, file, directory, input, status, created, updated) VALUES (?, 'w', 'w.ts', ?, '{}', 'succeeded', ?, ?)",
+  )
+  hostile.forEach((id, index) => insert.run(id, directory, 2_000_000_000_000 + index, 2_000_000_000_000 + index))
+  insert.run(valid, directory, 1_000, 1_000)
+  db.close()
+
+  const store = Store.at(directory)
+
+  // The limit counts runs, so rows that are not runs cannot push the real ones out of a listing.
+  expect(store.runs(1).map((run) => run.id)).toEqual([valid])
+  expect(store.runs().map((run) => run.id)).toEqual([valid])
+  expect(store.run(valid)).toMatchObject({ id: valid })
+  for (const id of hostile) expect(store.run(id)).toBeUndefined()
   store.close()
 })

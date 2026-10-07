@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Layer, Logger } from "effect"
 import { CompatNames } from "@orbit/compat/names"
 import { Agent } from "@orbit/core/agent"
 import { FileLedger } from "@orbit/core/file-ledger"
@@ -19,6 +19,7 @@ import { FileAccess } from "@orbit/core/file-access"
 import { Model } from "@orbit/core/model"
 import { Permission } from "@orbit/core/permission"
 import { Project } from "@orbit/core/project"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Provider } from "@orbit/core/provider"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
@@ -32,7 +33,10 @@ import { Session } from "@orbit/core/session"
 import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Tool } from "@orbit/core/tool"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tempLocationLayer } from "./fixture/location"
+import { canLinkFile } from "./fixture/symlink"
+import { tmpdirScoped } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -57,9 +61,11 @@ const readToolNode = makeLocationNode({
   ],
 })
 
-const permission = permissionLayer({ assert: () => Effect.void })
+const asserted: Permission.AssertInput[] = []
+const permission = permissionLayer({ assert: (input) => Effect.sync(() => void asserted.push(input)) })
 
-const sessionLayer = (config: ReturnType<typeof Config.testLayer>) => {
+// Every folder is trusted, as the core tests run, unless `trusted` is false.
+const sessionLayer = (config: ReturnType<typeof Config.testLayer>, trusted = true) => {
   const imageLayer = AppNodeBuilder.build(Image.node, [Config.node.replace(config)])
   return AppNodeBuilder.build(
     LayerNode.group([
@@ -75,6 +81,7 @@ const sessionLayer = (config: ReturnType<typeof Config.testLayer>) => {
       readToolNode,
       Tool.node,
       PluginHooks.node,
+      ProjectTrust.node,
       SessionInstructions.node,
       Global.node,
       Image.node,
@@ -86,13 +93,15 @@ const sessionLayer = (config: ReturnType<typeof Config.testLayer>) => {
       Permission.node.replace(permission),
       Config.node.replace(config),
       Image.node.replace(imageLayer),
+      WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: trusted })),
     ],
   )
 }
 
-// Compatibility is on by default; the second harness switches it off.
+// Compatibility is on by default; the second harness switches it off. The third is in a project that is not trusted.
 const it = testEffect(sessionLayer(Config.testLayer()))
 const compatOff = testEffect(sessionLayer(Config.testLayer([], { enabled: false, roots: [] })))
+const untrusted = testEffect(sessionLayer(Config.testLayer(), false))
 
 const identity = {
   agent: Agent.ID.make("build"),
@@ -394,4 +403,124 @@ describe("SessionInstructions", () => {
     // Metadata is bookkeeping for the dedup ledger; the model must not see it.
     expect(messages[0]!.metadata).toBeUndefined()
   })
+})
+
+// A project that is not trusted yet supplies only what is inside it. A clone recreates the links a repository ships, so
+// one can lead the walk for instruction files out of the project, or be named like an instruction file itself.
+describe("SessionInstructions in a project that is not trusted", () => {
+  const skippedNotices = () => {
+    const skipped: Array<{ path: unknown; reason: unknown }> = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      if (!Array.isArray(entry.message) || entry.message[0] !== "instruction file skipped") return
+      skipped.push(entry.message[1])
+    })
+    return { skipped, logger: Logger.layer([logger]) }
+  }
+
+  untrusted.live("does not inject an instruction file that a link in the project leads to, until it is trusted", () => {
+    const { skipped, logger } = skippedNotices()
+    return Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const outside = (yield* tmpdirScoped()).path
+      const outsideFile = path.resolve(outside, "AGENTS.md")
+      yield* writeAgents(outsideFile, "outside-instructions")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(path.resolve(outside, "file.txt"), "content")
+        // A junction reads as a symlink to a directory, and needs no privilege on Windows.
+        await fs.symlink(outside, path.resolve(dir, "linked"), "junction")
+      })
+
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const trust = yield* ProjectTrust.Service
+      const instructions = yield* SessionInstructions.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      // A read through the link is outside the project, so it asks about the folder first, and the walk for instruction
+      // files does not start from it: external reads are skipped.
+      asserted.length = 0
+      yield* executeTool(registry, readCall(sessionID, "call-linked", "linked/file.txt"))
+      yield* executeTool(registry, readCall(sessionID, "call-again", "linked/file.txt"))
+      expect(asserted.map((input) => input.action)).toEqual([
+        "external_directory",
+        "read",
+        "external_directory",
+        "read",
+      ])
+      expect(asserted[0]).toMatchObject({ resources: [path.join(outside, "*").replaceAll("\\", "/")] })
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+      expect(skipped).toEqual([])
+
+      // What that walk would hand over, were the read inside the project, is left out. The file is reported once, however
+      // often the model's reads find it.
+      yield* instructions.load({ sessionID, paths: [outsideFile] })
+      yield* instructions.load({ sessionID, paths: [outsideFile] })
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+      expect(skipped).toMatchObject([{ path: outsideFile, reason: expect.stringContaining("not trusted") }])
+
+      // Nothing was recorded for it, so the next read after the grant injects it.
+      yield* trust.grant({ persist: false, via: "test" })
+      asserted.length = 0
+      yield* executeTool(registry, readCall(sessionID, "call-trusted", "linked/file.txt"))
+      expect(asserted.map((input) => input.action)).toEqual(["read"])
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${outsideFile}\noutside-instructions`)
+    }).pipe(Effect.provide(logger))
+  })
+
+  const linked = canLinkFile ? untrusted.live : untrusted.live.skip
+  linked("does not inject a file that an instruction file is a symlink to, until the project is trusted", () => {
+    const { skipped, logger } = skippedNotices()
+    return Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const outside = (yield* tmpdirScoped()).path
+      const secret = path.resolve(outside, "secret.txt")
+      const subPath = path.resolve(dir, "sub", "AGENTS.md")
+      yield* mkdir(path.resolve(dir, "sub"))
+      yield* writeAgents(secret, "TOP SECRET")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(path.resolve(dir, "sub", "file.txt"), "content")
+        await fs.symlink(secret, subPath)
+      })
+
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const trust = yield* ProjectTrust.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+      expect(yield* synthetics(sessionID)).toHaveLength(0)
+      expect(skipped).toMatchObject([{ path: secret }])
+
+      yield* trust.grant({ persist: false, via: "test" })
+      yield* executeTool(registry, readCall(sessionID, "call-trusted", "sub/file.txt"))
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${secret}\nTOP SECRET`)
+    }).pipe(Effect.provide(logger))
+  })
+
+  untrusted.live("still injects the instruction files that the project holds itself", () =>
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const dir = location.directory
+      const subPath = path.resolve(dir, "sub", "AGENTS.md")
+      yield* mkdir(path.resolve(dir, "sub"))
+      yield* writeAgents(subPath, "sub-instructions")
+      yield* Effect.promise(() => fs.writeFile(path.resolve(dir, "sub", "file.txt"), "content"))
+
+      const session = yield* Session.Service
+      const registry = yield* Tool.Service
+      const sessionID = (yield* session.create({ location: Location.Ref.make({ directory: dir }) })).id
+
+      yield* executeTool(registry, readCall(sessionID, "call-sub", "sub/file.txt"))
+
+      const injected = yield* synthetics(sessionID)
+      expect(injected).toHaveLength(1)
+      expect(injected[0]!.text).toBe(`Instructions from: ${subPath}\nsub-instructions`)
+    }),
+  )
 })

@@ -17,6 +17,7 @@ import { Job } from "@orbit/core/job"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { Permission } from "@orbit/core/permission"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionExecution } from "@orbit/core/session/execution"
@@ -30,6 +31,7 @@ import { AppProcess } from "@orbit/util/process"
 import { tempGlobalLayer } from "../fixture/global"
 import { emptyConfigLayer, emptyMcpLayer, testLocationLayer } from "../fixture/mcp"
 import { offlineModels } from "../fixture/models"
+import { trustedProject } from "../fixture/project-trust"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { permissionLayer } from "../lib/permission"
@@ -102,9 +104,11 @@ const nodes = LayerNode.group([
   Session.node,
   Job.node,
   Agent.node,
+  ProjectTrust.node,
 ])
 const replacements = [
   Mcp.node.replace(emptyMcpLayer),
+  ProjectTrust.node.replace(trustedProject),
   Config.node.replace(emptyConfigLayer),
   Location.node.replace(testLocationLayer),
   ShellSelect.node.replace(shell),

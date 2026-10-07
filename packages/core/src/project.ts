@@ -298,6 +298,21 @@ const layer = Layer.effect(
       return root ? ID.make(root) : undefined
     })
 
+    // A linked worktree shares the project, and the trust decision, of the main checkout it was added from. A `.git` file
+    // can name any git directory, and that directory's `commondir` can name another repository's, which git then reports
+    // as the main checkout of a folder that was never added to it. So the main checkout counts only when its repository
+    // lists this folder as a worktree, which `git worktree add` does and a file in the folder cannot.
+    const mainCheckout = Effect.fnUntraced(function* (repo: Git.Repository) {
+      const items = yield* git.worktree.list(repo).pipe(Effect.orElseSucceed(() => []))
+      const main = items.find((item) => item.kind === "main")
+      const here = yield* fs.resolve(repo.worktree)
+      const linked = yield* Effect.forEach(
+        items.filter((item) => item.kind === "linked"),
+        (item) => fs.resolve(item.directory),
+      )
+      return main && linked.some((directory) => path.relative(directory, here) === "") ? main.directory : repo.worktree
+    })
+
     // Mercurial identity uses the cached ID or the first root changeset; remote-derived
     // identity (the git `remote()` path) is a follow-up.
     const hgRoot = Effect.fnUntraced(function* (worktree: AbsolutePath) {
@@ -347,13 +362,7 @@ const layer = Layer.effect(
       if (repo) {
         const previous = yield* cached(repo.commonDirectory)
         const id = (yield* remote(repo)) ?? previous ?? (yield* rootCommit(repo))
-        const canonical =
-          repo.gitDirectory === repo.commonDirectory
-            ? repo.worktree
-            : yield* git.worktree.list(repo).pipe(
-                Effect.map((items) => items.find((item) => item.kind === "main")?.directory ?? repo.worktree),
-                Effect.orElseSucceed(() => repo.worktree),
-              )
+        const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({
           previous,
           id: id ?? ID.global,

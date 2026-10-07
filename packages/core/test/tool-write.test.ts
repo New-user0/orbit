@@ -17,6 +17,7 @@ import { Tool } from "@orbit/core/tool"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdir, withTempDir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
@@ -78,6 +79,8 @@ const withTool = <A, E, R>(
   directory: string,
   fixture: ReturnType<typeof makeWriteFixture>,
   body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
+  // The core tests trust every folder, unless the project is untrusted.
+  untrusted = false,
 ) => {
   const activeLocation = Layer.succeed(
     Location.Service,
@@ -99,6 +102,7 @@ const withTool = <A, E, R>(
         Location.node.replace(activeLocation),
         Formatter.node.replace(fixture.formatter),
         Permission.node.replace(fixture.permission),
+        ...(untrusted ? untrustedProjectNodes : []),
       ]),
     ),
   )
@@ -364,6 +368,74 @@ describe("WriteTool", () => {
           ),
         )
       },
+      ([active, outside]) =>
+        Effect.promise(() =>
+          Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+        ),
+    ),
+  )
+
+  // The repository ships its links, and a clone recreates them. In a project that is not trusted a link that leads out
+  // of it is outside like any other path, so the write asks about the folder it would reach and creates nothing when
+  // that is refused. A junction stands for the link, since it needs no privilege on Windows.
+  for (const item of [
+    { project: "untrusted", untrusted: true, actions: ["external_directory", "edit"] },
+    { project: "trusted", untrusted: false, actions: ["edit"] },
+  ])
+    it.live(
+      `${item.untrusted ? "asks" : "does not ask"} about the folder a link leads to in a ${item.project} project`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+          ([active, outside]) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => fs.symlink(outside.path, path.join(active.path, "out"), "junction"))
+              const created = path.join(outside.path, "pwned.txt")
+              const fixture = makeWriteFixture()
+              const settled = yield* withTool(
+                active.path,
+                fixture,
+                (registry) => executeTool(registry, call({ path: "out/pwned.txt", content: "pwned" })),
+                item.untrusted,
+              )
+              expect(settled.status).toBe("completed")
+              expect(fixture.assertions.map((input) => input.action)).toEqual(item.actions)
+              if (item.untrusted) {
+                const real = yield* Effect.promise(() => fs.realpath(outside.path))
+                expect(fixture.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
+              }
+              expect(yield* Effect.promise(() => fs.readFile(created, "utf8"))).toBe("pwned")
+            }),
+          ([active, outside]) =>
+            Effect.promise(() =>
+              Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+            ),
+        ),
+    )
+
+  it.live("creates nothing through a link out of an untrusted project when the approval is denied", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      ([active, outside]) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.symlink(outside.path, path.join(active.path, "out"), "junction"))
+          const fixture = makeWriteFixture()
+          fixture.denyAction = "external_directory"
+          expect(
+            yield* withTool(
+              active.path,
+              fixture,
+              (registry) => executeTool(registry, call({ path: "out/pwned.txt", content: "pwned" })),
+              true,
+            ),
+          ).toEqual({
+            status: "error",
+            error: { type: "permission.rejected", message: "Permission denied: external_directory" },
+          })
+          expect(fixture.assertions.map((input) => input.action)).toEqual(["external_directory"])
+          expect(fixture.writes).toEqual([])
+          expect(yield* Effect.promise(() => Bun.file(path.join(outside.path, "pwned.txt")).exists())).toBe(false)
+        }),
       ([active, outside]) =>
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),

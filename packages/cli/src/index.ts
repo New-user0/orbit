@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import { progress } from "@orbit/flow/plain"
 import { Cause, Effect } from "effect"
 import { getErrorReported } from "effect/Runtime"
 import { Commands } from "./commands/commands"
@@ -16,6 +17,11 @@ import { EffectFlock } from "@orbit/util/effect-flock"
 import { Heap } from "./heap"
 import { CpuProfile } from "./cpu-profile"
 import { Network } from "@orbit/util/network"
+import { ProgramLookup } from "@orbit/util/program-lookup"
+
+// Before anything starts a program: this process can be started in a repository that is not trusted yet, and on Windows
+// it would look in that folder before PATH for every program it starts by name. See ProgramLookup.
+ProgramLookup.install()
 
 // Custom CA bundles and client certificates apply to every request, so install them before anything connects.
 Network.install()
@@ -157,7 +163,10 @@ Effect.gen(function* () {
     Effect.sync(() => {
       if (Cause.hasInterruptsOnly(cause)) return
       if (!getErrorReported(Cause.squash(cause))) return
-      process.stderr.write(Cause.pretty(cause) + "\n")
+      // Any failure can name text from a file that a clone brings along, such as the node IDs of an invalid workflow or
+      // the file a run store names. The line breaks of the message and its stack stay, and every other control or
+      // format character is written out, so a failure cannot act on the terminal either.
+      process.stderr.write(Cause.pretty(cause).split(/\r?\n/).map(progress).join("\n") + "\n")
     }),
   ),
   NodeRuntime.runMain({ disableErrorReporting: true }),

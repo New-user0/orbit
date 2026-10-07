@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Logger, Stream } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import { CompatNames } from "@orbit/compat/names"
@@ -10,13 +10,16 @@ import { ConfigInstructionPlugin } from "@orbit/core/config/plugin/instruction"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { Location } from "@orbit/core/location"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Event } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { tempGlobalLayer } from "./fixture/global"
 import { location } from "./fixture/location"
+import { canLinkFile } from "./fixture/symlink"
 import { tmpdir } from "./fixture/tmpdir"
 import { readInitial, readUpdate, state } from "./lib/instructions"
 import { testEffect } from "./lib/effect"
@@ -36,13 +39,26 @@ const instructionLayer = (input: {
   project?: boolean
   // Compatibility is on, with no roots, unless a test supplies its own config.
   configLayer?: Layer.Layer<Config.Service>
+  // Every folder is trusted, as the core tests run, unless a test says otherwise.
+  trusted?: boolean
 }) => {
   const watcher = Watcher.testLayer
+  const config = input.configLayer ?? Config.testLayer()
   return Layer.mergeAll(
-    input.configLayer ?? Config.testLayer(),
+    config,
     AppNodeBuilder.build(
-      LayerNode.group([InstructionDiscovery.node, Bus.node, FSUtil.node, Global.node, Location.node, Watcher.node]),
+      LayerNode.group([
+        InstructionDiscovery.node,
+        Bus.node,
+        FSUtil.node,
+        Global.node,
+        Location.node,
+        ProjectTrust.node,
+        Watcher.node,
+      ]),
       [
+        Config.node.replace(config),
+        WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: input.trusted ?? true })),
         InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: input.project })),
         Global.node.replace(
           input.config || input.home
@@ -69,9 +85,9 @@ const start = Effect.fnUntraced(function* (overrides?: Parameters<typeof host>[0
 const file = (path: string, content: string) =>
   new InstructionDiscovery.File({ path: AbsolutePath.make(path), content })
 
-function emitAndWait(update: Watcher.Update) {
+// Runs `trigger` and waits for the instruction files to be scanned again because of it.
+function rescanAfter<A, E, R>(trigger: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
-    const watcher = yield* Watcher.Test
     const bus = yield* Bus.Service
     const updated = yield* Deferred.make<void>()
     const fiber = yield* bus.subscribe(InstructionDiscovery.Event.Updated).pipe(
@@ -79,10 +95,14 @@ function emitAndWait(update: Watcher.Update) {
       Effect.forkScoped,
     )
     yield* Effect.yieldNow
-    yield* watcher.emit(update)
+    yield* trigger
     yield* Deferred.await(updated).pipe(Effect.timeout("2 seconds"))
     yield* Fiber.interrupt(fiber)
   })
+}
+
+function emitAndWait(update: Watcher.Update) {
+  return Effect.flatMap(Watcher.Test, (watcher) => rescanAfter(watcher.emit(update)))
 }
 
 describe("InstructionDiscovery", () => {
@@ -670,6 +690,127 @@ describe("ConfigInstructionPlugin.Plugin", () => {
       expect(observed.values).toEqual([{ targets: allNames, start: repo, stop: repo, type: "file" }])
     }),
   )
+})
+
+// A project that is not trusted yet supplies only what is inside it. A clone recreates the links a repository ships, so a
+// link named like an instruction file can lead to any file of the user's, such as a key, and the plugin would put it into
+// the first request. Where this account cannot create a link to a file (Windows without a privilege), a regular file
+// stands in for it and the file system answers for its real path as it would for the link, which is all the plugin
+// sees of one.
+describe("ConfigInstructionPlugin.Plugin in a project that is not trusted", () => {
+  const linking = (links: Readonly<Record<string, string>>) =>
+    Layer.effect(
+      FSUtil.Service,
+      FSUtil.Service.pipe(
+        Effect.map((fs) =>
+          FSUtil.Service.of({ ...fs, resolve: (input) => fs.resolve(links[path.resolve(input)] ?? input) }),
+        ),
+      ),
+    ).pipe(Layer.provide(LayerNode.compile(FSUtil.node)))
+
+  const modes = [
+    { how: "a symlink", real: true },
+    { how: "a file that resolves like a symlink", real: false },
+  ] as const
+
+  for (const mode of modes)
+    (mode.real && !canLinkFile ? it.live.skip : it.live)(
+      `leaves out ${mode.how} that leaves the project and the files above it, until the project is trusted`,
+      () =>
+        Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ).pipe(
+          Effect.flatMap((tmp) => {
+            const home = path.join(tmp.path, "home")
+            const shared = path.join(home, "code")
+            const project = path.join(shared, "repo")
+            const directory = path.join(project, "packages", "core")
+            const secret = path.join(tmp.path, "secret.txt")
+            const notes = path.join(project, "docs", "notes.md")
+            // The package links to a file of the project's own. The project folder has a link to the user's secret under
+            // the first name, and a regular file under the second, which takes its place while the link is left out.
+            const inside = path.join(directory, "AGENTS.md")
+            const outside = path.join(project, "ORBIT.md")
+            const projectFile = path.join(project, "AGENTS.md")
+            const sharedFile = path.join(shared, "AGENTS.md")
+            const skipped: Array<{ path: unknown; reason: unknown }> = []
+            const logger = Logger.map(Logger.formatStructured, (entry) => {
+              if (!Array.isArray(entry.message) || entry.message[0] !== "instruction file skipped") return
+              skipped.push(entry.message[1])
+            })
+            return Effect.gen(function* () {
+              yield* Effect.promise(async () => {
+                await fs.mkdir(directory, { recursive: true })
+                await fs.mkdir(path.dirname(notes), { recursive: true })
+                await fs.writeFile(secret, "TOP SECRET")
+                await fs.writeFile(notes, "notes")
+                await fs.writeFile(projectFile, "project")
+                await fs.writeFile(sharedFile, "shared")
+                if (mode.real) {
+                  await fs.symlink(notes, inside)
+                  await fs.symlink(secret, outside)
+                } else {
+                  await fs.writeFile(inside, "stand-in")
+                  await fs.writeFile(outside, "stand-in")
+                }
+              })
+              const discovery = yield* start()
+              const trust = yield* ProjectTrust.Service
+              const loaded = discovery
+                .list()
+                .pipe(
+                  Effect.map((files) =>
+                    Array.isArray(files) ? files.map((item) => [item.path, item.content]) : files,
+                  ),
+                )
+
+              // What is inside the project, for real, is read. The user's secret is not, nor is the file in the folder
+              // above the project, and each of them is reported once.
+              const untrusted = [
+                [notes, "notes"],
+                [projectFile, "project"],
+              ]
+              expect(yield* loaded).toEqual(untrusted)
+              expect(skipped).toMatchObject([{ path: outside }, { path: sharedFile }])
+              expect(skipped.map((item) => item.reason)).toEqual(Array(2).fill(expect.stringContaining("not trusted")))
+
+              // Trusting the project reads them too, without a restart and without a config reload, which a project with
+              // no config of its own does not have.
+              yield* rescanAfter(trust.grant({ persist: false, via: "test" }))
+              expect(yield* loaded).toEqual([
+                [notes, "notes"],
+                [secret, "TOP SECRET"],
+                [projectFile, "project"],
+                [sharedFile, "shared"],
+              ])
+              expect(skipped).toHaveLength(2)
+
+              yield* rescanAfter(trust.revoke())
+              expect(yield* loaded).toEqual(untrusted)
+            }).pipe(
+              Effect.provide(
+                instructionLayer({
+                  config: path.join(tmp.path, "global"),
+                  home,
+                  trusted: false,
+                  filesystemLayer: mode.real ? undefined : linking({ [inside]: notes, [outside]: secret }),
+                  locationServiceLayer: Layer.succeed(
+                    Location.Service,
+                    Location.Service.of(
+                      location(
+                        { directory: AbsolutePath.make(directory) },
+                        { projectDirectory: AbsolutePath.make(project) },
+                      ),
+                    ),
+                  ),
+                }),
+              ),
+              Effect.provide(Logger.layer([logger])),
+            )
+          }),
+        ),
+    )
 })
 
 function watchedNames(names: readonly string[]) {

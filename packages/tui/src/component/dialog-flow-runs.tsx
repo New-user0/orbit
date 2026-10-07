@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { createMemo, createResource } from "solid-js"
 import { useData } from "../context/data"
 import { useLocation } from "../context/location"
@@ -8,6 +9,10 @@ import { useToast } from "../ui/toast"
 
 // Orbit Flow runs of the current directory, their nodes, and decisions on gates waiting for one. The run store is a
 // local SQLite file, so this reads it directly; @orbit/flow loads only when the dialog opens.
+//
+// The store is a file in the repository, so a clone brings its own, and the renderer writes text to the terminal as it
+// is. Everything the store says that the dialog shows goes through `plain`, which writes control and format characters
+// out; the values that the dialog acts on, such as the ID of a gate, stay as the store has them.
 
 const marks = { running: "…", waiting: "?", succeeded: "✓", failed: "✗" }
 
@@ -34,8 +39,8 @@ export function DialogFlowRuns() {
   const options = createMemo(() =>
     (runs() ?? []).map((run) => ({
       value: run.id,
-      title: `${marks[run.status]} ${run.workflow}`,
-      description: `${run.status} · ${new Date(run.updated).toLocaleString()}`,
+      title: `${marks[run.status]} ${plain(run.workflow)}`,
+      description: `${plain(run.status)} · ${new Date(run.updated).toLocaleString()}`,
       category: run.status === "waiting" ? "Waiting for a decision" : "Runs",
       searchText: run.id,
     })),
@@ -64,14 +69,16 @@ export function DialogFlowRun(props: { readonly run: string }) {
       const usage = node.result?.usage as { input?: number; output?: number; cost?: number } | undefined
       return {
         value: node.id,
-        title: `${marks[node.status]} ${node.id}`,
-        description: [
-          node.status === "waiting" ? node.message : undefined,
-          usage ? `${(usage.input ?? 0) + (usage.output ?? 0)} tokens` : undefined,
-          node.error ? String(node.error.message) : undefined,
-        ]
-          .filter(Boolean)
-          .join(" · "),
+        title: `${marks[node.status]} ${plain(node.id)}`,
+        description: plain(
+          [
+            node.status === "waiting" ? node.message : undefined,
+            usage ? `${Number(usage.input ?? 0) + Number(usage.output ?? 0)} tokens` : undefined,
+            node.error ? String(node.error.message) : undefined,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        ),
         category: node.status === "waiting" ? "Waiting for a decision" : "Nodes",
       }
     }),
@@ -91,7 +98,7 @@ export function DialogFlowRun(props: { readonly run: string }) {
   )
 }
 
-function DialogFlowGate(props: { readonly run: string; readonly gate: string; readonly message: string }) {
+export function DialogFlowGate(props: { readonly run: string; readonly gate: string; readonly message: string }) {
   const dialog = useDialog()
   const toast = useToast()
   const directory = useDirectory()
@@ -99,9 +106,9 @@ function DialogFlowGate(props: { readonly run: string; readonly gate: string; re
     const store = await open(directory())
     const error = store.decide(props.run, props.gate, approved, note)
     store.close()
-    if (error) return toast.show({ title: "Not decided", message: error, variant: "error" })
+    if (error) return toast.show({ title: "Not decided", message: plain(error), variant: "error" })
     toast.show({
-      title: approved ? `Approved ${props.gate}` : `Rejected ${props.gate}`,
+      title: approved ? `Approved ${plain(props.gate)}` : `Rejected ${plain(props.gate)}`,
       message: `Continue the run with: orb flow resume ${props.run}`,
       variant: "success",
     })
@@ -110,7 +117,7 @@ function DialogFlowGate(props: { readonly run: string; readonly gate: string; re
   const withNote = (approved: boolean) =>
     dialog.replace(() => (
       <DialogPrompt
-        title={`${approved ? "Approve" : "Reject"} ${props.gate}: note`}
+        title={`${approved ? "Approve" : "Reject"} ${plain(props.gate)}: note`}
         placeholder="A note the workflow receives with the decision"
         onConfirm={(note) => void decide(approved, note.trim() || undefined).catch(toast.error)}
         onCancel={() => dialog.replace(() => <DialogFlowGate {...props} />)}
@@ -118,7 +125,7 @@ function DialogFlowGate(props: { readonly run: string; readonly gate: string; re
     ))
   return (
     <DialogSelect
-      title={`${props.gate}: ${props.message}`}
+      title={`${plain(props.gate)}: ${plain(props.message)}`}
       options={[
         { value: "approve", title: "Approve" },
         { value: "approve-note", title: "Approve with a note…" },

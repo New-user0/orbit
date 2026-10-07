@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -94,7 +95,10 @@ function stream(chunks: Array<{ delta: unknown; finish: string }>) {
 }
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-"))
-const workflow = path.join(root, "three.ts")
+// The workflows and suites live in a folder of their own: the root is the home directory of the isolated environment,
+// which no server trusts without a grant, and a command that loads a file needs the folder that holds it trusted.
+const flows = path.join(root, "flows")
+const workflow = path.join(flows, "three.ts")
 
 beforeAll(async () => {
   await fs.mkdir(path.join(root, "config"), { recursive: true })
@@ -231,7 +235,7 @@ async function orb(directory: string, args: string[]) {
 
 test("a failing model is retried, then the fallback model completes the node", async () => {
   const repository = await repo("fallback")
-  const file = path.join(root, "fallback.ts")
+  const file = path.join(flows, "fallback.ts")
   await Bun.write(
     file,
     `export default {
@@ -272,7 +276,7 @@ test("a failing model is retried, then the fallback model completes the node", a
 
 test("a merge conflict is reported and leaves the checkout clean", async () => {
   const repository = await repo("conflict")
-  const file = path.join(root, "conflict.ts")
+  const file = path.join(flows, "conflict.ts")
   await Bun.write(
     file,
     `export default {
@@ -300,7 +304,7 @@ test("a merge conflict is reported and leaves the checkout clean", async () => {
 
 test("a gate pauses the run until a person approves it, then resume continues past it", async () => {
   const repository = await repo("gate")
-  const file = path.join(root, "gate.ts")
+  const file = path.join(flows, "gate.ts")
   await Bun.write(
     file,
     `export default {
@@ -342,7 +346,7 @@ test("a gate pauses the run until a person approves it, then resume continues pa
 
 test("a budget pauses the run before it overspends, and cost reports spend by node", async () => {
   const repository = await repo("budget")
-  const file = path.join(root, "budget.ts")
+  const file = path.join(flows, "budget.ts")
   await Bun.write(
     file,
     `export default {
@@ -380,7 +384,7 @@ test("a budget pauses the run before it overspends, and cost reports spend by no
 
 test("a model that does not exist is named in the error, and the fallback model runs", async () => {
   const repository = await repo("missing-model")
-  const file = path.join(root, "missing.ts")
+  const file = path.join(flows, "missing.ts")
   await Bun.write(
     file,
     `export default {
@@ -435,7 +439,9 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   const calls = requests.length
   const worktrees = await fs.readdir(path.join(repository, ".orbit", "worktrees"))
 
-  const same = await orb(repository, ["flow", "replay", id])
+  // A module workflow is code, so a replay asks a server whether the folder is trusted before it loads one: a private
+  // server here, though the replay itself calls no model.
+  const same = await orb(repository, ["flow", "replay", "--standalone", id])
 
   expect({ code: same.code, stderr: same.code === 0 ? "" : same.stderr }).toEqual({ code: 0, stderr: "" })
   expect(same.stderr).toContain(`replaying ${id} as`)
@@ -445,16 +451,16 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
   expect(requests.length).toBe(calls)
   expect(await fs.readdir(path.join(repository, ".orbit", "worktrees"))).toEqual(worktrees)
 
-  const edited = path.join(root, "three-edited.ts")
+  const edited = path.join(flows, "three-edited.ts")
   await Bun.write(edited, (await Bun.file(workflow).text()).replace("write ${node}.txt", "write ${node}.txt carefully"))
-  const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
+  const changed = await orb(repository, ["flow", "replay", "--standalone", id, "--file", edited])
   expect(changed.code).toBe(0)
   expect(changed.stderr).toContain("~ a: its inputs differ from the recording")
   expect(changed.stderr).toContain("Nodes whose inputs changed since the recording: a, b, c")
 
-  const longer = path.join(root, "three-longer.ts")
+  const longer = path.join(flows, "three-longer.ts")
   await Bun.write(longer, (await Bun.file(workflow).text()).replace('["a", "b", "c"]', '["a", "b", "c", "d"]'))
-  const diverged = await orb(repository, ["flow", "replay", id, "--file", longer])
+  const diverged = await orb(repository, ["flow", "replay", "--standalone", id, "--file", longer])
   expect(diverged.code).toBe(1)
   expect(diverged.stderr).toContain(`Replay diverged: d is not in the recording of ${id}`)
   expect(requests.length).toBe(calls)
@@ -467,7 +473,7 @@ test("replay re-runs a recorded run without models, reports changed inputs, and 
 
 test("a YAML workflow runs nodes as their needs finish, fills templates, and pauses at its gate", async () => {
   const repository = await repo("yaml")
-  const file = path.join(root, "flow.yaml")
+  const file = path.join(flows, "flow.yaml")
   await Bun.write(
     file,
     `name: yaml-flow
@@ -527,7 +533,7 @@ output: merge
 
 test("ctx.map runs an agent for every item", async () => {
   const repository = await repo("map")
-  const file = path.join(root, "map.ts")
+  const file = path.join(flows, "map.ts")
   await Bun.write(
     file,
     `export default {
@@ -552,7 +558,7 @@ test("a model whose breaker is open is skipped for its fallback", async () => {
   for (const run of ["run_x", "run_y", "run_z"])
     store.append(run, "n", "attempt.ended", { model: "ollama/tiny:1b", error: { class: "transient" } })
   store.close()
-  const file = path.join(root, "breaker.ts")
+  const file = path.join(flows, "breaker.ts")
   await Bun.write(
     file,
     `export default {
@@ -579,7 +585,7 @@ test("a model whose breaker is open is skipped for its fallback", async () => {
 
 test("orb flow trace shows a timeline, prints OTLP, and sends it only to a collector it is given", async () => {
   const repository = await repo("trace")
-  const file = path.join(root, "trace.ts")
+  const file = path.join(flows, "trace.ts")
   await Bun.write(
     file,
     `export default {
@@ -631,3 +637,344 @@ test("orb flow trace shows a timeline, prints OTLP, and sends it only to a colle
   expect(sent.stdout).toContain(`Sent 4 spans of ${id}`)
   expect(received).toEqual([exported])
 }, 120_000)
+
+// A clone brings its own .orbit/runs.db, so what the run store says is not to be trusted, and `orb flow clean` acts on
+// it without any trust check: removing worktrees and branches is all it does, and only inside .orbit/worktrees.
+test("orb flow clean in a clone whose run store names runs like paths leaves everything outside .orbit/worktrees alone", async () => {
+  const repository = await repo("hostile-clean")
+  const victim = path.join(root, "victim")
+  await Bun.write(path.join(victim, "precious.txt"), "keep\n")
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  // `../../../victim` from .orbit/worktrees is the folder beside the repository, `../..` the repository itself and `..`
+  // its .orbit folder, where the run store is.
+  for (const id of ["../../../victim", "../..", "..", "run_20260101000005_0a1b2c"]) {
+    store.create({ id, workflow: "w", file: "w.ts", directory: repository, input: {} })
+    store.status(id, "succeeded")
+  }
+  store.close()
+
+  const cleaned = await orb(repository, ["flow", "clean"])
+
+  expect({ code: cleaned.code, stderr: cleaned.code === 0 ? "" : cleaned.stderr }).toEqual({ code: 0, stderr: "" })
+  // Only the run with an ID the runner could have made is a run.
+  expect(cleaned.stdout).toContain("from 1 run(s)")
+  // Naming such a run does not make it one, for any command that takes a run, and resuming one makes no worktree.
+  for (const command of ["clean", "show", "resume"]) {
+    const named = await orb(repository, ["flow", command, "../../../victim"])
+    expect({ command, code: named.code }).toEqual({ command, code: 1 })
+    expect(named.stderr).toContain("No run ../../../victim in this repository")
+  }
+  expect(await Bun.file(path.join(victim, "precious.txt")).text()).toBe("keep\n")
+  expect(await Bun.file(path.join(repository, "readme.md")).text()).toBe("fixture\n")
+  expect(await Bun.file(path.join(repository, ".orbit", "runs.db")).exists()).toBe(true)
+}, 120_000)
+
+test("orb flow prints what a run store says without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-text")
+  const id = "run_20260101000006_0a1b2c"
+  // An operating system command that sets the title of the window, a sequence that erases the line, a C1 control
+  // sequence introducer, DEL and a right-to-left override: a clone's run store can carry them in any text it holds, and a
+  // carriage return in the workflow's name.
+  const evil = "\u001b]0;pwned\u0007name\u001b[2K\u009b\u007f\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07name\\x1b[2K\\x9b\\x7f\\u{202e}end"
+  const workflow = `${evil}\rreturn`
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  store.create({ id, workflow, file: `${evil}.ts`, directory: repository, input: {} })
+  store.append(id, `node${evil}`, "node.started", { key: "k" })
+  store.append(id, `node${evil}`, "attempt.started", { model: `model${evil}`, attempt: 1 })
+  store.append(id, `node${evil}`, "attempt.ended", { model: `model${evil}`, cost: 1, input: 2, output: 3 })
+  store.append(id, `node${evil}`, "node.failed", { error: { class: "invalid", message: `failed${evil}` } })
+  store.append(id, "gate", "gate.pending", { message: `ship${evil}` })
+  store.append(id, "team", "team.message", { from: `lead${evil}`, to: `coder${evil}`, text: `do it${evil}` })
+  store.append(id, "team", "team.note", { from: `lead${evil}`, key: `plan${evil}`, text: `note${evil}` })
+  store.status(id, "waiting")
+  store.close()
+
+  // One after the other: processes that open the same store at once can find it locked.
+  const outputs = []
+  for (const args of [["ls"], ["show", id], ["watch", id], ["cost", id], ["trace", id]])
+    outputs.push(await orb(repository, ["flow", ...args]))
+
+  // No line has a control character in it: nothing reaches the terminal that moves the cursor, sets a title or erases
+  // text. The ends of the lines are the commands' own, and `watch` only clears a terminal when its output is one.
+  for (const [index, output] of outputs.entries()) {
+    expect({ index, code: output.code, stderr: output.code === 0 ? "" : output.stderr }).toEqual({
+      index,
+      code: 0,
+      stderr: "",
+    })
+    for (const line of output.stdout.split(/\r?\n/)) expect(line).not.toMatch(/\p{Cc}/u)
+  }
+  // What the text said is still there, written out.
+  expect(outputs[0].stdout).toContain(`${id}  waiting    ${shown}\\x0dreturn`)
+  expect(outputs[1].stdout).toContain(`${id}  ${shown}\\x0dreturn  waiting`)
+  expect(outputs[1].stdout).toContain(`file  ${shown}.ts`)
+  expect(outputs[1].stdout).toContain(`node${shown}`)
+  expect(outputs[1].stdout).toContain(`failed${shown}`)
+  expect(outputs[1].stdout).toContain(`waiting: ship${shown}`)
+  expect(outputs[1].stdout).toContain(`team: lead${shown} → coder${shown}: do it${shown}`)
+  expect(outputs[1].stdout).toContain(`team: lead${shown} noted plan${shown}: note${shown}`)
+  expect(outputs[2].stdout).toBe(outputs[1].stdout)
+  expect(outputs[3].stdout).toContain(`model${shown}`)
+  expect(outputs[4].stdout).toContain(`run ${shown}\\x0dreturn`)
+
+  // JSON is for programs, so it keeps every character: the ones that `JSON.stringify` leaves raw are written as \u
+  // escapes, and the same text comes back out of `JSON.parse`.
+  const formats = []
+  for (const args of [
+    ["ls", "--format", "json"],
+    ["show", id, "--format", "json"],
+    ["cost", id, "--format", "json"],
+    ["trace", id, "--format", "otlp"],
+  ])
+    formats.push(await orb(repository, ["flow", ...args]))
+  for (const [index, output] of formats.entries()) {
+    expect({ index, code: output.code, stderr: output.code === 0 ? "" : output.stderr }).toEqual({
+      index,
+      code: 0,
+      stderr: "",
+    })
+    expectNoControl(output.stdout)
+  }
+  const [listed, details, spent, traced] = formats.map((output) => JSON.parse(output.stdout))
+  expect(listed[0].workflow).toBe(workflow)
+  expect(listed[0].id).toBe(id)
+  expect(details.run.workflow).toBe(workflow)
+  expect(details.nodes.map((node: { id: string }) => node.id)).toContain(`node${evil}`)
+  expect(spent.rows[0]).toMatchObject({ node: `node${evil}`, model: `model${evil}` })
+  expect(traced.resourceSpans[0].scopeSpans[0].spans.map((span: { name: string }) => span.name)).toContain(
+    `run ${workflow}`,
+  )
+}, 180_000)
+
+// The text of a file is not the person's own: what a suite or a workflow says is printed as the run goes, and a clone
+// brings its own files. No line may hold a character that moves the cursor, sets the title of the window, erases text
+// or reorders it. The ends of the lines are the command's own. That holds for standard output as well, where `orb flow
+// run` and `replay` print the JSON of the result: JSON for programs keeps every character, and writes the ones that
+// `JSON.stringify` would leave raw as \u escapes.
+function expectNoControl(...streams: string[]) {
+  for (const text of streams) for (const line of text.split(/\r?\n/)) expect(line).not.toMatch(/\p{C}/u)
+}
+
+// A suite is a file in the repository, and one with no `checks` and no `judge` agent runs without the trust check. Its
+// task IDs are printed in the table of an eval, in the progress above it and in the message of a run that fails.
+test("orb eval prints the task IDs of a suite without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-eval")
+  const evil = "\u001b]0;pwned\u0007task\u001b[2K\u009b\u007f\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07task\\x1b[2K\\x9b\\x7f\\u{202e}end"
+  const suite = (file: string, ids: string[]) =>
+    Bun.write(
+      path.join(repository, file),
+      JSON.stringify({
+        name: "hostile",
+        models: ["ollama/tiny:1b"],
+        tasks: ids.map((id) => ({ id, prompt: "write t.txt" })),
+      }),
+    )
+  await suite("once.json", [evil])
+  // The same ID twice fails the run, and the failure names the node.
+  await suite("twice.json", [evil, evil])
+
+  const passed = await orb(repository, ["eval", "--standalone", "once.json"])
+
+  expect({ code: passed.code, stderr: passed.code === 0 ? "" : passed.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(passed.stdout, passed.stderr)
+  // What the suite said is still there, written out.
+  expect(passed.stdout).toContain(`${shown}  ✓`)
+  expect(passed.stderr).toContain(`> ollama/tiny:1b.${shown}`)
+
+  // A resumed eval reuses what the run store recorded for a task, and a clone brings its own run store, which can say
+  // that the task spent text.
+  const id = await runID(repository)
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  const node = `ollama/tiny:1b.${evil}#1`
+  const recorded = store.nodes(id).get(node)
+  store.append(id, node, "node.succeeded", {
+    key: recorded?.key,
+    result: { ...recorded?.result, usage: { cost: evil, input: evil, output: evil } },
+  })
+  store.close()
+
+  const resumed = await orb(repository, ["eval", "--standalone", "once.json", "--resume", id])
+
+  expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(resumed.stdout, resumed.stderr)
+  expect(resumed.stderr).toContain(`= ollama/tiny:1b.${shown}#1 (recorded)`)
+
+  // The JSON of an eval is for programs, so it keeps the task ID, and parses back to it.
+  const asJson = await orb(repository, ["eval", "--standalone", "once.json", "--resume", id, "--format", "json"])
+
+  expect({ code: asJson.code, stderr: asJson.code === 0 ? "" : asJson.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(asJson.stdout, asJson.stderr)
+  expect(JSON.parse(asJson.stdout).scores.map((score: { task: string }) => score.task)).toEqual([evil])
+
+  const failed = await orb(repository, ["eval", "--standalone", "twice.json"])
+
+  expect(failed.code).toBe(1)
+  expectNoControl(failed.stdout, failed.stderr)
+  expect(failed.stderr).toContain(`did not finish: Node id ollama/tiny:1b.${shown} is used twice`)
+}, 240_000)
+
+// A YAML workflow is data, so one that defines no command, approval or agent runs without the trust check as well. Its
+// node IDs are printed as the run goes, and the person who decides at a gate reads the text that the workflow gives it.
+test("orb flow run prints YAML workflow nodes and gates without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-gate")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}end"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}end"
+  const file = path.join(repository, "gated.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: hostile-gate",
+      "nodes:",
+      `  - id: ${JSON.stringify(`work${evil}`)}`,
+      "    prompt: write a.txt",
+      `  - id: ${JSON.stringify(`ship${evil}`)}`,
+      "    type: gate",
+      `    needs: [${JSON.stringify(`work${evil}`)}]`,
+      `    message: ${JSON.stringify(`Merge${evil}?`)}`,
+      "",
+    ].join("\n"),
+  )
+
+  const paused = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+
+  expect(paused.code).toBe(2)
+  expectNoControl(paused.stderr)
+  expect(paused.stderr).toContain(`> work${shown}`)
+  expect(paused.stderr).toContain(`  ship${shown}: Merge${shown}?`)
+}, 180_000)
+
+test("orb flow replay prints the nodes of a YAML workflow without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-replay")
+  // The C1 controls U+009B and U+009D start the escape sequences that ESC [ and ESC ] do, on a terminal that takes 8-bit
+  // controls, and `JSON.stringify` leaves them and DEL as they are.
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009d\u009c\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9d\\x9c\\x9b\\x7fend"
+  const workflow = (prompt: string, ...more: string[]) =>
+    [
+      "name: hostile-replay",
+      "nodes:",
+      `  - id: ${JSON.stringify(`a${evil}`)}`,
+      `    prompt: ${prompt}`,
+      ...more,
+      "",
+    ].join("\n")
+  const file = path.join(repository, "recorded.yaml")
+  await Bun.write(file, workflow("write a.txt"))
+
+  const recorded = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+
+  expect({ code: recorded.code, stderr: recorded.code === 0 ? "" : recorded.stderr }).toEqual({ code: 0, stderr: "" })
+  expectNoControl(recorded.stdout, recorded.stderr)
+  expect(recorded.stderr).toContain(`> a${shown}`)
+  // The result of a run is keyed by node ID. It is printed as JSON for programs, which gets the node ID back whole.
+  expect(Object.keys(JSON.parse(recorded.stdout))).toEqual([`a${evil}`])
+  expect(JSON.parse(recorded.stdout)[`a${evil}`].id).toBe(`a${evil}`)
+  const id = await runID(repository)
+
+  // A node whose inputs changed since the recording is named, as the replay of an edited workflow goes on.
+  const edited = path.join(repository, "edited.yaml")
+  await Bun.write(edited, workflow("write a.txt carefully"))
+  const changed = await orb(repository, ["flow", "replay", id, "--file", edited])
+
+  expectNoControl(changed.stdout, changed.stderr)
+  expect(changed.stderr).toContain(`~ a${shown}: its inputs differ from the recording`)
+  expect(changed.stderr).toContain(`Nodes whose inputs changed since the recording: a${shown}`)
+  // A replay takes the results of its nodes from the run store, so what it prints holds the node IDs the store has.
+  expect(Object.keys(JSON.parse(changed.stdout))).toEqual([`a${evil}`])
+
+  // A node that the recording lacks stops the replay, and the failure names it.
+  const longer = path.join(repository, "longer.yaml")
+  await Bun.write(longer, workflow("write a.txt", `  - id: ${JSON.stringify(`b${evil}`)}`, "    prompt: write b.txt"))
+  const diverged = await orb(repository, ["flow", "replay", id, "--file", longer])
+
+  expect(diverged.code).toBe(1)
+  expectNoControl(diverged.stderr)
+  expect(diverged.stderr).toContain(`Replay diverged: b${shown} is not in the recording of ${id}`)
+}, 240_000)
+
+// The failure of a command names text from a file as well. An invalid workflow lists its node IDs and types in the
+// message, and it is read before the trust check, so a clone only has to ship one.
+test("orb flow run prints the failure of an invalid workflow without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-invalid")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9b\\x7fend"
+  const file = path.join(repository, "bad.yaml")
+  await Bun.write(
+    file,
+    [
+      "name: bad",
+      "nodes:",
+      `  - id: ${JSON.stringify(`a${evil}`)}`,
+      `    type: ${JSON.stringify(`t${evil}`)}`,
+      "    prompt: write a.txt",
+      "",
+    ].join("\n"),
+  )
+
+  const failed = await orb(repository, ["flow", "run", "--standalone", file])
+
+  expect(failed.code).toBe(1)
+  expectNoControl(failed.stdout, failed.stderr)
+  // What the file said is still there, written out, and the lines of the message stay apart.
+  expect(failed.stderr).toContain("is not a valid workflow:")
+  expect(failed.stderr).toContain(`- a${shown}: unknown type t${shown}`)
+}, 120_000)
+
+// A resumed or replayed run loads the file that its row in the run store names, and a clone brings its own run store.
+test("orb flow resume and replay print the failure for a workflow file that the run store names without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-file")
+  const id = "run_20260101000010_0a1b2c"
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9b\\x7fend"
+  const { Store } = await import("@orbit/flow")
+  const store = Store.at(repository)
+  store.create({ id, workflow: "w", file: `w${evil}.yaml`, directory: repository, input: {} })
+  store.status(id, "failed")
+  store.close()
+
+  // A replay of a YAML workflow connects to no server, so nothing at all stands in front of its failure. They run one
+  // after the other, as processes that open the same store at once can find it locked.
+  const replayed = await orb(repository, ["flow", "replay", id])
+  const resumed = await orb(repository, ["flow", "resume", "--standalone", id])
+
+  for (const output of [replayed, resumed]) {
+    expect(output.code).toBe(1)
+    expectNoControl(output.stdout, output.stderr)
+    expect(output.stderr).toContain(`w${shown}.yaml`)
+  }
+}, 180_000)
+
+// The runner titles each session `<workflow name> · <node>`. The title stays in the server's database after the clone is
+// gone, and `orb session list` and the terminal UI show it, so it is what a person reads later.
+test("orb flow run titles the sessions it opens without the characters that act on a terminal", async () => {
+  const repository = await repo("hostile-title")
+  const evil = "\u001b]0;pwned\u0007x\u001b[2K\u{202e}\u009b\u007fend"
+  const shown = "\\x1b]0;pwned\\x07x\\x1b[2K\\u{202e}\\x9b\\x7fend"
+  const file = path.join(repository, "titled.yaml")
+  await Bun.write(
+    file,
+    [
+      `name: ${JSON.stringify(`titled${evil}`)}`,
+      "nodes:",
+      `  - id: ${JSON.stringify(`a${evil}`)}`,
+      "    prompt: write a.txt",
+      "",
+    ].join("\n"),
+  )
+
+  const result = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+
+  expect({ code: result.code, stderr: result.code === 0 ? "" : result.stderr }).toEqual({ code: 0, stderr: "" })
+  // The private server has stopped, so its database can be read: the one that every test of this file shares.
+  const database = new Database(path.join(root, "orbit.db"), { readonly: true })
+  const titles = (
+    database.query("SELECT title FROM session_v2 WHERE title LIKE 'titled%'").all() as Array<{ title: string }>
+  ).map((row) => row.title)
+  database.close()
+  expect(titles).toEqual([`titled${shown} · a${shown}`])
+}, 180_000)

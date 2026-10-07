@@ -25,7 +25,9 @@ import type { ConfigPolicy } from "@orbit/schema/config/policy"
 import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { Cause, Effect, Exit, Fiber, Layer, PubSub, Schema, Stream } from "effect"
+import { Network } from "@orbit/util/network"
+import { Cause, Effect, Exit, Fiber, Layer, PubSub, References, Schema, Stream } from "effect"
+import path from "node:path"
 import { location } from "./fixture/location"
 import { it, testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
@@ -145,6 +147,8 @@ const seed = Effect.fn(function* (rules: Permission.Ruleset = [], options: { rea
 const redirects: Record<string, readonly [number, (local: string) => string]> = {
   "/to-local": [302, (local) => `${local}/landed`],
   "/to-metadata": [302, () => "http://169.254.169.254/latest/meta-data/"],
+  // A name that only the configuration's resolver leads anywhere.
+  "/to-name": [302, (local) => `http://hop.example.test:${new URL(local).port}/landed`],
   "/to-file": [302, () => "file:///etc/hosts"],
   "/within": [302, () => "/landed"],
   "/moved": [301, () => "/landed"],
@@ -743,6 +747,37 @@ describe("CodeMode fetch redirects", () => {
       expect(hits).toEqual(["GET /to-local"])
     }),
   )
+
+  web.live("asks about a redirect in the context of the execution, not in a new root fiber", () =>
+    Effect.gen(function* () {
+      const { origin, local } = yield* serve
+      yield* seed()
+      const permission = yield* Permission.Service
+      const hooks = yield* PluginHooks.Service
+      // The minimum log level stands for what the context of an execution holds besides its services, such as loggers and
+      // a tracer: a hook sees it for each request the program makes, and a root fiber has only the default.
+      const seen: Array<readonly [string, string]> = []
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.service(References.MinimumLogLevel).pipe(
+          Effect.map((level) => void seen.push([event.resources[0], level])),
+        ),
+      )
+      const fiber = yield* run(`return await (await fetch("${origin}/to-local")).text()`).pipe(
+        Effect.provideService(References.MinimumLogLevel, "Error"),
+        Effect.forkScoped,
+      )
+
+      yield* permission.reply({ requestID: (yield* nextRequest()).id, reply: "once" })
+      yield* permission.reply({ requestID: (yield* nextRequest()).id, reply: "once" })
+      yield* Fiber.join(fiber)
+
+      // The redirect is asked about where the program's own request is, not in a root fiber that has only the defaults.
+      expect(seen).toEqual([
+        [`${origin}/to-local`, "Error"],
+        [`${local}/landed`, "Error"],
+      ])
+    }),
+  )
 })
 
 // A request that nobody approved, for an address on this machine or the networks around it, is not one the user could
@@ -794,7 +829,21 @@ describe("CodeMode fetch addresses", () => {
           "http://0xa9fea9fe/",
           "http://[::ffff:169.254.169.254]/",
           "http://[fd00:ec2::254]/",
+          // The IPv6 endpoints of the other clouds' credentials, inside the unique local range that is otherwise only private.
+          "http://[fd20:ce::254]/",
+          "http://[fd00:c1::a9fe:a9fe]/",
+          "http://[fd00:ec2::23]/",
+          // The Akamai (Linode) and Scaleway metadata services, which have an IPv6 address in the same range.
+          "http://[fd00:a9fe:a9fe::1]/v1/token",
+          "http://[fd00:42::42]/conf",
           "http://100.100.100.200/",
+          // Oracle Cloud Infrastructure Classic, inside a range that is otherwise only private.
+          "http://192.0.0.192/",
+          // An IPv6 address that a translator or a tunnel delivers to the metadata address.
+          "http://[64:ff9b::a9fe:a9fe]/",
+          "http://[64:ff9b:1::a9fe:a9fe]/",
+          "http://[2002:a9fe:a9fe::]/",
+          "http://[2001:0:4136:e378:8000:63bf:5601:5601]/",
           "http://169.254.1.1/",
           "http://[fe80::1]/",
         ]),
@@ -803,7 +852,17 @@ describe("CodeMode fetch addresses", () => {
         "fetch cannot reach 169.254.169.254: it is a cloud metadata address.",
         "fetch cannot reach [::ffff:a9fe:a9fe]: it is a cloud metadata address.",
         "fetch cannot reach [fd00:ec2::254]: it is a cloud metadata address.",
+        "fetch cannot reach [fd20:ce::254]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:c1::a9fe:a9fe]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:ec2::23]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:a9fe:a9fe::1]: it is a cloud metadata address.",
+        "fetch cannot reach [fd00:42::42]: it is a cloud metadata address.",
         "fetch cannot reach 100.100.100.200: it is a cloud metadata address.",
+        "fetch cannot reach 192.0.0.192: it is a cloud metadata address.",
+        "fetch cannot reach [64:ff9b::a9fe:a9fe]: it is a cloud metadata address.",
+        "fetch cannot reach [64:ff9b:1::a9fe:a9fe]: it is a cloud metadata address.",
+        "fetch cannot reach [2002:a9fe:a9fe::]: it is a cloud metadata address.",
+        "fetch cannot reach [2001:0:4136:e378:8000:63bf:5601:5601]: it is a cloud metadata address.",
         "fetch cannot reach 169.254.1.1: it is a link-local address.",
         "fetch cannot reach [fe80::1]: it is a link-local address.",
       ])
@@ -884,6 +943,219 @@ describe("CodeMode fetch addresses", () => {
       yield* settles(`fetch cannot reach 127.0.0.1: it is a loopback address.${hint}`)
     }).pipe(Effect.provide(Config.testLayer())),
   )
+})
+
+// A request goes to the addresses that it was checked as, and the name only says what it is for. A name is resolved again
+// by whatever connects to it, and an attacker's name can answer differently the second time (DNS rebinding), so these
+// tests use names under .test, which no resolver leads anywhere: a request reaches the local server only by connecting
+// to the address that the configuration's resolver answered with.
+describe("CodeMode fetch connections", () => {
+  const allowAll: Permission.Ruleset = [{ action: "*", resource: "*", effect: "allow" }]
+  const resolving = Effect.fn(function* (lookup: (name: string) => Promise<ReadonlyArray<string>>) {
+    const tools = yield* Tool.Service
+    yield* tools.transform((editor) => editor.web({ lookup }))
+  })
+  const attempt = (url: string, init = "") =>
+    run(`try { return await (await fetch("${url}"${init})).text() } catch (e) { return e.message }`).pipe(
+      Effect.map((result) => result.output.output),
+    )
+
+  web.live("connects to the address that was checked, and the name only goes in the Host header", () =>
+    Effect.gen(function* () {
+      const { hits, requests, server } = yield* serve
+      yield* seed(allowAll)
+      const asked: Array<string> = []
+      // The first answer is a place that may be reached, which the local server stands in for, and every later one is the
+      // metadata service, as a name that rebinds would give.
+      yield* resolving(async (name) => {
+        asked.push(name)
+        return asked.length === 1 ? ["127.0.0.1"] : ["169.254.169.254"]
+      })
+      const url = `http://rebind.example.test:${server.port}`
+
+      expect(yield* attempt(`${url}/first`)).toBe("served")
+
+      expect(hits).toEqual(["GET /first"])
+      expect(requests[0].headers.get("host")).toBe(`rebind.example.test:${server.port}`)
+      // The answer that was checked is the one that was connected to, so nothing resolved the name again for the connection.
+      expect(asked).toEqual(["rebind.example.test"])
+
+      // The next request is checked on its own, and the answer it gets now is the metadata service.
+      expect(yield* attempt(`${url}/second`)).toBe(
+        "fetch cannot reach rebind.example.test (169.254.169.254): it is a cloud metadata address.",
+      )
+      expect(hits).toEqual(["GET /first"])
+    }),
+  )
+
+  web.live("keeps a Host header that the program sets", () =>
+    Effect.gen(function* () {
+      const { requests, server } = yield* serve
+      yield* seed(allowAll)
+      yield* resolving(async () => ["127.0.0.1"])
+
+      const init = `, { headers: { host: "virtual.example.test" } }`
+      expect(yield* attempt(`http://named.example.test:${server.port}/a`, init)).toBe("served")
+
+      expect(requests.map((request) => request.headers.get("host"))).toEqual(["virtual.example.test"])
+    }),
+  )
+
+  web.live("connects to the addresses that were checked for each redirect, and for a redirect only", () =>
+    Effect.gen(function* () {
+      const { hits, requests, origin } = yield* serve
+      yield* seed(allowAll)
+      const asked: Array<string> = []
+      yield* resolving(async (name) => {
+        asked.push(name)
+        return ["127.0.0.1"]
+      })
+
+      // The first request is to an address, which nothing resolves; the redirect names a host that something has to.
+      expect(yield* attempt(`${origin}/to-name`)).toBe("served")
+
+      expect(hits).toEqual(["GET /to-name", "GET /landed"])
+      expect(asked).toEqual(["hop.example.test"])
+      expect(requests.map((request) => request.headers.get("host"))).toEqual([
+        new URL(origin).host,
+        `hop.example.test:${new URL(origin).port}`,
+      ])
+    }),
+  )
+
+  web.live("reports the name that a request was for, and not the address it went to", () =>
+    Effect.gen(function* () {
+      const { server } = yield* serve
+      yield* seed(allowAll)
+      yield* resolving(async () => ["127.0.0.1"])
+      const url = `http://reported.example.test:${server.port}/page?x=1`
+
+      const result = yield* run(
+        `const reply = await fetch("${url}#top"); return [reply.url, reply.redirected, await reply.text()]`,
+      )
+
+      expect(JSON.parse(result.output.output)).toEqual([url, false, "served"])
+    }),
+  )
+
+  web.live("refuses a redirect to a name that now leads to the metadata service, and sends nothing to it", () =>
+    Effect.gen(function* () {
+      const { hits, origin } = yield* serve
+      yield* seed(allowAll)
+      yield* resolving(async () => ["169.254.169.254"])
+
+      expect(yield* attempt(`${origin}/to-name`)).toBe(
+        "fetch cannot reach hop.example.test (169.254.169.254): it is a cloud metadata address.",
+      )
+      expect(hits).toEqual(["GET /to-name"])
+    }),
+  )
+
+  web.live("refuses a name that does not resolve, whether the resolver fails or has no answer", () =>
+    Effect.gen(function* () {
+      const { hits, server } = yield* serve
+      yield* seed(allowAll)
+      const answers = [async () => Promise.reject(new Error("SERVFAIL")), async () => []]
+      const refused = "fetch cannot reach gone.example.test: it does not resolve to an address."
+
+      for (const answer of answers) {
+        yield* resolving(answer)
+        expect(yield* attempt(`http://gone.example.test:${server.port}/a`)).toBe(refused)
+      }
+      expect(hits).toEqual([])
+    }),
+  )
+
+  // Without a resolver of its own the configuration asks the system's. A name under .invalid is reserved to never resolve,
+  // and a request to it used to be sent on, to fail only when fetch resolved it again for the connection.
+  web.live(
+    "refuses a name that the system resolver does not know",
+    () =>
+      Effect.gen(function* () {
+        const { hits, server } = yield* serve
+        yield* seed(allowAll)
+
+        expect(yield* attempt(`http://orbit-no-such-host.invalid:${server.port}/a`)).toBe(
+          "fetch cannot reach orbit-no-such-host.invalid: it does not resolve to an address.",
+        )
+        expect(hits).toEqual([])
+      }),
+    30_000,
+  )
+
+  web.live("tries the next address when nothing listens at the one before, and sends the request once", () =>
+    Effect.gen(function* () {
+      const { hits, server } = yield* serve
+      yield* seed(allowAll)
+      // Nothing listens at 127.0.0.2, as a server on localhost can listen on only one of its two addresses.
+      yield* resolving(async () => ["127.0.0.2", "127.0.0.1"])
+
+      expect(yield* attempt(`http://either.example.test:${server.port}/a`)).toBe("served")
+      expect(hits).toEqual(["GET /a"])
+    }),
+  )
+
+  describe("over TLS", () => {
+    // The certificate of the test server is valid for localhost and 127.0.0.1, and is issued by a private test CA.
+    const fixture = (name: string) => path.join(import.meta.dir, "..", "..", "util", "test", "fixture", "tls", name)
+    const secure = Effect.acquireRelease(
+      Effect.promise(async () => {
+        const hits: Array<string> = []
+        const server = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          tls: {
+            cert: await Bun.file(fixture("server.pem")).text(),
+            key: await Bun.file(fixture("server.key")).text(),
+          },
+          fetch: (request) => {
+            hits.push(`${request.method} ${new URL(request.url).pathname}`)
+            return new Response("served over TLS")
+          },
+        })
+        return { hits, server }
+      }),
+      ({ server }) => Effect.promise(() => server.stop(true)),
+    )
+    // What `orb` installs for every request it makes, a program's fetch included: it trusts the private CA.
+    const trusting = Effect.acquireRelease(
+      Effect.sync(() => {
+        const original = globalThis.fetch
+        Network.install({ ORBIT_CA_CERTS: fixture("ca.pem") })
+        return original
+      }),
+      (original) =>
+        Effect.sync(() => {
+          globalThis.fetch = original
+        }),
+    )
+
+    web.live("checks the certificate against the name that the request is for, and not the address", () =>
+      Effect.gen(function* () {
+        const { hits, server } = yield* secure
+        yield* seed(allowAll)
+        yield* resolving(async () => ["127.0.0.1"])
+
+        // Checking the name does not replace checking the chain: the CA of the certificate is not trusted yet.
+        expect(yield* attempt(`https://localhost:${server.port}/untrusted`)).not.toBe("served over TLS")
+        expect(hits).toEqual([])
+
+        yield* trusting
+        // localhost is in the certificate. The request goes to 127.0.0.1 and is for localhost, so the certificate is
+        // checked for the name; an address is connected to as it is, and the certificate is valid for this one too.
+        expect(yield* attempt(`https://localhost:${server.port}/name`)).toBe("served over TLS")
+        expect(yield* attempt(`https://127.0.0.1:${server.port}/address`)).toBe("served over TLS")
+        expect(hits).toEqual(["GET /name", "GET /address"])
+
+        // The certificate is valid for 127.0.0.1, where this name is sent, but not for the name, and it is the name that
+        // the error blames.
+        expect(yield* attempt(`https://other.example.test:${server.port}/other`)).toMatch(
+          /altnames: Host: other\.example\.test/,
+        )
+        expect(hits).toEqual(["GET /name", "GET /address"])
+      }),
+    )
+  })
 })
 
 function updated() {

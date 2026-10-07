@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import path from "node:path"
 import { attempt, type Attempt } from "./agent.js"
 import { Git } from "./git.js"
+import { plain } from "./plain.js"
 import { Store, type NodeState } from "./store.js"
 import { introduction, parse, update } from "./team.js"
 import type {
@@ -82,6 +83,9 @@ export async function run(options: RunOptions): Promise<RunResult> {
   if (repository) await Git.exclude(repository)
   const store = Store.at(home)
   const log = options.log ?? (() => {})
+  // The title stays in the user's session database and is shown by `orb session list` and the terminal UI, which set it
+  // as the title of the window. The workflow's name and the node IDs are text from a file that a clone brings along.
+  const title = (node: string) => plain(`${options.workflow.name} · ${node}`)
   const previous = options.resume ? store.run(options.resume) : undefined
   if (options.resume && !previous) throw new Error(`No run ${options.resume} in ${home}`)
   const source = options.replay ? store.run(options.replay) : undefined
@@ -255,7 +259,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
         store.append(id, node, "attempt.started", { attempt: attempts, model })
         const result = await attempt(client(), {
           directory,
-          title: `${options.workflow.name} · ${node}`,
+          title: title(node),
           prompt: agentOptions.prompt,
           model,
           agent: agentOptions.agent,
@@ -284,7 +288,8 @@ export async function run(options: RunOptions): Promise<RunResult> {
         usage.input += result.usage.input ?? 0
         usage.output += result.usage.output ?? 0
         if (!result.error) {
-          const changed = place ? await Git.commit(place.directory, `orbit ${id}: ${node}`) : false
+          // The message of a commit is text from the file as well, and `git log` prints it as it is.
+          const changed = place ? await Git.commit(place.directory, `orbit ${id}: ${plain(node)}`) : false
           const value: AgentResult = {
             id: node,
             status: "succeeded",
@@ -461,7 +466,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
     store.append(id, node, "attempt.started", { attempt: 1, model: input.model })
     const result = await attempt(client(), {
       directory: input.directory,
-      title: `${options.workflow.name} · ${node}`,
+      title: title(node),
       prompt: input.prompt,
       model: input.model,
       agent: input.agent,
@@ -594,7 +599,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
     }
     await play(1, false)
 
-    const changed = place && !source ? await Git.commit(place.directory, `orbit ${id}: ${node}`) : false
+    const changed = place && !source ? await Git.commit(place.directory, `orbit ${id}: ${plain(node)}`) : false
     const done = state.summary !== undefined
     const error =
       state.failure ??

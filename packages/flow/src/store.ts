@@ -51,6 +51,12 @@ export interface Spend {
 
 const PASSING = new Set(["rate-limit", "transient", "timeout"])
 
+// The IDs the runner makes: run_ and a timestamp of 14 digits, then 6 hexadecimal digits. The store is a file in the
+// repository, so a clone brings its own, and what it holds is not to be trusted: an ID becomes a folder to remove and
+// part of a branch name, and one like `../../../x` leads out of the repository. A row with any other ID is not a run, so
+// the store neither lists it nor returns it.
+const RUN_ID_GLOB = `run_${"[0-9]".repeat(14)}_${"[0-9a-f]".repeat(6)}`
+
 export class Store {
   private readonly db: Database
 
@@ -94,12 +100,16 @@ export class Store {
   }
 
   run(id: string): Run | undefined {
-    const row = this.db.query("SELECT * FROM run WHERE id = ?").get(id) as RunRow | null
+    const row = this.db.query("SELECT * FROM run WHERE id = ? AND id GLOB ?").get(id, RUN_ID_GLOB) as RunRow | null
     return row ? toRun(row) : undefined
   }
 
   runs(limit = 20): Run[] {
-    return (this.db.query("SELECT * FROM run ORDER BY created DESC LIMIT ?").all(limit) as RunRow[]).map(toRun)
+    return (
+      this.db
+        .query("SELECT * FROM run WHERE id GLOB ? ORDER BY created DESC LIMIT ?")
+        .all(RUN_ID_GLOB, limit) as RunRow[]
+    ).map(toRun)
   }
 
   events(run: string): Event[] {

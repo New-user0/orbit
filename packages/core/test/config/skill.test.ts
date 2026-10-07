@@ -17,11 +17,13 @@ import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Location } from "@orbit/core/location"
 import { AbsolutePath } from "@orbit/core/schema"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Skill } from "@orbit/core/skill"
 import { SkillDiscovery } from "@orbit/core/skill/discovery"
 import { WellKnown } from "@orbit/core/wellknown"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
-import { tmpdir } from "../fixture/tmpdir"
+import { trustedProject, untrustedProject } from "../fixture/project-trust"
+import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
@@ -29,7 +31,11 @@ import { host } from "../plugin/host"
 const emptyDiscovery = SkillDiscovery.Service.of({ pull: () => Effect.succeed([]) })
 const watcherLayer = Watcher.testLayer
 const it = testEffect(
-  Layer.merge(AppNodeBuilder.build(LayerNode.group([Skill.node, Bus.node, FSUtil.node])), watcherLayer),
+  Layer.mergeAll(
+    AppNodeBuilder.build(LayerNode.group([Skill.node, Bus.node, FSUtil.node])),
+    watcherLayer,
+    trustedProject,
+  ),
 )
 const decode = Schema.decodeUnknownSync(Info)
 
@@ -50,6 +56,7 @@ const startEntries = Effect.fnUntraced(function* (
   home = directory,
   discovery = emptyDiscovery,
   compat: Config.Compat = Config.defaultCompat,
+  event?: NonNullable<Parameters<typeof host>[0]>["event"],
 ) {
   const service = yield* Skill.Service
   const pluginHost = host({
@@ -58,6 +65,7 @@ const startEntries = Effect.fnUntraced(function* (
       transform: service.transform,
       reload: service.reload,
     },
+    ...(event === undefined ? {} : { event }),
   })
   yield* ConfigCompatibilityPlugin.Plugin.effect(pluginHost).pipe(Effect.provide(Config.testLayer(entries, compat)))
   yield* ConfigSkillPlugin.Plugin.effect(
@@ -252,6 +260,68 @@ describe("ConfigSkillPlugin.Plugin", () => {
         }),
       ),
     ),
+  )
+
+  // The repository ships its links, and a clone recreates them. A skill's text goes to the model when it loads the skill,
+  // which the repository's own instructions can ask for, so a file that a link in an untrusted folder leads to must not
+  // become one. A junction stands for the link, since it needs no privilege on Windows.
+  it.live("leaves out a skill that a link leads out of an untrusted folder, until the folder is trusted", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const project = path.join(tmp, "project")
+      const orbit = path.join(project, ".orbit")
+      const vendor = path.join(project, CompatNames.vendor.directory)
+      const agents = path.join(project, CompatNames.agents)
+      const outside = path.join(tmp, "outside")
+      yield* Effect.promise(async () => {
+        // What the project holds itself, in Orbit's directory and in the roots of other products.
+        await fs.mkdir(path.join(orbit, "skills", "native"), { recursive: true })
+        await fs.mkdir(path.join(vendor, "skills", "foreign"), { recursive: true })
+        await write(path.join(orbit, "skills"), "native", "Shipped by the project")
+        await write(path.join(vendor, "skills"), "foreign", "Shipped for another product")
+        // What links lead to: a skill folder, a whole folder of skills, and the skills folder of a root.
+        await fs.mkdir(path.join(outside, "one"), { recursive: true })
+        await fs.mkdir(path.join(outside, "two"), { recursive: true })
+        await fs.mkdir(path.join(outside, "three", "abducted"), { recursive: true })
+        await fs.writeFile(path.join(outside, "one", "SKILL.md"), "---\nname: linked\n---\nSTOLEN ONE")
+        await fs.writeFile(path.join(outside, "two", "loose.md"), "---\nname: loose\n---\nSTOLEN TWO")
+        await write(path.join(outside, "three"), "abducted", "Taken from outside")
+        await fs.symlink(path.join(outside, "one"), path.join(orbit, "skills", "linked"), "junction")
+        await fs.symlink(path.join(outside, "two"), path.join(orbit, "skill"), "junction")
+        await fs.mkdir(agents, { recursive: true })
+        await fs.symlink(path.join(outside, "three"), path.join(agents, "skills"), "junction")
+      })
+      yield* Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        const trust = yield* ProjectTrust.Service
+        const skills = yield* startEntries(
+          [new Directory({ type: "directory", path: AbsolutePath.make(orbit), scope: "project", trusted: false })],
+          project,
+          tmp,
+          emptyDiscovery,
+          {
+            enabled: true,
+            roots: [
+              { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false },
+              { path: AbsolutePath.make(agents), kind: "agents", scope: "project", trusted: false },
+            ],
+          },
+          { subscribe: () => bus.subscribe(Event.Updated) },
+        )
+        const ids = () => skills.list().pipe(Effect.map((list) => list.map((item) => item.id).toSorted()))
+        const own = [Skill.ID.make("foreign"), Skill.ID.make("native")]
+        expect(yield* ids()).toEqual(own)
+
+        // Trusting the folder tells the plugin of the config and the one of the other products' roots, and the linked files
+        // supply skills as before.
+        yield* trust.grant({ persist: false, via: "test" })
+        yield* bus.publish(Event.Updated, {})
+        for (let attempt = 0; attempt < 100 && (yield* ids()).length < 5; attempt++) yield* Effect.sleep("20 millis")
+        expect(yield* ids()).toEqual(
+          [...own, ...["abducted", "linked", "loose"].map((id) => Skill.ID.make(id))].toSorted(),
+        )
+      }).pipe(Effect.provide(untrustedProject({ directory: project })))
+    }),
   )
 
   it.live("maps config entry types to skill directories", () =>

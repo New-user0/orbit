@@ -1,4 +1,5 @@
 import { ClientError, type OrbitClient, type TrustStatus } from "@orbit/client/promise"
+import { plain } from "@orbit/flow/plain"
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
@@ -9,51 +10,101 @@ import { errorMessage } from "./error"
 type Withheld = TrustStatus["withheld"][number]
 
 /**
+ * What a workflow or suite file defines that a run carries out on its own account, as `@orbit/flow` lists it, each with
+ * the node or task that carries it: the shell commands, the nodes whose agents have every action they ask permission
+ * for approved, with the `permissions` they set as written, and the nodes that run as one of the user's agents because
+ * the file names it, with the `agent` as written. Any of them can be none.
+ */
+type Defined = {
+  readonly file: string
+  readonly commands: ReadonlyArray<{ readonly id: string; readonly command: string }>
+  readonly approvals: ReadonlyArray<{ readonly id: string; readonly permissions: string }>
+  readonly agents: ReadonlyArray<{ readonly id: string; readonly agent: string }>
+}
+
+type Options = {
+  /** Trust an untrusted folder first (the `--trust` flag). */
+  readonly grant?: boolean
+  /** A session that, when it exists, decides the folder: the one the run happens in. */
+  readonly session?: string
+  /** The file the command is about to import, which runs the code in it. */
+  readonly imports?: string
+  /** The workflow or suite file the command is about to read, and what a run of it carries out, which may be nothing. */
+  readonly defines?: Defined
+}
+
+/**
  * What stops a command before it does any work: its folder is untrusted and its project config holds something back,
  * so a run would quietly go without the project's hooks, MCP servers and plugins and not be the run it asked for. This
  * is the text that says so, or undefined when the command may go ahead, as it may in a folder that holds nothing back
- * whether or not it is trusted. With `grant` (the `--trust` flag) an untrusted folder is first trusted for as long as
- * the serving process lives, which callers make a private one that ends with the run. The folder is the one the run
- * happens in: `directory` unless `session` names a session that exists, which runs in its own folder wherever the
- * command was started. A server older than workspace trust has no such route and holds nothing back, so the command
- * goes ahead, with a line on stderr that says nothing was checked. A trusted folder whose config above it is still
- * held back goes ahead as well, with a line that says what stays off.
+ * whether or not it is trusted. A command that imports a file, named by `imports`, is stopped by an untrusted folder
+ * whatever it holds back, because importing the file runs its code and there is nothing to leave out of that run. So is
+ * one that is about to run what a workflow or suite file defines, named by `defines`: shell commands, which no
+ * permission rule is asked about, nodes that approve what their agents ask permission for, and nodes that run as an
+ * agent the file names, whose own rules are added after the user's global ones and win. The last two settle the user's
+ * own rules in the file's favour. The code and the commands come from the folder that holds the file, which need not be
+ * the one the run happens in and can belong to another project, so that folder has to be trusted as well, whatever it
+ * holds back, because the run applies none of its config and the file is all it takes from it. It is asked after the
+ * folder of the run, which settled that project already, so it is left out when the file is in that very folder. With
+ * `grant` (the `--trust` flag) an untrusted folder is first trusted for as long as the serving process lives, which
+ * callers make a private one that ends with the run, and so is the folder that holds the file. The folder is the one the
+ * run happens in: `directory` unless `session` names a session that exists, which runs in its own folder wherever the
+ * command was started. A server older than workspace trust has no such route and holds nothing back, so a command that
+ * only checks what is held back goes ahead, with a line on stderr that says nothing was checked. One that imports a file
+ * or runs what a file defines does not: that server cannot say whether the folder is trusted, and this process would run
+ * the file or the commands itself, so the text says so and names the ways to get an answer. A trusted folder whose
+ * config above it is still held back goes ahead, with a line that says what stays off.
  */
 export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
   client: OrbitClient,
   directory: string,
-  options: { readonly grant?: boolean; readonly session?: string } = {},
+  options: Options = {},
 ) {
   const named = options.session
   const existing = named === undefined ? undefined : yield* call((signal) => findSession(client, named, signal))
   const location = { directory: existing?.location.directory ?? directory }
+  // A file that defines nothing a run carries out holds nothing up, as a folder that holds nothing back does not.
+  const defined =
+    options.defines &&
+    (options.defines.commands.length > 0 || options.defines.approvals.length > 0 || options.defines.agents.length > 0)
+      ? options.defines
+      : undefined
   const current = yield* call((signal) => client.location.trust.get({ location }, { signal })).pipe(
-    Effect.catchIf(unsupported, () =>
-      Effect.sync(() => {
-        process.stderr.write(
-          `Warning: this server is older than workspace trust, so it applies a folder's project config without asking whether the folder is trusted, and nothing was checked. Restart it to get the check; for the background service that is \`orb service restart\`.${EOL}`,
-        )
-        return undefined
-      }),
-    ),
-    // A folder that cannot be opened, or a server that does not answer, would otherwise surface as a bare status code.
-    Effect.mapError(
-      (cause) =>
-        new Error(`Could not check whether ${location.directory} is trusted: ${errorMessage(cause)}`, { cause }),
-    ),
+    // A server older than workspace trust has no such route.
+    Effect.catchIf(unsupported, () => Effect.succeed(undefined)),
+    Effect.mapError(unchecked(location.directory)),
   )
-  if (current === undefined) return undefined
+  if (current === undefined) {
+    if (options.imports !== undefined || defined !== undefined)
+      return unanswered(location.directory, options.imports, defined)
+    yield* Effect.sync(() =>
+      process.stderr.write(
+        `Warning: this server is older than workspace trust, so it applies a folder's project config without asking whether the folder is trusted, and nothing was checked. Restart it to get the check; for the background service that is \`orb service restart\`.${EOL}`,
+      ),
+    )
+    return undefined
+  }
   const status = options.grant && !current.trusted ? yield* grant(client, location) : current
-  if (blocked(status)) return refusal(status)
+  if (blocked(status, options.imports, defined)) return refusal(status, options.imports, defined)
   if (status.withheld.length > 0) yield* Effect.sync(() => process.stderr.write(`Warning: ${notice(status)}${EOL}`))
-  return undefined
+  // The folder that holds the file is the run's own unless the command was given a path elsewhere, and another project
+  // can own that folder: the run takes nothing from it but the file, and the file is what its trust is for. Getting here
+  // with a file means that the project of the run is trusted, so a folder of the same project is trusted as well.
+  const file = options.imports ?? defined?.file
+  const holder = file === undefined ? undefined : { directory: path.dirname(path.resolve(location.directory, file)) }
+  if (holder === undefined || holder.directory === location.directory) return undefined
+  const asked = yield* call((signal) => client.location.trust.get({ location: holder }, { signal })).pipe(
+    Effect.mapError(unchecked(holder.directory)),
+  )
+  const decided = options.grant && !asked.trusted ? yield* grant(client, holder) : asked
+  return decided.trusted ? undefined : holderRefusal(decided, options.imports, defined)
 })
 
 /** Prints the refusal, if there is one, the way `orb run` prints an error, and exits 1: for a command with nothing of its own to report it through. */
 export const requireTrust = Effect.fn("cli.trust.require")(function* (
   client: OrbitClient,
   directory: string,
-  options: { readonly grant?: boolean; readonly session?: string } = {},
+  options: Options = {},
 ) {
   const text = yield* trustRefusal(client, directory, options)
   if (text === undefined) return
@@ -70,20 +121,41 @@ export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: Orbi
   process.stderr.write(`orb acp: ${notice(status)}${EOL}`)
 })
 
-export function refusal(status: TrustStatus) {
+/**
+ * What a refusal says: the folder is not trusted, and what that holds up. That is the project config it finds, which
+ * holds something back, and, when the command loads a file from the folder, what running that file does: the code
+ * it imports (`imports`), or what it defines (`defines`), which is listed: shell commands, nodes that approve what
+ * their agents ask permission for, and nodes that run as an agent the file names.
+ */
+export function refusal(status: TrustStatus, imports?: string, defines?: Defined) {
   const own = status.withheld.filter((item) => item.directory === undefined)
   const above = status.withheld.filter((item) => item.directory !== undefined)
+  const loads = imports ?? defines?.file
+  // What there is to look over before trusting the folder.
+  const review = loads === undefined ? "those files" : own.length === 0 ? "the file" : "the file and those files"
   return [
-    `Orbit stopped before doing any work: ${status.directory} is not trusted, so the project config it finds holds back what could run code or reach the network:`,
-    "",
-    ...heldLines(status.directory, status.withheld),
+    ...lead(
+      `Orbit stopped before doing any work: ${status.directory} is not trusted`,
+      status.directory,
+      imports,
+      defines,
+    ),
+    ...(status.withheld.length === 0
+      ? []
+      : [
+          "",
+          ...(loads === undefined
+            ? []
+            : ["The project config it finds also holds back what could run code or reach the network:", ""]),
+          ...heldLines(status.directory, status.withheld),
+        ]),
     "",
     // What trusting the project lifts, and the files above it, which only their own folders do.
-    ...(own.length === 0
+    ...(own.length === 0 && loads === undefined
       ? []
       : [
           status.persistent
-            ? "Look those files over, then trust the folder for good with `orb trust`, or for this run only with --trust."
+            ? `Look ${review} over, then trust the folder for good with \`orb trust\`, or for this run only with --trust.`
             : "That folder is a home directory or a filesystem root, which Orbit never trusts for good, so `orb trust` refuses it. Pass --trust to trust it for this run only, or run from inside a project folder.",
         ]),
     ...(above.length === 0
@@ -91,6 +163,47 @@ export function refusal(status: TrustStatus) {
       : [
           `The files above the project stay off until the folder that holds them is trusted, which trusting the project does not do. Look them over, then trust it for good with ${trustCommands(above)}.`,
         ]),
+  ].join(EOL)
+}
+
+/**
+ * What a refusal says when the server has no trust routes, because it is older than workspace trust: it cannot say whether
+ * the folder is trusted, and the command is about to run what the folder brings in this process, so it stops. The text
+ * names the file and what it brings as `refusal` does, and the ways to get an answer.
+ */
+export function unanswered(directory: string, imports?: string, defines?: Defined) {
+  return [
+    ...lead(
+      `Orbit stopped before doing any work: the server is older than workspace trust, so it cannot say whether ${directory} is trusted`,
+      directory,
+      imports,
+      defines,
+    ),
+    "",
+    "Restart the server to get an answer, which for the background service is `orb service restart`. Or run on a current private server instead: --standalone starts one that checks the folder, and --trust starts one that trusts the folder for this run only.",
+  ].join(EOL)
+}
+
+/**
+ * What a refusal says when the folder that is not trusted is the one that holds the file the command loads, and not the
+ * one the run happens in, which was. It names the file and what it brings as `refusal` does, but not the config of the
+ * folder, which the run does not apply, and gives the command that trusts that folder, because a plain `orb trust` would
+ * trust the folder of the run.
+ */
+export function holderRefusal(status: TrustStatus, imports?: string, defines?: Defined) {
+  return [
+    ...lead(
+      `Orbit stopped before doing any work: ${status.directory} is not trusted`,
+      status.directory,
+      imports,
+      defines,
+    ),
+    "",
+    `The file is in another project than the one the command runs in, and each project is trusted on its own. ${
+      status.persistent
+        ? `Look the file over, then trust its folder for good with \`orb trust ${quoted(status.directory)}\`, or for this run only with --trust.`
+        : "Its folder is a home directory or a filesystem root, which Orbit never trusts for good, so `orb trust` refuses it. Pass --trust to trust it for this run only, or keep the file in a project folder."
+    }`,
   ].join(EOL)
 }
 
@@ -126,6 +239,10 @@ export const unsupported = (cause: unknown) =>
 export const call = <A>(request: (signal: AbortSignal) => Promise<A>) =>
   Effect.tryPromise({ try: request, catch: (cause) => cause })
 
+// A folder that cannot be opened, or a server that does not answer, would otherwise surface as a bare status code.
+const unchecked = (directory: string) => (cause: unknown) =>
+  new Error(`Could not check whether ${directory} is trusted: ${errorMessage(cause)}`, { cause })
+
 // One sentence on what stays off: the project's own files while it is untrusted, and what sits in folders above it.
 function notice(status: TrustStatus) {
   const above = status.withheld.filter((item) => item.directory !== undefined)
@@ -149,13 +266,67 @@ const summary = (directory: string, items: ReadonlyArray<Withheld>) =>
     .map((item) => `${item.name}: ${item.kinds}`)
     .join("; ")
 
-// Named from the project's folder when it lies inside it.
 function held(directory: string, items: ReadonlyArray<Withheld>) {
-  return items.map((item) => {
-    const relative = path.relative(directory, item.path)
-    const inside = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
-    return { name: inside ? relative : item.path, kinds: item.kinds.join(", ") }
-  })
+  return items.map((item) => ({ name: plain(fromFolder(directory, item.path)), kinds: item.kinds.join(", ") }))
+}
+
+// A file or directory named from the project's folder when it lies inside it.
+function fromFolder(directory: string, file: string) {
+  const relative = path.relative(directory, file)
+  const inside = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  return inside ? relative : file
+}
+
+// What the folder's missing trust holds up, first of all: the code the command imports, what the file it reads defines
+// (shell commands, nodes that approve what their agents ask permission for, and nodes that run as an agent the file
+// names), or else the config it finds. `heading` is what comes before: why the folder is not enough as it stands.
+function lead(heading: string, directory: string, imports: string | undefined, defines: Defined | undefined) {
+  if (imports !== undefined)
+    return [
+      `${heading}, and this command runs code from the folder: it imports ${plain(fromFolder(directory, imports))}, and importing a TypeScript or JavaScript file runs the code in it.`,
+    ]
+  if (defines === undefined)
+    return [`${heading}, so the project config it finds holds back what could run code or reach the network:`]
+  const file = plain(fromFolder(directory, defines.file))
+  // Each is a sentence that says what the command does, with the rows it found.
+  const found = [
+    ...(defines.commands.length === 0
+      ? []
+      : [
+          {
+            says: `runs shell commands from the folder: ${file} defines them, and a run executes them through the platform shell without asking for permission:`,
+            rows: defines.commands.map((item) => [item.id, item.command] as const),
+          },
+        ]),
+    ...(defines.approvals.length === 0
+      ? []
+      : [
+          {
+            says: `approves actions without asking you: ${file} sets \`permissions\` on the nodes below to \`auto\`, or to a template that can fill in as \`auto\`, which makes a run say yes, once, to every action their agents ask permission for, where it rejects them otherwise:`,
+            rows: defines.approvals.map((item) => [item.id, `permissions: ${item.permissions}`] as const),
+          },
+        ]),
+    ...(defines.agents.length === 0
+      ? []
+      : [
+          {
+            says: `lets the file choose which of your agents run its nodes: ${file} names an \`agent\` for each entry below, and an agent's own rules are added after your global rules, where the last match wins, so the file can pick an agent whose rules allow actions that yours ask about, which a run then does without asking:`,
+            rows: defines.agents.map((item) => [item.id, `agent: ${item.agent}`] as const),
+          },
+        ]),
+  ]
+  return found.flatMap((item, index) => [
+    ...(index === 0 ? [`${heading}, and this command ${item.says}`] : ["", `It also ${item.says}`]),
+    "",
+    ...columns(item.rows),
+  ])
+}
+
+// What a file defines, one line apiece in two columns: the node or task that carries it, and what it is.
+function columns(rows: ReadonlyArray<readonly [string, string]>) {
+  const shown = rows.map(([id, text]) => ({ id: plain(id), text: plain(text) }))
+  const width = Math.max(...shown.map((item) => item.id.length))
+  return shown.map((item) => `  ${item.id.padEnd(width)}  ${item.text}`)
 }
 
 // Trusts the folder for as long as this server lives, and nothing is stored. The config applies a grant a moment after
@@ -169,5 +340,11 @@ const grant = Effect.fnUntraced(function* (client: OrbitClient, location: { read
   return status
 })
 
-/** Whether the folder is held to a trust it lacks: untrusted, with something held back that a grant would let through. */
-const blocked = (status: TrustStatus) => !status.trusted && status.withheld.length > 0
+/**
+ * Whether the folder is held to a trust it lacks: untrusted, and either something is held back that a grant would let
+ * through, or the command loads a file from it that runs code (a module it imports) or carries out what the file defines
+ * (shell commands, approvals of what agents ask permission for, and the choice of which agents run), which a folder that
+ * holds nothing back does not excuse.
+ */
+const blocked = (status: TrustStatus, imports: string | undefined, defines: Defined | undefined) =>
+  !status.trusted && (imports !== undefined || defines !== undefined || status.withheld.length > 0)

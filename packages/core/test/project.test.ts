@@ -12,6 +12,7 @@ import { ProjectSchema } from "@orbit/core/project/schema"
 import { ProjectTable } from "@orbit/core/project/sql"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Hash } from "@orbit/util/hash"
+import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -316,6 +317,44 @@ describe("Project.resolve", () => {
     }),
   )
 
+  // A `.git` file can name any git directory, and that directory's `commondir` file can name another repository's `.git`.
+  // Git then reports the other repository as the main checkout of a folder that was never added to it, and the folder
+  // would share the other repository's trust decision, which is made for the canonical directory.
+  it.live("gives a folder that only names another repository's common directory a canonical directory of its own", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const victim = path.join(tmp.path, "victim")
+      const crafted = path.join(tmp.path, "crafted")
+      const linked = path.join(tmp.path, "linked")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(victim)
+        await initRepo(victim, { commit: true, remote: "git@github.com:owner/victim.git" })
+        await $`git worktree add ${linked} -b linked`.cwd(victim).quiet()
+        // The crafted folder's own git directory, with the victim's as its common directory.
+        await fs.mkdir(path.join(crafted, "gd"), { recursive: true })
+        await fs.writeFile(path.join(crafted, "gd", "HEAD"), "ref: refs/heads/main\n")
+        await fs.writeFile(path.join(crafted, "gd", "commondir"), path.join(victim, ".git"))
+        await fs.writeFile(path.join(crafted, ".git"), "gitdir: ./gd\n")
+      })
+      const project = yield* Project.Service
+
+      const resolved = yield* project.resolve(abs(crafted))
+      // Git does see the folder as a linked worktree of the victim's repository, so the identity follows it as before.
+      expect(resolved.vcs).toMatchObject({ type: "git", store: abs(path.join(victim, ".git")) })
+      expect(resolved.id).toBe(remoteID("github.com/owner/victim"))
+      expect(resolved.directory).toBe(yield* real(crafted))
+      expect(resolved.canonical).toBe(yield* real(crafted))
+
+      // A worktree that `git worktree add` registered still shares the main checkout's directory.
+      const shared = yield* project.resolve(abs(linked))
+      expect(shared.canonical).toBe(yield* real(victim))
+      expect(shared.id).toBe(resolved.id)
+    }),
+  )
+
   it.live("returns git global for repo with no commits and no remote", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
@@ -513,6 +552,54 @@ describe("Project.resolve", () => {
       expect(result.vcs?.type).toBe("git")
       expect(result.directory).toBe(yield* real(nested))
     }),
+  )
+
+  it.live("resolving a mercurial folder does not run an hg.bat that the folder holds", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      const marker = path.join(tmp.path, "ran.txt")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(tmp.path, ".hg"))
+        await fs.writeFile(path.join(tmp.path, "hg.bat"), `@echo off\r\necho ran> "${marker}"\r\n`)
+      })
+      const project = yield* Project.Service
+
+      // The project is identified before the user is asked about trusting its folder. cmd.exe skips the working folder
+      // when NoDefaultCurrentDirectoryInExePath is set, and the shell that runs the tests may set it.
+      yield* withCurrentDirectoryOnPath(project.resolve(abs(tmp.path)))
+
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+    }),
+  )
+
+  it.live(
+    "resolving a mercurial folder does not run an hg.exe that the folder holds",
+    () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, ".hg")))
+        const ran = yield* Effect.promise(() => plant(tmp.path, "hg"))
+        const project = yield* Project.Service
+
+        // The project is identified before the user is asked about trusting its folder. Bun looks in the working folder
+        // before PATH for an .exe that it only has a name for, unless the process has NoDefaultCurrentDirectoryInExePath,
+        // which is removed first because the shell that runs the tests may set it.
+        yield* withCurrentDirectoryOnPath(project.resolve(abs(tmp.path)))
+
+        expect(yield* Effect.promise(ran)).toEqual([])
+      }),
+    // The test compiles its decoy program, which takes longer on a slow disk.
+    30_000,
   )
 
   it.live("returns global id for unreadable mercurial metadata", () =>

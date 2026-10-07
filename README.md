@@ -31,18 +31,24 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   reach the network. Its hooks, MCP servers (including `.mcp.json`), plugin list, providers, shell, sandbox, formatter
   and language server settings, default agent and keep-alive requests are left out, only its `deny` permission rules
   are kept, and it cannot choose a web search provider. The server loads none of the plugins in its `.orbit/plugins`,
-  and the terminal UI imports none of the ones it finds there itself. Its commands run no shell
-  snippets, and its agent files lose their `request` and their `allow` and `ask` rules. Its `{env:VAR}` references are
-  not expanded, and a `{file:path}` reference or instruction path counts only inside the project's folder. Orbit starts
-  no language server and runs no formatter in such a folder, built-in or configured, because they read its code and
-  some run it. Config in the folders above a project follows the decision for the folder that holds it. Your own config,
-  `ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT` are never held back. A private or foreground server trusts every folder
+  and the terminal UI imports none of the ones it finds there itself. Its commands run no shell snippets and run as the
+  current agent, and its agent files lose their `request`, their `mode` and `hidden`, and their `allow` and `ask` rules.
+  Its `{env:VAR}` references are not expanded, and a `{file:path}` reference or instruction path counts only inside the
+  project's folder. A link in the project that leads out of it supplies no instruction file, agent, command, skill or
+  output style, and the file tools ask before they follow one. Orbit starts no language server and runs no formatter in
+  such a folder, built-in or configured, because they read its code and some run it. Config in the folders above a
+  project follows the decision for the folder that holds it. Your own config, `ORBIT_CONFIG` and `ORBIT_CONFIG_CONTENT`
+  are never held back. A private or foreground server trusts every folder
   except the home directory and filesystem roots when it starts with `ORBIT_TRUST_PROJECT=1`, and an SDK host does with
   `trust: { implicit: true }`; the shared background service never does, and a host that leaves the option unset trusts
   nothing. `orb trust` trusts a folder for good (`--list` shows the folders, `--revoke` ends it), and `--trust` on
   `orb run`, `orb loop`, `orb flow run`, `orb flow resume` and `orb eval` trusts it for one run on a private server.
   Those commands exit with status 1, doing nothing, in a folder that is not trusted and holds something back. The
-  terminal UI asks about such a folder, and `/trust` asks again. See
+  terminal UI asks about such a folder, and `/trust` asks again. `orb flow run`, `orb flow resume` and `orb eval` also
+  stop in a folder that is not trusted, whatever it holds back, for a workflow or suite that is a TypeScript or
+  JavaScript module, that defines shell commands, that names an agent, or, for a workflow, that sets
+  `permissions: auto`, and they stop when the server is too old to say whether the folder is trusted. The folder that
+  holds such a file is held to the same when it belongs to another project than the one they run in. See
   [docs/upgrading.md](docs/upgrading.md).
 - **Tachyon:** set the same `TACHYON_*` variables the Python SDK uses; see [docs/tachyon.md](docs/tachyon.md).
 - **Corporate TLS:** `ORBIT_CA_CERTS` (PEM files, separated like `PATH`) are trusted in addition to the bundled and
