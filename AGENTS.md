@@ -42,6 +42,10 @@ Valid types are `feat`, `fix`, `docs`, `chore`, `refactor`, and `test`. Scopes a
 
 Examples: `fix(tui): simplify thinking toggle styling`, `docs: update contributing guide`, `chore(sdk): regenerate types`.
 
+Agents never merge a pull request or delete a remote branch. A stack lands bottom-up, only after the review of each head commit approves, and a child is retargeted to `main` (`gh pr edit <n> --base main`) before its parent's branch is deleted, because GitHub closes a child whose base is deleted.
+
+Regenerate the PR body from the commit list and the last gate run after every push. A PR that names helpers only another open PR provides has `depends on #<n>` in its title until that PR merges.
+
 ## Style Guide
 
 ### General Principles
@@ -164,6 +168,31 @@ const table = sqliteTable("session", {
   createdAt: integer("created_at").notNull(),
 })
 ```
+
+## Untrusted Repositories
+
+A cloned repository chooses every file in its folder, and Orbit starts there before anyone has decided anything, so treat what a folder supplies as hostile until `ProjectTrust` says that folder is trusted. The number after each rule is its class in `docs/untrusted-repositories.md`.
+
+- Before writing a loader (anything that reads, imports or spawns what a folder supplies), add it to the inventory in `docs/untrusted-repositories.md`. Gate it on "this folder is trusted" before its first read, import or spawn: `ProjectTrust.trusted()` in the server, `requireTrust` with `imports` or `defines` in a command (without them it refuses only a folder that holds config back), `trust.startup.trusted()` in the TUI. Never gate on "something is held back". (class 1)
+- Treat a repository data file that reaches a shell, an approval or an agent choice as code: list it with a reader that shares the runner's validator (`workflowCommands`, `workflowApprovals`, `workflowAgents` in `packages/flow/src/load.ts`), gate on that list, and test that gate and runner agree. (class 2)
+- Decide trust for one resolved folder and pass that same value through ask, display, grant and act; where two components resolve a root differently (server and TUI, cwd and file, link and real path, `.git` file and worktree list), the stricter answer wins. (class 3)
+- Decide containment by asking `ProjectTrust` (`reachable`, `supplies` or `escapes`). Use `FSUtil.contains` only on two paths that are already real. Never decide it with `FSUtil.resolve`, `fs.resolve`, `===` or `startsWith`: the resolvers keep the lexical path for a part that is not there, so a new file under a link passes. Cover dangling links, UNC paths and Windows case. (class 4)
+- Treat a name, ID or ref read from a file the clone ships (run store, config, workflow) as hostile: validate its exact shape where it enters, and never join it into a path, git ref, glob or session title before that. (class 5)
+- Only `http:` and `https:` URLs reach `fetch` (Bun's also reads `file:`, `data:` and `s3:`). Ask permission for every hop a repository or script can influence (`PermissionWeb.request`), pass `AddressGuard.check`, connect to the address that was checked with the name only in `Host` and SNI, and refuse a name that resolves to nothing, fails to resolve or answers with names. (class 6)
+- Give every gate and decoder an explicit result for error, unknown input, old server, timeout and a malformed sibling: refuse with one log line, and let one bad entry cost only itself (`HookConfig.decode` decodes entry by entry). (class 7)
+- Classify every new config, agent or command field in `ConfigTrust.classification`. A field that selects which rules, agent or mode apply is a permission: an untrusted folder gets deny rules only and cannot name an agent. `model` and an agent's `steps` are inert today, an open decision on the page (Known gaps), so ask before classifying a model, provider or budget field as inert. (class 8)
+- Pass every string from a file, run store or workflow, and every session title, that reaches a person through `plain`, `progress`, `json` (`@orbit/flow/plain`) or `terminalTitle`, and escape stored text at write time. `plain` flattens line breaks, so it is not the sink for message bodies, which wait for a renderer sanitizer (Known gaps). (class 9)
+- Assume the compiled binary starts in an untrusted repository before any trust check: keep the autoload options in `packages/cli/script/autoload.ts` off except `autoloadPackageJson`, never load a package by name from the folder, and replace each lookup that a dependency leaves to the runtime and that can load code (`packages/cli/script/runtime-requires.ts`). (class 10)
+- On Windows a bare program name is looked up in the working folder before `PATH` unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`: call `ProgramLookup.install()` (`packages/util/src/program-lookup.ts`) first in every process entry, find executables with `which` (`packages/core/src/util/which.ts`, `PATH` only unless `PATH` itself names the folder), start them through `CrossSpawnSpawner`, and never hand a bare name to `exec` or `cmd /c` outside it. (class 10)
+- Parse Markdown front matter only through `ConfigMarkdown`, whose evaluating engines are disabled; never call gray-matter or another parser that can evaluate content, and test every spelling with a marker file. (class 11)
+- Route every entry point that can start work (each command, subprocess, TUI plugin loader, editor button and SDK host) through the same gate, because a gate in the server does not reach the CLI or the TUI process. (class 12)
+- Carry each refusal and decline to every client (TUI, JSON, ACP, SDK) as a typed error with a time limit. (class 13)
+- Make every test fail on the pre-fix code: write each attack as a marker file with a trusted control run, record the mutation in the PR, and run the tests that skip on your platform elsewhere before closing. (class 14)
+- A negative test passes vacuously under two defaults: core tests trust every folder (`packages/core/test/preload.ts` sets `ORBIT_TRUST_PROJECT`), so build `WorkspaceTrust.configured({ implicit: false })` as `untrustedProject` does in `packages/core/test/fixture/project-trust.ts`, and some shells set `NoDefaultCurrentDirectoryInExePath`, so a program-lookup test deletes it from `process.env` first and plants `.exe` decoys (`hg.exe`, `cmd.exe`, `node.exe`) as well as `.bat` ones (`packages/core/test/fixture/decoy.ts`). (class 14)
+- Write docs, schema descriptions, comments and the PR body last, from the final tree, claim only what a named test pins, and add a `docs/upgrading.md` note for every visible behavior change. (class 15)
+- When a review finds one hole, list its class from `docs/untrusted-repositories.md` (surfaces, sinks, spellings, entry points) and close every member in one commit with a table-driven test. A hole on a default or demonstrated path is not a speculative edge case under the Style Guide's buy-in rule: fix it in the PR that finds it, and put speculative hardening on a follow-up list. (Working practices)
+
+Walk the Review checklist in `docs/untrusted-repositories.md` before opening a PR that reads project files, runs commands, makes network requests, prints text from a file or changes the build; it holds the reasons, helpers, tests and review questions behind each rule, and the Known gaps that M1 left open.
 
 ## Testing
 
