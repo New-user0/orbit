@@ -603,7 +603,10 @@ const layer = Layer.unwrap(
       ],
     )
   }),
-).pipe(Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)), Layer.provideMerge(testLLM))
+).pipe(
+  Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
+  Layer.provideMerge(testLLM),
+)
 const it = testEffect(layer)
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
@@ -3738,6 +3741,41 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Question")
 
     expect(s.requests[0]?.generation?.maxTokens).toBe(256_000)
+  })
+
+  scenario("lowers the output limit to the configured cap and never raises it", function* (s) {
+    const config = s.configControl!
+    const setCap = (cap: number) =>
+      config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: cap }) })])
+    s.currentModel = fittedOutputModel
+    yield* setCap(8_000)
+    yield* s.llm.push(TestLLM.text("Capped", "text-cap-low"))
+    yield* s.runPrompt("Question")
+    yield* setCap(500_000)
+    yield* s.llm.push(TestLLM.text("Above the maximum", "text-cap-high"))
+    yield* s.runPrompt("Again")
+
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
+    expect(s.requests[1]?.generation?.maxTokens).toBe(64_000)
+  })
+
+  scenario("applies the configured cap before session context hooks run", function* (s) {
+    const config = s.configControl!
+    const hooks = yield* PluginHooks.Service
+    const seen: (number | undefined)[] = []
+    yield* config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        seen.push(event.options.maxTokens)
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(TestLLM.text("Hooked", "text-cap-hook"))
+    yield* s.runPrompt("Question")
+
+    expect(seen).toEqual([8_000])
+    expect(s.requests[0]?.generation?.maxTokens).toBe(20_000)
   })
 
   scenario("gives the summary its full output limit when the conversation overshot the threshold", function* (s) {

@@ -47,6 +47,7 @@ describe("ConfigTrust.sanitize", () => {
     ["shell", "/bin/zsh", "shell"],
     ["default_agent", "mine", "permissions"],
     ["fallback_model", "acme/backup", "providers"],
+    ["output_token_cap", 8000, "providers"],
     ["update", "auto", "network"],
     ["share", "auto", "network"],
     ["enterprise", { url: "https://share.example.com" }, "network"],
