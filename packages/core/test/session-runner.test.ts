@@ -339,6 +339,20 @@ const layer = Layer.unwrap(
                   return { output: { text }, content: text }
                 }),
             },
+            // A read-only call that a new user message may cancel.
+            cancelable: {
+              name: "cancelable",
+              description: "Echo text, as a call a new user message cancels",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: true, interruptBehavior: "cancel" },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* state.awaitToolBarrier
+                  return { output: { text }, content: text }
+                }),
+            },
             // Runs alone: the scheduler starts it only when nothing else runs.
             mutate: {
               name: "mutate",
@@ -1500,6 +1514,7 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.model).toBe(model)
     expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual([
       "ask",
+      "cancelable",
       "defect",
       "echo",
       "gated",
@@ -3944,6 +3959,7 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests).toHaveLength(1)
     expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual([
       "ask",
+      "cancelable",
       "defect",
       "echo",
       "gated",
@@ -4788,6 +4804,111 @@ describe("SessionRunnerLLM", () => {
       ]),
       { type: "assistant", finish: "stop" },
     ])
+  })
+
+  // A step with a cancel-behavior call and a block-behavior call, both running, and the first request already sent.
+  const steerFixture = function* (s: Scenario) {
+    yield* s.admit("Look and echo")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-cancelable", name: "cancelable", input: { text: "look" } }),
+        LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "keep" } }),
+      ),
+      TestLLM.text("Handled", "text-after-steer"),
+    )
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    return { tools, run }
+  }
+  const finishSteered = (fixture: { tools: { release: Effect.Effect<void> }; run: Fiber.Fiber<unknown, unknown> }) =>
+    Effect.gen(function* () {
+      yield* fixture.tools.release
+      yield* Fiber.join(fixture.run)
+    })
+
+  scenario("cancels only the cancel-behavior calls when the user steers", function* (s) {
+    const fixture = yield* steerFixture(s)
+    yield* s.admit("STEER")
+    yield* finishSteered(fixture)
+
+    expect(s.requests).toHaveLength(2)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Look and echo"),
+      Expected.assistant({}, [
+        Expected.failedTool({ id: "call-cancelable" }, { error: { type: "tool.cancelled" } }),
+        { id: "call-echo", state: { status: "completed" } },
+      ]),
+      Expected.user("STEER"),
+      { type: "assistant", finish: "stop" },
+    ])
+    expect(userTexts(s.requests[1])).toEqual(["Look and echo", "STEER"])
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-cancelable", "call-echo"])
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain("Cancelled because the user sent a new message")
+  })
+
+  scenario("cancels when a prompt is sent with the default delivery and resume", function* (s) {
+    const fixture = yield* steerFixture(s)
+    yield* s.session.prompt({ sessionID, text: "STEER" })
+    yield* finishSteered(fixture)
+    expect((yield* s.context)[1]).toMatchObject({
+      content: [{ id: "call-cancelable", state: { error: { type: "tool.cancelled" } } }, { id: "call-echo" }],
+    })
+  })
+
+  for (const [name, admit] of [
+    ["a steer in another session", (s: Scenario) =>
+      Effect.gen(function* () {
+        yield* insertSession(otherSessionID)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "OTHER", delivery: "steer", resume: false })
+      })],
+    ["a queued prompt", (s: Scenario) => s.session.prompt({ sessionID, text: "LATER", delivery: "queue", resume: false })],
+    ["a synthetic notice", (s: Scenario) => s.session.synthetic({ sessionID, text: "Shell job finished" })],
+  ] as const)
+    scenario(`does not cancel anything for ${name}`, function* (s) {
+      const fixture = yield* steerFixture(s)
+      yield* admit(s)
+      yield* Effect.yieldNow
+      yield* finishSteered(fixture)
+      expect(JSON.stringify(yield* s.context)).not.toContain("tool.cancelled")
+    })
+
+  scenario("cancels when a queued user prompt is steered, but not a pending synthetic item", function* (s) {
+    const fixture = yield* steerFixture(s)
+    const synthetic = yield* s.session.synthetic({ sessionID, text: "Shell job finished", delivery: "queue", resume: false })
+    yield* s.session.steerInbox({ sessionID, inboxID: synthetic.id })
+    yield* Effect.yieldNow
+    expect(JSON.stringify(yield* s.context)).not.toContain("tool.cancelled")
+    const queued = yield* s.session.prompt({ sessionID, text: "LATER", delivery: "queue", resume: false })
+    yield* s.session.steerInbox({ sessionID, inboxID: queued.id })
+    yield* finishSteered(fixture)
+    expect((yield* s.context)[1]).toMatchObject({
+      content: [{ id: "call-cancelable", state: { error: { type: "tool.cancelled" } } }, { id: "call-echo" }],
+    })
+  })
+
+  scenario("cancels a cancel-behavior call that streams in after the steer", function* (s) {
+    yield* s.admit("Echo then look")
+    const gate = yield* s.llm.gate
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "keep" } }),
+        LLMEvent.toolCall({ id: "call-late", name: "cancelable", input: { text: "late" } }),
+      ),
+      TestLLM.text("Handled", "text-after-steer"),
+    )
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* gate.started
+    yield* s.admit("STEER")
+    yield* gate.release
+    yield* tools.started
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["keep"])
+    expect((yield* s.context)[1]).toMatchObject({
+      content: [{ id: "call-echo" }, { id: "call-late", state: { error: { type: "tool.cancelled" } } }],
+    })
   })
 
   scenario("settles repeated provider-local tool call IDs against their owning assistant messages", function* (s) {
