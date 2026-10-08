@@ -605,6 +605,7 @@ const layer = Layer.effectDiscard(
     })
     yield* bus.project(SessionEvent.MessageContentUpdated, (event) => run(db, event))
     yield* bus.project(SessionEvent.UsageRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
+    yield* bus.project(SessionEvent.SideQueryRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
     yield* bus.project(SessionEvent.Forked, (event) => projectFork(db, event))
     yield* bus.project(SessionEvent.InboxDelivered, (event) =>
       Effect.gen(function* () {
@@ -777,17 +778,24 @@ const layer = Layer.effectDiscard(
         yield* InstructionState.reset(db, event.data.sessionID)
       }),
     )
-    yield* bus.subscribe([SessionEvent.Step.Ended, SessionEvent.Step.Failed, SessionEvent.UsageRecorded]).pipe(
-      Stream.runForEach((event) => {
-        if (
-          event.type === SessionEvent.Step.Failed.type &&
-          (event.data.cost === undefined || event.data.tokens === undefined)
-        )
-          return Effect.void
-        return publishSessionUsage(db, bus, event.data.sessionID)
-      }),
-      Effect.forkScoped({ startImmediately: true }),
-    )
+    yield* bus
+      .subscribe([
+        SessionEvent.Step.Ended,
+        SessionEvent.Step.Failed,
+        SessionEvent.UsageRecorded,
+        SessionEvent.SideQueryRecorded,
+      ])
+      .pipe(
+        Stream.runForEach((event) => {
+          if (
+            event.type === SessionEvent.Step.Failed.type &&
+            (event.data.cost === undefined || event.data.tokens === undefined)
+          )
+            return Effect.void
+          return publishSessionUsage(db, bus, event.data.sessionID)
+        }),
+        Effect.forkScoped({ startImmediately: true }),
+      )
   }),
 )
 
