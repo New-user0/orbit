@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import path from "path"
 import { pathToFileURL } from "url"
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { Database } from "@orbit/core/database/database"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -1212,6 +1212,61 @@ describe("Session.prompt", () => {
       const promoted = yield* session.prompt({ ...input, turn: { maxTokens: 5 } })
       expect(promoted.payload.turn).toEqual({ maxSteps: 3 })
       expect(yield* admitted(messageID)).toBeUndefined()
+    }),
+  )
+
+  // The message records the delivery the input left the inbox with, and a retry reports that one, not its own.
+  for (const [first, retry] of [
+    ["steer", "queue"],
+    ["queue", "steer"],
+  ] as const)
+    it.effect(`reports the ${first} delivery of a promoted prompt or synthetic whose ID is retried as ${retry}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* Session.Service
+        const bus = yield* Bus.Service
+        const { db } = yield* Database.Service
+        const syntheticID = SessionMessage.ID.create()
+
+        yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: first, resume: false })
+        yield* session.synthetic({ sessionID, id: syntheticID, text: "Done", delivery: first, resume: false })
+        // Pending, the inbox row answers.
+        expect((yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: retry })).delivery).toBe(
+          first,
+        )
+        expect((yield* session.synthetic({ sessionID, id: syntheticID, text: "Done", delivery: retry })).delivery).toBe(
+          first,
+        )
+
+        yield* SessionInbox.promote(db, bus, sessionID, "input")
+        yield* SessionInbox.promote(db, bus, sessionID, "input")
+        expect(yield* admittedCount).toBe(0)
+        // Promoted, the message answers, and it has not forgotten how it arrived.
+        expect((yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: retry })).delivery).toBe(
+          first,
+        )
+        expect((yield* session.synthetic({ sessionID, id: syntheticID, text: "Done", delivery: retry })).delivery).toBe(
+          first,
+        )
+        expect(yield* admittedCount).toBe(0)
+      }),
+    )
+
+  it.effect("reports the delivery of the retry for a promoted message that predates recorded deliveries", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+
+      yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: "steer", resume: false })
+      yield* SessionInbox.promote(db, bus, sessionID, "input")
+      // Rows projected before the delivery was recorded carry none.
+      yield* db.run(sql`update session_message set data = json_remove(data, '$.delivery') where id = ${messageID}`)
+
+      expect((yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: "queue" })).delivery).toBe(
+        "queue",
+      )
     }),
   )
 })
