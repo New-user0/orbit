@@ -1245,6 +1245,87 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[2])).toContain("Background work completed")
   })
 
+  scenario("delivers a notice admitted during a tool batch once, after the tool results", function* (s) {
+    yield* s.admit("Start background work")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "job started" }),
+      TestLLM.text("Handled notice", "text-notice"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    yield* s.session.synthetic({
+      sessionID,
+      text: "Shell job finished",
+      description: "job",
+      metadata: { source: "shell", state: "completed" },
+    })
+    expect(s.requests).toHaveLength(1)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "user"])
+    expect(userTexts(s.requests[1])).toEqual(["Start background work", "Shell job finished"])
+    expect(userTexts(s.requests[0])).toEqual(["Start background work"])
+    expect((yield* s.context).map((message) => message.type)).toEqual(["user", "assistant", "synthetic", "assistant"])
+    expect(yield* s.inbox).toEqual([])
+    expect(
+      (yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1"),
+    ).toHaveLength(2)
+  })
+
+  scenario("delivers a notice only after every tool in the batch has joined", function* (s) {
+    yield* s.admit("Echo twice in parallel")
+    yield* s.llm.push(
+      Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: "call-echo-0", name: "echo", input: { text: "0" } }),
+        LLMEvent.toolCall({ id: "call-echo-1", name: "echo", input: { text: "1" } }),
+        LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" } }),
+        LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
+      ]),
+      TestLLM.text("Handled notice", "text-notice"),
+    )
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(yield* tools.maxActive).toBe(2)
+    yield* s.session.synthetic({ sessionID, text: "Shell job finished" })
+    yield* Effect.yieldNow
+    expect(s.requests).toHaveLength(1)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "tool", "user"])
+    expect(userTexts(s.requests[1])).toEqual(["Echo twice in parallel", "Shell job finished"])
+    expect(yield* s.inbox).toEqual([])
+  })
+
+  scenario("keeps a queued prompt admitted during a tool batch out of the tool continuation", function* (s) {
+    yield* s.admit("Echo before queue")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "working" }),
+      TestLLM.text("Finished first", "text-first"),
+      TestLLM.text("Handled queue", "text-queue"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    yield* s.session.prompt({ sessionID, text: "Queued for later", delivery: "queue" })
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1])).toEqual(["Echo before queue"])
+    expect(userTexts(s.requests[2])).toEqual(["Echo before queue", "Queued for later"])
+    expect(yield* s.inbox).toEqual([])
+  })
+
   scenario("streams one request with registry definitions from chronological user history", function* (s) {
     yield* s.admit("First")
     yield* s.runPrompt("Second")
