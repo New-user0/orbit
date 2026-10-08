@@ -774,6 +774,43 @@ describe("certificate failures", () => {
     expect(isRetryable(transport({ cause: Object.assign(new Error("fetch failed"), { cause: { code } }) }))).toBe(false)
   })
 
+  // Node's shapes: undici throws TypeError("fetch failed") whose cause carries the code, and the AI SDK wraps that as
+  // the cause of an APICallError. The native route lifts the cause's code onto the TransportError and keeps the cause.
+  const undici = (message: string, code = "UNSPECIFIED") =>
+    new TypeError("fetch failed", { cause: Object.assign(new Error(message), { code }) })
+
+  test.each([
+    { name: "undici fetch failed", code: undefined, cause: undici("CA signature digest algorithm too weak") },
+    { name: "native route lifted code", code: "UNSPECIFIED", cause: undici("permitted subtree violation") },
+    {
+      name: "AI SDK APICallError",
+      code: undefined,
+      cause: Object.assign(new Error("Cannot connect to API"), { cause: undici("permitted subtree violation") }),
+    },
+  ])("does not retry Node's UNSPECIFIED verification result: $name", (input) => {
+    expect(certificateFailureCode(transport({ code: input.code, cause: input.cause }).reason)).toBe("UNSPECIFIED")
+    expect(isRetryable(transport({ code: input.code, cause: input.cause }))).toBe(false)
+  })
+
+  test.each([
+    { name: "a transport code of its own", failure: transport({ code: "UNSPECIFIED" }) },
+    {
+      name: "a direct cause with that code",
+      failure: transport({ cause: Object.assign(new Error("x"), { code: "UNSPECIFIED" }) }),
+    },
+    { name: "a plain-object cause", failure: transport({ code: "UNSPECIFIED", cause: { code: "UNSPECIFIED" } }) },
+    {
+      name: "a provider object in a cause",
+      failure: transport({ cause: new Error("x", { cause: { code: "UNSPECIFIED" } }) }),
+    },
+    {
+      name: "a reset connection",
+      failure: transport({ code: "ECONNRESET", cause: undici("other side closed", "ECONNRESET") }),
+    },
+  ])("keeps $name retryable", (input) => {
+    expect(isRetryable(input.failure)).toBe(true)
+  })
+
   test("a provider message that mentions a certificate stays retryable", () => {
     expect(isRetryable(transport({ message: "unknown certificate authority", code: "server_error" }))).toBe(true)
   })

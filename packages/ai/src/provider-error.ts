@@ -69,8 +69,10 @@ export const isContextOverflowFailure = (failure: unknown) =>
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
 // The certificate verification codes (X509_V_ERR_* names) that Bun's fetch reports as the error code, as listed in its
-// binary, plus Node's own host-name check. UNKNOWN_CERTIFICATE_VERIFICATION_ERROR is Bun's name for a result its table
-// does not map. A provider's own error codes are never in this set.
+// binary (OUT_OF_MEM is left out on purpose: it is a resource failure, not a verdict on the certificate), plus Node's own
+// host-name check. UNKNOWN_CERTIFICATE_VERIFICATION_ERROR is Bun's name for a result its table does not map. Node names
+// only a short list of results and reports every other one as UNSPECIFIED (see certificateFailureCode); workerd gives no
+// code at all, so a failed check there stays retryable. A provider's own error codes are never in this set.
 const CERTIFICATE_CODES = new Set([
   "UNABLE_TO_GET_ISSUER_CERT",
   "UNABLE_TO_GET_CRL",
@@ -148,6 +150,10 @@ export const certificateFailureCode = (error: unknown, depth = 0): string | unde
   if (depth > 5 || !isRecord(error)) return undefined
   const code = typeof error.code === "string" ? error.code : undefined
   if (code !== undefined && CERTIFICATE_CODES.has(code)) return code
+  // Node reports a verification result it has no name for (a weak signature digest, a name-constraint violation) as
+  // UNSPECIFIED on the Error that undici's TypeError("fetch failed") carries as its cause. The code is generic, so it
+  // counts only there, two levels below the failure: never on the failure, its direct cause, a plain object, or a value a provider supplied.
+  if (code === "UNSPECIFIED" && depth > 1 && error instanceof Error) return code
   return certificateFailureCode(error.cause, depth + 1)
 }
 

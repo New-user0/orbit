@@ -1235,7 +1235,9 @@ issuer, an untrusted chain, an expired or not yet valid certificate, or a host n
 it like any other network failure and retried it for about 160 seconds before showing anything. A failed certificate
 check gives the same answer every time, so it is now shown at once, with the verification message. Other network
 failures, such as a reset or refused connection, still retry as before. This also covers the token request of a gateway
-provider.
+provider. Under Node, a verification result that Node does not name (a weak signature digest, a name-constraint
+violation) is recognized by the generic `UNSPECIFIED` code on the cause of a failed fetch; under Bun every verification
+result has a name. Cloudflare workerd reports no code, so a failed check there still retries.
 
 **Affects:** people who reach a model endpoint behind a private certificate authority and have not yet told Orbit to
 trust it, and scripts that waited out the retries.
