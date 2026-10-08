@@ -1227,3 +1227,17 @@ possible before; typing the name and pressing Enter now opens the built-in dialo
 when the names collide both appear in autocomplete.
 
 **What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
+
+### A failed certificate check is no longer retried
+
+When a connection to a model endpoint failed because its certificate could not be verified (a self-signed or unknown
+issuer, an untrusted chain, an expired or not yet valid certificate, or a host name that does not match), Orbit treated
+it like any other network failure and retried it for about 160 seconds before showing anything. A failed certificate
+check gives the same answer every time, so it is now shown at once, with the verification message. Other network
+failures, such as a reset or refused connection, still retry as before. This also covers the token request of a gateway
+provider.
+
+**Affects:** people who reach a model endpoint behind a private certificate authority and have not yet told Orbit to
+trust it, and scripts that waited out the retries.
+
+**What to do:** trust the authority with `ORBIT_CA_CERTS` (or `NODE_EXTRA_CA_CERTS`), or fix the endpoint's certificate.

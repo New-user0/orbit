@@ -726,3 +726,53 @@ describe("provider overload classification", () => {
     expect(isRetryable(new AIError({ reason: overloaded }))).toBe(true)
   })
 })
+
+describe("certificate failures", () => {
+  const transport = (input: { code?: string; message?: string; cause?: unknown }) =>
+    new AIError({
+      reason: new TransportError({
+        message: input.message ?? "Transport failed",
+        code: input.code,
+        cause: input.cause,
+        transport: "http",
+        operation: "request",
+      }),
+    })
+
+  const codes = [
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "CERT_HAS_EXPIRED",
+    "CERT_NOT_YET_VALID",
+    "CERT_UNTRUSTED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "UNKNOWN_CA",
+    "CERTIFICATE_VERIFY_FAILED",
+  ]
+
+  test.each(codes)("does not retry %s", (code) => {
+    expect(isRetryable(transport({ code }))).toBe(false)
+    expect(isRetryable(transport({ cause: Object.assign(new Error("fetch failed"), { cause: { code } }) }))).toBe(false)
+  })
+
+  test.each([
+    "self signed certificate in certificate chain",
+    "unable to verify the first certificate",
+    "certificate has expired",
+    "Hostname/IP does not match certificate's altnames: Host: example.test",
+    "unknown certificate authority",
+  ])("does not retry a failure worded %p", (message) => {
+    expect(isRetryable(transport({ message }))).toBe(false)
+    expect(isRetryable(transport({ cause: new Error(message) }))).toBe(false)
+  })
+
+  test("still retries a reset connection and other transport failures", () => {
+    expect(isRetryable(transport({ code: "ECONNRESET", message: "other side closed" }))).toBe(true)
+    expect(isRetryable(transport({ code: "ETIMEDOUT" }))).toBe(true)
+    expect(isRetryable(transport({ cause: Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" }) }))).toBe(
+      true,
+    )
+  })
+})

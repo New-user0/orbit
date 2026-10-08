@@ -68,6 +68,43 @@ export const isContextOverflowFailure = (failure: unknown) =>
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
+// Node and Bun report a failed certificate check under these codes (OpenSSL names, plus Node's own hostname check).
+const CERTIFICATE_CODES = new Set([
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_DECRYPT_CERT_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "CERT_UNTRUSTED",
+  "CERT_REJECTED",
+  "CERT_REVOKED",
+  "CERT_CHAIN_TOO_LONG",
+  "HOSTNAME_MISMATCH",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "UNKNOWN_CA",
+  "CERTIFICATE_VERIFY_FAILED",
+])
+
+// Some runtimes drop the code and keep only OpenSSL's wording, so the message is a second signal.
+const CERTIFICATE_TEXT =
+  /self[- ]signed certificate|unable to (?:verify the first certificate|get (?:local )?issuer certificate|verify the leaf signature)|certificate (?:has expired|is not yet valid|verify failed|is not trusted)|unknown certificate authority|(?:hostname|host name)\/ip does not match certificate|certificate verification failed|altnames/i
+
+/**
+ * The certificate failure code behind a transport failure, looking through its causes, or undefined when the failure
+ * has another origin. A failed certificate check gives the same answer on every attempt, so it is never retried.
+ */
+export const certificateFailureCode = (error: unknown, depth = 0): string | undefined => {
+  if (depth > 5 || !isRecord(error)) return undefined
+  const code = typeof error.code === "string" ? error.code : undefined
+  if (code !== undefined && CERTIFICATE_CODES.has(code.toUpperCase())) return code
+  if (typeof error.message === "string" && CERTIFICATE_TEXT.test(error.message))
+    return code ?? "CERTIFICATE_VERIFY_FAILED"
+  return certificateFailureCode(error.cause, depth + 1)
+}
+
 /**
  * Whether a failed call may succeed when sent again: rate limits, provider-side failures, transport failures that did
  * not deliver an accepted write, and unrecognized failures. Callers decide which calls are safe to repeat.
@@ -84,6 +121,7 @@ export const isRetryable = (error: AIError) => {
     // Read failures can still recover; the caller chooses retry versus continuation from durable output.
     case "Transport":
       return (
+        certificateFailureCode(error.reason) === undefined &&
         error.reason.delivery !== "rejected" &&
         (error.reason.delivery !== "accepted" || error.reason.operation === "read")
       )
