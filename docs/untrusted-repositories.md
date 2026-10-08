@@ -133,6 +133,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/flow/test/git.test.ts`, `packages/cli/test/flow.test.ts`.
 - Text printed to a terminal or stored in a title or a commit: `plain`, `progress` and `json` from `@orbit/flow/plain`.
   Proof: `packages/flow/test/plain.test.ts`, `packages/cli/test/flow.test.ts`.
+- What `orb run` prints (`packages/cli/src/run`): every line of JSON, which is each event of `json` and `stream-json`,
+  the `result` object and the error that `reportRunError` prints, goes through `jsonLine` from `@orbit/flow/plain`.
+  Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
+  step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
+  thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
+  are message content, which waits for the renderer sanitizer (see Known gaps). Proof:
+  `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
 
@@ -728,11 +735,14 @@ repository text.
 - `plain(text)`, `progress(line)` and `json(value)` come from `@orbit/flow/plain` (`packages/flow/src/plain.ts`, which
   loads no other module). `plain` trims, writes control and format characters out and puts a line break on one line.
   `progress` keeps indentation and takes any value. `json` writes every character of Unicode category C as `\uXXXX`, so
-  `JSON.parse` returns the original value. Never `JSON.stringify` a string from a file for a terminal.
+  `JSON.parse` returns the original value. Never `JSON.stringify` a string from a file for a terminal. `jsonLine` is
+  `json` on one line, and it writes U+2028 and U+2029 out as well, for output that a program reads line by line, as it
+  reads `orb run --format stream-json`.
 
   ```ts
   process.stderr.write(`${progress(line)}\n`)
   process.stdout.write(`${json(result.output)}\n`)
+  process.stdout.write(`${jsonLine(event)}\n`)
   renderer.setTerminalTitle(terminalTitle(title))
   ```
 
@@ -755,9 +765,10 @@ repository text.
   category C remains on any line apart from real line breaks, that the written-out text is present, and that
   `JSON.parse` of printed JSON equals the original value. In terminal UI tests poll `renderOnce` and `captureCharFrame`.
 - Tests: `packages/flow/test/plain.test.ts`, `packages/flow/test/agents.test.ts` (titles and commit subjects),
-  `packages/cli/test/flow.test.ts`, `packages/tui/test/component/dialog-flow-runs.test.tsx`,
-  `packages/tui/test/util/renderer.test.ts`, `packages/tui/test/util/presentation.test.ts` and
-  `packages/tui/test/mini/splash.test.ts`. Mutation: revert each sink one at a time.
+  `packages/cli/test/flow.test.ts`, `packages/cli/test/run/noninteractive.test.ts` (`orb run`),
+  `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts`,
+  `packages/tui/test/util/presentation.test.ts` and `packages/tui/test/mini/splash.test.ts`. Mutation: revert each sink
+  one at a time.
 
 **Review questions:**
 
@@ -1283,7 +1294,9 @@ fixes it or asks.
   agent or mode apply.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
   reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
-  bodies need a sanitizer in the renderer (#22 round 7).
+  bodies need a sanitizer in the renderer (#22 round 7). In `orb run` that is the answer, the thinking lines and the
+  tool blocks of the default format, which are written as the model and the tools made them; its JSON formats write the
+  same text out with `jsonLine`.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
