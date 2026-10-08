@@ -349,7 +349,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       id,
       error:
         tool.name === "subagent" &&
-        (error.type === "aborted" || error.type === Tool.ErrorCode.Cancelled) && typeof tool.progress?.sessionID === "string"
+        (error.type === "aborted" || error.type === Tool.ErrorCode.Cancelled) &&
+        typeof tool.progress?.sessionID === "string"
           ? { ...error, message: `${error.message} (sessionID: ${tool.progress.sessionID})` }
           : error,
       ...failureSnapshot(tool, metadata),
