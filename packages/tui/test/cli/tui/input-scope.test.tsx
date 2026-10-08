@@ -5,6 +5,7 @@ import { testRender, type JSX } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { createSignal, onMount } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
+import { KeybindingsFile } from "../../../src/config/keybindings-file"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider, useData, type FormWithLocation } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
@@ -19,7 +20,12 @@ import { createApi, createEventStream, createFetch, json } from "../../fixture/t
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
-async function mountPanes(root: string, render: () => JSX.Element, parentID?: string) {
+async function mountPanes(
+  root: string,
+  render: () => JSX.Element,
+  parentID?: string,
+  keybindings?: KeybindingsFile.Result,
+) {
   const [active, setActive] = createSignal(false)
   const replies: unknown[] = []
   const cancellations: string[] = []
@@ -74,7 +80,7 @@ async function mountPanes(root: string, render: () => JSX.Element, parentID?: st
   const app = await testRender(
     () => (
       <TestTuiContexts directory={root} paths={{ home: root, state: root, worktree: root }}>
-        <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+        <ConfigProvider config={createTuiResolvedConfig({ animations: false }, { keybindings })}>
           <Keymap.Provider>
             <ClientProvider api={createApi(transport.fetch)}>
               <DataProvider directory={root}>
@@ -249,6 +255,36 @@ test("permission layers leave the focused peer's Enter and navigation alone unti
     panes.app.renderer.destroy()
   }
 })
+
+test.each([
+  ["permission", true],
+  ["dialog", false],
+])(
+  "a key given to the fullscreen command in the %s context reaches the permission prompt only if that is its own: %s",
+  async (context, toggles) => {
+    await using tmp = await tmpdir()
+    const keybindings = KeybindingsFile.decode(
+      JSON.stringify({ contexts: { [context]: { "permission.prompt.fullscreen": "ctrl+alt+f" } } }),
+    )
+    const panes = await mountPanes(tmp.path, () => <PermissionPrompt request={request} />, undefined, keybindings)
+    try {
+      panes.setActive(true)
+      // The hint beside the prompt names whichever key the keymap holds for the command.
+      const hint = await panes.app.waitForFrame((frame) => /\S+ fullscreen/.test(frame))
+      expect(hint.includes("ctrl+alt+f fullscreen")).toBe(toggles)
+      expect(hint.includes("ctrl+f fullscreen")).toBe(!toggles)
+
+      panes.app.mockInput.pressKey("f", { ctrl: true, meta: true })
+      await panes.app.renderOnce()
+      await Bun.sleep(100)
+      await panes.app.renderOnce()
+      // Full screen, the prompt is drawn in a portal that this harness does not lay out, so it leaves the frame.
+      expect(panes.app.captureCharFrame().includes("Permission required")).toBe(!toggles)
+    } finally {
+      panes.app.renderer.destroy()
+    }
+  },
+)
 
 test("permission rejection text keeps its draft and regains focus when its scope resumes", async () => {
   await using tmp = await tmpdir()

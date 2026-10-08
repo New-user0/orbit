@@ -162,6 +162,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
     focusSession()
   })
   Keymap.createLayer(() => ({
+    context: "session",
     mode: "global",
     enabled: () => (rightPane() === "terminal" || activePanel() !== undefined) && dialog.stack.length === 0,
     commands: [
@@ -181,6 +182,7 @@ export function SessionFrame(props: { sessionID: string; verticalTabsWidth: numb
 
   // Pane management stays reachable from either input scope.
   Keymap.createLayer(() => ({
+    context: "session",
     mode: "global",
     commands: [
       {

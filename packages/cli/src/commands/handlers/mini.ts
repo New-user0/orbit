@@ -1,9 +1,12 @@
 import { Context, Effect, FileSystem, Option } from "effect"
+import { EOL } from "node:os"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { Config } from "../../config"
 import { resolve } from "@orbit/tui/config"
+import { KeybindingsFile } from "@orbit/tui/config/keybindings-file"
+import { progress } from "@orbit/flow/plain"
 import { Global } from "@orbit/util/global"
 
 export default Runtime.handler(Commands.commands.mini, (input) =>
@@ -18,7 +21,16 @@ export default Runtime.handler(Commands.commands.mini, (input) =>
     })
     const config = yield* Config.Service
     const global = yield* Global.Service
-    const resolved = resolve(yield* config.get(), { terminalSuspend: process.platform !== "win32" })
+    const file = KeybindingsFile.locate(config.path)
+    const keybindings = yield* Effect.promise(() => KeybindingsFile.load(file))
+    // Mini has no toast, so what is wrong with the keybindings file is said once here, before the footer takes the screen.
+    if (keybindings.diagnostics.length)
+      process.stderr.write(
+        [`Keybindings file ${file}:`, ...keybindings.diagnostics.map((note) => `  ${note.message}`)]
+          .map((line) => progress(line))
+          .join(EOL) + EOL,
+      )
+    const resolved = resolve(yield* config.get(), { terminalSuspend: process.platform !== "win32", keybindings })
     const fileSystem = yield* FileSystem.FileSystem
     const runServicePromise = Effect.runPromiseWith(Context.make(FileSystem.FileSystem, fileSystem))
     const service = server.service

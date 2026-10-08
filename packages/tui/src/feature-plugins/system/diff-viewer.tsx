@@ -797,6 +797,7 @@ export function DiffViewerContent(props: {
   )
 
   props.context.keymap.layer(() => ({
+    context: "diff",
     commands,
   }))
 
@@ -1195,6 +1196,7 @@ function DiffViewerHelpDialog(props: { context: Plugin.Context; single: boolean 
 
 function Commands(props: { context: Plugin.Context }) {
   props.context.keymap.layer(() => ({
+    context: "global",
     mode: "global",
     commands: [
       {

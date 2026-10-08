@@ -665,6 +665,7 @@ export function Autocomplete(props: {
   }
 
   Keymap.createLayer(() => ({
+    context: "prompt",
     mode: "autocomplete",
     target: props.input,
     enabled: () => Boolean(store.visible),

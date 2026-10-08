@@ -269,6 +269,7 @@ export function Prompt(props: PromptProps) {
   })
   const [pendingDirectory, setPendingDirectory] = createSignal<string>()
   Keymap.createLayer(() => ({
+    context: "prompt",
     mode: "global",
     enabled: !disabled(),
     commands: [
@@ -647,18 +648,21 @@ export function Prompt(props: PromptProps) {
   )
 
   Keymap.createLayer(() => ({
+    context: "prompt",
     mode: "global",
     enabled: !disabled(),
     commands: promptCommands(),
   }))
 
   Keymap.createLayer(() => ({
+    context: "prompt",
     priority: 1,
     enabled: !disabled(),
     bindings: ["prompt.queue"],
   }))
 
   Keymap.createLayer(() => ({
+    context: "prompt",
     enabled: !disabled(),
     bindings: [
       "prompt.submit",
@@ -944,6 +948,7 @@ export function Prompt(props: PromptProps) {
   )
 
   Keymap.createLayer(() => ({
+    context: "prompt",
     mode: "global",
     enabled: !disabled(),
     commands: stashCommands(),
@@ -951,6 +956,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       target: inputTarget,
       enabled: inputTarget() !== undefined && !disabled(),
       bindings: ["prompt.paste"],
@@ -959,6 +965,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       target: inputTarget,
       enabled: inputTarget() !== undefined && !disabled() && store.prompt.text !== "",
       bindings: ["prompt.clear"],
@@ -967,6 +974,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
@@ -993,6 +1001,7 @@ export function Prompt(props: PromptProps) {
   })
 
   Keymap.createLayer(() => ({
+    context: "prompt",
     priority: 1,
     target: inputTarget,
     enabled:
@@ -1016,6 +1025,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       priority: 1,
       target: inputTarget,
       enabled: inputTarget() !== undefined && !disabled() && store.mode === "shell",
@@ -1034,6 +1044,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       target: inputTarget,
       enabled: (() => {
         cursorVersion()
@@ -1047,6 +1058,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       priority: 1,
       target: inputTarget,
       enabled: (() => {
@@ -1083,6 +1095,7 @@ export function Prompt(props: PromptProps) {
 
   Keymap.createLayer(() => {
     return {
+      context: "prompt",
       priority: 1,
       target: inputTarget,
       enabled: (() => {

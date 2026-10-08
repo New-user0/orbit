@@ -29,6 +29,7 @@ import { StorageProvider, useStorage } from "../../../src/context/storage"
 import { TuiAppProvider } from "../../../src/context/runtime"
 import { ConfigProvider, type Info } from "../../../src/config"
 import type { TuiKeybind } from "../../../src/config/keybind"
+import { KeybindingsFile } from "../../../src/config/keybindings-file"
 import { Keymap } from "../../../src/context/keymap"
 import diffViewerPlugin from "../../../src/feature-plugins/system/diff-viewer"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -669,6 +670,32 @@ test("the remapped source chooser preserves its current selection marker", async
     viewer.app.renderer.destroy()
   }
 })
+
+test.each([
+  ["diff", true],
+  ["dialog", false],
+])(
+  "a key given to diff.switch_source in the %s context opens the chooser only if that is the diff viewer's: %s",
+  async (context, opens) => {
+    const viewer = await renderDiffViewer(hunkDiff, {
+      height: 30,
+      keybindings: KeybindingsFile.decode(JSON.stringify({ contexts: { [context]: { "diff.switch_source": "x" } } })),
+    })
+    try {
+      viewer.app.mockInput.pressKey("x")
+      await viewer.app.flush()
+      await Bun.sleep(100)
+      expect(viewer.app.captureCharFrame().includes("Diff source")).toBe(opens)
+      if (opens) return
+
+      // The control: the stock key still opens the chooser, so it was the context that kept the other key out.
+      viewer.app.mockInput.pressKey("d")
+      await viewer.app.waitForFrame((frame) => frame.includes("Diff source"))
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  },
+)
 
 test("pending and failed scopes never render the previous scope's files", async () => {
   const pending = Promise.withResolvers<Response>()
@@ -1875,6 +1902,7 @@ async function renderDiffViewer(
     readImage?: (file: string, signal: AbortSignal) => Promise<Uint8Array>
     onSessionTab?: () => void
     keybinds?: TuiKeybind.KeybindOverrides
+    keybindings?: KeybindingsFile.Result
     kittyKeyboard?: boolean
     source?: "branch" | "committed" | "working" | "turn"
     base?: typeof baseFixture | null
@@ -1906,7 +1934,7 @@ async function renderDiffViewer(
   const turnDiffRequests: URL[] = []
   const branchesRequests: URL[] = []
   const mutationRequests: URL[] = []
-  const config = createTuiResolvedConfig(stored.info)
+  const config = createTuiResolvedConfig(stored.info, { keybindings: options.keybindings })
   const transport = createFetch(async (url, request) => {
     if (request.method !== "GET") mutationRequests.push(url)
     if (url.pathname.startsWith("/api/fs/read/")) {

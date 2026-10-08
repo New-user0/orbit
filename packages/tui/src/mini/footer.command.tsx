@@ -973,6 +973,7 @@ export function RunQueuedPromptSelectBody(props: {
   const undoShortcut = () => monoShortcut(shortcuts.get("queued_prompt.undo") ?? "", props.mono ?? false)
   const deleteShortcut = () => monoShortcut(shortcuts.get("queued_prompt.delete") ?? "", props.mono ?? false)
   Keymap.createLayer(() => ({
+    context: "mini",
     priority: 1,
     commands: [
       {

@@ -50,6 +50,7 @@ import type {
 } from "../../src/mini/types"
 import { selectedCommand } from "../../src/mini/footer.prompt"
 import { RejectField } from "../../src/mini/footer.permission"
+import { KeybindingsFile } from "../../src/config/keybindings-file"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { tmpdir } from "../fixture/fixture"
 import { diffImageFixture } from "../fixture/diff-image"
@@ -1873,6 +1874,58 @@ test.each([8, 12])("production footer grows for wrapped instructions in %i rows"
     footer.event({ type: "stream.patch", patch: { notice: "" } })
     await app.renderOnce()
     expect(app.renderer.footerHeight).toBe(initial)
+  } finally {
+    footer.destroy()
+    app.renderer.destroy()
+  }
+})
+
+test("the mini footer takes the keys of the mini context from the keybindings file, and no other context's", async () => {
+  const app = await createTestRenderer({ width: 40, height: 12, screenMode: "split-footer", footerHeight: 4 })
+  const footer = new RunFooter(app.renderer, {
+    directory: () => "/project",
+    findFiles: async () => [],
+    agents: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
+    references: [],
+    agent: "build",
+    modelLabel: "GPT-5",
+    model: undefined,
+    variant: undefined,
+    first: false,
+    theme: RUN_THEME_FALLBACK,
+    tuiConfig: createTuiResolvedConfig(
+      {},
+      {
+        keybindings: KeybindingsFile.decode(
+          JSON.stringify({ contexts: { mini: { "prompt.clear": "ctrl+alt+x" }, prompt: { "prompt.clear": "ctrl+alt+z" } } }),
+        ),
+      },
+    ),
+    miniSettings: {
+      current: {
+        thinking: "hide",
+        tools: "show",
+        shell_output: "hide",
+        turn_summary: "show",
+        footer: "show",
+        splash: "show",
+        work_spinner: "block-soft-slide",
+        mono: false,
+      },
+    },
+    onPermissionReply: () => {},
+    onFormReply: () => {},
+    onFormCancel: () => {},
+    onEditorOpen: async () => undefined,
+    subscribeThemeSignal: () => () => {},
+  })
+  try {
+    await app.renderOnce()
+    footer.requestExit()
+    await app.renderOnce()
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("ctrl+alt+x")
+    expect(app.captureCharFrame()).not.toContain("ctrl+alt+z")
   } finally {
     footer.destroy()
     app.renderer.destroy()

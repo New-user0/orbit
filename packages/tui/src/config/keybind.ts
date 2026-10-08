@@ -1,11 +1,12 @@
 export * as TuiKeybind from "./keybind"
 
 import type { KeyEvent, Renderable } from "@opentui/core"
-import type { Binding } from "@opentui/keymap"
+import type { Binding, BindingExpander, Keymap, KeymapEvent } from "@opentui/keymap"
+import { registerCommaBindings, registerEmacsBindings } from "@opentui/keymap/addons"
 import type { BindingConfig, BindingDefaults } from "@opentui/keymap/extras"
 import { Schema } from "effect"
 
-const KeyStroke = Schema.Struct({
+export const KeyStroke = Schema.Struct({
   name: Schema.String,
   ctrl: Schema.optional(Schema.Boolean),
   shift: Schema.optional(Schema.Boolean),
@@ -58,6 +59,7 @@ export const Definitions = {
   "help.show": keybind("none", "Open help dialog"),
   "docs.open": keybind("none", "Open documentation"),
   "orbit.settings": keybind("none", "Open settings"),
+  "keybindings.open": keybind("none", "Edit the keybindings file"),
   "server.pair": keybind("none", "Pair device"),
   "service.restart": keybind("none", "Restart service"),
   "location.reload": keybind("none", "Reload configuration"),
@@ -305,6 +307,36 @@ export const Definitions = {
 type KeybindName = keyof typeof Definitions
 const KeybindNames = new Set<string>(Object.keys(Definitions))
 
+/** A command that a person can give keys to. The leader key is set beside the commands, not as one of them. */
+export type CommandName = Exclude<KeybindName, "leader">
+
+export function isCommand(name: string): name is CommandName {
+  return name !== "leader" && KeybindNames.has(name)
+}
+
+/**
+ * The places a keymap layer can belong to. A layer names its place with `context`, and the keybindings file can give a
+ * command other keys in one place only, as `session.rename` can have one key in the session list and another in a
+ * session. The set is closed: a layer that names anything else is read as having no place.
+ */
+export const Contexts = [
+  "global",
+  "prompt",
+  "session",
+  "permission",
+  "composer",
+  "dialog",
+  "session-list",
+  "diff",
+  "which-key",
+  "mini",
+] as const
+export type Context = (typeof Contexts)[number]
+
+export function isContext(name: unknown): name is Context {
+  return typeof name === "string" && Contexts.some((context) => context === name)
+}
+
 export const KeybindOverrides = Schema.Struct(
   Object.fromEntries(
     Object.entries(Definitions).map(([name, item]) => [
@@ -326,9 +358,16 @@ export type BindingLookupView = {
   gather(name: string, commands: readonly string[]): readonly Binding<Renderable, KeyEvent>[]
   pick(name: string, commands: readonly string[]): Binding<Renderable, KeyEvent>[]
   omit(name: string, commands: readonly string[]): Binding<Renderable, KeyEvent>[]
+  /**
+   * What the keybindings file gives `command` where a layer of `context` binds it, and failing that everywhere. An
+   * empty list means the file unbinds the command; undefined means it says nothing, so the usual bindings apply.
+   */
+  override(context: string | undefined, command: string): readonly Binding<Renderable, KeyEvent>[] | undefined
 }
 
-export function toBindingConfig(keybinds: Keybinds): BindingConfig<Renderable, KeyEvent> {
+export function toBindingConfig(
+  keybinds: Readonly<Record<string, BindingValueSchema>>,
+): BindingConfig<Renderable, KeyEvent> {
   return Object.fromEntries(Object.entries(keybinds)) as BindingConfig<Renderable, KeyEvent>
 }
 
@@ -360,4 +399,27 @@ export function bindingDefaults(): BindingDefaults<Renderable, KeyEvent> {
     if (binding.desc !== undefined) return
     return { desc: Descriptions[command as KeybindName] }
   }
+}
+
+const spellings = Object.entries({ enter: "return", esc: "escape", pgdown: "pagedown", pgup: "pageup" }).map(
+  ([alias, key]) => [new RegExp(`(^|[+,\\s>])${alias}(?=$|[+,\\s<])`, "gi"), `$1${key}`] as const,
+)
+
+const expandSpellings: BindingExpander = (context) => {
+  const key = spellings.reduce((result, [alias, replacement]) => result.replace(alias, replacement), context.input)
+  if (key === context.input) return
+  return [{ key, displays: context.displays }]
+}
+
+/**
+ * Teaches a keymap the key strings that Orbit accepts for a binding: a comma separates alternatives, `enter`, `esc`,
+ * `pgup` and `pgdown` stand for the keys the keymap calls `return`, `escape`, `pageup` and `pagedown`, and a space
+ * separates the strokes of a chord such as `ctrl+k ctrl+s`. A `<leader>` sequence has no space in it and reads as it
+ * always did.
+ *
+ * The terminal UI registers this on its keymap, and the keybindings file checks each entry against a keymap that has
+ * it, so the file takes in exactly what the live keymap can read.
+ */
+export function registerSyntax<TTarget extends object, TEvent extends KeymapEvent>(keymap: Keymap<TTarget, TEvent>) {
+  return [registerCommaBindings(keymap), keymap.appendBindingExpander(expandSpellings), registerEmacsBindings(keymap)]
 }

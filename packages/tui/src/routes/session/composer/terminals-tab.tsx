@@ -40,6 +40,7 @@ export function TerminalsTab(props: { sessionID: string; visibleTerminalID?: str
   }
 
   Keymap.createLayer(() => ({
+    context: "composer",
     mode: "composer",
     enabled: () => composer.active("terminals"),
     priority: 1,
