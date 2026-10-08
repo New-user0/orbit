@@ -2004,13 +2004,15 @@ describe("runNonInteractivePrompt limits and results", () => {
     "the envelope's result line carries the subtype with outcome, reason and totals in %s",
     async (format) => {
       const envelope = { cwd: "/tmp", version: "test" }
-      const answered = (text: string, ...ending: V2Event[]) => (id: string) => [
-        prompted(id),
-        stepStarted("msg_one"),
-        textEnded("msg_one", text),
-        stepEnded("msg_one", "stop", 0.75),
-        ...ending,
-      ]
+      const answered =
+        (text: string, ...ending: V2Event[]) =>
+        (id: string) => [
+          prompted(id),
+          stepStarted("msg_one"),
+          textEnded("msg_one", text),
+          stepEnded("msg_one", "stop", 0.75),
+          ...ending,
+        ]
       const rows: {
         name: string
         turn: (id: string) => V2Event[]

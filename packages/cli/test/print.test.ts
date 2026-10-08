@@ -41,9 +41,12 @@ test("-p --resume fails with one failed result for a session that does not exist
   // Under stream-json no session exists to name in an init line, so the stream is the result line alone.
   const streamed = await orb(["-p", ...base, "--resume", "ses_missing", "--output-format", "stream-json", "hello"])
   expect(streamed.code).toBe(1)
-  expect(streamed.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line))).toEqual([
-    expect.objectContaining({ type: "result", is_error: true, sessionID: "", subtype: "error" }),
-  ])
+  expect(
+    streamed.stdout
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line)),
+  ).toEqual([expect.objectContaining({ type: "result", is_error: true, sessionID: "", subtype: "error" })])
 
   // Words that match no session are not a new session either, and neither is an empty value.
   for (const value of ["no session has these words", ""]) {
@@ -177,7 +180,11 @@ test("--json-schema: text prints only the JSON, json and stream-json carry struc
   const run = await sent(["run", ...base, "--json-schema", schema, "say ok"])
 
   expect(text.stdout.trim()).toBe('{"answer":"ok"}')
-  expect(JSON.parse(json.stdout)).toMatchObject({ type: "result", is_error: false, structured_output: { answer: "ok" } })
+  expect(JSON.parse(json.stdout)).toMatchObject({
+    type: "result",
+    is_error: false,
+    structured_output: { answer: "ok" },
+  })
   expect(parseLines(stream.stdout).at(-1)).toMatchObject({ type: "result", structured_output: { answer: "ok" } })
   // `orb run` prints the result it always printed, without the fields of the envelope.
   expect(JSON.parse(run.stdout)).toMatchObject({ type: "result", is_error: false, structured_output: { answer: "ok" } })
@@ -266,7 +273,12 @@ test("stream-json starts with the init line, ends with the result line, and ever
   const lines = parseLines(run.stdout)
   expect(lines[0]).toMatchObject({ type: "init", protocol: 1, model: model.model, version: expect.any(String) })
   expect(path.normalize(String(lines[0].cwd)).toLowerCase()).toBe(path.normalize(workspace).toLowerCase())
-  expect(lines.at(-1)).toMatchObject({ type: "result", is_error: false, outcome: "succeeded", result: '{"answer":"ok"}' })
+  expect(lines.at(-1)).toMatchObject({
+    type: "result",
+    is_error: false,
+    outcome: "succeeded",
+    result: '{"answer":"ok"}',
+  })
   expect(lines.filter((line) => line.type === "result")).toHaveLength(1)
   expect(lines.filter((line) => line.type === "init")).toHaveLength(1)
   expect(lines[0].sessionID).toBe(lines.at(-1)?.sessionID)
@@ -368,7 +380,9 @@ test("--verbose tool output keeps tabs and writes out the characters that act on
   const file = path.join(workspace, "tabbed.txt")
   await Bun.write(file, "col\tone\n\u001b[31mred\u001b[0m\rlone\n")
   const call = { name: "read", input: { path: file } }
-  const verbose = await scripted([{ tool: call }, "done"], (own, home) => print(own, home, ["--verbose", "say ok"], "text"))
+  const verbose = await scripted([{ tool: call }, "done"], (own, home) =>
+    print(own, home, ["--verbose", "say ok"], "text"),
+  )
 
   expect(verbose.stderr).toContain("col\tone")
   expect(verbose.stderr).toContain("\\x1b[31mred")
@@ -469,7 +483,13 @@ const sinks: Array<{
   hostile: string
   escaped: string
 }> = [
-  { sink: "inline title", name: "grep", input: (value) => ({ pattern: value }), hostile: evil, escaped: "e\\x1b]0;pwned\\x07" },
+  {
+    sink: "inline title",
+    name: "grep",
+    input: (value) => ({ pattern: value }),
+    hostile: evil,
+    escaped: "e\\x1b]0;pwned\\x07",
+  },
   {
     sink: "description",
     name: "read",
@@ -495,23 +515,27 @@ const sinks: Array<{
   },
 ]
 
-test.each(sinks)("a hostile $name input reaches no terminal through the $sink", async (row) => {
-  const run = await scripted([{ tool: { name: row.name, input: row.input(row.hostile) } }, "done"], (own, home) =>
-    print(own, home, ["--yolo", "say ok"], "text"),
-  )
-  const control = await scripted([{ tool: { name: row.name, input: row.input("plain") } }, "done"], (own, home) =>
-    print(own, home, ["--yolo", "say ok"], "text"),
-  )
+test.each(sinks)(
+  "a hostile $name input reaches no terminal through the $sink",
+  async (row) => {
+    const run = await scripted([{ tool: { name: row.name, input: row.input(row.hostile) } }, "done"], (own, home) =>
+      print(own, home, ["--yolo", "say ok"], "text"),
+    )
+    const control = await scripted([{ tool: { name: row.name, input: row.input("plain") } }, "done"], (own, home) =>
+      print(own, home, ["--yolo", "say ok"], "text"),
+    )
 
-  const printed = run.stdout + run.stderr
-  expect(printed).toContain(row.escaped)
-  // The interface's own colors are escape sequences too, so only what a tool could inject is looked for.
-  expect(printed).not.toContain("\u001b]")
-  expect(printed).not.toContain("\u0007")
-  expect(printed).not.toContain("\u009b")
-  // The same call with a plain value is printed too, so the absence above is the escaping's doing.
-  expect(control.stdout + control.stderr).toContain("plain")
-}, 240_000)
+    const printed = run.stdout + run.stderr
+    expect(printed).toContain(row.escaped)
+    // The interface's own colors are escape sequences too, so only what a tool could inject is looked for.
+    expect(printed).not.toContain("\u001b]")
+    expect(printed).not.toContain("\u0007")
+    expect(printed).not.toContain("\u009b")
+    // The same call with a plain value is printed too, so the absence above is the escaping's doing.
+    expect(control.stdout + control.stderr).toContain("plain")
+  },
+  240_000,
+)
 test("the list of printed-run flags covers every flag the root command refuses without -p", () => {
   const listed = new Set(printedRunFlags.map(([flag]) => flag))
   expect(PrintParamFlags.filter((flag) => !listed.has(flag))).toEqual([])

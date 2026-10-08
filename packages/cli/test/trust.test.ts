@@ -36,7 +36,14 @@ const ollama = Bun.serve({
       return Response.json({
         models: [
           { name: "trust:1b", model: "trust:1b", modified_at: "2026-01-01T00:00:00Z", size: 1, digest: "d", details },
-          { name: "pricey:70b", model: "pricey:70b", modified_at: "2026-01-01T00:00:00Z", size: 1, digest: "d", details },
+          {
+            name: "pricey:70b",
+            model: "pricey:70b",
+            modified_at: "2026-01-01T00:00:00Z",
+            size: 1,
+            digest: "d",
+            details,
+          },
         ],
       })
     if (pathname === "/api/show")
@@ -377,8 +384,7 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
       expect({ context, code: result.code }).toEqual({ context, code: 1 })
       if (startName === "stream-json") {
         // No session exists, so there is no init line: the output is the result line alone.
-        const lines = result.stdout.trim().split("
-")
+        const lines = result.stdout.trim().split("\n")
         expect({ context, lines: lines.length }).toEqual({ context, lines: 1 })
         expect(JSON.parse(lines[0])).toMatchObject({
           type: "result",
@@ -427,7 +433,9 @@ test("orb -p cannot ask a server older than workspace trust whether a clean fold
     const result = await orb(clone, ["-p", "--server", old.url.toString(), "say ok"])
 
     expect(result.code).toBe(1)
-    expect(result.stderr).toContain(`the server is older than workspace trust, so it cannot say whether ${clone} is trusted`)
+    expect(result.stderr).toContain(
+      `the server is older than workspace trust, so it cannot say whether ${clone} is trusted`,
+    )
   } finally {
     await old.stop(true)
   }
@@ -539,10 +547,7 @@ test("a server older than workspace trust cannot say that a folder is trusted: o
     const autoFile = path.join(clone, "auto.yaml")
     const suiteFile = path.join(clone, "suite.json")
     await Bun.write(checkFile, `name: older\nnodes:\n  - id: tests\n    type: check\n    command: ${check.quoted}\n`)
-    await Bun.write(
-      autoFile,
-      `name: older\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n`,
-    )
+    await Bun.write(autoFile, `name: older\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n`)
     await Bun.write(
       suiteFile,
       JSON.stringify({
@@ -552,10 +557,7 @@ test("a server older than workspace trust cannot say that a folder is trusted: o
     )
     const agentFile = path.join(clone, "agent.yaml")
     const judgeFile = path.join(clone, "judge.json")
-    await Bun.write(
-      agentFile,
-      `name: older\nnodes:\n  - id: work\n    prompt: say ok\n    agent: autopilot\n`,
-    )
+    await Bun.write(agentFile, `name: older\nnodes:\n  - id: work\n    prompt: say ok\n    agent: autopilot\n`)
     await Bun.write(
       judgeFile,
       JSON.stringify({
@@ -879,12 +881,7 @@ test("a recorded YAML run's commands are not run again by resume in an untrusted
 test("a YAML workflow that sets permissions to auto is not run in an untrusted folder that holds nothing back, and runs with --trust", async () => {
   const repository = await bare("approvals")
   const files = [
-    [
-      "agent.yaml",
-      `name: agent\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n`,
-      "work",
-      "auto",
-    ],
+    ["agent.yaml", `name: agent\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n`, "work", "auto"],
     [
       "verify.yaml",
       `name: verifies\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    permissions: auto\n    checks: []\n`,
@@ -949,10 +946,7 @@ test("a YAML workflow that sets permissions to auto is not run in an untrusted f
 test("a recorded run whose agents were set to approve is not run again by resume in an untrusted folder, and a replay is not held up", async () => {
   const repository = await bare("recorded-approvals")
   const file = path.join(repository, "workflow.yaml")
-  await Bun.write(
-    file,
-    `name: recorded\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n`,
-  )
+  await Bun.write(file, `name: recorded\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n`)
   succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", file]))
   // The run store, which sits in the repository, names the file that a resume loads.
   const id: string = JSON.parse((await orb(repository, ["flow", "ls", "--format", "json"])).stdout)[0].id
@@ -980,10 +974,7 @@ test("a YAML workflow that names an agent is not run in an untrusted folder that
   const plain = path.join(repository, "plain.yaml")
   const written = path.join(repository, "blocked.txt")
   // The same node, which asks the model to write a file, with the agent that the user's rules let edit and without it.
-  await Bun.write(
-    named,
-    `name: named\nnodes:\n  - id: work\n    prompt: write blocked.txt\n    agent: autopilot\n`,
-  )
+  await Bun.write(named, `name: named\nnodes:\n  - id: work\n    prompt: write blocked.txt\n    agent: autopilot\n`)
   await Bun.write(plain, `name: plain\nnodes:\n  - id: work\n    prompt: write blocked.txt\n`)
 
   // Without an agent the node runs as the default one, and the run rejects the write that the user's rules ask about. The
@@ -1053,13 +1044,21 @@ test("a workflow or suite that picks a model or a limit on attempts is not run i
   const pricey = "ollama/pricey:70b"
   const repository = await bare("model-choices")
   const files = [
-    ["node.yaml", `name: m\nnodes:\n  - id: work\n    prompt: say ok\n    model: ${pricey}\n`, `  work  model: ${pricey}`],
+    [
+      "node.yaml",
+      `name: m\nnodes:\n  - id: work\n    prompt: say ok\n    model: ${pricey}\n`,
+      `  work  model: ${pricey}`,
+    ],
     [
       "fallback.yaml",
       `name: m\nnodes:\n  - id: work\n    prompt: say ok\n    retry: { fallbackModels: [${pricey}] }\n`,
       `  work  retry.fallbackModels: ["${pricey}"]`,
     ],
-    ["attempts.yaml", `name: m\nnodes:\n  - id: work\n    prompt: say ok\n    retry: { maxAttempts: 50 }\n`, "  work  retry.maxAttempts: 50"],
+    [
+      "attempts.yaml",
+      `name: m\nnodes:\n  - id: work\n    prompt: say ok\n    retry: { maxAttempts: 50 }\n`,
+      "  work  retry.maxAttempts: 50",
+    ],
     [
       "judge.yaml",
       `name: m\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    checks: []\n    judge: { model: ${pricey} }\n`,
@@ -1214,14 +1213,8 @@ test("a YAML workflow or a suite whose checks are empty defines no command, so i
   const empty = await bare("no-commands")
   const flowFile = path.join(empty, "workflow.yaml")
   const suiteFile = path.join(empty, "suite.json")
-  await Bun.write(
-    flowFile,
-    `name: empty\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    checks: []\n`,
-  )
-  await Bun.write(
-    suiteFile,
-    JSON.stringify({ name: "empty", tasks: [{ id: "task", prompt: "say ok", checks: [] }] }),
-  )
+  await Bun.write(flowFile, `name: empty\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    checks: []\n`)
+  await Bun.write(suiteFile, JSON.stringify({ name: "empty", tasks: [{ id: "task", prompt: "say ok", checks: [] }] }))
   const before = runs
 
   // Nothing is held back and no shell command is defined, so both run without a grant.
@@ -1384,10 +1377,7 @@ test("a workflow or suite that defines commands, approvals or agents in another 
 
   // A file that defines none of these is only read, so it keeps the check that the folder of the run gets, here a pass.
   const plain = path.join(away, "plain.yaml")
-  await Bun.write(
-    plain,
-    `name: plain\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    checks: []\n`,
-  )
+  await Bun.write(plain, `name: plain\nnodes:\n  - id: work\n    type: verify\n    prompt: say ok\n    checks: []\n`)
   succeeded(await orb(home, flowing(plain), user))
 }, 600_000)
 
@@ -1527,7 +1517,11 @@ test("--resume and --fork check the folder of the session they name, wherever th
   const before = runs
 
   // From a clean folder the session still lives in the untrusted repository, so nothing starts, by ID or as a fork.
-  for (const choice of [["--resume", session], ["-r", session], ["--resume", session, "--fork"]]) {
+  for (const choice of [
+    ["--resume", session],
+    ["-r", session],
+    ["--resume", session, "--fork"],
+  ]) {
     const refused = await orb(away, ["run", "--standalone", "--model", model, ...choice, "write blocked.txt"])
     expect(refused.code).toBe(1)
     expect(refused.stderr).toContain(`${repository} is not trusted`)
@@ -1553,7 +1547,10 @@ test("--resume of a session in a clean folder is not refused for the repository 
   const session = SessionID.create()
   succeeded(await orb(clean, ["run", "--standalone", "--model", model, "--session", session, "say ok"]))
 
-  for (const choice of [["--resume", session], ["--resume", session, "--fork"]]) {
+  for (const choice of [
+    ["--resume", session],
+    ["--resume", session, "--fork"],
+  ]) {
     const resumed = await orb(repository, ["run", "--standalone", "--model", model, ...choice, "say ok"])
     succeeded(resumed)
     expect(resumed.stdout).toContain("ran fine")
@@ -1884,7 +1881,13 @@ test("the refusal for a command that runs the shell commands of a file lists the
     `${away} defines them`,
   )
 
-  const home = refusal({ ...status, persistent: false }, undefined, { file, commands, approvals: [], agents: [], models: [] })
+  const home = refusal({ ...status, persistent: false }, undefined, {
+    file,
+    commands,
+    approvals: [],
+    agents: [],
+    models: [],
+  })
   expect(home).toContain("runs shell commands from the folder")
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("`orb trust` refuses it")
@@ -1990,7 +1993,13 @@ test("the refusal for a command that carries out a file's approvals lists each n
   expect(held).toMatch(/^ {2}orbit\.json\s+hooks$/m)
   expect(held).toContain("Look the file and those files over, then trust the folder")
 
-  const home = refusal({ ...status, persistent: false }, undefined, { file, commands: [], approvals, agents: [], models: [] })
+  const home = refusal({ ...status, persistent: false }, undefined, {
+    file,
+    commands: [],
+    approvals,
+    agents: [],
+    models: [],
+  })
   expect(home).toContain("this command approves actions without asking you")
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("--trust")
@@ -2054,7 +2063,13 @@ test("the refusal for a command that runs a file's agents lists each node with t
   expect(held).toMatch(/^ {2}orbit\.json\s+hooks$/m)
   expect(held).toContain("Look the file and those files over, then trust the folder")
 
-  const home = refusal({ ...status, persistent: false }, undefined, { file, commands: [], approvals: [], agents, models: [] })
+  const home = refusal({ ...status, persistent: false }, undefined, {
+    file,
+    commands: [],
+    approvals: [],
+    agents,
+    models: [],
+  })
   expect(home).toContain("this command lets the file choose which of your agents run its nodes")
   expect(home).toContain("home directory or a filesystem root")
   expect(home).toContain("--trust")

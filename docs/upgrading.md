@@ -1610,12 +1610,13 @@ output limit keeps the limit it chose, and a request already at the model's maxi
 
 `orb run` and `orb -p` take `--max-steps` (alias `--max-turns`), `--max-cost` (US dollars), `--max-tokens` and
 `--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
-them. A run that reaches a limit exits 1 and says which: the result object of `--format result` and `--json-schema`
+them. A run that reaches a limit exits 1 and says which: the result object of `orb run --format result` and `orb run --json-schema`
 gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
 (the steps, cost and tokens of this session's own responses to the prompt, read from the stored messages when the run
 ends, so a subagent's spend is not in it; a response that failed part way adds its spend but is not a step) and
 `truncated` (the last step stopped at the output limit, even when a limit then ended the run, which also prints a
-warning). With `--format json` and `stream-json` every `error` line of a printed run carries the same
+warning). `orb -p` has no `usage`: its result carries the flat `steps`, `cost` and `tokens` described in the note on its
+output envelope, which count failed steps and subagents' steps, so `steps` can exceed what `--max-steps` counted. With `--format json` and `stream-json` every `error` line of a printed run carries the same
 `subtype`. A `--max-cost` that the model's missing price cannot check fails the run with the session error type
 `limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
 turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags

@@ -101,10 +101,16 @@ export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
             ]
           : (scripted.chunks ?? []).map((chunk, index) => ({
               choices: [
-                { index: 0, delta: { ...(index === 0 ? { role: "assistant" } : {}), content: chunk }, finish_reason: null },
+                {
+                  index: 0,
+                  delta: { ...(index === 0 ? { role: "assistant" } : {}), content: chunk },
+                  finish_reason: null,
+                },
               ],
             }))),
-        { choices: [{ index: 0, delta: {}, finish_reason: scripted.finish ?? (scripted.tool ? "tool_calls" : "stop") }] },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: scripted.finish ?? (scripted.tool ? "tool_calls" : "stop") }],
+        },
         { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
       ]
       return new Response(`${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`, {
