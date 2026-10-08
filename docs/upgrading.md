@@ -979,8 +979,8 @@ would use for it.
 
 Orbit's own tools now declare their traits: `read`, `glob`, `grep`, `lsp`, `webfetch`, `websearch`, the MCP resource
 tools, `skill`, `models`, `task_list`, `shell_output` and `shell_watch` are read-only and safe beside other calls, and
-the file-changing tools, `todo`, the task tools and the session tools are not. `question` and the plan-mode tools wait
-for the person, `patch` is destructive when it deletes a file, `memory` is read-only for `read` and `list` and
+the file-changing tools, `todo`, `task_create`, `task_update` and the session tools are not. `question` and the plan-mode tools wait
+for the person, `patch` is destructive when it deletes or moves a file or cannot be parsed, `memory` is read-only for `read` and `list` and
 destructive for `delete`, and the Code Mode `execute` tool is neither read-only nor safe and reaches the network.
 The shell declares only that a failure cancels its siblings. Nothing schedules or limits calls by these traits yet, so
 tools run as they did before.

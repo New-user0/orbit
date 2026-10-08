@@ -44,9 +44,11 @@ export function traits(tool: Mcp.Tool): Tool.Traits {
 }
 
 // A control character acts on a terminal and a format character, such as a right-to-left override, reorders the text
-// around it, so each is written out. Line breaks too: a name is one line.
+// around it, so each is written out. Same rule as `plain` in @orbit/flow, which core does not depend on;
+// tool-runtime-10 folds both into one shared function.
 function escaped(text: string) {
-  return text.replace(/\p{C}/gu, (match) => {
+  return text.replace(/\r?\n|\p{C}/gu, (match) => {
+    if (match.endsWith("\n")) return "\\n"
     const code = match.codePointAt(0) ?? 0
     return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
   })

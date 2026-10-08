@@ -180,6 +180,7 @@ test("decodes simulated tool registrations with and without static traits", () =
     { interruptBehavior: "queue" },
     { maxResultChars: 0 },
     { displayName: "" },
+    { displayName: "  " },
     "fast",
   ])
     expect(() => decodeTools([{ ...registration, traits: invalid }])).toThrow()

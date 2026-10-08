@@ -85,6 +85,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/config-trust.test.ts`.
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`.
+- An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
+  with control and format characters written out. Only this source escapes; a plugin or a simulated tool supplies its
+  `displayName` raw, so a client that draws any `displayName` still passes it through `plain` (escaping text that is
+  already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
+  `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
+  hints and permissions` in `core/test/mcp.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:
@@ -154,11 +160,6 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/component/dialog-flow-runs.test.tsx`.
 - Window titles, the exit summary and the Mini splash: `terminalTitle`, `sessionEpilogue` and the splash's own filter.
   Proof: `test/util/renderer.test.ts`, `test/util/presentation.test.ts`, `test/mini/splash.test.ts`.
-- An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
-  with control and format characters written out, so every client that draws the name receives escaped text. The hints
-  beside it (`readOnlyHint`, `destructiveHint`, `openWorldHint`) drive scheduling and display only and never declare
-  `readOnly`. Proof: `MCP tool traits` and `MCP hints and permissions` in `core/test/mcp.test.ts`. No client draws
-  `displayName` yet; whoever starts to draws it as given and does not unescape it.
 - The keybindings file: `Config.read` reads `keybindings.json` from the folder that holds `cli.json`, the person's own
   config folder, and from nowhere else, so a project folder cannot supply one. An entry only chooses keys for commands
   that exist, so nothing in it starts a program. A name or key that it holds reaches the screen only through `plain`, and

@@ -523,7 +523,7 @@ export namespace Backend {
         cancelSiblingsOnFailure: Schema.optionalKey(Schema.Boolean),
         interruptBehavior: Schema.optionalKey(Schema.Literals(["cancel", "block"])),
         maxResultChars: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThan(0))),
-        displayName: Schema.optionalKey(Schema.NonEmptyString),
+        displayName: Schema.optionalKey(Schema.String.check(Schema.isPattern(/\S/))),
       }),
     ),
   })

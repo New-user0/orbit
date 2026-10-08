@@ -2868,9 +2868,9 @@ describe("MCP tool traits", () => {
   })
 
   test("writes out the control and format characters of a title a server chose", () => {
-    const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd‮e\nf"
+    const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b‮e\r\nf\ng"
     const displayName = McpTool.traits(tool({ title: hostile })).displayName
-    expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\u{202e}e\\x0af")
+    expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e\\nf\\ng")
     expect(displayName).not.toMatch(/\p{C}/u)
     expect(McpTool.traits(tool({ annotations: { title: hostile } })).displayName).toBe(displayName)
     // A title that is only a format character is still a title once written out.
@@ -2975,11 +2975,11 @@ describe("MCP tool traits", () => {
 
   testEffect(Layer.empty).live("carries a hostile title to every client as written-out text", () =>
     Effect.gen(function* () {
-      const { service } = yield* fixture(false, { MCP_TRAITS_TITLE: "a\u001b]0;x\u0007b\u001b[2Kc\u009bd‮e" })
+      const { service } = yield* fixture(false, { MCP_TRAITS_TITLE: "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b‮e" })
       yield* Effect.gen(function* () {
         const registry = yield* registered
         const displayName = (yield* registry.snapshot()).describe("traits_lookup")?.displayName
-        expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\u{202e}e")
+        expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e")
         expect(displayName).not.toMatch(/\p{C}/u)
       }).pipe(Effect.provide(traitsLayer(service)))
     }),
@@ -3071,7 +3071,8 @@ describe("MCP hints and permissions", () => {
           }),
         )
         const registry = yield* Tool.Service
-        yield* (yield* McpTool.Service).flush
+        const mcpTool = yield* McpTool.Service
+        yield* mcpTool.flush
         const permission = yield* Permission.Service
         const bus = yield* Bus.Service
 
@@ -3088,7 +3089,12 @@ describe("MCP hints and permissions", () => {
               ...toolIdentity,
               call: { type: "tool-call", id: `call_${name}`, name, input: {} },
             }).pipe(Effect.exit, Effect.forkScoped)
-            const request = yield* Deferred.await(asked)
+            const request = yield* Deferred.await(asked).pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error(`${name} did not ask for permission`)),
+              }),
+            )
             yield* permission.reply({ requestID: request.id, reply: "reject" })
             yield* Fiber.join(fiber)
             yield* unsubscribe

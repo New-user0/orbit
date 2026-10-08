@@ -185,6 +185,9 @@ describe("PatchTool", () => {
         const deleting = "*** Begin Patch\n*** Update File: b.txt\n@@\n-x\n+y\n*** Delete File: c.txt\n*** End Patch"
         expect(yield* traits(modifying)).toMatchObject({ readOnly: false, concurrencySafe: false, destructive: false })
         expect(yield* traits(deleting)).toMatchObject({ readOnly: false, concurrencySafe: false, destructive: true })
+        const moving =
+          "*** Begin Patch\n*** Update File: b.txt\n*** Move to: d.txt\n@@\n-x\n+y\n*** End Patch"
+        expect(yield* traits(moving)).toMatchObject({ destructive: true })
         expect(yield* traits("not a patch")).toMatchObject({
           readOnly: false,
           concurrencySafe: false,
