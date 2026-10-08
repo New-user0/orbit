@@ -1922,7 +1922,7 @@ describe("ShellTool", () => {
       Effect.promise(() => tmpdir()),
       (tmp) => {
         reset()
-        denyAction = "shell"
+        denyAction = "Bash"
         return withSession(tmp.path, (registry) => failureFlag(registry, call({ command: cwdCommand }))).pipe(
           Effect.andThen((result) => Effect.sync(() => expect(result).toEqual({ settled: "failed", flag: undefined }))),
         )
