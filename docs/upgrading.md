@@ -310,6 +310,27 @@ reports the refusal as a JSON result object under `--output-format json`; `--tru
 
 **What to do:** nothing for `-p`; to send a message that starts with a dash, put it after `--`.
 
+### `orb -p` prints an init line, an enriched result and, on request, streamed fragments
+
+`orb -p --output-format stream-json` prints one JSON line per event, beginning with an init line
+`{"type":"init","protocol":1,"sessionID","cwd","agent","model","version"}` that is written before the message is sent
+(`agent` is `null` until the session has chosen one), and ending with exactly one result line. `--output-format json`
+prints only that result object. Besides `sessionID`, `is_error`, `result`, `structured_output` and `error`, it now has
+`outcome` (`succeeded`, `failed` or `interrupted`), `reason` when the run did not succeed, `steps`, `duration_ms`,
+`cost`, `tokens` and `rejected` (the requests that were rejected because nobody could approve them). The steps, cost and
+tokens include failed steps and the steps of subagents the run started. `--include-partial-messages` (stream-json only)
+adds `text_delta`, `reasoning_delta` (with `--thinking`) and `tool_input_delta` lines. `--verbose` implies `--thinking`,
+prints what the tools returned and writes one usage line per step to stderr. With the text format, a run that
+auto-rejected requests ends with one summary line on stderr; its exit code does not change.
+
+`orb -p --json-schema` with the text format now prints only the parsed JSON answer (it used to print the result object,
+which `--output-format json` still does); an answer that is not JSON is an error on stderr and exits 1. `orb run
+--format` is hidden from `--help` and prints exactly what it printed before, without the new fields or lines.
+
+**Affects:** scripts that read the output of `orb -p --json-schema` as a result object.
+
+**What to do:** add `--output-format json` to keep reading the result object; ignore the new fields otherwise.
+
 ### The sidebar's getting-started text no longer lists model families
 
 The getting-started panel in the TUI sidebar used to end its second line with a list of three model families. It now says

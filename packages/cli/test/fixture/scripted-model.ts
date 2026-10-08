@@ -17,7 +17,18 @@ export type ScriptedRequest = {
  *
  * `config` is the content of an orbit.json that points the ollama provider at it; the model is `ollama/scripted:1b`.
  */
-export function scriptedModel(replies: ReadonlyArray<string> = ["ok"]) {
+export type ScriptedReply =
+  | string
+  | {
+      /** The text, sent as one chunk per element, so a client sees the answer stream. */
+      readonly chunks?: ReadonlyArray<string>
+      /** A tool call to make instead of answering; the model is asked again with its result. */
+      readonly tool?: { readonly name: string; readonly input: unknown }
+      /** The finish reason of the step, such as "content_filter" for a step the runner counts as failed. */
+      readonly finish?: string
+    }
+
+export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
   const requests: ScriptedRequest[] = []
   const details = {
     format: "gguf",
@@ -61,10 +72,39 @@ export function scriptedModel(replies: ReadonlyArray<string> = ["ok"]) {
         body,
       }
       requests.push(entry)
-      const text = entry.step ? (replies[Math.min(requests.filter((item) => item.step).length - 1, replies.length - 1)] ?? "ok") : "Title"
+      const reply = entry.step
+        ? (replies[Math.min(requests.filter((item) => item.step).length - 1, replies.length - 1)] ?? "ok")
+        : "Title"
+      const scripted = typeof reply === "string" ? { chunks: [reply] } : reply
       const events = [
-        { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },
-        { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+        ...(scripted.tool
+          ? [
+              {
+                choices: [
+                  {
+                    index: 0,
+                    delta: {
+                      role: "assistant",
+                      tool_calls: [
+                        {
+                          index: 0,
+                          id: `call_${requests.length}`,
+                          type: "function",
+                          function: { name: scripted.tool.name, arguments: JSON.stringify(scripted.tool.input) },
+                        },
+                      ],
+                    },
+                    finish_reason: null,
+                  },
+                ],
+              },
+            ]
+          : (scripted.chunks ?? []).map((chunk, index) => ({
+              choices: [
+                { index: 0, delta: { ...(index === 0 ? { role: "assistant" } : {}), content: chunk }, finish_reason: null },
+              ],
+            }))),
+        { choices: [{ index: 0, delta: {}, finish_reason: scripted.finish ?? (scripted.tool ? "tool_calls" : "stop") }] },
         { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
       ]
       return new Response(`${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`, {

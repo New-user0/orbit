@@ -70,9 +70,23 @@ const HeadlessParams = {
 // The flags that only `orb -p` takes, which the root command lists so that --help shows them.
 const PrintParams = {
   ...HeadlessParams,
-  outputFormat: Flag.choice("output-format", ["text", "json"]).pipe(
-    Flag.withDescription('Output format with -p: "text" prints the answer, "json" prints one JSON result object'),
+  outputFormat: Flag.choice("output-format", ["text", "json", "stream-json"]).pipe(
+    Flag.withDescription(
+      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} and ending with the result line. The result object has type "result", sessionID, is_error, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents',
+    ),
     Flag.optional,
+  ),
+  includePartialMessages: Flag.boolean("include-partial-messages").pipe(
+    Flag.withDescription(
+      "With --output-format stream-json: also print text_delta, reasoning_delta (with --thinking) and tool_input_delta lines as the model streams",
+    ),
+    Flag.withDefault(false),
+  ),
+  verbose: Flag.boolean("verbose").pipe(
+    Flag.withDescription(
+      "With the text format: show thinking and tool output, and print one usage line per step on stderr",
+    ),
+    Flag.withDefault(false),
   ),
   model: Flag.string("model").pipe(
     Flag.withAlias("m"),
@@ -635,6 +649,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         ),
         agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
         format: Flag.choice("format", ["default", "json", "stream-json", "result"]).pipe(
+          Flag.withHidden,
           Flag.withDescription(
             'Output format: "json" or "stream-json" print one JSON event per line, "result" prints one JSON object at the end',
           ),
@@ -859,6 +874,8 @@ export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
   fork: undefined,
   bare: undefined,
   thinking: undefined,
+  "include-partial-messages": undefined,
+  verbose: undefined,
   "print-logs": undefined,
 }
 

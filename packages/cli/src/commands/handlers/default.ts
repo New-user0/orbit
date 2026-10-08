@@ -26,6 +26,8 @@ export default Runtime.handler(Commands, (input) =>
       ["--agent", Option.isSome(input.agent)],
       ["--bare", input.bare],
       ["--thinking", input.thinking],
+      ["--include-partial-messages", input.includePartialMessages],
+      ["--verbose", input.verbose],
     ].flatMap(([flag, given]) => (given ? [flag] : []))
     if (printOnly.length > 0)
       return yield* Effect.fail(new Error(`${printOnly.join(", ")} can only be used with -p, as in: orb -p <message>`))

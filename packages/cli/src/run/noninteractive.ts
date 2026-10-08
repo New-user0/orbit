@@ -9,6 +9,7 @@ import type {
   ToolContent,
 } from "@orbit/client/promise"
 import { jsonLine, progress } from "@orbit/flow/plain"
+import { errorMessage } from "../util/error"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { EOL } from "node:os"
 import { Option, Schema } from "effect"
@@ -42,6 +43,16 @@ type Input = {
   /** A JSON Schema the final answer must follow; the result then carries the parsed value. */
   jsonSchema?: unknown
   auto: boolean
+  /**
+   * The headless output contract of `orb -p`. With `format` "result" or "stream-json" it adds an init line before the
+   * prompt is admitted and ends with exactly one enriched result line; with "default" and a schema it prints only the
+   * parsed JSON. Without it the run prints what `orb run --format` always printed.
+   */
+  envelope?: { cwd: string; agent?: string; model?: string; version: string }
+  /** With the stream-json envelope: a line for every text, reasoning and tool input fragment as it streams. */
+  partial?: boolean
+  /** With the text format: tool output bodies and one usage line per step, on stderr. */
+  verbose?: boolean
   /** True when the client is attached to a shared server rather than an exclusive in-process one. */
   attached: boolean
   compatibility?: "v1"
@@ -86,10 +97,28 @@ const PERMISSION_REJECTED_FEEDBACK =
   "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action."
 
 export async function runNonInteractivePrompt(input: Input) {
+  const startedAt = Date.now()
   const controller = new AbortController()
   const stream = input.client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
   const connected = await stream.next()
   if (connected.done) throw new Error("Event stream disconnected before prompt admission")
+  // The lines of the envelope, and the schema text mode that prints only the parsed answer.
+  const lines = input.envelope !== undefined && (input.format === "result" || input.format === "stream-json")
+  const schemaText = input.envelope !== undefined && input.format === "default" && input.jsonSchema !== undefined
+  const collecting = input.format === "result" || schemaText
+  if (lines && input.envelope && input.format === "stream-json") {
+    process.stdout.write(
+      jsonLine({
+        type: "init",
+        protocol: 1,
+        sessionID: input.sessionID,
+        cwd: input.envelope.cwd,
+        agent: input.envelope.agent ?? null,
+        model: input.envelope.model ?? null,
+        version: input.envelope.version,
+      }) + EOL,
+    )
+  }
 
   const messageID = SessionMessage.ID.create()
   const starts = new Map<string, StartedPart>()
@@ -113,6 +142,13 @@ export async function runNonInteractivePrompt(input: Input) {
   // switching to a fallback model. The next step to start clears it. It is reported only when the run ends without one.
   let pendingStepError: { error: SessionStructuredError; time: number } | undefined
   let held: Held[] = []
+  // What the result line reports: the message of the failure, the totals of this run's sessions and the requests that
+  // were rejected because nobody could approve them.
+  let failure: string | undefined
+  const totals = { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+  const rejected: { action: string; resources: string[] }[] = []
+  // The answer of a stream-json run, which is written as it arrives and so is not held; kept per message for `discard`.
+  let streamed: { messageID: string; text: string }[] = []
   // The assistant messages whose step ended at the output limit, and the ones that a notice replaced.
   const lengthMessages = new Set<string>()
   const replaced = new Set<string>()
@@ -120,6 +156,8 @@ export async function runNonInteractivePrompt(input: Input) {
   const streaming = input.format === "json" || input.format === "stream-json"
   const answer: string[] = []
   const emit = (type: string, timestamp: number, data: Record<string, unknown>) => {
+    if (type === "error" && typeof data.error === "object" && data.error && "message" in data.error)
+      failure = String(data.error.message)
     if (!streaming) return false
     process.stdout.write(jsonLine({ type, timestamp, sessionID: input.sessionID, ...data }) + EOL)
     return true
@@ -128,7 +166,7 @@ export async function runNonInteractivePrompt(input: Input) {
   const printText = (value: string) => {
     const text = value.trim()
     if (!text) return
-    if (input.format === "result") return void answer.push(text)
+    if (collecting) return void answer.push(text)
     if (!process.stdout.isTTY) {
       process.stdout.write(text + EOL)
       return
@@ -162,6 +200,7 @@ export async function runNonInteractivePrompt(input: Input) {
   }
 
   const discard = (messageID: string) => {
+    streamed = streamed.filter((part) => part.messageID !== messageID)
     held = held.flatMap((item): Held[] => {
       if (item.type === "note") return item.messageID === messageID ? [] : [item]
       const parts = item.parts.filter((part) => part.messageID !== messageID)
@@ -203,14 +242,14 @@ export async function runNonInteractivePrompt(input: Input) {
   }
 
   const writeText = (part: { messageID: string; text: string; [key: string]: unknown }, timestamp: number) => {
-    if (emit("text", timestamp, { part })) return
+    if (emit("text", timestamp, { part })) return void streamed.push({ messageID: part.messageID, text: part.text })
     if (input.compatibility === "v1") return printText(part.text)
     hold(part.messageID, part.text)
   }
 
   const writeReasoning = (part: { text: string; [key: string]: unknown }, timestamp: number) => {
     if (emit("reasoning", timestamp, { part })) return
-    if (input.format === "result") return
+    if (collecting) return
     const text = part.text.trim()
     if (!text) return
     release()
@@ -260,6 +299,7 @@ export async function runNonInteractivePrompt(input: Input) {
     const continuing = !input.auto && input.compatibility !== "v1"
     if (!input.auto) {
       if (!continuing) permissionRejected = true
+      rejected.push({ action: request.action, resources: [...request.resources] })
       release()
       UI.println(
         UI.Style.TEXT_WARNING_BOLD + "!",
@@ -310,6 +350,32 @@ export async function runNonInteractivePrompt(input: Input) {
     surfaceStepError()
   }
 
+  const tally = (
+    event: Extract<V2Event, { type: "session.step.started" | "session.step.ended" | "session.step.failed" }>,
+  ) => {
+    if (event.type === "session.step.started") {
+      totals.steps += 1
+      return
+    }
+    const tokens = event.data.tokens
+    totals.cost += event.data.cost ?? 0
+    if (tokens) {
+      totals.tokens.input += tokens.input
+      totals.tokens.output += tokens.output
+      totals.tokens.reasoning += tokens.reasoning
+      totals.tokens.cache.read += tokens.cache.read
+      totals.tokens.cache.write += tokens.cache.write
+    }
+    if (input.verbose && input.format === "default" && event.data.cost !== undefined && tokens)
+      UI.println(
+        UI.Style.TEXT_DIM +
+          progress(
+            `usage: ${tokens.input} in, ${tokens.output} out, ${tokens.reasoning} reasoning, ${tokens.cache.read} cache read, ${tokens.cache.write} cache write, cost ${event.data.cost}`,
+          ) +
+          UI.Style.TEXT_NORMAL,
+      )
+  }
+
   const consume = async () => {
     while (!controller.signal.aborted) {
       const next = await stream.next().catch((error) => {
@@ -339,6 +405,16 @@ export async function runNonInteractivePrompt(input: Input) {
         await cancelForm(event.data.form)
         continue
       }
+      // Steps of this run's own sessions, subagents included, are counted before the filter that keeps only the root
+      // session's output. Other clients' sessions on a shared server are not owned and so are not counted.
+      if (
+        promoted &&
+        (event.type === "session.step.started" ||
+          event.type === "session.step.ended" ||
+          event.type === "session.step.failed") &&
+        (await ownsSession(event.data.sessionID))
+      )
+        tally(event)
       if (!("sessionID" in event.data) || event.data.sessionID !== input.sessionID) continue
       const time = toMillis("created" in event ? event.created : undefined)
 
@@ -371,6 +447,22 @@ export async function runNonInteractivePrompt(input: Input) {
       )
         return
       if (!promoted) continue
+      if (lines && input.partial && event.type === "session.text.delta") {
+        emit("text_delta", time, {
+          messageID: event.data.assistantMessageID,
+          ordinal: event.data.ordinal,
+          delta: event.data.delta,
+        })
+        continue
+      }
+      if (lines && input.partial && input.thinking && event.type === "session.reasoning.delta") {
+        emit("reasoning_delta", time, {
+          messageID: event.data.assistantMessageID,
+          ordinal: event.data.ordinal,
+          delta: event.data.delta,
+        })
+        continue
+      }
       if (finalizing && !event.type.startsWith("session.execution.")) continue
 
       if (event.type === "session.step.started") {
@@ -468,6 +560,13 @@ export async function runNonInteractivePrompt(input: Input) {
       if (event.type === "session.tool.input.delta") {
         const current = tools.get(toolKey(event.data.assistantMessageID, event.data.id))
         if (current) current.raw = (current.raw ?? "") + event.data.delta
+        if (lines && input.partial)
+          emit("tool_input_delta", time, {
+            messageID: event.data.assistantMessageID,
+            toolID: event.data.id,
+            tool: current?.tool,
+            delta: event.data.delta,
+          })
         continue
       }
       if (event.type === "session.tool.called") {
@@ -930,17 +1029,53 @@ export async function runNonInteractivePrompt(input: Input) {
       process.exitCode = 1
       if (!emit("error", Date.now(), { error })) UI.error(error.message)
     }
+    // The step events of the last steps can still be on their way, and the totals count them.
+    if (lines) await Promise.race([completed.catch(() => {}), Bun.sleep(3000)])
     reachedEnd = true
+  } catch (error) {
+    failure ??= errorMessage(error)
+    throw error
   } finally {
     // Whatever way the run ends, the text that was waiting for a continuation is written, so a result holds all of it.
     release()
     // Every way out of the run prints exactly one result, failed unless the run reached its end cleanly.
-    if (input.format === "result")
-      writeResult(
-        input.sessionID,
-        answer.join("\n\n"),
-        !reachedEnd || emittedError || interrupted || permissionRejected || formCancelled,
-        input.jsonSchema,
+    const failed = !reachedEnd || emittedError || interrupted || permissionRejected || formCancelled
+    if (lines) {
+      const text = input.format === "stream-json" ? streamed.map((part) => part.text.trim()).filter(Boolean) : answer
+      writeEnvelopeResult({
+        sessionID: input.sessionID,
+        text: text.join("\n\n"),
+        failed,
+        schema: input.jsonSchema,
+        outcome: interrupted ? "interrupted" : failed ? "failed" : "succeeded",
+        reason: !failed
+          ? undefined
+          : interrupted
+            ? "interrupted"
+            : failure !== undefined
+              ? "error"
+              : permissionRejected
+                ? "permission_rejected"
+                : formCancelled
+                  ? "question_cancelled"
+                  : "incomplete",
+        error: failure,
+        steps: totals.steps,
+        duration: Date.now() - startedAt,
+        cost: totals.cost,
+        tokens: totals.tokens,
+        rejected,
+      })
+    } else if (schemaText) writeSchemaText(answer.join("\n\n"), failed, failure)
+    else if (input.format === "result") writeResult(input.sessionID, answer.join("\n\n"), failed, input.jsonSchema)
+    // Nobody could approve these, so the model went on without them; the exit code does not change.
+    if (input.envelope && input.format === "default" && rejected.length > 0)
+      UI.println(
+        UI.Style.TEXT_WARNING_BOLD + "!",
+        UI.Style.TEXT_NORMAL +
+          progress(
+            `${rejected.length} request${rejected.length === 1 ? " was" : "s were"} auto-rejected: ${rejected.map((request) => request.action).join(", ")}`,
+          ),
       )
     process.off("SIGINT", interrupt)
     controller.abort()
@@ -1035,8 +1170,7 @@ export function wroteResult() {
 
 // One JSON object for scripts: the final answer, whether the run failed, and with a schema, the parsed value.
 function writeResult(sessionID: string, text: string, failed: boolean, schema: unknown) {
-  const unfenced = text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
-  const parsed = schema === undefined ? undefined : parseJson(unfenced)
+  const parsed = schema === undefined ? undefined : parseJson(unfence(text))
   const invalid = schema !== undefined && parsed === undefined
   if (failed || invalid) process.exitCode = 1
   resultWritten = true
@@ -1050,6 +1184,58 @@ function writeResult(sessionID: string, text: string, failed: boolean, schema: u
       ...(invalid ? { error: "The answer was not valid JSON." } : {}),
     }) + EOL,
   )
+}
+
+// The result line of the envelope: what writeResult prints, plus how the run ended and what it used.
+function writeEnvelopeResult(run: {
+  sessionID: string
+  text: string
+  failed: boolean
+  schema: unknown
+  outcome: "succeeded" | "failed" | "interrupted"
+  reason: string | undefined
+  error: string | undefined
+  steps: number
+  duration: number
+  cost: number
+  tokens: unknown
+  rejected: unknown
+}) {
+  const parsed = run.schema === undefined ? undefined : parseJson(unfence(run.text))
+  const invalid = run.schema !== undefined && parsed === undefined
+  const failed = run.failed || invalid
+  if (failed) process.exitCode = process.exitCode || 1
+  resultWritten = true
+  process.stdout.write(
+    jsonLine({
+      type: "result",
+      sessionID: run.sessionID,
+      is_error: failed,
+      outcome: run.outcome === "succeeded" && invalid ? "failed" : run.outcome,
+      ...(run.reason === undefined && !invalid ? {} : { reason: run.reason ?? "invalid_output" }),
+      result: run.text,
+      ...(parsed === undefined ? {} : { structured_output: parsed.value }),
+      ...(invalid ? { error: "The answer was not valid JSON." } : run.error === undefined ? {} : { error: run.error }),
+      steps: run.steps,
+      duration_ms: run.duration,
+      cost: run.cost,
+      tokens: run.tokens,
+      rejected: run.rejected,
+    }) + EOL,
+  )
+}
+
+// `orb -p --json-schema` in text format: stdout holds only the parsed answer, and an answer that is not JSON is an error.
+function writeSchemaText(text: string, failed: boolean, failure: string | undefined) {
+  const parsed = parseJson(unfence(text))
+  if (failed || !parsed) process.exitCode = process.exitCode || 1
+  if (failed) return void (failure && UI.error(failure))
+  if (!parsed) return UI.error("The answer was not valid JSON.")
+  process.stdout.write(jsonLine(parsed.value) + EOL)
+}
+
+function unfence(text: string) {
+  return text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
 }
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))

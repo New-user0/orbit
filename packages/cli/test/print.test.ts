@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
-import { scriptedModel } from "./fixture/scripted-model"
+import { scriptedModel, type ScriptedReply } from "./fixture/scripted-model"
 
 // `orb -p` against a real private server and a scripted model. Every run is a child process of src/index.ts, so the
 // argv classification, the Print spec and the handler are the ones a user reaches.
@@ -33,11 +33,11 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
-async function orb(args: string[], input?: string) {
+async function orb(args: string[], input?: string, home = root) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
-    env: isolatedEnv(root, {
-      USERPROFILE: root,
+    env: isolatedEnv(home, {
+      USERPROFILE: home,
       PWD: workspace,
       ORBIT_CONFIG: undefined,
       ORBIT_CONFIG_CONTENT: undefined,
@@ -103,13 +103,203 @@ test("-p --bare runs as orb run --bare does: on a private server, with no projec
   expect(plain.requests.map((request) => request.system).join("")).toContain(instructions)
 }, 180_000)
 
-test("-p --json-schema prints the result object that orb run --json-schema prints", async () => {
-  const print = await sent(["-p", ...base, "--json-schema", schema, "say ok"])
+test("--json-schema: text prints only the JSON, json and stream-json carry structured_output, run keeps its result object", async () => {
+  const text = await sent(["-p", ...base, "--json-schema", schema, "say ok"])
+  const json = await sent(["-p", ...base, "--json-schema", schema, "--output-format", "json", "say ok"])
+  const stream = await sent(["-p", ...base, "--json-schema", schema, "--output-format", "stream-json", "say ok"])
   const run = await sent(["run", ...base, "--json-schema", schema, "say ok"])
 
-  const withoutID = (output: string) => ({ ...JSON.parse(output), sessionID: undefined })
-  expect(withoutID(print.stdout)).toMatchObject({ type: "result", is_error: false })
-  expect(withoutID(print.stdout)).toEqual(withoutID(run.stdout))
+  expect(text.stdout.trim()).toBe('{"answer":"ok"}')
+  expect(JSON.parse(json.stdout)).toMatchObject({ type: "result", is_error: false, structured_output: { answer: "ok" } })
+  expect(parseLines(stream.stdout).at(-1)).toMatchObject({ type: "result", structured_output: { answer: "ok" } })
+  // `orb run` prints the result it always printed, without the fields of the envelope.
+  expect(JSON.parse(run.stdout)).toMatchObject({ type: "result", is_error: false, structured_output: { answer: "ok" } })
+  expect(Object.keys(JSON.parse(run.stdout))).not.toContain("outcome")
+}, 240_000)
+
+// Runs with its own scripted model and its own home, so that each script starts at its first step.
+async function scripted<T>(
+  replies: ReadonlyArray<ScriptedReply>,
+  run: (model: ReturnType<typeof scriptedModel>, home: string) => Promise<T>,
+) {
+  const own = scriptedModel(replies)
+  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-print-own-")))
+  await own.configure(home)
+  try {
+    return await run(own, home)
+  } finally {
+    await own.stop()
+    await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+}
+
+function parseLines(output: string) {
+  return output
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => JSON.parse(line) as Record<string, any>)
+}
+
+// A line of the envelope must hold no character that acts on a terminal, whatever a tool or a title called itself.
+const raw = /[\p{C}\p{Zl}\p{Zp}]/u
+
+// `orb -p` against a model of its own, in the output format that is given, with the flags that are given.
+function print(own: ReturnType<typeof scriptedModel>, home: string, args: string[], format = "json") {
+  return orb(["-p", "--standalone", "--model", own.model, "--output-format", format, ...args], undefined, home)
+}
+
+test("--output-format json prints one result object with the outcome, the steps and the tokens", async () => {
+  const run = await sent(["-p", ...base, "--output-format", "json", "say ok"])
+
+  const lines = run.stdout.trim().split(/\r?\n/)
+  expect(lines).toHaveLength(1)
+  expect(JSON.parse(lines[0])).toMatchObject({
+    type: "result",
+    is_error: false,
+    outcome: "succeeded",
+    result: '{"answer":"ok"}',
+    rejected: [],
+  })
+  const result = JSON.parse(lines[0])
+  expect(result.steps).toBeGreaterThanOrEqual(1)
+  expect(result.tokens.input).toBeGreaterThan(0)
+  expect(result.duration_ms).toBeGreaterThan(0)
+  expect(result.sessionID).toStartWith("ses_")
+}, 120_000)
+
+test("a failed step is counted in the steps, the tokens and the cost", async () => {
+  await scripted([{ chunks: ["blocked"], finish: "content_filter" }], async (own, home) => {
+    const run = await print(own, home, ["say ok"])
+
+    const result = JSON.parse(run.stdout)
+    expect(result.steps).toBe(1)
+    expect(result.tokens.input).toBe(10)
+    expect(result.tokens.output).toBe(2)
+    expect(result).toMatchObject({ is_error: true, outcome: "failed", reason: "error" })
+    expect(run.code).toBe(1)
+  })
+}, 120_000)
+
+test("the steps of a subagent are counted with the steps of the run", async () => {
+  const call = { name: "subagent", input: { agent: "general", description: "child work", prompt: "answer" } }
+  await scripted([{ tool: call }, "from the child", "done"], async (own, home) => {
+    const run = await print(own, home, ["say ok"])
+
+    expect(own.steps).toHaveLength(3)
+    const result = JSON.parse(run.stdout)
+    expect({ code: run.code, error: result.error }).toEqual({ code: 0, error: undefined })
+    expect(result.steps).toBe(3)
+    expect(result.tokens.input).toBe(30)
+  })
+}, 120_000)
+
+test("stream-json starts with the init line, ends with the result line, and every line parses", async () => {
+  const run = await sent(["-p", ...base, "--output-format", "stream-json", "say ok"])
+
+  const lines = parseLines(run.stdout)
+  expect(lines[0]).toMatchObject({ type: "init", protocol: 1, model: model.model, version: expect.any(String) })
+  expect(path.normalize(lines[0].cwd).toLowerCase()).toBe(path.normalize(workspace).toLowerCase())
+  expect(lines.at(-1)).toMatchObject({ type: "result", is_error: false, outcome: "succeeded", result: '{"answer":"ok"}' })
+  expect(lines.filter((line) => line.type === "result")).toHaveLength(1)
+  expect(lines.filter((line) => line.type === "init")).toHaveLength(1)
+  expect(lines[0].sessionID).toBe(lines.at(-1)?.sessionID)
+  expect(lines.map((line) => line.type)).toContain("text")
+  // Fragments are only printed when they are asked for.
+  expect(lines.map((line) => line.type)).not.toContain("text_delta")
+}, 120_000)
+
+test("--include-partial-messages prints text fragments that add up to the answer", async () => {
+  await scripted([{ chunks: ["Hel", "lo ", "there"] }], async (own, home) => {
+    const run = await print(own, home, ["--include-partial-messages", "say hi"], "stream-json")
+
+    const lines = parseLines(run.stdout)
+    const deltas = lines.filter((line) => line.type === "text_delta")
+    expect(deltas.length).toBeGreaterThan(0)
+    expect(deltas.map((line) => line.delta).join("")).toBe("Hello there")
+    expect(lines.at(-1)).toMatchObject({ type: "result", result: "Hello there" })
+  })
+}, 120_000)
+
+test("--include-partial-messages without stream-json is a usage error", async () => {
+  const before = model.requests.length
+
+  const run = await orb(["-p", ...base, "--include-partial-messages", "say ok"])
+
+  expect(run.code).toBe(1)
+  expect(run.stderr).toContain("--include-partial-messages requires --output-format stream-json")
+  expect(model.requests.length).toBe(before)
+}, 60_000)
+
+test("an answer that is not JSON under --json-schema is an error in every format", async () => {
+  await scripted(["not json"], async (own, home) => {
+    const text = await print(own, home, ["--json-schema", schema, "say ok"], "text")
+    const json = await print(own, home, ["--json-schema", schema, "say ok"])
+
+    expect(text.code).toBe(1)
+    expect(text.stdout).toBe("")
+    expect(text.stderr).toContain("The answer was not valid JSON.")
+    expect(json.code).toBe(1)
+    expect(JSON.parse(json.stdout)).toMatchObject({ is_error: true, outcome: "failed", reason: "invalid_output" })
+  })
+}, 180_000)
+
+test("a run whose write was rejected prints one summary on stderr and exits 0", async () => {
+  // A file outside the folder of the run needs a permission that nobody can give.
+  const target = path.join(root, "rejected.txt")
+  const outside = { name: "write", input: { path: target, content: "x" } }
+  await scripted([{ tool: outside }, "done"], async (own, home) => {
+    const text = await print(own, home, ["say ok"], "text")
+
+    expect(text.code).toBe(0)
+    expect(text.stdout.trim()).toBe("done")
+    expect(text.stderr).toContain("1 request was auto-rejected: ")
+    expect(await Bun.file(target).exists()).toBe(false)
+  })
+  await scripted([{ tool: outside }, "done"], async (own, home) => {
+    const json = await print(own, home, ["say ok"])
+
+    const result = JSON.parse(json.stdout)
+    expect(json.code).toBe(0)
+    expect(result).toMatchObject({ is_error: false, outcome: "succeeded" })
+    expect(result.rejected).toHaveLength(1)
+  })
+}, 180_000)
+
+test("--verbose shows tool output and one usage line per step on stderr", async () => {
+  const call = { name: "read", input: { path: path.join(workspace, "AGENTS.md") } }
+  await scripted([{ tool: call }, "done"], async (own, home) => {
+    const verbose = await print(own, home, ["--verbose", "say ok"], "text")
+
+    expect(verbose.code).toBe(0)
+    expect(verbose.stdout.trim()).toBe("done")
+    expect(verbose.stderr).toContain(instructions)
+    expect(verbose.stderr.match(/usage: /g)).toHaveLength(2)
+  })
+  await scripted([{ tool: call }, "done"], async (own, home) => {
+    const quiet = await print(own, home, ["say ok"], "text")
+
+    expect(quiet.stderr).not.toContain("usage: ")
+    expect(quiet.stderr).not.toContain(instructions)
+  })
+}, 180_000)
+
+test("a hostile tool name and session title reach no terminal or reader as a control character", async () => {
+  const hostile = "evil\u001b]0;pwned\u0007\u009b31m x"
+  await scripted([{ tool: { name: hostile, input: {} } }, "done"], async (own, home) => {
+    const stream = await print(own, home, ["--title", hostile, "say ok"], "stream-json")
+    const text = await print(own, home, ["--title", hostile, "--verbose", "say ok"], "text")
+
+    // Every line is one JSON value with no raw control or separator character, and the name is still what the model sent.
+    stream.stdout
+      .trim()
+      .split(/\r?\n/)
+      .forEach((line) => expect(raw.test(line)).toBe(false))
+    expect(parseLines(stream.stdout).some((line) => JSON.stringify(line).includes("evil"))).toBe(true)
+    // What reaches the terminal is the text with the characters written out, never the sequence that sets a title.
+    expect(text.stderr).not.toContain("\u001b]0;")
+    expect(text.stderr).not.toContain("\u0007")
+    expect(text.stderr).not.toContain("\u009b")
+  })
 }, 180_000)
 
 test("-p reads a piped message, and with no message at all it fails", async () => {

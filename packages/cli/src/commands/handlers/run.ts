@@ -26,6 +26,9 @@ type HeadlessInput = {
   readonly file: ReadonlyArray<string>
   readonly title: Option.Option<string>
   readonly thinking: boolean
+  readonly envelope?: boolean
+  readonly partial?: boolean
+  readonly verbose?: boolean
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
@@ -40,7 +43,8 @@ export function headlessInput(input: HeadlessInput) {
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
     const schemaFile = Option.getOrUndefined(input.jsonSchema)
     const jsonSchema = schemaFile ? yield* Effect.promise(() => Bun.file(schemaFile).json()) : undefined
-    const format = jsonSchema === undefined ? input.format : "result"
+    // Without the envelope a schema always prints the result object; with it the format picks what is printed.
+    const format = jsonSchema === undefined || input.envelope ? input.format : "result"
     // The private server inherits this process's environment, which is how --bare reaches it.
     if (input.bare) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
@@ -59,7 +63,7 @@ export function headlessInput(input: HeadlessInput) {
       directory(),
       { grant: input.trust, session: Option.getOrUndefined(input.session) },
     ).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
-    if (stopped !== undefined) return reportRunError({ format }, stopped)
+    if (stopped !== undefined) return reportRunError({ format, envelope: input.envelope }, stopped)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
@@ -75,6 +79,9 @@ export function headlessInput(input: HeadlessInput) {
         file: [...input.file],
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,
+        envelope: input.envelope,
+        partial: input.partial,
+        verbose: input.verbose,
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       }),
     )
