@@ -780,6 +780,18 @@ to `leader` or to an `input.*` key in `cli.json` now also applies while the term
 
 **What to do:** nothing. Run `/keybindings` to start from the template.
 
+### VS Code hides recovered step failures and shows loop notices
+
+The VS Code chat used to show an error note the moment a step failed, even when the next step went on to finish the
+run. It now holds the failure back: a later step of the same run drops it, and it shows only when the run ends
+without one (or ends with a stop), as `orb run` does. A run that fails keeps just its own error. The chat also shows
+the runner's own notices that carry a description, such as a model fallback, a stop hook or a plan exit, as a muted
+note, with control and format characters in the text written out as escapes.
+
+**Affects:** VS Code users.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

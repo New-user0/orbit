@@ -42,6 +42,8 @@ export class Controller {
   private agent: Mode = "build"
   private readonly started = new Map<string, number>()
   private readonly items = new Map<string, Item>()
+  // A failed step waits here: a later step of the same run usually recovers from it, and then it is not shown.
+  private held: { readonly id: string; readonly text: string } | undefined
   private readonly owned = new Map<string, Promise<boolean>>()
   private readonly abort = new AbortController()
   // The last trust answer. A read that fails leaves it as it was, because a dropped connection says nothing about trust.
@@ -123,6 +125,10 @@ export class Controller {
     if (session.agent === "build" || session.agent === "plan") this.agent = session.agent
     for (const message of await this.history(sessionID)) {
       if (message.type === "user") this.update({ type: "user", id: `user:${message.id}`, text: message.text })
+      if (message.type === "synthetic") {
+        const notice = loopNotice(message.metadata, message.description)
+        if (notice) this.update({ type: "note", id: `notice:${message.id}`, text: notice, tone: "muted" })
+      }
       if (message.type !== "assistant") continue
       message.content.forEach((part, index) => {
         if (part.type === "text") this.update({ type: "text", id: `text:${message.id}:${index}`, text: part.text })
@@ -230,6 +236,7 @@ export class Controller {
 
   /** Start over: the next prompt opens a new session. */
   reset() {
+    this.held = undefined
     this.session = undefined
     this.items.clear()
     this.owned.clear()
@@ -424,7 +431,8 @@ export class Controller {
     }
   }
 
-  private handle(event: OrbitEvent) {
+  /** @internal Folds one event into the chat; the stream calls it, and tests do. */
+  handle(event: OrbitEvent) {
     switch (event.type) {
       case "session.renamed":
         if (event.data.sessionID === this.session) this.emit({ type: "title", title: event.data.title })
@@ -522,23 +530,43 @@ export class Controller {
         return
       }
       case "session.step.failed":
-        this.update({ type: "note", id: `error:${event.id}`, text: event.data.error.message, tone: "error" })
+        this.held = { id: `error:${event.id}`, text: event.data.error.message }
         return
+      case "session.step.started":
+        this.held = undefined
+        return
+      case "session.synthetic": {
+        const notice = loopNotice(event.data.metadata, event.data.description)
+        if (notice) this.update({ type: "note", id: `notice:${event.id}`, text: notice, tone: "muted" })
+        return
+      }
       case "session.execution.failed":
         if (event.data.sessionID === this.session) {
+          // What ended the run replaces the failure of a step that was held back.
+          this.held = undefined
           this.update({ type: "note", id: `error:${event.id}`, text: event.data.error.message, tone: "error" })
           this.emit({ type: "busy", busy: false })
         }
         return
       case "session.execution.interrupted":
         if (event.data.sessionID !== this.session) return
+        this.release()
         this.update({ type: "note", id: `stopped:${event.id}`, text: "Stopped.", tone: "muted" })
         this.emit({ type: "busy", busy: false })
         return
       case "session.execution.succeeded":
-        if (event.data.sessionID === this.session) this.emit({ type: "busy", busy: false })
+        if (event.data.sessionID !== this.session) return
+        this.release()
+        this.emit({ type: "busy", busy: false })
         return
     }
+  }
+
+  // The run ended with a step failure nothing recovered from: show it.
+  private release() {
+    if (!this.held) return
+    this.update({ type: "note", id: this.held.id, text: this.held.text, tone: "error" })
+    this.held = undefined
   }
 
   private tool(id: string): Extract<Item, { type: "tool" }> {
@@ -550,6 +578,13 @@ export class Controller {
     this.items.set(item.id, item)
     this.emit({ type: "item", item })
   }
+}
+
+// What the runner says about its own loop (a model fallback, a stop hook, a plan exit). The text comes from the runner
+// and the model, so it is escaped as `plain` does before it reaches the chat; one without a description says nothing.
+function loopNotice(metadata: Readonly<Record<string, unknown>> | undefined, description: string | undefined) {
+  if (typeof metadata?.notice !== "string" || !description?.trim()) return undefined
+  return plain(description)
 }
 
 function changes(metadata: Readonly<Record<string, unknown>> | undefined): ReadonlyArray<FileChange> {
