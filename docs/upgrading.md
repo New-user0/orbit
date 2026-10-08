@@ -104,11 +104,16 @@ rest:
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours, so it would otherwise replace the one in your own config.
+  because an agent's
+ own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the
+ model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as
+ the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key
+ that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours,
+ so it would otherwise replace the one in your own config.
 
 - **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
   `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
@@ -1403,7 +1408,8 @@ a step. No new event type is added.
 
 ### A failed shell call cancels the calls that ran with it
 
-When a `shell` call times out, is killed by a signal or cannot be started, the other calls of the same model response
+When a `shell` call times out, is killed by a signal, cannot be started (on Linux and macOS; on Windows a shell that
+cannot start looks like exit 1 for now) or is removed by a client while it runs, the other calls of the same model response
 that have not finished no longer run on. Calls that have not started never start. A call that is still running is
 interrupted. Each of them ends with the error type `tool.cancelled` and a short note that names the tool, and the step
 carries on: the model sees those results and answers. A permission denial, a rejection with feedback, a call that

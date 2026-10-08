@@ -4807,6 +4807,7 @@ describe("SessionRunnerLLM", () => {
             LLMEvent.stepStart({ index: 0 }),
             callOf("call-f", failing, "f"),
             callOf("call-h1", "held", "h1"),
+            callOf("call-h2", "held", "h2"),
             callOf("call-m", "mutate", "m"),
           ],
           gate,
@@ -4820,17 +4821,18 @@ describe("SessionRunnerLLM", () => {
       const run = yield* s.resume.pipe(Effect.forkChild)
       yield* Deferred.await(s.hold("f").started)
       yield* Deferred.await(s.hold("h1").started)
+      yield* Deferred.await(s.hold("h2").started)
       yield* Deferred.succeed(s.hold("f").release, undefined)
-      // The running sibling and the queued call settle before the provider streams anything more.
+      // The running siblings and the queued call settle before the provider streams anything more.
       const settled = new Set<string>()
-      while (!settled.has("call-h1") || !settled.has("call-m")) settled.add(yield* Queue.take(failed))
+      while (!settled.has("call-h1") || !settled.has("call-h2") || !settled.has("call-m")) settled.add(yield* Queue.take(failed))
       yield* Deferred.succeed(gate, undefined)
       yield* Fiber.join(run)
 
       // Only the failing call and the running sibling ever started; the others never did.
-      expect(s.executions).toEqual(["f", "h1"])
+      expect(s.executions).toEqual(["f", "h1", "h2"])
       expect(s.requests).toHaveLength(2)
-      expect(toolResultIDs(s.requests[1])).toEqual(["call-f", "call-h1", "call-m", "call-late"])
+      expect(toolResultIDs(s.requests[1])).toEqual(["call-f", "call-h1", "call-h2", "call-m", "call-late"])
       expect(yield* s.context).toMatchObject([
         Expected.user("Fail, hold, mutate, echo"),
         Expected.assistant({}, [
@@ -4839,6 +4841,10 @@ describe("SessionRunnerLLM", () => {
             : Expected.failedTool({ id: "call-f" }, { error: { type: "tool.execution" } }),
           Expected.failedTool(
             { id: "call-h1" },
+            { error: { type: "tool.cancelled", message: expect.stringContaining("Cancelled") } },
+          ),
+          Expected.failedTool(
+            { id: "call-h2" },
             { error: { type: "tool.cancelled", message: expect.stringContaining("Cancelled") } },
           ),
           Expected.failedTool(

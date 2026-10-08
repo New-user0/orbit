@@ -466,7 +466,16 @@ const layer = () =>
           ).pipe(Effect.catchTag("AppProcessError", (error) => Deferred.fail(ready, error))),
         )
 
-        const command = yield* Deferred.await(ready)
+        // `list` shows the command before `ready` resolves, so a creator interrupted here would leave
+        // a spawned process with no owner; remove it once it has spawned.
+        const command = yield* Deferred.await(ready).pipe(
+          Effect.onInterrupt(() =>
+            Deferred.await(ready).pipe(
+              Effect.flatMap((spawned) => removeCommand(spawned.info.id)),
+              Effect.ignore,
+            ),
+          ),
+        )
         return command.info
       })
 

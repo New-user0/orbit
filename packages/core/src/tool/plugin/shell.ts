@@ -5,6 +5,7 @@ import type { Context } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import type { ShellCreateBefore } from "@orbit/plugin/effect/shell"
 import type { Tool } from "@orbit/schema/tool"
+import { AppProcess } from "@orbit/util/process"
 import { Deferred, Effect, Schema, Scope } from "effect"
 import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
@@ -281,7 +282,12 @@ export const Plugin = {
                     message: `Unable to execute command: ${input.command}`,
                     error,
                     // Only the execution-stage failure above carries `error: true`; prepare failures never do.
-                    ...(error instanceof ToolFailure ? { metadata: error.metadata } : {}),
+                    // A spawn or sandbox refusal (AppProcessError) means the command never ran: also a failure.
+                    ...(error instanceof ToolFailure
+                      ? { metadata: error.metadata }
+                      : error instanceof AppProcess.AppProcessError
+                        ? { metadata: { error: true } }
+                        : {}),
                   }),
               ),
             ),
