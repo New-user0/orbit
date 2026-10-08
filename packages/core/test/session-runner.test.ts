@@ -1190,6 +1190,49 @@ describe("SessionRunnerLLM", () => {
     expect(s.executions).toEqual(["renamed"])
   })
 
+  scenario("projects a declared display name, escaped, onto the assistant tool and keeps it on replay", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        named: {
+          name: "named",
+          description: "A tool that declares a display name",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { displayName: "Named\u001b]0;x\u0007\u001b[2K\u009b‮" },
+          execute: () => Effect.succeed({ output: {} }),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Use the named tool")
+    yield* s.llm.push(
+      TestLLM.tool("call-named", "named", {}),
+      TestLLM.tool("call-echo", "echo", { text: "plain" }),
+      [],
+    )
+
+    yield* s.resume
+
+    const shown = "Named\\x1b]0;x\\x07\\x1b[2K\\x9b\\u{202e}"
+    const tools = () =>
+      Effect.map(s.context, (context) =>
+        context.flatMap((message) =>
+          message.type === "assistant" ? message.content.flatMap((part) => (part.type === "tool" ? [part] : [])) : [],
+        ),
+      )
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
+    yield* replaySessionProjection(sessionID)
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
+  })
+
   scenario("executes the tool advertised before a registry reload", function* (s) {
     const registry = yield* Tool.Service
     const scope = yield* Scope.make()

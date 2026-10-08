@@ -30,7 +30,11 @@ const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 
 const capture = (
   providerMetadataKey = "anthropic",
-  options?: { readonly interruptProgress?: boolean; readonly beforeTextDelta?: Effect.Effect<void> },
+  options?: {
+    readonly interruptProgress?: boolean
+    readonly beforeTextDelta?: Effect.Effect<void>
+    readonly displayName?: (name: string) => string | undefined
+  },
 ) => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
   const bus: Pick<Bus.Interface, "publish"> = {
@@ -60,6 +64,7 @@ const capture = (
         providerID: Provider.ID.orbit,
       },
       providerMetadataKey,
+      displayName: options?.displayName,
       started: 0,
       assistantMessageID: SessionMessage.ID.create(),
     }),
@@ -499,6 +504,42 @@ test("authoritative end values replace accumulated deltas in the durable ended e
   expect(published.find((event) => event.type === "session.reasoning.ended.1")?.data).toMatchObject({
     text: "Thinking done.",
   })
+})
+
+const startedData = async (
+  displayName: ((name: string) => string | undefined) | undefined,
+  event = LLMEvent.toolInputStart({ id: "call", name: "read" }),
+) => {
+  const { published, publisher } = capture("anthropic", { displayName })
+  await Effect.runPromise(publisher.publish(event))
+  return published.find((item) => item.type === "session.tool.input.started.1")?.data as object
+}
+
+test("tool input started carries the declared display name, escaped, and only when declared", async () => {
+  // A set-title sequence, one that erases the line, C1 CSI, and a right-to-left override.
+  const hostile = "\u001b]0;x\u0007a\u001b[2Kb\u009bc‮d"
+  const escaped = "\\x1b]0;x\\x07a\\x1b[2Kb\\x9bc\\u{202e}d"
+  const cases: ReadonlyArray<readonly [string, ((name: string) => string | undefined) | undefined, unknown]> = [
+    ["plain name", () => "Read file", "Read file"],
+    ["hostile name", () => hostile, escaped],
+    ["line breaks", () => " a\r\nb ", "a\\nb"],
+    ["no lookup", undefined, undefined],
+    ["lookup declares none", () => undefined, undefined],
+  ]
+  for (const [label, lookup, expected] of cases) {
+    const data = await startedData(lookup)
+    expect(data, label).toMatchObject({ name: "read" })
+    if (expected === undefined) expect("displayName" in data, label).toBe(false)
+    else expect((data as { displayName?: string }).displayName, label).toBe(expected as string)
+  }
+})
+
+test("a provider-hosted tool is given no display name", async () => {
+  const data = await startedData(
+    () => "Read file",
+    LLMEvent.toolInputStart({ id: "call", name: "read", providerExecuted: true }),
+  )
+  expect("displayName" in data).toBe(false)
 })
 
 test("tool input deltas are accumulated without being published", async () => {

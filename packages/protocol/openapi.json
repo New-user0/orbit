@@ -18835,6 +18835,9 @@
           "name": {
             "type": "string"
           },
+          "displayName": {
+            "type": "string"
+          },
           "executed": {
             "type": "boolean"
           },
