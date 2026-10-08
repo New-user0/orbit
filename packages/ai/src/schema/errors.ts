@@ -96,6 +96,8 @@ export class ProviderInternalError extends Schema.TaggedError<ProviderInternalEr
   {
     ...ReasonFields,
     retryAfterMs: Schema.optional(Schema.Number),
+    /** `overloaded` only when the provider said so: status 529, an overload code, or overload wording. */
+    classification: Schema.optional(Schema.Literals(["overloaded"])),
   },
 ) {}
 

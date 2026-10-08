@@ -17,6 +17,9 @@ import {
   TranscriptionClient,
   Video,
   VideoClient,
+  isContextOverflowFailure,
+  isOverloaded,
+  isRetryable,
 } from "@orbit/ai"
 import { Route, Protocol, RequestExecutor, WebSocketTransport } from "@orbit/ai/route"
 import { Provider as ProviderSubpath } from "@orbit/ai/provider"
@@ -75,6 +78,9 @@ describe("public exports", () => {
     expect(LLMClient.Service).toBeFunction()
     expect(LLMClient.layer).toBeDefined()
     expect(AIError).toBeFunction()
+    expect(isRetryable).toBeFunction()
+    expect(isOverloaded).toBeFunction()
+    expect(isContextOverflowFailure).toBeFunction()
     expect(LanguageModel.make).toBeFunction()
     expect(Media.bytes).toBeFunction()
     expect(Image.generate).toBeFunction()

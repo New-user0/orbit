@@ -11,6 +11,7 @@ import {
   ToolDefinition,
   Usage,
   Media,
+  isOverloaded,
 } from "../../src/index.js"
 import { Auth, Endpoint, LLMClient, Route } from "../../src/route.js"
 import { compileRequest } from "../../src/route/client.js"
@@ -1888,6 +1889,137 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  // A write whose JSON stops mid-string, the way a response cut off by the output limit leaves it.
+  const writeRequest = LLMRequest.update(request, {
+    tools: [ToolDefinition.make({ name: "write", description: "Write a file", inputSchema: { type: "object" } })],
+  })
+  const writeStream = (stopReason: string | undefined, closeBlock = true) =>
+    sseEvents(
+      { type: "message_start", message: { usage: { input_tokens: 5 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call_1", name: "write" } },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"a.ts","content":"par' },
+      },
+      ...(closeBlock ? [{ type: "content_block_stop", index: 0 }] : []),
+      { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 8 } },
+      { type: "message_stop" },
+    )
+
+  it.effect("does not call a tool whose input the output limit cut off", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(writeRequest).pipe(
+        Effect.provide(fixedResponse(writeStream("max_tokens"))),
+      )
+
+      expect(response.toolCalls).toEqual([])
+      expect(response.events.map((event) => event.type)).toEqual([
+        "step-start",
+        "tool-input-start",
+        "tool-input-delta",
+        "tool-input-end",
+        "step-finish",
+        "finish",
+      ])
+      expect(response.finishReason).toEqual({ normalized: "length", raw: "max_tokens" })
+    }),
+  )
+
+  it.effect("emits a tool call recovered from cut-off input before a tool-calls finish", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(writeRequest).pipe(
+        Effect.provide(fixedResponse(writeStream("tool_use"))),
+      )
+
+      expect(response.toolCalls).toMatchObject([
+        { id: "call_1", name: "write", input: { path: "a.ts", content: "par" }, partialInput: true },
+      ])
+      expect(response.events.map((event) => event.type)).toEqual([
+        "step-start",
+        "tool-input-start",
+        "tool-input-delta",
+        "tool-input-end",
+        "tool-call",
+        "step-finish",
+        "finish",
+      ])
+      expect(response.finishReason).toEqual({ normalized: "tool-calls", raw: "tool_use" })
+    }),
+  )
+
+  const recoveries = [
+    ["end_turn", "stop", true],
+    ["stop_sequence", "stop", true],
+    ["pause_turn", "stop", true],
+    ["tool_use", "tool-calls", true],
+    ["max_tokens", "length", false],
+    ["model_context_window_exceeded", "length", false],
+    ["refusal", "content-filter", false],
+    ["a_reason_added_later", "unknown", false],
+    [undefined, "unknown", false],
+  ] as const
+  recoveries.forEach(([stopReason, normalized, runs]) => {
+    ;[true, false].forEach((closeBlock) => {
+      it.effect(
+        `${runs ? "emits" : "drops"} a recovered tool call on ${stopReason ?? "a missing stop reason"} ${closeBlock ? "after" : "without"} content_block_stop`,
+        () =>
+          Effect.gen(function* () {
+            const response = yield* LLMClient.generate(writeRequest).pipe(
+              Effect.provide(fixedResponse(writeStream(stopReason, closeBlock))),
+            )
+
+            expect(response.finishReason.normalized).toBe(normalized)
+            // Counted first: Bun's toEqual takes a list of `undefined` markers for an empty list.
+            expect(response.toolCalls).toHaveLength(runs ? 1 : 0)
+            expect(response.toolCalls.every((call) => call.partialInput === true)).toBe(true)
+          }),
+      )
+    })
+  })
+
+  it.effect("still calls a tool that finished before the output limit cut off a later one", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(writeRequest).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "message_start", message: { usage: { input_tokens: 5 } } },
+              {
+                type: "content_block_start",
+                index: 0,
+                content_block: { type: "tool_use", id: "call_1", name: "read" },
+              },
+              {
+                type: "content_block_delta",
+                index: 0,
+                delta: { type: "input_json_delta", partial_json: '{"path":"a.ts"}' },
+              },
+              { type: "content_block_stop", index: 0 },
+              {
+                type: "content_block_start",
+                index: 1,
+                content_block: { type: "tool_use", id: "call_2", name: "write" },
+              },
+              {
+                type: "content_block_delta",
+                index: 1,
+                delta: { type: "input_json_delta", partial_json: '{"path":"b.ts","content":"par' },
+              },
+              { type: "content_block_stop", index: 1 },
+              { type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 8 } },
+              { type: "message_stop" },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.toolCalls).toMatchObject([{ id: "call_1", name: "read", input: { path: "a.ts" } }])
+      expect(response.toolCalls[0].partialInput).toBeUndefined()
+      expect(response.finishReason).toEqual({ normalized: "length", raw: "max_tokens" })
+    }),
+  )
+
   it.effect("keeps malformed server tool input terminal", () =>
     Effect.gen(function* () {
       const body = sseEvents(
@@ -1921,7 +2053,48 @@ describe("Anthropic Messages route", () => {
         Effect.flip,
       )
 
-      expect(error).toMatchObject({ reason: { _tag: "ProviderInternal" }, message: "overloaded_error: Overloaded" })
+      expect(error).toMatchObject({
+        reason: { _tag: "ProviderInternal", classification: "overloaded" },
+        message: "overloaded_error: Overloaded",
+      })
+      expect(isOverloaded(error)).toBe(true)
+    }),
+  )
+
+  it.effect("classifies an HTTP 529 response as an overload", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse('{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', {
+            status: 529,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+        Effect.flip,
+      )
+
+      expect(error).toMatchObject({
+        reason: { _tag: "ProviderInternal", classification: "overloaded" },
+        message: "Overloaded",
+      })
+      expect(isOverloaded(error)).toBe(true)
+    }),
+  )
+
+  it.effect("leaves an HTTP 500 unclassified", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse('{"type":"error","error":{"type":"api_error","message":"Internal server error"}}', {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+        Effect.flip,
+      )
+
+      expect(error.reason._tag).toBe("ProviderInternal")
+      expect(isOverloaded(error)).toBe(false)
     }),
   )
 
@@ -1953,7 +2126,10 @@ describe("Anthropic Messages route", () => {
         Effect.flip,
       )
 
-      expect(error).toMatchObject({ reason: { _tag: "ProviderInternal" }, message: "overloaded_error" })
+      expect(error).toMatchObject({
+        reason: { _tag: "ProviderInternal", classification: "overloaded" },
+        message: "overloaded_error",
+      })
     }),
   )
 
