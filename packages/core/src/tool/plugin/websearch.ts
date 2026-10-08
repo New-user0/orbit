@@ -58,7 +58,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { codemode: false },
+          options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, openWorld: true, interruptBehavior: "cancel" },
           description,
           input: Input,

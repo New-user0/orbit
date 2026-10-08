@@ -80,12 +80,15 @@ export function handlers<const Root extends Spec.Any>(root: Root, handlers: Hand
   return result
 }
 
-export function run(commands: Spec.Any, handlers: ReadonlyArray<LazyHandler>, options: { readonly version: string }) {
-  return Command.run(provide(commands, handlers).pipe(Command.withGlobalFlags([PrintLogs])), options) as Effect.Effect<
-    void,
-    unknown,
-    Command.Environment
-  >
+export function run(
+  commands: Spec.Any,
+  handlers: ReadonlyArray<LazyHandler>,
+  options: { readonly version: string },
+  args: ReadonlyArray<string>,
+) {
+  return Command.runWith(provide(commands, handlers).pipe(Command.withGlobalFlags([PrintLogs])), options)(
+    args,
+  ) as Effect.Effect<void, unknown, Command.Environment>
 }
 
 function provide(node: Spec.Any, handlers: ReadonlyArray<LazyHandler>): ProvidedCommand {

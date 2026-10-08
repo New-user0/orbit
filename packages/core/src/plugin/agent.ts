@@ -145,6 +145,15 @@ export const Plugin = define({
         item.permissions.push({ action: "*", resource: "*", effect: "deny" })
       })
 
+      // One-shot side queries (SideQuery). It has no system prompt of its own, because each caller writes one, and
+      // `agents.side.model` pins the model they use.
+      editor.update(Agent.ID.make("side"), (item) => {
+        item.name = Agent.Name.make("Side")
+        item.mode = "primary"
+        item.hidden = true
+        item.permissions.push({ action: "*", resource: "*", effect: "deny" })
+      })
+
       editor.update(Agent.ID.make("summary"), (item) => {
         item.name = Agent.Name.make("Summary")
         item.mode = "primary"

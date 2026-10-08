@@ -44,6 +44,13 @@ describe("CLI frontend import boundaries", () => {
     expect(run).not.toContain("packages/tui/src/mini/scrollback.surface.ts")
     expect(run).not.toContain("packages/tui/src/runtime.tsx")
 
+    const print = await bundleInputs("packages/cli/src/commands/handlers/print.ts")
+    expect(print).toContain("packages/cli/src/commands/handlers/run.ts")
+    expect(print).toContain("packages/cli/src/run/run.ts")
+    expect(print).not.toContain("packages/tui/src/runtime.tsx")
+    expect(print).not.toContain("packages/tui/src/app.tsx")
+    expect(print).not.toContain("packages/tui/src/mini/runtime.ts")
+
     const mini = await bundleInputs("packages/cli/src/commands/handlers/mini.ts")
     expect(mini).toContain("packages/cli/src/mini.ts")
     expect(mini).toContain("packages/tui/src/mini/index.ts")

@@ -683,6 +683,15 @@ permissions:
     }),
   )
 
+  const modelled = "description: Reviews changes\nmodel: acme/expensive"
+
+  it.live("drops the model of an agent file from an untrusted folder and keeps it once trusted", () =>
+    Effect.gen(function* () {
+      expect((yield* loadMarkdownAgent(modelled, untrustedDirectoryEntry)).model).toBeUndefined()
+      expect((yield* loadMarkdownAgent(modelled)).model).toMatchObject({ providerID: "acme", id: "expensive" })
+    }),
+  )
+
   const legacy = "temperature: 0.5\npermission:\n  bash: allow\n  edit: deny"
 
   it.live("cuts a legacy agent file down the same way", () =>

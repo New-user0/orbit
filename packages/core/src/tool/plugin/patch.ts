@@ -80,7 +80,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { codemode: false, permission: "edit" },
+          options: { authorizes: true, codemode: false, permission: "edit" },
           traits: {
             readOnly: false,
             concurrencySafe: false,
