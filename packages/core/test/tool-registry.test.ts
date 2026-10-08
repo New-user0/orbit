@@ -1310,3 +1310,90 @@ describe("Tool", () => {
     }),
   )
 })
+
+describe("Tool exposure", () => {
+  // Where a tool goes for each spelling of the options that decide it: advertised in the request (direct), or found
+  // through the Code Mode catalog (deferred), where a pinned tool is always listed. A plugin is not bound by the types,
+  // so the table holds values that are not the boolean false, which defer, and a pinned tool that is also direct.
+  const exposures: ReadonlyArray<
+    readonly [name: string, options: unknown, exposure: ToolTraits.Exposure, pinned: boolean]
+  > = [
+    ["codemode: false", { codemode: false }, "direct", false],
+    ["codemode: true", { codemode: true }, "deferred", false],
+    ["no options", undefined, "deferred", false],
+    ["empty options", {}, "deferred", false],
+    ["pinned: true", { pinned: true }, "deferred", true],
+    ["pinned: false", { pinned: false }, "deferred", false],
+    ["codemode: true and pinned: true", { codemode: true, pinned: true }, "deferred", true],
+    ["codemode: false and pinned: true", { codemode: false, pinned: true }, "direct", false],
+    ["codemode as text", { codemode: "false" }, "deferred", false],
+    ["codemode: 0", { codemode: 0 }, "deferred", false],
+    ["codemode: null", { codemode: null }, "deferred", false],
+  ]
+
+  for (const [name, options, exposure, pinned] of exposures) {
+    it.effect(`offers a tool with ${name} ${exposure === "direct" ? "directly" : "through Code Mode"}`, () =>
+      Effect.gen(function* () {
+        const tool = { ...make(), options: options as Tool.Options | undefined }
+        expect(ToolTraits.exposure(tool)).toBe(exposure)
+        expect(ToolTraits.pinned(tool)).toBe(pinned)
+
+        const service = yield* Tool.Service
+        yield* service.transform((editor) => editor.add(tool))
+        const snapshot = yield* service.snapshot()
+        const direct = exposure === "direct"
+        expect(snapshot.definitions.map((definition) => definition.name)).toEqual(
+          direct ? ["echo", "execute"] : ["execute"],
+        )
+        expect(snapshot.codeModeCatalog?.tools).toEqual(
+          direct ? [] : [expect.objectContaining({ type: "tool", name: "echo", pinned })],
+        )
+      }),
+    )
+  }
+
+  it.effect("leaves a namespace out of how a tool is offered", () =>
+    Effect.sync(() => {
+      expect(ToolTraits.exposure({ options: { namespace: "acme" } })).toBe("deferred")
+      expect(ToolTraits.exposure({ options: { namespace: "acme", codemode: false } })).toBe("direct")
+      expect(ToolTraits.pinned({ options: { namespace: "acme", pinned: true } })).toBe(true)
+    }),
+  )
+
+  // `execute` is the name of the Code Mode tool in the request, so a direct tool cannot take it. A deferred tool is
+  // called through Code Mode, and a namespaced one is named `acme_execute`, so neither clashes with it.
+  for (const [name, options, refused, direct, deferred] of [
+    ["a direct tool", { codemode: false }, true, [], []],
+    ["a tool that leaves codemode out", undefined, false, [], ["execute"]],
+    ["a tool with codemode: true", { codemode: true }, false, [], ["execute"]],
+    ["a pinned tool", { pinned: true }, false, [], ["execute"]],
+    ["a direct tool in a namespace", { namespace: "acme", codemode: false }, false, ["acme_execute"], []],
+  ] as const) {
+    it.effect(`${refused ? "refuses" : "registers"} ${name} named execute`, () => {
+      const output: unknown[] = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        output.push(entry.message)
+      })
+      return Effect.gen(function* () {
+        const service = yield* Tool.Service
+        yield* service.transform((editor) => editor.add({ ...make(), name: "execute", options }))
+
+        expect(output).toEqual(
+          refused
+            ? [
+                [
+                  "Skipping invalid tool registration",
+                  { name: "execute", namespace: undefined, error: 'Tool name "execute" is reserved for CodeMode' },
+                ],
+              ]
+            : [],
+        )
+        const snapshot = yield* service.snapshot()
+        expect(snapshot.definitions.map((definition) => definition.name)).toEqual([...direct, "execute"])
+        expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([...deferred])
+        // Whatever registered, the `execute` that the request advertises is the Code Mode tool.
+        expect(snapshot.definitions.at(-1)?.description).toContain("confined Code Mode runtime")
+      }).pipe(Effect.provide(Logger.layer([logger])))
+    })
+  }
+})

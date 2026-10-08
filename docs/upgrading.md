@@ -756,3 +756,25 @@ a boolean or a Promise of one.
 
 **What to do:** Nothing for plugins that are already running; declaring `traits` is optional. If your code builds a
 context by hand, add a `traits` record to it; the defaults are every boolean `false` and `interruptBehavior: "block"`.
+
+### A tool's `searchHint` helps Code Mode search find it
+
+A tool's `traits.searchHint` was accepted and ignored. Code Mode's `search` now matches it: a program that searches for a
+word in the hint finds the tool. A match in the hint counts for less than a match in the tool's name and for more than
+one in its description. The hint only ranks the tool; `search` and the catalog return the same fields as before. It
+applies to the tools that Code Mode offers, which is every tool that does not set `codemode: false`. A tool that sets it
+is advertised to the model directly and is not searched. `Tool.make` in `@orbit/codemode` takes the same `searchHint`
+option.
+
+How a tool is offered did not change, and `Tool.Options` now documents it: `codemode: false` advertises the tool
+directly, leaving `codemode` out or setting anything else defers it into Code Mode, and `pinned: true` also keeps a
+deferred tool in the catalog that the model sees first. There is no separate `defer` or `alwaysLoad` option. Core reads
+these two options in one place, `ToolTraits.exposure` and `ToolTraits.pinned` in `@orbit/core/tool/traits`.
+
+**Affects:** plugin authors and code built on the SDK or `@orbit/codemode` whose tools declare a `searchHint`: the order
+of their Code Mode search results changes, and a tool can now appear for a word that only its hint contains. Code that
+reads `options.codemode` or `options.pinned` of a registration to tell where a tool goes can ask the two functions
+instead.
+
+**What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
+would use for it.
