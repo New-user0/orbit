@@ -900,6 +900,20 @@ markdown export, and the prompt history and stash lists. Known gaps in
 
 **What to do:** nothing.
 
+### Footers for continued and truncated replies
+
+The line under an assistant reply in the terminal UI now ends with a muted label when the reply was not the end of the
+run. "continued" marks a step that hit an error or the output limit and was followed by another step, and its error
+line is no longer shown, since the run recovered. "truncated at output limit" marks a final reply that was cut off and
+that the run did not resume; while the next step is still starting it has no label. A prompt that is queued but not yet
+delivered does not end the turn. The terminal UI can also show "retried" for an attempt that a retry with a larger
+output limit replaced, which appears once Orbit makes such retries in a later change. Before, a recovered error stayed on
+screen and a cut-off reply had no marker.
+
+**Affects:** people who use the terminal UI.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
