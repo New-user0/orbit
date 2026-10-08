@@ -12,7 +12,7 @@ import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const sessionID = Session.ID.make("ses_question_tool_test")
 const assertions: Permission.AssertInput[] = []
@@ -77,6 +77,12 @@ describe("QuestionTool", () => {
     Effect.gen(function* () {
       captured = undefined
       const registry = yield* Tool.Service
+      expect(yield* toolTraits(registry, "question")).toMatchObject({
+        readOnly: false,
+        concurrencySafe: false,
+        requiresUserInteraction: true,
+        interruptBehavior: "cancel",
+      })
       const definition = (yield* toolDefinitions(registry)).find((tool) => tool.name === QuestionTool.name)
 
       expect(definition?.inputSchema).toHaveProperty("properties.questions.type", "array")

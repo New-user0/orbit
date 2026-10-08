@@ -85,6 +85,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/config-trust.test.ts`.
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`.
+- An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
+  with control and format characters written out. Only this source escapes; a plugin or a simulated tool supplies its
+  `displayName` raw, so a client that draws any `displayName` still passes it through `plain` (escaping text that is
+  already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
+  `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
+  hints and permissions` in `core/test/mcp.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:

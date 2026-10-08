@@ -14,7 +14,7 @@ import { Image } from "@orbit/core/image"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const webFetchToolNode = makeLocationNode({
   name: "test/webfetch-tool-plugin",
@@ -426,6 +426,12 @@ describe("WebFetchTool registration", () => {
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
+      expect(yield* toolTraits(registry, "webfetch")).toMatchObject({
+        readOnly: true,
+        concurrencySafe: true,
+        openWorld: true,
+        interruptBehavior: "cancel",
+      })
       const url = "http://example.com/public"
 
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["webfetch", "execute"])

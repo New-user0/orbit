@@ -77,6 +77,11 @@ export const Plugin = {
       editor.add({
         name,
         options: { codemode: false },
+        traits: {
+          readOnly: (input) => input.action === "read" || input.action === "list",
+          concurrencySafe: (input) => input.action === "read" || input.action === "list",
+          destructive: (input) => input.action === "delete",
+        },
         description:
           "Keep notes about this project that later sessions will see: commands that work, conventions, user preferences, and decisions with their reasons. Save a memory when you learn something you would otherwise have to rediscover; update it when it changes; delete it when it is wrong. Do not save secrets or anything the code itself makes obvious.",
         input: Input,

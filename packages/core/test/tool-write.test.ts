@@ -22,7 +22,7 @@ import { tmpdir, withTempDir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const writeToolNode = makeLocationNode({
   name: "test/write-tool-plugin",
@@ -122,6 +122,20 @@ const call = (input: typeof WriteTool.Input.Type, id = "call-write") => ({
 const it = testEffect(Layer.empty)
 
 describe("WriteTool", () => {
+  it.live("changes files, so it is neither read-only nor safe beside other calls", () =>
+    withTempDir((tmp) =>
+      withTool(tmp.path, makeWriteFixture(), (registry) =>
+        Effect.gen(function* () {
+          expect(yield* toolTraits(registry, "write", { path: "a.txt", content: "a" })).toMatchObject({
+            readOnly: false,
+            concurrencySafe: false,
+            destructive: false,
+          })
+        }),
+      ),
+    ),
+  )
+
   it.live("registers and creates a relative file through FileMutation once", () =>
     withTempDir((tmp) => {
       const fixture = makeWriteFixture()

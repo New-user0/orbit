@@ -1002,6 +1002,33 @@ instead.
 **What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
 would use for it.
 
+### Built-in, Code Mode and MCP tools declare traits, and simulated tools can
+
+Orbit's own tools now declare their traits: `read`, `glob`, `grep`, `lsp`, `webfetch`, `websearch`, the MCP resource
+tools, `skill`, `models`, `task_list`, `shell_output` and `shell_watch` are read-only and safe beside other calls, and
+the file-changing tools, `todo`, `task_create`, `task_update` and the session tools are not. `question` and the plan-mode tools wait
+for the person, `patch` is destructive when it deletes or moves a file or cannot be parsed, `memory` is read-only for
+`read` and `list` and destructive for `delete`, and the Code Mode `execute` tool is neither read-only nor safe and reaches the network.
+The shell declares only that a failure cancels its siblings. Nothing schedules or limits calls by these traits yet, so
+tools run as they did before.
+
+An MCP server's annotations map onto the traits of its tools, and they are treated as claims, not facts. `readOnlyHint:
+true` makes a tool safe to run beside other calls and nothing else: an MCP tool is never read-only, its permission
+request is the same with or without the hint, and plan mode and the read-only allowances never apply to it. A tool is
+destructive unless it says `readOnlyHint: true` or `destructiveHint: false`, and open-world unless it says
+`openWorldHint: false`, as the MCP specification defaults; both only inform how a call is shown. A `title`, or the
+title in the annotations when that is blank, becomes the tool's `displayName`, trimmed. It is text the server chose, so
+control characters and format characters such as a right-to-left override are stored written out (`\x1b`, `\u{202e}`).
+A blank title gives no display name and the tool still registers.
+
+A simulated tool registration (`tool.attach` in the simulation protocol) can carry a static `traits` record with the same
+booleans, `interruptBehavior`, `maxResultChars` and `displayName`. Without it the tool is not safe and runs alone.
+
+**Affects:** plugin authors who read `Tool.Info.traits` of the built-in or MCP tools, and drivers of the simulation
+protocol, which accepts one more optional field.
+
+**What to do:** Nothing.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.

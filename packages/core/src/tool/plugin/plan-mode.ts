@@ -42,6 +42,7 @@ export const Plugin = {
       editor.add({
         name: "enter_plan_mode",
         options: { codemode: false },
+        traits: { requiresUserInteraction: true },
         description:
           "Switch to Plan mode to research and design an approach before changing any files. Use it for large tasks, tasks with several reasonable approaches, or when the user asks for a plan. In Plan mode you can read and search but not edit; finish by calling exit_plan_mode with the plan.",
         input: EnterInput,
@@ -61,6 +62,7 @@ export const Plugin = {
       editor.add({
         name: "exit_plan_mode",
         options: { codemode: false },
+        traits: { requiresUserInteraction: true },
         description:
           "In Plan mode, present the finished plan to the user for approval. If they approve, Plan mode ends and you can carry out the plan; otherwise keep planning with their feedback.",
         input: ExitInput,

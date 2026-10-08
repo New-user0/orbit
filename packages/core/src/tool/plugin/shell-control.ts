@@ -63,6 +63,7 @@ export const Plugin = {
       editor.add({
         name: "shell_output",
         options: { codemode: false },
+        traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
         description:
           "Read the output a background shell command produced since the last time you read it, with its status. Use it to check on dev servers, watchers, and long builds.",
         input: OutputInput,
@@ -87,6 +88,7 @@ export const Plugin = {
       editor.add({
         name: "shell_watch",
         options: { codemode: false },
+        traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
         description:
           "Wait until a background shell command prints a line matching a regular expression, or exits, then return its new output. Use it to wait for a server to report it is ready instead of sleeping.",
         input: WatchInput,
@@ -128,6 +130,7 @@ export const Plugin = {
       editor.add({
         name: "shell_stop",
         options: { codemode: false },
+        traits: { interruptBehavior: "block" },
         description: "Stop a background shell command this session started. Its output stays readable.",
         input: StopInput,
         output: Schema.Struct({ status: Shell.Status }),
