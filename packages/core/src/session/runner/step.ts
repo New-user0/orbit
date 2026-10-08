@@ -31,6 +31,8 @@ import { SessionRunnerRetry } from "./retry.js"
 
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
+  /** The response stopped at the output limit; the runner decides whether to resume it. */
+  OutputLimited: { readonly needsContinuation: boolean }
   Retry: { readonly error: SessionError.Error; readonly decision: SessionRunnerRetry.Decision }
   Continue: {
     readonly error: SessionError.Error
@@ -60,6 +62,10 @@ interface Input {
 
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
 const STEP_INTERRUPTED = { type: "aborted", message: "Step interrupted" } as const
+const INPUT_TRUNCATED = {
+  type: "tool.input-truncated",
+  message: "The response hit its output limit before this tool call was complete, so the call did not run",
+} as const
 const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
 
 /** Captures Location-scoped dependencies without introducing another service or execution loop. */
@@ -225,6 +231,10 @@ export const make = Effect.gen(function* () {
           if (missing && !llmError && !recorded.finish) yield* publisher.failAssistant(RESULT_MISSING)
         }
 
+        // A length stop cuts inputs off before their call: settle them so nothing stays streaming and the model learns.
+        if (!llmError && Exit.isSuccess(stream) && !recorded.providerFailed && recorded.finish?.finish === "length")
+          yield* publisher.failUnsettledTools(INPUT_TRUNCATED, "uncalled")
+
         const record = publisher.record()
         if (record.finish || record.failure) {
           const snapshot = yield* snapshots.capture()
@@ -271,9 +281,9 @@ export const make = Effect.gen(function* () {
         if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
         if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
-        return Outcome.Completed({
-          needsContinuation: input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation,
-        })
+        const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
+        if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation })
+        return Outcome.Completed({ needsContinuation })
       }),
     )
   }, Effect.scoped)

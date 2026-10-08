@@ -172,3 +172,79 @@ for (const fixture of [
     }),
   )
 }
+
+it.effect("fails inputs that never became calls when the response stops at the output limit", () =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const llm = yield* TestLLM.Test
+    const sessionID = Session.ID.create()
+    const assistantMessageID = SessionMessage.ID.create()
+    const steps = yield* SessionStep.make.pipe(
+      Effect.provide(
+        Layer.mock(Snapshot.Service)({ capture: () => Effect.succeed(undefined), files: () => Effect.succeed([]) }),
+      ),
+    )
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .run()
+    yield* db
+      .insert(SessionTable)
+      .values({ id: sessionID, project_id: Project.ID.global, slug: "limit", directory: "/project", version: "test" })
+      .run()
+    const model = SessionRunnerModel.resolved(
+      LanguageModel.make({ id: "test-model", provider: "test", route: OpenAIChat.route }),
+      {
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        limit: { context: 100_000, output: 1_000 },
+        cost: [],
+      },
+    )
+    yield* llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolInputStart({ id: "call-cut", name: "test" }),
+        LLMEvent.toolInputDelta({ id: "call-cut", name: "test", text: '{"a":' }),
+      ),
+    )
+    let executions = 0
+    const result = yield* steps.attempt({
+      isLocationClosed: () => false,
+      sessionID,
+      assistantMessageID,
+      agent: Agent.defaultID,
+      model,
+      prepared: {
+        retry: () => Effect.void,
+        request: LLM.request({ model: model.model, prompt: "Run one tool" }),
+        options: {},
+        executeTool: () =>
+          Effect.sync(() => {
+            executions++
+            return { content: [{ type: "text", text: "ran" }] }
+          }),
+        toolTraits: () => Effect.succeed(ToolTraits.defaults),
+        describeTool: () => undefined,
+      },
+      retry: () => Effect.succeed({ retry: false }),
+      recoverContinuation: true,
+      recoverOverflow: Effect.succeed(false),
+    })
+    expect(result).toEqual(SessionStep.Outcome.OutputLimited({ needsContinuation: true }))
+    expect(executions).toBe(0)
+    const events = yield* db
+      .select({ type: EventTable.type, data: EventTable.data })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, sessionID))
+      .orderBy(asc(EventTable.seq))
+      .all()
+    const types = events.map((event) => event.type)
+    expect(types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
+    expect(types.indexOf("session.tool.failed.2")).toBeLessThan(types.indexOf("session.step.ended.1"))
+    expect(events[types.indexOf("session.tool.failed.2")]?.data).toMatchObject({
+      error: { type: "tool.input-truncated" },
+      executed: false,
+    })
+    expect(events[types.indexOf("session.step.ended.1")]?.data).toMatchObject({ finish: "length" })
+  }),
+)

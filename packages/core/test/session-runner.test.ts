@@ -6990,4 +6990,119 @@ describe("SessionRunnerLLM", () => {
     if (!(defect instanceof Error)) return
     expect(defect.message).toBe("Tool input delta before start: call-1")
   })
+
+  const OUTPUT_LIMIT_NOTICE = {
+    type: "synthetic",
+    metadata: { notice: "output-limit" },
+  }
+
+  const lengthStop = (id: string, text: string) =>
+    TestLLM.complete(
+      { reason: { normalized: "length", raw: "max_tokens" } },
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text }),
+      LLMEvent.textEnd({ id }),
+    )
+
+  scenario("resumes a response that stopped at the output limit", function* (s) {
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("limit-1", "Part 1"), TestLLM.text(" Part 2", "limit-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests[1]?.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Part 1" }],
+    })
+    expect(s.requests[1]?.messages.at(-1)).toMatchObject({ role: "user" })
+    const context = yield* s.context
+    expect(context).toMatchObject([
+      Expected.user("Write a long answer"),
+      Expected.assistant({ finish: "length" }, [Expected.text("Part 1")]),
+      OUTPUT_LIMIT_NOTICE,
+      Expected.assistant({ finish: "stop" }, [Expected.text(" Part 2")]),
+    ])
+    expect(context.find((message) => message.type === "synthetic")?.description).toBeUndefined()
+    yield* replaySessionProjection(sessionID)
+    expect(yield* s.context).toMatchObject(context)
+  })
+
+  scenario("stops resuming after three consecutive output-limit stops", function* (s) {
+    yield* s.admit("Never finishes")
+    yield* s.llm.push(
+      lengthStop("cap-1", "1"),
+      lengthStop("cap-2", "2"),
+      lengthStop("cap-3", "3"),
+      lengthStop("cap-4", "4"),
+    )
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(4)
+    const context = yield* s.context
+    expect(context.filter((message) => message.type === "synthetic")).toHaveLength(3)
+    expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
+  })
+
+  scenario("counts the output-limit streak from the last response that finished normally", function* (s) {
+    yield* s.admit("Mixed limits")
+    yield* s.llm.push(
+      lengthStop("reset-1", "1"),
+      TestLLM.tool("call-reset", "echo", { text: "reset" }),
+      lengthStop("reset-2", "2"),
+      lengthStop("reset-3", "3"),
+      lengthStop("reset-4", "4"),
+      TestLLM.text("Done", "reset-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+  })
+
+  scenario("never runs a tool call that was cut off by the output limit", function* (s) {
+    yield* s.admit("Truncated call")
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolInputStart({ id: "call-cut", name: "echo" }),
+        LLMEvent.toolInputDelta({ id: "call-cut", name: "echo", text: '{"text":"par' }),
+      ),
+      TestLLM.tool("call-whole", "echo", { text: "whole" }),
+      TestLLM.text("Done", "cut-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["whole"])
+    expect(s.requests).toHaveLength(3)
+    const types = yield* recordedEventTypes(sessionID)
+    expect(types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
+    expect(types.indexOf("session.tool.failed.2")).toBeLessThan(types.indexOf("session.step.ended.1"))
+    const context = yield* s.context
+    expect(context[1]).toMatchObject({
+      type: "assistant",
+      finish: "length",
+      content: [{ type: "tool", id: "call-cut", state: { status: "error", error: { type: "tool.input-truncated" } } }],
+    })
+    expect(context[2]).toMatchObject(OUTPUT_LIMIT_NOTICE)
+  })
+
+  scenario("keeps tools disabled while resuming on the agent's final step", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 1
+      }),
+    )
+    yield* s.admit("Final step")
+    yield* s.llm.push(lengthStop("final-1", "A"), TestLLM.text("B", "final-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests.map((request) => request.toolChoice)).toMatchObject([{ type: "none" }, { type: "none" }])
+  })
 })

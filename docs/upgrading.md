@@ -1227,3 +1227,17 @@ possible before; typing the name and pressing Enter now opens the built-in dialo
 when the names collide both appear in autocomplete.
 
 **What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
+
+### A response cut off by the output limit is resumed
+
+When a model response stops because it reached its output limit, Orbit now adds a short hidden note asking the model to
+resume where it stopped and sends the request again, up to three times in a row. Before, the turn ended with the cut-off
+text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
+`tool.input-truncated`, so the model learns it did not run and can issue it again in full. After the third consecutive
+cut-off the response stays as it is. The count comes from the session history, so it survives a restart, and it starts
+over after any response that finishes normally.
+
+**Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
+session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
+
+**What to do:** Nothing. Raise the model's output limit if you would rather avoid the extra requests.

@@ -36,6 +36,21 @@ import { MAX_STEPS_PROMPT } from "./max-steps.js"
 const CONTINUE_AFTER_INCOMPLETE_STREAM =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."
 
+const RESUME_AFTER_OUTPUT_LIMIT =
+  "Your last response stopped because it reached the output limit. Resume exactly where it stopped, without repeating what you already wrote. If you were writing a tool call, issue it again in full."
+const MAX_OUTPUT_RECOVERIES = 3
+
+/** Resume notices since the last response that did not hit the limit; read from history so a new drain keeps the count. */
+const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>) => {
+  let count = 0
+  for (const message of messages.toReversed()) {
+    if (message.type === "user" || message.type === "idle") break
+    if (message.type === "assistant" && message.finish !== "length") break
+    if (message.type === "synthetic" && message.metadata?.notice === "output-limit") count++
+  }
+  return count
+}
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -281,6 +296,16 @@ const layer = Layer.effect(
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
+          OutputLimited: Effect.fnUntraced(function* (outcome) {
+            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return outcome.needsContinuation
+            yield* bus.publish(SessionEvent.Synthetic, {
+              sessionID,
+              text: RESUME_AFTER_OUTPUT_LIMIT,
+              metadata: { notice: "output-limit" },
+            })
+            if (outcome.needsContinuation) return true
+            assistantMessageID = SessionMessage.ID.create()
+          }),
           Retry: (outcome) =>
             retry.wait({
               decision: outcome.decision,
