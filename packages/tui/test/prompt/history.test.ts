@@ -105,6 +105,11 @@ describe("prompt history", () => {
     ["files that are an empty object", { files: [{}] }],
     ["a paste that is an empty object", { pasted: [{}] }],
     ["files that are a string", { files: "x" }],
+    ["agents that are a string", { agents: "x" }],
+    ["skills that are an empty object", { skills: [{}] }],
+    ["a file mention whose start is a string", { files: [{ uri: "file:///a", mention: { start: "a", end: 2, text: "x" } }] }],
+    ["a paste source without a start", { pasted: [{ text: "p", source: { end: 2, text: "x" } }] }],
+    ["a mode that is a number", { mode: 5 }],
   ])("skips a line with %s and loads the lines around it", (_name, value) => {
     const bad = JSON.stringify({ ...entry("bad"), ...value })
     const input = [entry("one"), bad, entry("two")].map((item) => (typeof item === "string" ? item : JSON.stringify(item)))

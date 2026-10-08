@@ -151,7 +151,7 @@ test("a session-list override of dialog.session.rename applies only in the sessi
   const [listOpen, setListOpen] = createSignal(false)
 
   function Harness() {
-    // The same command in two places, as the session list and a session both have dialog.session.rename.
+    // The harness reuses one command ID in two contexts, to show that a context entry applies only to its own layers.
     Keymap.createLayer(() => ({
       context: "session-list",
       enabled: () => listOpen(),

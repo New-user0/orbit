@@ -1157,8 +1157,13 @@ export function Prompt(props: PromptProps) {
               directory={historyDirectory()}
               onSelect={(item) => {
                 // A draft that the entry would replace goes to the stash, where "Stash pop" brings it back.
-                if (store.prompt.text && store.prompt.text !== item.text) {
-                  stash.push({ prompt: store.prompt })
+                // Text that is already an entry in history (an unedited recall) is not a draft.
+                if (
+                  store.prompt.text &&
+                  store.prompt.text !== item.text &&
+                  !history.entries().some((entry) => entry.text === store.prompt.text)
+                ) {
+                  stash.push({ prompt: { ...store.prompt, directory: undefined, time: undefined } })
                   toast.show({ message: "Your draft was moved to the stash", variant: "info" })
                 }
                 if (item.pasted.some((part) => part.text === PASTE_NOT_SAVED))

@@ -2,8 +2,8 @@ import path from "path"
 import fuzzysort from "fuzzysort"
 import { onMount } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
-import type { PromptInput } from "@orbit/schema"
-import type { Types } from "effect"
+import { PromptInput, PromptMention } from "@orbit/schema"
+import { Option, Schema, type Types } from "effect"
 import { createSimpleContext } from "../context/helper"
 import { useConfig } from "../config"
 import { useTuiPaths } from "../context/runtime"
@@ -146,23 +146,24 @@ export function isDuplicateEntry(previous: PromptInfo | undefined, next: PromptI
   return JSON.stringify({ ...previous, time: 0 }) === JSON.stringify({ ...next, time: 0 })
 }
 
+const PromptInfoSchema = Schema.Struct({
+  ...PromptInput.Prompt.fields,
+  pasted: Schema.Array(
+    Schema.Struct({
+      text: Schema.String,
+      source: PromptMention,
+    }),
+  ),
+  mode: Schema.Literals(["normal", "shell"]).pipe(Schema.optional),
+  directory: Schema.String.pipe(Schema.optional),
+  time: Schema.Number.pipe(Schema.optional),
+})
+
+const decodePromptInfo = Schema.decodeUnknownOption(PromptInfoSchema)
+
+/** Decodes one stored line once, so that a bad field costs only its own entry. */
 export function parsePromptInfo(value: unknown): PromptInfo | undefined {
-  if (!value || typeof value !== "object") return
-  const input = value as Record<string, unknown>
-  if (typeof input.text !== "string" || !Array.isArray(input.pasted)) return
-  if (!input.pasted.every(isPastedText)) return
-  if (input.files !== undefined && !(Array.isArray(input.files) && input.files.every(isFilePart))) return
-  return input as PromptInfo
-}
-
-function isPastedText(value: unknown) {
-  if (!value || typeof value !== "object") return false
-  const part = value as { text?: unknown; source?: unknown }
-  return typeof part.text === "string" && !!part.source && typeof part.source === "object"
-}
-
-function isFilePart(value: unknown) {
-  return !!value && typeof value === "object" && typeof (value as { uri?: unknown }).uri === "string"
+  return Option.getOrUndefined(decodePromptInfo(value)) as PromptInfo | undefined
 }
 
 export const { use: usePromptHistory, provider: PromptHistoryProvider } = createSimpleContext({

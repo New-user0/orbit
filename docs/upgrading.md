@@ -669,15 +669,15 @@ to `leader` or to an `input.*` key in `cli.json` now also applies while the term
 ### Ctrl+R in the prompt searches earlier prompts, and prompt history keeps 500 entries
 
 `ctrl+r` in the prompt of the terminal UI now opens a search over the prompts you sent before. The list narrows as you
-type, shows prompts sent from the current directory first and then the newest, and Enter loads the choice into the
+type, shows prompts sent from the current directory first, then the closest match, then the newest, and Enter loads the choice into the
 prompt with its mode and mentions. With `prompt.vim` on, `ctrl+r` in normal mode is still redo. The command is
 `prompt.history.search`.
 
 Renaming a session no longer has a key of its own in a session: `session.rename` now has no default key, and the
 session list's rename action is the new `dialog.session.rename`, still `ctrl+r`, in the `session-list` place. `/rename`
-and the command palette still rename a session. A `session.rename` key that you set in `keybinds`, `bindings` or the
-`session-list` place of `keybindings.json` still works for a session, but no longer reaches the session list: move it to
-`dialog.session.rename`.
+and the command palette still rename a session. A `session.rename` key that you set in `keybinds` or `bindings` still
+works for a session, but no longer reaches the session list. An entry for it in the `session-list` place of
+`keybindings.json` now does nothing: move it to `dialog.session.rename`.
 
 Prompt history is also kept differently. It holds up to `prompt.history_limit` entries (500 by default, 50 before), and
 the file in Orbit's state folder is trimmed from its oldest end to stay under 1 MiB. Each entry now records the

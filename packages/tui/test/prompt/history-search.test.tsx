@@ -41,6 +41,7 @@ async function mount(input: { vim?: boolean; extra?: string[]; session?: FetchHa
   await setup.waitForFrame((frame) => promptReady(frame))
   return {
     setup,
+    state: state.path,
     async [Symbol.asyncDispose]() {
       await setup[Symbol.asyncDispose]()
       await config[Symbol.asyncDispose]()
@@ -189,7 +190,30 @@ test("selecting an entry moves a different draft to the stash and says so", asyn
 
   // The stash gives the draft back.
   app.setup.mockInput.pressKey("p", { ctrl: true })
-  await app.setup.waitForFrame((frame) => frame.includes("Stash"))
+  await app.setup.waitForFrame((frame) => frame.includes("Commands"))
+  await Bun.sleep(50)
+  await app.setup.mockInput.typeText("Stash pop")
+  await app.setup.waitForFrame((frame) => frame.includes("Stash pop"))
+  app.setup.mockInput.pressEnter()
+  await app.setup.waitForFrame((frame) => frame.includes("› half-written thought"))
+})
+
+test("selecting an entry after an unedited recall does not stash the recalled entry", async () => {
+  await using app = await mount()
+  app.setup.mockInput.pressArrow("up")
+  await app.setup.waitForFrame((frame) => frame.includes("› explain @src/main.ts please"))
+
+  await search(app, "stag", "deploy the staging build")
+  await app.setup.waitForFrame((frame) => frame.includes("› deploy the staging build"))
+  expect(app.setup.captureCharFrame()).not.toContain("Your draft was moved to the stash")
+  expect(await Bun.file(path.join(app.state, "prompt-stash.jsonl")).exists()).toBe(false)
+})
+
+test("selecting an entry whose stored agents are malformed skips only that entry", async () => {
+  await using app = await mount({ extra: [line({ text: "weird entry", agents: "x" })] })
+  app.setup.mockInput.pressKey("r", { ctrl: true })
+  await app.setup.waitForFrame((frame) => frame.includes("deploy the staging build"))
+  expect(app.setup.captureCharFrame()).not.toContain("weird entry")
 })
 
 test("a row title is drawn without control or bidirectional characters", async () => {
