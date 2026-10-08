@@ -271,19 +271,14 @@ export const layer = Layer.effect(
       // because their reasoning is hard to budget.
       const cap = input.outputEscalated ? undefined : input.outputTokenCap
       const defaultLimit =
-        kind === "primary" || kind === "compaction"
-          ? outputLimit(model.limit, kind, input.inputTokens, cap)
-          : undefined
+        kind === "primary" || kind === "compaction" ? outputLimit(model.limit, kind, input.inputTokens, cap) : undefined
       const shaped = yield* shape(
         {
           sessionID: session.id,
           model: model.ref,
           system: input.system,
           messages: input.messages,
-          options:
-            kind === "primary" || kind === "compaction"
-              ? { maxTokens: defaultLimit }
-              : {},
+          options: kind === "primary" || kind === "compaction" ? { maxTokens: defaultLimit } : {},
         },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
@@ -416,7 +411,10 @@ export const layer = Layer.effect(
       // Only the runner's own cap escalates: a hook that changed or removed the limit pins it.
       const maximum = kind === "primary" ? outputLimit(model.limit, kind, input.inputTokens) : undefined
       const escalation =
-        maximum !== undefined && defaultLimit !== undefined && shaped.options.maxTokens === defaultLimit && maximum > defaultLimit
+        maximum !== undefined &&
+        defaultLimit !== undefined &&
+        shaped.options.maxTokens === defaultLimit &&
+        maximum > defaultLimit
           ? maximum
           : undefined
       return {

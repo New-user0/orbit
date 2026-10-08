@@ -42,7 +42,8 @@ const RESUME_AFTER_OUTPUT_LIMIT =
   "Your last response stopped because it reached the output limit. Resume exactly where it stopped, without repeating what you already wrote. If you were writing a tool call, issue it again in full."
 const MAX_OUTPUT_RECOVERIES = 3
 // Never sent to the model: the notice and the attempt it replaces are left out of every request.
-const ESCALATE_OUTPUT_LIMIT = "The previous response reached the output cap, so the request is repeated with a larger one."
+const ESCALATE_OUTPUT_LIMIT =
+  "The previous response reached the output cap, so the request is repeated with a larger one."
 
 /**
  * The messages since the last response that ended normally. A failed or interrupted response (a retry or an
@@ -242,7 +243,10 @@ const layer = Layer.effect(
       return selected
     })
 
-    const turnLimit = Effect.fnUntraced(function* (loaded: SessionContext.Loaded, turn: SessionTurn.Current["options"]) {
+    const turnLimit = Effect.fnUntraced(function* (
+      loaded: SessionContext.Loaded,
+      turn: SessionTurn.Current["options"],
+    ) {
       if (!turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)) return
       return SessionTurn.exceeded(
         turn,
@@ -291,7 +295,9 @@ const layer = Layer.effect(
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded =
           initial ??
-          (yield* prepareContext(sessionID).pipe(Effect.flatMap((selected) => loadSelected(selected, current.fallback))))
+          (yield* prepareContext(sessionID).pipe(
+            Effect.flatMap((selected) => loadSelected(selected, current.fallback)),
+          ))
         initial = undefined
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
         const limit = yield* turnLimit(loaded, current.options)
@@ -365,7 +371,9 @@ const layer = Layer.effect(
             // three requests. Return now: the boundary delivers it and its user message starts a fresh streak.
             if (
               !outcome.needsContinuation &&
-              (yield* SessionInbox.list(db, sessionID)).some((item) => item.type === "user" && item.delivery === "steer")
+              (yield* SessionInbox.list(db, sessionID)).some(
+                (item) => item.type === "user" && item.delivery === "steer",
+              )
             )
               return false
             // The first cut-off of a text-only reply under the runner's own lowered cap retries the same request at the
@@ -379,7 +387,7 @@ const layer = Layer.effect(
               yield* bus.publish(SessionEvent.Synthetic, {
                 sessionID,
                 text: ESCALATE_OUTPUT_LIMIT,
-                metadata: { notice: "output-escalation", replaces: assistantMessageID, maxTokens: prepared.escalation },
+                metadata: { notice: "output-escalation", replaces: assistantMessageID },
               })
               assistantMessageID = SessionMessage.ID.create()
               return undefined

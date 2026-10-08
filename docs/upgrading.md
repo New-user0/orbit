@@ -1435,7 +1435,7 @@ limits each model request, not the whole reply. Compaction summaries and titles 
 request, including a subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied
 before `session.context` hooks run, so a hook can still change it. It reaches every provider, including one whose
 adapter otherwise omits the default limit, and `session.context` hooks see it as `outputTokenCap` when it lowered the
-model's limit. The one exception is a model that rejects an output limit at its highest reasoning effort, where Orbit
+model's limit (except while an escalated retry is in effect, see the retry note below). The one exception is a model that rejects an output limit at its highest reasoning effort, where Orbit
 sends none. The cap never raises a limit. Left unset, requests are unchanged. Zero, a negative number or a fraction is
 reported and ignored. With a cap of 1,024 or less, every request from a model with a fixed reasoning budget is refused;
 below about 2,000, most of the cap goes to reasoning.
@@ -1498,11 +1498,14 @@ completion notices never cancel anything. Before, every call ran to the end befo
 ### A reply cut off at `output_token_cap` is retried once at the model's maximum
 
 When a text-only reply stops at the output cap that `output_token_cap` set, Orbit now repeats the same request once with
-the model's own maximum before it resumes the reply. The cut-off attempt and a hidden note with `metadata.notice` set to
-`output-escalation` (and `metadata.replaces` naming that attempt) stay in the session's messages but are left out of
-every later request, token estimate and compaction summary. The larger limit lasts until a response ends normally, and
-resumes after it work as described above. A `session.context` hook that changes or removes the output limit keeps the
-limit it chose, and a request already at the model's maximum is not repeated.
+the model's own maximum before it resumes the reply (the resume works as described in the output-limit note above). A
+reply that ran a tool before the cut-off is resumed as before and is never repeated. The cut-off attempt and a hidden
+note with `metadata.notice` set to `output-escalation` (and `metadata.replaces` naming that attempt) stay in the
+session's messages but are left out of every later request, token estimate and compaction summary, including in a fork,
+whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
+`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction empties the history
+the runner reads, so a long stretch can escalate again after one. A `session.context` hook that changes or removes the
+output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
 
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
 

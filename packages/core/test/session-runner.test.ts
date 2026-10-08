@@ -8726,7 +8726,7 @@ describe("SessionRunnerLLM", () => {
     const escalations = notices(context, "output-escalation")
     expect(escalations).toHaveLength(1)
     expect(notices(context, "output-limit")).toHaveLength(1)
-    expect(escalations[0]).toMatchObject({ metadata: { maxTokens: 64_000 } })
+    expect(escalations[0]?.metadata).toEqual({ notice: "output-escalation", replaces: expect.any(String) })
     expect(escalations[0]).not.toHaveProperty("description")
     expect(context.some((message) => message.id === escalations[0]?.metadata?.replaces)).toBe(true)
   })
@@ -8741,6 +8741,48 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 8_000])
     expect(notices(yield* s.context, "output-limit")).toHaveLength(0)
+  })
+
+  scenario("does not escalate a capped reply that ran a tool before the cut-off", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolCall({ id: "cap-tool", name: "echo", input: { text: "ran" } }),
+      ),
+      TestLLM.text("Done", "cap-tool-2"),
+    )
+    yield* s.runPrompt("Question")
+
+    expect(s.executions).toEqual(["ran"])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain("cap-tool")
+  })
+
+  scenario("leaves an escalated attempt out of a fork's requests", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-fork-1", "FirstCut"), TestLLM.text("Whole answer", "cap-fork-2"))
+    yield* s.runPrompt("Question")
+    yield* s.llm.push(TestLLM.text("Second answer", "cap-fork-3"))
+    const second = yield* s.runPrompt("Second")
+
+    const forked = yield* s.session.fork({ sessionID, before: second.id })
+    const copied = yield* s.session.messages({ sessionID: forked.id })
+    const notice = copied.find(
+      (message) => message.type === "synthetic" && message.metadata?.notice === "output-escalation",
+    )
+    // The copy names the copied attempt, not the parent's.
+    expect(notice?.metadata?.replaces).toBeDefined()
+    expect(copied.some((message) => message.id === notice?.metadata?.replaces)).toBe(true)
+
+    yield* s.llm.push(TestLLM.text("Fork answer", "cap-fork-4"))
+    s.requests.length = 0
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    expect(JSON.stringify(s.requests[0]?.messages)).toContain("Whole answer")
+    expect(JSON.stringify(s.requests[0]?.messages)).not.toContain("FirstCut")
   })
 
   scenario("does not escalate when a hook set the output limit", function* (s) {
