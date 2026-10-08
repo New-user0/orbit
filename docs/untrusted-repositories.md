@@ -94,8 +94,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/markdown.test.ts`, `test/plugin/output-style.test.ts`.
 - Instruction files (`AGENTS.md`, `ORBIT.md`): `ProjectTrust.reachable`, asked by `ConfigInstructionPlugin` and
   `SessionInstructions`. Proof: `test/instruction-discovery.test.ts`, `test/session-instructions.test.ts`.
-- Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. Proof:
-  `test/file-access.test.ts`, `test/tool-edit.test.ts`, `test/tool-write.test.ts`.
+- Paths that a file tool is given: `ProjectTrust.escapes`, asked by `FileAccess.resolve`. The `edit` tool's `validate`
+  reads the file before any permission is asked, so it reads only when `resolve` reports no `externalDirectory`: a link
+  out of an untrusted project is not read until the folder it leads to has been approved. Proof:
+  `test/file-access.test.ts`, `test/tool-edit.test.ts` (that link, with a trusted project as the control),
+  `test/tool-write.test.ts`.
 - Language servers and formatters: `ProjectTrust.trusted()` in `Lsp` and `Formatter`. Proof: `test/lsp.test.ts`,
   `test/formatter.test.ts`.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the

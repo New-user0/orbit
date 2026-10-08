@@ -677,6 +677,74 @@ text that the output limit cut is one line.
 
 **What to do:** nothing for most setups. A program that reads `json` or `stream-json` joins the parts of steps whose
 `step_finish` has reason `length`, and drops the parts of the message that a `notice` line replaces.
+### A failed tool call has an error type that names what went wrong
+
+A tool call that failed used to be reported with the error type `tool.execution` whatever the reason, so a client could
+only tell failures apart by reading the message. These now have a type of their own:
+
+- `tool.input-invalid`: the input does not match the tool's schema.
+- `tool.unknown`: the model named a tool that does not exist. The same type was already used when the provider reported
+  an unknown tool.
+- `tool.unavailable`: the tool exists but was not offered for the request.
+- `tool.disabled`: tools are switched off for the rest of the run, after the maximum agent steps.
+- `tool.validation`: the tool refused the call before running it, without naming a reason of its own.
+- `file.unread` and `file.stale`: `edit`, `write`, `patch` and `notebook_edit` refuse a file that the session has not
+  read, or that changed since it did.
+- `file.not-found`, `file.is-directory`, `edit.no-change`, `edit.empty-old-string`, `edit.no-match` and
+  `edit.ambiguous`: the `edit` tool's other refusals.
+
+The messages are the same as before. `tool.cancelled` is also reserved for a call that is ended before it finishes;
+nothing reports it yet. Every other failure, and a failure of a plugin tool that names no code, is still
+`tool.execution`. The type is the `error.type` of a `session.tool.failed` event and of the error state of a tool part in
+a message.
+
+**Affects:** code that reads a failed tool call's `error.type` from those events or messages, such as an SDK client or a
+plugin that matches on `tool.execution`, and dashboards that count failures by type. Anything that only shows the
+message is not affected.
+
+**What to do:** Nothing for code that does not read the type. If you match on `tool.execution`, also match the types
+above, or match the type of the failure you care about.
+### Messages say how they were delivered, and a prompt can carry turn options
+
+A `user` message and a `synthetic` message now carry a `delivery` field, `steer` or `queue`: the delivery that the input
+left the inbox with. A queued input waits until the previous work ended and then starts a new turn, while a steer joins
+the turn in progress, so the field tells where a turn begins. A message that Orbit records directly, such as a note
+from the agent loop, has no `delivery` and never starts a turn, and neither does a message stored before this change,
+which counts as a steer. The `session.prompt` request also takes a `turn` object, with `maxSteps`, `maxCost` (in US
+dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count that is not a whole number above zero, a
+cost that is not above zero, a `fallbackModel` that is not a model reference, or a key that `turn` does not define
+(`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
+fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
+message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
+turn and no fallback model is used.
+
+A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
+cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
+notices, whenever the history in front of it does not end in an idle mark. That is so for:
+
+- the first prompt after a fork that stops before an idle mark, such as a fork before a queued prompt;
+- the first prompt after a revert, which removes the idle mark that followed the history it keeps, such as a revert to a
+  queued prompt;
+- the first prompt after an import of a session that was exported in the middle of a turn;
+- the first prompt to a subagent's session that a crash cut off, or that a shutdown interrupted without recording an idle
+  mark. The next start resumes only top-level sessions and background subagents, and it forgets that any other session
+  was in the middle of work, again without an idle mark. The prompt can come from a client or from the parent agent
+  continuing the subagent with its `sessionID`;
+- a steer that arrives after the agent loop has finished its last response but before the idle mark;
+- a steer that arrives while a manual compaction (sent with either delivery, and the TUI's `/compact` sends none), a
+  move or a location reload runs after the turn's last response. It holds the idle mark back until it ends, and the
+  steer is promoted in the same run.
+
+A prompt sent with `queue` delivery starts a new turn in each of these cases.
+
+**Affects:** programs that read messages through the HTTP API, the client libraries or an exported session, and code
+that checks them against the old shape: `user` messages gain optional `turn` and `delivery`, `synthetic` messages gain
+optional `delivery`, and the `session.inbox.enqueued` event carries `turn` on a prompt that had it. The generated client
+types add `SessionTurnOptions` and the new fields.
+
+**What to do:** nothing. Every new field is optional, and a prompt without `turn` behaves as before. A client that sets
+`turn` and wants the first prompt after a fork, a revert, an import or a cut-off subagent session to start a new turn
+sends it with `delivery: "queue"`.
 
 ### Keys can be set in `keybindings.json`, per place, and as two-step chords
 
@@ -800,6 +868,30 @@ scripts reach local dev servers, set `experimental.allow_local_fetch` to `true` 
 loopback and private-network addresses and no others, and like the rest of `experimental` it is ignored in the config of
 a folder that is not trusted.
 
+### An edit that cannot work fails before it asks you to approve it
+
+The `edit` tool used to ask for your approval before it checked that the text to replace was in the file exactly once,
+and that the file existed and was not a directory, so you could approve an edit that then failed. Those checks now come
+first. The refusals for identical or empty text and for a file that was not read or changed already came before the
+approval; they now carry a stable code too. An edit that cannot work fails without asking:
+
+- the old and new text are the same, or the old text is empty;
+- the file does not exist or is a directory;
+- the session has not read the file, or it changed since the session did;
+- the old text is not in the file, or is in it more than once and `replaceAll` is not set.
+
+The checks run again just before the `edit` approval would be asked, on the file as it is then, so an edit that stopped
+working in between is not put to you either. A file outside the project is not read until you have approved its
+directory, as before, and the checks then run before the `edit` approval. One more difference follows from the order:
+when a rule denies `edit` for a file that the session has read, a call whose old text is not in the file now fails with
+`edit.no-match` instead of with the denial. The session has read the file, so it learns nothing it did not have.
+
+**Affects:** people who approve edits, who now see fewer prompts that end in an error, and agents in plan mode or under a
+rule that denies `edit`, whose bad edits get the specific failure first. The failures have their own error types, which
+the note on error types describes.
+
+**What to do:** Nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -836,6 +928,30 @@ a boolean or a Promise of one.
 
 **What to do:** Nothing for plugins that are already running; declaring `traits` is optional. If your code builds a
 context by hand, add a `traits` record to it; the defaults are every boolean `false` and `interruptBehavior: "block"`.
+
+### Tools can fail with a code, and refuse a call in `validate` before they ask for permission
+
+`Tool.Error` has a new optional `code`, a string that names the failure. It becomes the error `type` of the failed call
+and decides over the type of the `error` that the failure wraps; without a code the type is `tool.execution`, as before.
+The SDK exports `ErrorCode`, the codes that Orbit gives its own failures, and a plugin may use any other string.
+
+A tool can also declare `validate(input, context)`. It receives the decoded input and the same context as `execute`,
+traits included. It runs after the `execute.before` hooks and after the input is decoded, and before `execute`, so a call
+that it refuses never reaches the tool's own permission requests. In an Effect plugin it fails with a `Tool.Error`. In a
+Promise plugin it throws or rejects, and the adapter turns that into a failure. A `Tool.Error` with a code keeps it; a
+`Tool.Error` without one and any other failure become `tool.validation`, with the message of the failure. A defect, a
+decline and an interrupt pass through as they do from `execute`. `validate` must not ask for permission or change
+anything, and `execute` must check again whatever it relies on, because the state can change in between.
+
+A registration whose `validate` is not a function is skipped with a log line, as other invalid registrations are, and
+the tools beside it still register, in an Effect plugin and in a Promise plugin alike. An update that would leave a tool
+with such a `validate` keeps the earlier definition.
+
+**Affects:** plugin authors and code built on the SDK. `Tool.Info` gains an optional `validate`, and a Promise plugin's
+`Tool.Info` declares it as `(input, context) => void | Promise<void>`. Code that builds a `Tool.Info` by hand or wraps
+one is not affected, and a wrapper that replaces only `execute` keeps the tool's `validate`.
+
+**What to do:** Nothing for plugins that are already running; both additions are optional.
 
 ### A tool's `searchHint` helps Code Mode search find it
 

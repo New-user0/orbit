@@ -50,6 +50,7 @@ import { SessionRunCoordinator } from "@orbit/core/session/run-coordinator"
 import { SessionRunner } from "@orbit/core/session/runner/index"
 import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
+import { SessionTurn } from "@orbit/core/session/turn"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Plugin } from "@orbit/core/plugin"
@@ -4329,6 +4330,93 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
+  scenario("starts a turn at a queued prompt it promotes and joins steers to the turn in progress", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Start working", turn: { maxSteps: 4 }, resume: false })
+    yield* s.llm.push(TestLLM.stop(), TestLLM.stop(), TestLLM.stop())
+    const seqOf = (id: SessionMessage.ID) =>
+      s.db
+        .select({ seq: SessionMessageTable.seq })
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, id))
+        .get()
+        .pipe(
+          Effect.orDie,
+          Effect.flatMap((row) => (row ? Effect.succeed(row.seq) : Effect.die(new Error(`Not projected: ${id}`)))),
+        )
+
+    const firstStream = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* firstStream.started
+    expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+      boundary: undefined,
+      options: { maxSteps: 4 },
+    })
+    const queued = yield* s.session.prompt({ sessionID, text: "Queued", delivery: "queue", turn: { maxSteps: 2 } })
+    const secondStream = yield* s.llm.gate
+    yield* firstStream.release
+    yield* secondStream.started
+    // The drain has not settled between the turns: its execution is still running, so the runner wrote no idle mark.
+    expect(run.pollUnsafe()).toBeUndefined()
+
+    // The queued prompt waited for the first response to end: it began a turn, and nothing it set before it applies.
+    expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+      boundary: yield* seqOf(queued.id),
+      options: { maxSteps: 2, seq: yield* seqOf(queued.id) },
+    })
+    const steer = yield* s.session.prompt({ sessionID, text: "Steer", turn: { maxCost: Money.USD.make(1) } })
+    const thirdStream = yield* s.llm.gate
+    yield* secondStream.release
+    yield* thirdStream.started
+    expect(run.pollUnsafe()).toBeUndefined()
+
+    // The steer joined that turn, and its options replaced the queued prompt's.
+    const joined = yield* SessionTurn.current(s.db, sessionID)
+    expect(joined.boundary).toBe(yield* seqOf(queued.id))
+    expect(joined.options).toMatchObject({ maxCost: 1, seq: yield* seqOf(steer.id) })
+    expect(joined.options).not.toHaveProperty("maxSteps")
+    yield* thirdStream.release
+    yield* Fiber.join(run)
+
+    // One drain promoted all three: the queue delivery tells the turns apart.
+    const messages = yield* s.session.messages({ sessionID, order: "asc" })
+    expect(
+      messages.flatMap((message) => (message.type === "user" ? [`${message.text}: ${message.delivery}`] : [])),
+    ).toEqual(["Start working: steer", "Queued: queue", "Steer: steer"])
+  })
+
+  for (const delivery of ["steer", "queue"] as const)
+    scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
+      s.currentModel = recoveryModel
+      yield* s.llm.push(
+        TestLLM.text("Active complete", "text-active"),
+        [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
+        TestLLM.text("Reply to the new request", "text-new"),
+      )
+      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 1 }, resume: false })
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
+      yield* s.session.compact({ sessionID, delivery })
+      const summary = yield* s.llm.gate
+      yield* first.release
+      yield* summary.started
+      // The drain has not settled between the response and the compaction, so no idle mark separates them.
+      expect(run.pollUnsafe()).toBeUndefined()
+      yield* s.session.prompt({ sessionID, text: "New request during compaction" })
+      const third = yield* s.llm.gate
+      yield* summary.release
+      yield* third.started
+
+      // The steer joined the finished turn and inherits its options.
+      expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+        boundary: undefined,
+        options: { maxSteps: 1 },
+      })
+      yield* third.release
+      yield* Fiber.join(run)
+    })
+
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
     const execution = yield* SessionExecution.Service
     yield* s.admit("Start working")
@@ -4783,9 +4871,38 @@ describe("SessionRunnerLLM", () => {
           { id: "call-missing" },
           {
             error: {
-              type: "tool.execution",
+              type: "tool.unknown",
               message:
                 'No tool named "missing" is currently available. Please use a tool from the available tool list.',
+            },
+          },
+        ),
+      ]),
+      Expected.assistant({ finish: "stop" }, [Expected.text("Recovered")]),
+    ])
+  })
+
+  scenario("returns a schema failure to the model with its code and continues", function* (s) {
+    yield* s.admit("Call echo wrongly")
+
+    yield* s.llm.push(
+      TestLLM.tool("call-invalid", "echo", { text: 1 }),
+      TestLLM.text("Recovered", "text-after-invalid"),
+    )
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool"])
+    expect(JSON.stringify(s.requests[1]?.messages.at(-1))).toContain('Invalid arguments for tool \\"echo\\"')
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call echo wrongly"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-invalid" },
+          {
+            error: {
+              type: "tool.input-invalid",
+              message: expect.stringContaining('Invalid arguments for tool "echo"'),
             },
           },
         ),

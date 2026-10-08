@@ -97,14 +97,7 @@ export type PromptFileSource = { type: "inline" } | { type: "uri"; uri: string }
 
 export type PromptMention = { start: number; end: number; text: string }
 
-export type SessionMessageSynthetic = {
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  text: string
-  description?: string
-  type: "synthetic"
-}
+export type SessionInboxDelivery = "steer" | "queue"
 
 export type SessionMessageSystem = {
   id: string
@@ -182,8 +175,6 @@ export type SessionMessageIdle = {
 }
 
 export type SessionActive = { type: "running" }
-
-export type SessionInboxDelivery = "steer" | "queue"
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
 
@@ -540,6 +531,8 @@ export type V2EventServerConnected = {
   data: {}
 }
 
+export type SessionTurnOptions = { maxSteps?: number; maxCost?: number; maxTokens?: number; fallbackModel?: ModelRef }
+
 export type ModelSettings = { compaction?: ProviderCompaction } & { [x: string]: any }
 
 export type ConfigModelSettings = { compaction?: ProviderCompaction } & { [x: string]: JsonValue | null }
@@ -594,6 +587,16 @@ export type PromptFileAttachment = {
 export type PromptAgentAttachment = { name: string; mention?: PromptMention }
 
 export type PromptSkillAttachment = { id: string; name: string; text?: string; mention?: PromptMention }
+
+export type SessionMessageSynthetic = {
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  text: string
+  description?: string
+  delivery?: SessionInboxDelivery
+  type: "synthetic"
+}
 
 export type SessionMessageAssistantText = { type: "text"; text: string; state?: SessionMessageProviderState }
 
@@ -1844,6 +1847,8 @@ export type SessionMessageUser = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
+  turn?: SessionTurnOptions
+  delivery?: SessionInboxDelivery
   type: "user"
 }
 
@@ -1853,6 +1858,7 @@ export type SessionInboxUserPayload = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
   metadata?: { [x: string]: JsonValue }
+  turn?: SessionTurnOptions
 }
 
 export type SessionInboxUserPayload1 = {
@@ -1861,6 +1867,7 @@ export type SessionInboxUserPayload1 = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
   metadata?: { [x: string]: any }
+  turn?: SessionTurnOptions
 }
 
 export type SessionMessageToolStateCompleted = {
@@ -3285,6 +3292,13 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly turn?: {
+            readonly maxSteps?: number
+            readonly maxCost?: number
+            readonly maxTokens?: number
+            readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+          }
+          readonly delivery?: "steer" | "queue"
           readonly type: "user"
         }
       | {
@@ -3293,6 +3307,7 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly text: string
           readonly description?: string
+          readonly delivery?: "steer" | "queue"
           readonly type: "synthetic"
         }
       | {
@@ -3622,6 +3637,13 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly turn?: {
+            readonly maxSteps?: number
+            readonly maxCost?: number
+            readonly maxTokens?: number
+            readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+          }
+          readonly delivery?: "steer" | "queue"
           readonly type: "user"
         }
       | {
@@ -3630,6 +3652,7 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly text: string
           readonly description?: string
+          readonly delivery?: "steer" | "queue"
           readonly type: "synthetic"
         }
       | {
@@ -3959,6 +3982,13 @@ export type SessionImportInput = {
             readonly text?: string
             readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
           }>
+          readonly turn?: {
+            readonly maxSteps?: number
+            readonly maxCost?: number
+            readonly maxTokens?: number
+            readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+          }
+          readonly delivery?: "steer" | "queue"
           readonly type: "user"
         }
       | {
@@ -3967,6 +3997,7 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly text: string
           readonly description?: string
+          readonly delivery?: "steer" | "queue"
           readonly type: "synthetic"
         }
       | {
@@ -4291,6 +4322,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["id"]
@@ -4312,6 +4349,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["text"]
@@ -4333,6 +4376,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["files"]
@@ -4354,6 +4403,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["agents"]
@@ -4375,6 +4430,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["skills"]
@@ -4396,9 +4457,42 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["metadata"]
+  readonly turn?: {
+    readonly id?: string | null
+    readonly text: string
+    readonly files?: ReadonlyArray<{
+      readonly uri: string
+      readonly name?: string
+      readonly description?: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly agents?: ReadonlyArray<{
+      readonly name: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly skills?: ReadonlyArray<{
+      readonly id: string
+      readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
+    }>
+    readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
+    readonly delivery?: ("steer" | "queue") | null
+    readonly resume?: boolean | null
+  }["turn"]
   readonly delivery?: {
     readonly id?: string | null
     readonly text: string
@@ -4417,6 +4511,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["delivery"]
@@ -4438,6 +4538,12 @@ export type SessionPromptInput = {
       readonly mention?: { readonly start: number; readonly end: number; readonly text: string }
     }>
     readonly metadata?: { readonly [x: string]: JsonValue }
+    readonly turn?: {
+      readonly maxSteps?: number
+      readonly maxCost?: number
+      readonly maxTokens?: number
+      readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+    }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
   }["resume"]

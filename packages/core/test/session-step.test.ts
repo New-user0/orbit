@@ -141,7 +141,18 @@ for (const fixture of [
         finish: fixture.finish,
         tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } },
         snapshot: { start, end, files },
-        content: [{ type: "tool", state: { status: fixture.toolChoice === "none" ? "error" : "completed" } }],
+        content: [
+          {
+            type: "tool",
+            state:
+              fixture.toolChoice === "none"
+                ? {
+                    status: "error",
+                    error: { type: "tool.disabled", message: "Tools are disabled after the maximum agent steps" },
+                  }
+                : { status: "completed" },
+          },
+        ],
       })
       expect(message?.data).toHaveProperty("cost", expect.closeTo(0.0000233, 10))
       const events = yield* db

@@ -3,6 +3,7 @@ import { Agent } from "@orbit/core/agent"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { PluginPromise } from "@orbit/core/plugin/promise"
+import { toSessionError } from "@orbit/core/session/to-session-error"
 import { Tool } from "@orbit/core/tool"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info, ToolEditor } from "@orbit/plugin/promise/tool"
@@ -10,7 +11,7 @@ import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Cause, Deferred, Effect, Exit, Fiber, Logger, Schema } from "effect"
 import { testEffect } from "../lib/effect"
-import { invalidTraits } from "../lib/tool"
+import { invalidTraits, invalidValidateProblem, invalidValidates } from "../lib/tool"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
@@ -347,3 +348,352 @@ it.live("a Promise plugin update can remove the traits of a tool", () =>
     })
   }),
 )
+
+const validationContext = {
+  ...identity,
+  id: Tool.CallID.make("call_validation_context"),
+  progress: async () => {},
+  signal: new AbortController().signal,
+  traits: ToolTraits.defaults,
+}
+
+// A Promise plugin tool that notes what it runs, and whose `validate` is the one given.
+const checked = (steps: Array<string>, validate?: Info<typeof Mode>["validate"]): Info<typeof Mode> => ({
+  name: "checked",
+  description: "Checked before it runs",
+  input: Mode,
+  options: { codemode: false },
+  traits: { readOnly: (input) => input.mode === "read" },
+  ...(validate === undefined ? {} : { validate }),
+  execute: async ({ mode }) => {
+    steps.push(`execute ${mode}`)
+    return { content: mode }
+  },
+})
+
+it.live("a Promise validate gets the decoded input and the call's context, and a call that passes then runs", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const tools = yield* Tool.Service
+    const steps: Array<string> = []
+    const seen: Array<unknown> = []
+    yield* PluginPromise.fromPromise({
+      id: "validated-tool",
+      async setup(context) {
+        await context.tool.transform((editor) => {
+          // Both forms of an answer: nothing, and a Promise of nothing.
+          editor.add({
+            ...checked(steps, (input, validation) => {
+              seen.push([input.mode, validation.traits.readOnly, validation.signal.aborted, validation.id])
+            }),
+            name: "sync",
+          })
+          editor.add({
+            ...checked(steps, async (input, validation) => {
+              seen.push([input.mode, validation.traits.readOnly, validation.signal.aborted, validation.id])
+            }),
+            name: "async",
+          })
+        })
+      },
+    }).effect(yield* PluginHost.make(plugins))
+
+    const snapshot = yield* tools.snapshot()
+    yield* snapshot.execute({ ...identity, call: call("sync", "read") })
+    yield* snapshot.execute({ ...identity, call: call("async", "write") })
+    expect(seen).toEqual([
+      ["read", true, false, "call_sync_read"],
+      ["write", false, false, "call_async_write"],
+    ])
+    expect(steps).toEqual(["execute read", "execute write"])
+  }),
+)
+
+class ForeignFailure extends Schema.TaggedError<ForeignFailure>()("Plugin.ForeignFailure", {
+  message: Schema.String,
+}) {}
+for (const [name, thrown, expected] of [
+  [
+    "a Tool.Error with a code",
+    new Tool.Error({ message: "Not today.", code: "acme.not-today" }),
+    { type: "acme.not-today", message: "Not today." },
+  ],
+  [
+    "a Tool.Error without a code",
+    new Tool.Error({ message: "Not valid." }),
+    { type: "tool.validation", message: "Not valid." },
+  ],
+  ["an Error", new Error("plain"), { type: "tool.validation", message: "plain" }],
+  [
+    "an error of another kind",
+    new ForeignFailure({ message: "transport died" }),
+    { type: "tool.validation", message: "transport died" },
+  ],
+  ["text", "just text", { type: "tool.validation", message: "just text" }],
+] as const)
+  it.live(`a Promise validate that throws ${name} refuses the call as ${expected.type}, however it fails`, () =>
+    Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const steps: Array<string> = []
+      yield* PluginPromise.fromPromise({
+        id: "refusing-tool",
+        async setup(context) {
+          await context.tool.transform((editor) => {
+            editor.add({
+              ...checked(steps, () => {
+                throw thrown
+              }),
+              name: "throws",
+            })
+            editor.add({
+              ...checked(steps, async () => {
+                throw thrown
+              }),
+              name: "rejects",
+            })
+            editor.add({ ...checked(steps, () => Promise.reject(thrown)), name: "returns" })
+          })
+        },
+      }).effect(yield* PluginHost.make(plugins))
+
+      const snapshot = yield* tools.snapshot()
+      for (const tool of ["throws", "rejects", "returns"]) {
+        const error = yield* snapshot.execute({ ...identity, call: call(tool, "read") }).pipe(Effect.flip)
+        expect(toSessionError(error)).toEqual(expected)
+      }
+      expect(steps).toEqual([])
+    }),
+  )
+
+it.live("a Promise plugin reads validate back as a Promise function, and an update can wrap it or remove it", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const tools = yield* Tool.Service
+    const steps: Array<string> = []
+    const read: { got?: Info; listed?: Info } = {}
+    yield* PluginPromise.fromPromise({
+      id: "readback-validate",
+      async setup(context) {
+        await context.tool.transform((editor) =>
+          editor.add(
+            checked(steps, (input) => {
+              if (input.mode === "write") throw new Tool.Error({ message: "Read only.", code: "acme.read-only" })
+            }),
+          ),
+        )
+        await context.tool.transform((editor: ToolEditor) => {
+          read.got = editor.get("checked")
+          editor.update("checked", (tool) => {
+            const inner = tool.validate
+            // The wrapper calls what it read back, and what that fails with must come out of it unchanged.
+            tool.validate = async (input, validation) => {
+              steps.push(`wrapper ${input.mode}`)
+              await inner?.(input, validation)
+            }
+          })
+        })
+        read.listed = (await context.tool.list()).find((tool) => tool.id === "checked")
+      },
+    }).effect(yield* PluginHost.make(plugins))
+
+    for (const tool of [read.got, read.listed]) expect(typeof tool?.validate).toBe("function")
+
+    const snapshot = yield* tools.snapshot()
+    yield* snapshot.execute({ ...identity, call: call("checked", "read") })
+    const error = yield* snapshot.execute({ ...identity, call: call("checked", "write") }).pipe(Effect.flip)
+    expect(toSessionError(error)).toEqual({ type: "acme.read-only", message: "Read only." })
+    expect(steps).toEqual(["wrapper read", "execute read", "wrapper write"])
+
+    // Reading it back on its own gives the same failure, as a rejected Promise.
+    const rejection = yield* Effect.promise(() =>
+      Promise.resolve(read.listed?.validate?.({ mode: "write" }, validationContext)).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      ),
+    )
+    expect(rejection).toBeInstanceOf(Tool.Error)
+    expect((rejection as Tool.Error).code).toBe("acme.read-only")
+  }),
+)
+
+it.live("a Promise plugin update that replaces only execute keeps validate", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const tools = yield* Tool.Service
+    const steps: Array<string> = []
+    yield* PluginPromise.fromPromise({
+      id: "wrap-execute",
+      async setup(context) {
+        await context.tool.transform((editor) =>
+          editor.add(
+            checked(steps, (input) => {
+              if (input.mode === "write") throw new Tool.Error({ message: "Read only.", code: "acme.read-only" })
+            }),
+          ),
+        )
+        await context.tool.transform((editor) =>
+          editor.update("checked", (tool) => {
+            const inner = tool.execute
+            tool.execute = async (input, validation) => {
+              steps.push("wrapped")
+              return inner(input, validation)
+            }
+          }),
+        )
+      },
+    }).effect(yield* PluginHost.make(plugins))
+
+    const snapshot = yield* tools.snapshot()
+    yield* snapshot.execute({ ...identity, call: call("checked", "read") })
+    const error = yield* snapshot.execute({ ...identity, call: call("checked", "write") }).pipe(Effect.flip)
+    expect(toSessionError(error)).toEqual({ type: "acme.read-only", message: "Read only." })
+    expect(steps).toEqual(["wrapped", "execute read"])
+  }),
+)
+
+it.live("a Promise plugin update can remove validate from a tool", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const tools = yield* Tool.Service
+    const steps: Array<string> = []
+    yield* PluginPromise.fromPromise({
+      id: "strip-validate",
+      async setup(context) {
+        await context.tool.transform((editor) =>
+          editor.add(
+            checked(steps, () => {
+              throw new Tool.Error({ message: "Never.", code: "acme.never" })
+            }),
+          ),
+        )
+        await context.tool.transform((editor) =>
+          editor.update("checked", (tool) => {
+            delete tool.validate
+          }),
+        )
+      },
+    }).effect(yield* PluginHost.make(plugins))
+
+    const snapshot = yield* tools.snapshot()
+    yield* snapshot.execute({ ...identity, call: call("checked", "read") })
+    expect(steps).toEqual(["execute read"])
+  }),
+)
+
+it.live("a Promise plugin update that leaves validate alone keeps an Effect validate, so its defect passes through", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const tools = yield* Tool.Service
+    const steps: Array<string> = []
+    yield* tools.transform((editor) =>
+      editor.add({
+        name: "dies",
+        description: "Its validate dies",
+        input: Mode,
+        options: { codemode: false },
+        validate: () => Effect.die("validate defect"),
+        execute: () => Effect.sync(() => void steps.push("execute")).pipe(Effect.as({ content: "ran" })),
+      }),
+    )
+    yield* PluginPromise.fromPromise({
+      id: "describe-only",
+      async setup(context) {
+        await context.tool.transform((editor) =>
+          editor.update("dies", (tool) => {
+            tool.description = "Only the description changed"
+          }),
+        )
+      },
+    }).effect(yield* PluginHost.make(plugins))
+
+    const exit = yield* (yield* tools.snapshot()).execute({ ...identity, call: call("dies", "read") }).pipe(Effect.exit)
+    expect(Exit.isFailure(exit) && exit.cause.toString().includes("validate defect")).toBe(true)
+    // A defect is not a failure of the call, so it did not become a validation error.
+    expect(Exit.isFailure(exit) && Cause.hasFails(exit.cause)).toBe(false)
+    expect(steps).toEqual([])
+  }),
+)
+
+// The adapter converts `validate` before the registry sees it. Whatever the registry refuses must still reach it, so the
+// plugin stays active, the tools beside the bad one register, and one line says what was skipped.
+for (const [name, validate] of invalidValidates) {
+  it.live(`a Promise plugin that adds a tool with ${name} stays active and registers the tools beside it`, () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const exit = yield* PluginPromise.fromPromise({
+        id: "invalid-validate-add",
+        async setup(context) {
+          await context.tool.transform((editor) => {
+            editor.add({ ...checked([]), name: "before" })
+            editor.add({ ...checked([]), name: "broken", validate } as unknown as Info)
+            editor.add({ ...checked([]), name: "after" })
+          })
+        },
+      })
+        .effect(yield* PluginHost.make(plugins))
+        .pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(output).toEqual([
+        [
+          "Skipping invalid tool registration",
+          { name: "broken", namespace: undefined, error: `Invalid tool validate broken: ${invalidValidateProblem}` },
+        ],
+      ])
+      const snapshot = yield* tools.snapshot()
+      expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["after", "before", "execute"])
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  it.live(`a Promise plugin update that leaves ${name} keeps the earlier definition and the plugin active`, () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const steps: Array<string> = []
+      const exit = yield* PluginPromise.fromPromise({
+        id: "invalid-validate-update",
+        async setup(context) {
+          await context.tool.transform((editor) => editor.add(checked(steps, () => {})))
+          await context.tool.transform((editor) => {
+            editor.update("checked", (tool) => {
+              tool.description = "Updated"
+              Object.assign(tool, { validate })
+            })
+            editor.add({ ...checked([]), name: "after" })
+          })
+        },
+      })
+        .effect(yield* PluginHost.make(plugins))
+        .pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(output).toEqual([
+        [
+          "Skipping invalid tool registration",
+          {
+            name: "checked",
+            namespace: undefined,
+            error: `Invalid tool validate checked: ${invalidValidateProblem}`,
+          },
+        ],
+      ])
+      const snapshot = yield* tools.snapshot()
+      expect(snapshot.definitions.find((definition) => definition.name === "checked")?.description).toBe(
+        "Checked before it runs",
+      )
+      expect(snapshot.describe("after")).toBeDefined()
+      yield* snapshot.execute({ ...identity, call: call("checked", "read") })
+      expect(steps).toEqual(["execute read"])
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+}

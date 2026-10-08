@@ -153,7 +153,7 @@ describe("search tools", () => {
             expect(yield* executeTool(registry, call("grep", { pattern: "" }))).toEqual({
               status: "error",
               error: {
-                type: "tool.execution",
+                type: "tool.input-invalid",
                 message:
                   'Invalid arguments for tool "grep":\n- pattern: Pattern must not be empty\n\nArguments provided:\n{\n  "pattern": ""\n}\n\nUpdate the arguments and call the tool again.',
               },

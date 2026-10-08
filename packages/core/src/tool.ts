@@ -1,5 +1,5 @@
 export * as Tool from "./tool.js"
-export { CallID, Content, Error, FileContent, TextContent } from "@orbit/schema/tool"
+export { CallID, Content, Error, ErrorCode, FileContent, TextContent } from "@orbit/schema/tool"
 export type {
   Context,
   InterruptBehavior,
@@ -398,10 +398,14 @@ const layer = Layer.effect(
               const event = yield* beforeExecute(input.call.name, input.call.input, context)
               const found = find(event.tool, input.definitions)
               if (found.type === "unavailable")
-                return yield* new Tool.Error({ message: `Tool is not available for this request: ${event.tool}` })
+                return yield* new Tool.Error({
+                  message: `Tool is not available for this request: ${event.tool}`,
+                  code: Tool.ErrorCode.Unavailable,
+                })
               if (found.type === "unknown")
                 return yield* new Tool.Error({
                   message: `No tool named "${found.name}" is currently available. Please use a tool from the available tool list.`,
+                  code: Tool.ErrorCode.Unknown,
                 })
               return yield* executeTool(found.tool, found.name, event.input, context)
             }),
@@ -491,6 +495,10 @@ function registrationError(tool: Tool.Info) {
   const problem = ToolTraits.problem(tool.traits)
   if (problem !== undefined)
     return new RegistrationError({ name: id, message: `Invalid tool traits ${id}: ${problem}` })
+  // Plugins are not bound by the types. A `validate` that is not a function would make every call of its tool die, so the
+  // tool is refused here, with one log line, like any other invalid registration.
+  if (tool.validate !== undefined && typeof tool.validate !== "function")
+    return new RegistrationError({ name: id, message: `Invalid tool validate ${id}: validate must be a function` })
   return undefined
 }
 

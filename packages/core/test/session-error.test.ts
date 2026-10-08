@@ -87,6 +87,26 @@ describe("toSessionError", () => {
     })
   })
 
+  test("names a tool failure by its code, whatever error it wraps", () => {
+    const blocked = new Permission.BlockedError({ rules: [], permission: "edit", resources: [] })
+    expect(toSessionError(new Tool.Error({ message: "Not today.", code: "acme.not-today" }))).toEqual({
+      type: "acme.not-today",
+      message: "Not today.",
+    })
+    // The code names the failure, so it decides over the type of the error that the failure wraps.
+    expect(toSessionError(new ToolFailure({ message: "Wrapped.", code: "file.stale", error: blocked }))).toEqual({
+      type: "file.stale",
+      message: "Wrapped.",
+    })
+    // Without a code the wrapped error still decides.
+    expect(toSessionError(new ToolFailure({ message: "Wrapped.", error: blocked }))).toEqual({
+      type: "permission.rejected",
+      message: "Permission denied: edit",
+    })
+    for (const code of Object.values(Tool.ErrorCode))
+      expect(toSessionError(new Tool.Error({ message: "m", code }))).toEqual({ type: code, message: "m" })
+  })
+
   test("preserves provider HTTP status without exposing runtime diagnostics", () => {
     const http = new HttpContext({
       url: "https://example.com",

@@ -2413,6 +2413,9 @@
                   "metadata": {
                     "type": "object"
                   },
+                  "turn": {
+                    "$ref": "#/components/schemas/Session.Turn.Options"
+                  },
                   "delivery": {
                     "anyOf": [
                       {
@@ -18502,6 +18505,9 @@
           },
           "metadata": {
             "type": "object"
+          },
+          "turn": {
+            "$ref": "#/components/schemas/Session.Turn.Options"
           }
         },
         "required": ["text"],
@@ -19322,6 +19328,9 @@
           "description": {
             "type": "string"
           },
+          "delivery": {
+            "$ref": "#/components/schemas/Session.Inbox.Delivery"
+          },
           "type": {
             "type": "string",
             "enum": ["synthetic"]
@@ -19497,6 +19506,12 @@
               "$ref": "#/components/schemas/Prompt.SkillAttachment"
             }
           },
+          "turn": {
+            "$ref": "#/components/schemas/Session.Turn.Options"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/Session.Inbox.Delivery"
+          },
           "type": {
             "type": "string",
             "enum": ["user"]
@@ -19598,6 +19613,28 @@
         },
         "required": ["type", "message"],
         "additionalProperties": false
+      },
+      "Session.Turn.Options": {
+        "type": "object",
+        "properties": {
+          "maxSteps": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "maxCost": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxTokens": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "fallbackModel": {
+            "$ref": "#/components/schemas/Model.Ref"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Limits and a fallback model that a prompt asks for on the turn it belongs to. They are recorded with the prompt, and a field left out asks for nothing."
       },
       "SessionActive": {
         "type": "object",
