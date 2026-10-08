@@ -225,8 +225,8 @@ const rank = (entries: ReadonlyArray<SearchEntry>, query: string): Array<SearchE
           (forms.some((form) => path === form || path.endsWith(`.${form}`)) ? 20 : 0) +
           (forms.some((form) => entry.pathWords.includes(form)) ? 12 : 0) +
           (forms.some((form) => path.includes(form)) ? 8 : 0) +
-          // The words a tool's author chose for finding it rank below every match in its path, so an exact name still
-          // wins, and above a match in the prose that describes it.
+          // A match in the words a tool's author chose for finding it counts for less than one in its path, so an exact
+          // name still wins, and for more than one in the prose that describes the tool.
           (forms.some((form) => entry.hint.includes(form)) ? 6 : 0) +
           (forms.some((form) => description.includes(form)) ? 4 : 0) +
           (forms.some((form) => entry.searchText.includes(form)) ? 2 : 0),

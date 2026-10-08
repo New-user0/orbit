@@ -57,6 +57,12 @@ Type safety ends at registration. The registry validates model input and declare
 - A plugin door that converts `traits` before it registers them, as the Promise adapter does in `effectTraits`, hands anything that is not an object to the registry as it is. The registry check is the one place that refuses it, so a malformed declaration costs one log line and the tools beside it still register. Do not destructure or spread `traits` ahead of that check, and run the invalid-traits table (`invalidTraits` in `test/lib/tool.ts`) through any new door.
 - Only `readOnly` may relax a permission decision, and only when Orbit or plugin code declares it. MCP annotations never set it, and `destructive` and `openWorld` are advisory.
 
+## Exposure
+
+Whether the model gets a tool in the request or finds it through Code Mode is `Tool.Options.codemode`, and `ToolTraits.exposure` is the only Core code that reads it: the snapshot's split into advertised tools and the Code Mode inventory, and the reserved `execute` name at registration, both ask it. `pinned` (a deferred tool that the inline catalog always lists) is read only by `ToolTraits.pinned`, which the catalog asks. There is no `defer` or `alwaysLoad` field: `codemode: false` is always loaded, leaving it out is deferred, and `pinned` is deferred but always listed. `schema/src/tool.ts` documents the mapping. A tool is `direct` only when `codemode` is exactly `false`, and a plugin that hands over anything else gets `deferred`, as before. Anything that changes where tools go, such as deferring tools until the model asks for them, changes the resolver and leaves the registrations alone. `protocol/src/simulation.ts` checks the same field on simulated registrations for the reserved name; Protocol cannot import Core, so keep the two readings the same.
+
+A tool's `traits.searchHint` goes to Code Mode with the tool (`runtime()` in `codemode/tool.ts`), where a match in it counts in `search` for less than a match in the tool's path and for more than one in its description. It ranks and nothing else: the catalog and the search results do not carry it.
+
 ## Permissions
 
 The registry has no `Permission.Service` dependency and performs no execution authorization. Registration options may attach a permission action solely to preserve whole-tool definition filtering. Most registrations default to their effective name; `edit`, `write`, and `patch` use the shared `edit` action.

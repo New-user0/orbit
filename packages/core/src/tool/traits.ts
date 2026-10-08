@@ -126,6 +126,28 @@ export const problem = (traits: Tool.Traits<any> | undefined) => {
   ].at(0)
 }
 
+/**
+ * How a tool reaches the model: a `direct` tool is advertised in the request, and a `deferred` one is found through
+ * Code Mode.
+ */
+export type Exposure = "direct" | "deferred"
+
+/**
+ * How the model gets a tool, read from its `options`. This and `pinned` are where Core reads `Tool.Options.codemode` and
+ * `Tool.Options.pinned`, so the way tools are offered can change here without touching a registration. Only a
+ * `codemode` of exactly `false` loads a tool directly. A tool that leaves it out, sets `true` or sets anything else
+ * that a plugin hands over is deferred, as it always was.
+ */
+export const exposure = (tool: Pick<Tool.Info, "options">): Exposure =>
+  tool.options?.codemode === false ? "direct" : "deferred"
+
+/**
+ * Whether the inline catalog of Code Mode must list the tool, whatever its budget leaves out. A tool that is loaded
+ * directly is already in front of the model, so only a deferred tool can be pinned.
+ */
+export const pinned = (tool: Pick<Tool.Info, "options">) =>
+  exposure(tool) === "deferred" && tool.options?.pinned === true
+
 function fixedAnswer(tool: Tool.Info<any, any>, key: (typeof predicates)[number]) {
   const predicate = tool.traits?.[key]
   return typeof predicate === "boolean" ? predicate : defaults[key]

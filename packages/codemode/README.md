@@ -189,8 +189,8 @@ empty-query browsing, and pagination, and returns callable paths with full signa
 `maxToolCalls`. Search also matches descriptions from enclosing `Namespace` values.
 
 A tool can declare a `searchHint`: a few words that help `search` find it when its path and description do not say what
-it is for. A match in the hint ranks below a match in the tool's path and above one in its description. The hint only
-ranks the tool; it is not part of the catalog or of what `search` returns.
+it is for. A match in the hint counts for less than a match in the tool's path and for more than one in its
+description. The hint only ranks the tool; it is not part of the catalog or of what `search` returns.
 
 ## Execution Limits
 

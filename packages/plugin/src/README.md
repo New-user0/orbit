@@ -140,11 +140,17 @@ await ctx.tool.transform((tools) => {
 })
 ```
 
+`options.codemode` decides how the model gets the tool. `false`, as above, advertises it in every request. Leaving it
+out, or `true`, defers it: the model finds the tool through Code Mode's catalog and `search` and calls it from a
+program. `pinned: true` on a deferred tool also keeps it listed in the catalog that the model sees first, however much
+the catalog leaves out to fit its budget.
+
 A tool can also declare `traits`: what it tells Orbit about itself beyond its schemas. `readOnly`, `concurrencySafe` and
 `destructive` are a boolean or a function of the decoded input that answers with a boolean or a Promise of one. The rest
 are plain values: `openWorld`, `requiresUserInteraction`, `cancelSiblingsOnFailure`, `interruptBehavior`,
 `maxResultChars`, `searchHint` and `displayName`. A trait you leave out takes its default, and the tool's context
-carries the answers for the call as `context.traits`.
+carries the answers for the call as `context.traits`. A `searchHint` is a few words that Code Mode's `search` matches
+when it looks for a deferred tool.
 
 ```ts
 tools.add({

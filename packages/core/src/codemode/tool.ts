@@ -13,6 +13,7 @@ import type {
 import { Cause, Deferred, Effect, Exit, Ref, Schema, Semaphore } from "effect"
 import { Permission } from "../permission.js"
 import { definition, normalizedName } from "../tool/runtime.js"
+import { ToolTraits } from "../tool/traits.js"
 import { CodeModeCatalog } from "./catalog.js"
 import { CodeModeWeb } from "./web.js"
 
@@ -243,11 +244,7 @@ function progressHooks(
 }
 
 export const catalog = (inventory: Inventory) => {
-  const pinned = new Set(
-    Array.from(inventory.tools.values())
-      .filter((registration) => registration.options?.pinned === true)
-      .map(qualifiedName),
-  )
+  const pinned = new Set(Array.from(inventory.tools.values()).filter(ToolTraits.pinned).map(qualifiedName))
   const root: CatalogNode = { children: new Map() }
   for (const namespace of inventory.namespaces?.values() ?? []) getNode(root, namespace.name).namespace = namespace
   for (const tool of runtime(inventory, () => Effect.fail(toolError("Execute context is unavailable"))).catalog)
@@ -299,6 +296,7 @@ function runtime(
     const child = definition(registration)
     getNode(root, qualifiedName(registration)).tool = Tool.make({
       description: child.description,
+      searchHint: registration.traits?.searchHint,
       input: child.inputSchema,
       output: child.outputSchema ?? Schema.NullOr(Schema.String),
       execute: (input) => executeTool(name, registration, input),

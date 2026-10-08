@@ -59,8 +59,8 @@ type ResultType<S> = S extends undefined ? void : S extends Schema.Decoder<unkno
 export type Options<I extends SchemaType, O extends SchemaType | undefined, R = never> = {
   readonly description: string
   /**
-   * A few words that help `search` find the tool, for a name or purpose the description does not say. A match in the
-   * hint ranks below a match in the tool's path and above one in its description.
+   * A few words that help `search` find the tool, for a purpose its path and description do not say. A match in the
+   * hint counts for less than a match in the tool's path and for more than one in its description.
    */
   readonly searchHint?: string
   readonly input: I
