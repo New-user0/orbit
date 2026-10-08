@@ -195,6 +195,9 @@ every other extension):
   `nodes` (`decodeRuns`, `decodeNodes`), keeping strings and finite numbers, and every string is written out with `plain`
   before the tree shows it. Proof: `test/runs.test.ts` (the usage with control characters and a cost that is not a
   number).
+- The runner's loop notices: `loopNotice` writes the description of a synthetic message, which a model, a hook or a
+  stored session can supply, out with `plain` before the chat shows it, live and when a session is opened from history.
+  Proof: `test/recovery.test.ts` (the escaped notice, and the replay on open).
 - The folder: the question shows the project's folder that the server names, the grant is made for that folder, and it
   counts only when the answer names it and the folder VS Code opened reads as trusted too. Proof: `test/trust.test.ts`
   ("trusts the folder the server named", "takes the stricter answer", "does not call a folder trusted").

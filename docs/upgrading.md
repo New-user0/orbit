@@ -780,6 +780,21 @@ to `leader` or to an `input.*` key in `cli.json` now also applies while the term
 
 **What to do:** nothing. Run `/keybindings` to start from the template.
 
+### VS Code hides recovered step failures and shows loop notices
+
+The VS Code chat used to show an error note the moment a step failed, even when the next step went on to finish the
+run. It now holds the failure back: a later step of the same run drops it. It shows when the run ends, or when the
+run is stopped for a reason other than a Stop. A Stop from any client drops the failure of the step it cut short (`orb run`
+drops it only for a Stop it made itself). A failure held when the event stream ends or drops is dropped too, so a stale
+one does not show above a later stop. A run that fails keeps just
+its own error. The chat also shows the runner's own notices that carry a description, such as "Continuing after
+restart", as a muted note, with control and format characters in the text written out as escapes. Other notices, such
+as a model fallback, appear in the same way once those features land.
+
+**Affects:** VS Code users.
+
+**What to do:** Nothing.
+
 ### Ctrl+R in the prompt searches earlier prompts, and prompt history keeps 500 entries
 
 `ctrl+r` in the prompt of the terminal UI now opens a search over the prompts you sent before. The list narrows as you
