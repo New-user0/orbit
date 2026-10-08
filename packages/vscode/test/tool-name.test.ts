@@ -10,6 +10,20 @@ test("the extension reads every reference tool name as the old name in the share
   }
 })
 
+test("the extension reads PowerShell as the shell tool", () => {
+  expect(legacyToolName("PowerShell")).toBe(ToolNames.legacy("PowerShell"))
+  expect(legacyToolName("PowerShell")).toBe("shell")
+})
+
+// The webview cannot be mounted here, so the test reads its source: a raw comparison with the old name draws a
+// generic row for a workflow recorded as `Workflow`, and the card with it.
+test("the webview draws a workflow card for a call recorded under either name", async () => {
+  const source = await Bun.file(new URL("../src/webview/main.ts", import.meta.url)).text()
+  expect(source).not.toMatch(/item\.name === "workflow"/)
+  expect(source.match(/legacyToolName\(item\.name\) === "workflow"/g)).toHaveLength(2)
+  expect(legacyToolName("Workflow")).toBe("workflow")
+})
+
 test("a name read from a chat is looked up as data", () => {
   for (const hostile of ["__proto__", "constructor", "toString", ""]) expect(legacyToolName(hostile)).toBe(hostile)
 })

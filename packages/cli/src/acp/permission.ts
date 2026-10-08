@@ -99,7 +99,9 @@ const permissionPreviews = Effect.fnUntraced(function* (toolName: string, input:
   if (oldString === undefined || newString === undefined) return []
   const oldText = yield* readText(path)
   const newText =
-    input.replace_all === true || input.replaceAll === true ? oldText.replaceAll(oldString, newString) : oldText.replace(oldString, newString)
+    input.replace_all === true || input.replaceAll === true
+      ? oldText.replaceAll(oldString, newString)
+      : oldText.replace(oldString, newString)
   return [diff(path, oldText, newText)]
 })
 

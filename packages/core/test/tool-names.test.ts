@@ -20,6 +20,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
+import { effectiveName } from "../src/tool/runtime"
 import { SessionMessage as SessionMessageSchema } from "@orbit/schema/session-message"
 import { DateTime, Effect, Exit, Layer, Schema } from "effect"
 import { tempLocationLayer } from "./fixture/location"
@@ -147,6 +148,36 @@ describe("tool names", () => {
       ["plugin_tool", 3],
     ])
     expect(tools.toString).toBe(Object.prototype.toString)
+  })
+
+  test("an entry under the exact key is not read as the built-in it shares an old name with", () => {
+    const tools = ToolNames.aliased({ Write: 1, write: 9 } as Record<string, number>)
+    expect(tools.write).toBe(9)
+    expect(tools.Write).toBe(1)
+    expect(Object.entries(tools)).toEqual([
+      ["Write", 1],
+      ["write", 9],
+    ])
+    delete tools.write
+    expect(Object.entries(tools)).toEqual([["Write", 1]])
+  })
+
+  // A plugin that confined `shell` under its old name replaces the built-in, as it did before the rename.
+  test.each(renamed)("a tool registered as %s takes the place of %s", (old, name) => {
+    expect(effectiveName({ name: old } as Tool.Info)).toBe(name)
+    expect(effectiveName({ name, options: { namespace: "mcp" } } as Tool.Info)).toBe(`mcp_${name}`)
+  })
+
+  test("PowerShell is another spelling of the shell tool and of nothing else", () => {
+    const shell = ["Bash", "shell", "PowerShell"]
+    shell.forEach((name) => expect([...ToolNames.spellings(name)].sort()).toEqual([...shell].sort()))
+    expect(ToolNames.legacy("PowerShell")).toBe("shell")
+    expect(ToolNames.canonical("PowerShell")).toBe("PowerShell")
+    expect(ToolNames.lowerInput("PowerShell", { background: true })).toEqual({ run_in_background: true })
+    expect(ToolNames.spellings("Read")).not.toContain("PowerShell")
+    // A rule written for either spelling governs the action the tool asks about.
+    expect(Permission.actionMatches("PowerShell", "Bash")).toBe(true)
+    expect(Permission.actionMatches("Bash", "PowerShell")).toBe(true)
   })
 
   test("the spellings of two tools never overlap", () => {

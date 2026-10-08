@@ -193,7 +193,12 @@ function locationFrom(cwd: string, ...values: unknown[]): ToolCallLocation[] {
 
 // Sessions migrated from V1 keep their original `filePath` tool inputs, and sessions recorded before the tool rename keep `path`.
 export function filePath(input: ToolInput) {
-  return stringValue(input.file_path) ?? stringValue(input.notebook_path) ?? stringValue(input.path) ?? stringValue(input.filePath)
+  return (
+    stringValue(input.file_path) ??
+    stringValue(input.notebook_path) ??
+    stringValue(input.path) ??
+    stringValue(input.filePath)
+  )
 }
 
 export function patchHunks(input: ToolInput) {

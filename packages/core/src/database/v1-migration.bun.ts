@@ -896,9 +896,19 @@ function row(
   }
 }
 
-const RENAMED_TOOLS: Readonly<Record<string, string>> = { bash: "shell", task: "subagent", apply_patch: "patch" }
+// V1 name to the name the tool is advertised under now. History is not lowered: the recorded calls keep the V1 name,
+// so this notice is what points the model at the current one.
+const RENAMED_TOOLS: Readonly<Record<string, string>> = {
+  bash: "Bash",
+  task: "Agent",
+  apply_patch: "Patch",
+  todowrite: "TodoWrite",
+  read: "Read",
+  edit: "Edit",
+  write: "Write",
+  skill: "Skill",
+}
 const PATH_TOOLS = ["read", "edit", "write"]
-const REMOVED_TOOLS = ["todowrite"]
 
 /**
  * Tells the model about V1 tools it called in the still-visible history whose
@@ -915,10 +925,9 @@ function legacyToolNotice(messages: ReadonlyArray<TransformResult["messages"][nu
       )
     }),
   )
-  const list = (names: ReadonlyArray<string>) => names.map((name) => `\`${name}\``).join(", ")
+  const list = (names: ReadonlyArray<string>) => names.map((name) => `\`${RENAMED_TOOLS[name]}\``).join(", ")
   const renamed = Object.keys(RENAMED_TOOLS).filter((name) => called.has(name))
   const paths = PATH_TOOLS.filter((name) => called.has(name))
-  const removed = REMOVED_TOOLS.filter((name) => called.has(name))
   const parts = [
     ...(renamed.length === 1
       ? [`The \`${renamed[0]}\` tool is now \`${RENAMED_TOOLS[renamed[0]]}\` and must be called by that name.`]
@@ -930,19 +939,19 @@ function legacyToolNotice(messages: ReadonlyArray<TransformResult["messages"][nu
           ]
         : []),
     ...(called.has("task")
-      ? ["The `subagent` tool takes `agent` instead of `subagent_type` and `sessionID` instead of `task_id`."]
+      ? ["The `Agent` tool takes `agent` instead of `subagent_type` and `sessionID` instead of `task_id`."]
       : []),
     ...(paths.length === 1
-      ? [`The \`${paths[0]}\` tool now takes \`path\` instead of \`filePath\`.`]
+      ? [`The \`${RENAMED_TOOLS[paths[0]]}\` tool now takes \`file_path\` instead of \`filePath\`.`]
       : paths.length > 1
-        ? [`The following tools now take \`path\` instead of \`filePath\`: ${list(paths)}.`]
+        ? [`The following tools now take \`file_path\` instead of \`filePath\`: ${list(paths)}.`]
         : []),
-    ...(called.has("skill") ? ["The `skill` tool now takes `id` instead of `name`."] : []),
-    ...(removed.length === 1
-      ? [`The \`${removed[0]}\` tool is no longer available and must not be called.`]
-      : removed.length > 1
-        ? [`The following tools are no longer available and must not be called: ${list(removed)}.`]
-        : []),
+    ...(called.has("edit")
+      ? [
+          "The `Edit` tool takes `old_string`, `new_string` and `replace_all` instead of `oldString`, `newString` and `replaceAll`.",
+        ]
+      : []),
+    ...(called.has("skill") ? ["The `Skill` tool now takes `id` instead of `name`."] : []),
   ]
   if (parts.length === 0) return undefined
   return ["The available tools have changed.", ...parts].join("\n\n")

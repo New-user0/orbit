@@ -160,7 +160,9 @@ describe("EditTool", () => {
     withTempDir((tmp) =>
       withTool(tmp.path, makeEditFixture(), (registry) =>
         Effect.gen(function* () {
-          expect(yield* toolTraits(registry, "Edit", { file_path: "a.txt", old_string: "a", new_string: "b" })).toMatchObject({
+          expect(
+            yield* toolTraits(registry, "Edit", { file_path: "a.txt", old_string: "a", new_string: "b" }),
+          ).toMatchObject({
             readOnly: false,
             concurrencySafe: false,
             destructive: false,
@@ -373,7 +375,10 @@ describe("EditTool", () => {
                 active.path,
                 edit,
                 (registry) =>
-                  executeTool(registry, call({ file_path: "docs/notes.md", old_string: "before", new_string: "after" })),
+                  executeTool(
+                    registry,
+                    call({ file_path: "docs/notes.md", old_string: "before", new_string: "after" }),
+                  ),
                 { untrusted: item.untrusted },
               )
               expect(result.status).toBe("completed")
@@ -710,7 +715,10 @@ describe("EditTool", () => {
       return Effect.promise(() => fs.writeFile(target, "same same same")).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
-            executeTool(registry, call({ file_path: "all.txt", old_string: "same", new_string: "after", replace_all: true })),
+            executeTool(
+              registry,
+              call({ file_path: "all.txt", old_string: "same", new_string: "after", replace_all: true }),
+            ),
           ),
         ),
         Effect.andThen((settled) =>
@@ -769,7 +777,10 @@ describe("EditTool", () => {
       return Effect.promise(() => fs.writeFile(target, "before  \nmatch  \nnext\t\nafter  \n")).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
-            executeTool(registry, call({ file_path: "whitespace.txt", old_string: "match\nnext", new_string: "changed" })),
+            executeTool(
+              registry,
+              call({ file_path: "whitespace.txt", old_string: "match\nnext", new_string: "changed" }),
+            ),
           ),
         ),
         Effect.tap((result) => Effect.sync(() => expect(result.status).toBe("completed"))),
@@ -822,7 +833,10 @@ describe("EditTool", () => {
       return Effect.promise(() => fs.writeFile(target, "\uFEFFbefore\r\nrest\r\n")).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
-            executeTool(registry, call({ file_path: "windows.txt", old_string: "before\nrest", new_string: "after\nrest" })),
+            executeTool(
+              registry,
+              call({ file_path: "windows.txt", old_string: "before\nrest", new_string: "after\nrest" }),
+            ),
           ),
         ),
         Effect.andThen(() => Effect.promise(() => fs.readFile(target, "utf8"))),

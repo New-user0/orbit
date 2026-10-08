@@ -16,6 +16,7 @@ import { NonNegativeInt } from "../../schema.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
+import { ToolNames } from "../names.js"
 import { ShellParse } from "../../shell/parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
@@ -304,7 +305,12 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
-        tool.description = description(ShellSelect.name(yield* compatibleShell))
+        const shellName = ShellSelect.name(yield* compatibleShell)
+        tool.description = description(shellName)
+        // The model is offered the tool as PowerShell when that is the session shell. The registry still runs it as `name`.
+        if (shellName !== "powershell" && shellName !== "pwsh") return
+        event.tools[ToolNames.powershell] = tool
+        delete event.tools[name]
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

@@ -165,7 +165,8 @@ const layer = Layer.effect(
         agent: context.agent,
         messageID: context.messageID,
         id: context.id,
-        input,
+        // A guard keyed on an old field name still sees the field. The registry runs on the real input.
+        input: ToolNames.view(name, input),
       })
 
     // The registry gate, for every path that runs a tool: a direct call and a Code Mode inner call both pass through
@@ -215,7 +216,7 @@ const layer = Layer.effect(
         agent: context.agent,
         messageID: context.messageID,
         id: context.id,
-        input,
+        input: ToolNames.view(name, input),
       }
       if ("failure" in execution) {
         const afterEvent: PluginHooks.Domains["tool"]["execute.after"] = {
@@ -453,7 +454,7 @@ const layer = Layer.effect(
                   message: `No tool named "${found.name}" is currently available. Please use a tool from the available tool list.`,
                   code: Tool.ErrorCode.Unknown,
                 })
-              return yield* executeTool(found.tool, found.name, event.input, context)
+              return yield* executeTool(found.tool, found.name, ToolNames.unview(event.input), context)
             }),
             traits: Effect.fnUntraced(function* (input: Parameters<Snapshot["traits"]>[0]) {
               const found = find(input.call.name, input.definitions)

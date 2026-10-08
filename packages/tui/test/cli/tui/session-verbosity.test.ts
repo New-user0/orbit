@@ -249,7 +249,10 @@ test("the reference tool names group and stand alone like the names they replace
 })
 
 test("the plan dock finds a plan recorded under the old or the reference tool names", () => {
-  const withInput = (name: string, input: { todos: { content: string; status: string }[] }): SessionMessageAssistantTool => ({
+  const withInput = (
+    name: string,
+    input: { todos: { content: string; status: string }[] },
+  ): SessionMessageAssistantTool => ({
     ...tool("p", name),
     state: { status: "completed", input, content: [{ type: "text", text: "ok" }], metadata: {} },
   })

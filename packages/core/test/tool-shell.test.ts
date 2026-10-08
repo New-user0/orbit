@@ -35,6 +35,7 @@ import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Shell } from "@orbit/core/shell"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { ShellSelect } from "@orbit/core/shell/select"
+import { ToolNames } from "@orbit/core/tool/names"
 import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { ToolOutput } from "@orbit/core/tool-output"
@@ -1281,6 +1282,99 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
+  // Read from the registry the model's tool list is built from, so a name built from a variable or registered by a
+  // plugin elsewhere is seen too.
+  productionIt.live("advertises no built-in tool under a name the alias table lists as an old one", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const names = (yield* toolDefinitions(registry)).map((tool) => tool.name)
+            // The control: the registry is the full set, and the old names are in the table.
+            expect(names).toEqual(expect.arrayContaining(["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Agent"]))
+            expect(Object.keys(ToolNames.tools)).toContain("shell")
+            expect(names.filter((name) => Object.hasOwn(ToolNames.tools, name))).toEqual([])
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  // A plugin guard written before the rename reads `input.background`; the call carries `run_in_background`.
+  productionIt.live(
+    "a plugin hook reads the old field names of the call it is shown, and the tool still gets the real input",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const hooks = yield* PluginHooks.Service
+              const seen: unknown[] = []
+              yield* hooks.register("tool", "execute.before", (event) =>
+                Effect.sync(() => {
+                  const input = event.input as Record<string, unknown>
+                  seen.push({
+                    old: input.background,
+                    current: input.run_in_background,
+                    keys: Object.keys(input).sort(),
+                  })
+                  input.background = false
+                }),
+              )
+              const settled = yield* executeTool(
+                registry,
+                call({ command: helloCommand, run_in_background: true }, "call-view"),
+              )
+              expect(seen).toEqual([{ old: true, current: true, keys: ["command", "run_in_background"] }])
+              // The guard's write under the old name reached the real field: the command ran in the foreground.
+              expect(settled.status).toBe("completed")
+              expect(settled.content).toEqual([{ type: "text", text: "hello" }])
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  productionIt.live("offers the tool as PowerShell only when the session shell is PowerShell", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          const offered = (shell: string) =>
+            withSession(tmp.path, () =>
+              Effect.gen(function* () {
+                const selection = yield* ShellSelect.Service
+                yield* selection.transform((editor) => editor.configure(shell))
+                const hooks = yield* PluginHooks.Service
+                const event = yield* hooks.trigger("session", "context", {
+                  sessionID,
+                  model: sessionModel,
+                  system: [],
+                  messages: [],
+                  options: {},
+                  agent: toolIdentity.agent,
+                  tools: { Bash: { description: "", input: {} } },
+                } as never)
+                return Object.keys(event.tools)
+              }),
+            )
+          // Not every machine has both shells; a missing one falls back to the default, which is still one of the two.
+          const sh = yield* offered("sh")
+          expect(sh).toHaveLength(1)
+          expect(["Bash", "PowerShell"]).toContain(sh[0])
+          if (isWindows) expect(yield* offered("powershell")).toEqual(["PowerShell"])
+          else expect(sh).toEqual(["Bash"])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
   it.live("exposes malformed native syntax without fallback or partial execution", () =>
     Effect.gen(function* () {
       if (isWindows) return
@@ -1361,12 +1455,7 @@ describe("ShellTool", () => {
                       }
                     }),
                   )
-                  expect(assertions.map((item) => item.action)).toEqual([
-                    "Bash",
-                    "external_directory",
-                    "Bash",
-                    "Bash",
-                  ])
+                  expect(assertions.map((item) => item.action)).toEqual(["Bash", "external_directory", "Bash", "Bash"])
                   expect(assertions[1]?.resources).toEqual([path.join(realpathSync(os.homedir()), "*")])
                   expect(assertions[0]).toMatchObject({ resources: ["echo $((1 + 1))"], save: ["echo *"] })
                   expect(assertions[2]).toMatchObject({ resources: ["pwd"], save: ["pwd *"] })
@@ -1528,7 +1617,10 @@ describe("ShellTool", () => {
               Stream.runHead,
               Effect.forkScoped({ startImmediately: true }),
             )
-            const settled = yield* executeTool(registry, call({ command: idleCommand, timeout: 50, run_in_background: true }))
+            const settled = yield* executeTool(
+              registry,
+              call({ command: idleCommand, timeout: 50, run_in_background: true }),
+            )
             const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : undefined
             expect(settled.metadata).toMatchObject({ truncated: false })
             expect(shellID).toStartWith("sh_")
@@ -1931,33 +2023,35 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live("cancels the job of a foreground command that is interrupted", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        reset()
-        return withSession(tmp.path, (registry) =>
-          Effect.gen(function* () {
-            const shell = yield* Shell.Service
-            const running = yield* executeTool(registry, call({ command: idleCommand }, "call-interrupted")).pipe(
-              Effect.forkChild({ startImmediately: true }),
-            )
-            const until = (done: (count: number) => boolean, remaining = 1000): Effect.Effect<void, Error> =>
-              Effect.gen(function* () {
-                if (done((yield* shell.list()).length)) return
-                if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
-                yield* Effect.promise(() => Bun.sleep(5))
-                return yield* until(done, remaining - 1)
-              })
-            yield* until((count) => count > 0)
-            yield* Fiber.interrupt(running)
-            // The job is cancelled on interrupt, so its shell goes away without the test removing it.
-            yield* until((count) => count === 0)
-          }),
-        )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
+  it.live(
+    "cancels the job of a foreground command that is interrupted",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const running = yield* executeTool(registry, call({ command: idleCommand }, "call-interrupted")).pipe(
+                Effect.forkChild({ startImmediately: true }),
+              )
+              const until = (done: (count: number) => boolean, remaining = 1000): Effect.Effect<void, Error> =>
+                Effect.gen(function* () {
+                  if (done((yield* shell.list()).length)) return
+                  if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
+                  yield* Effect.promise(() => Bun.sleep(5))
+                  return yield* until(done, remaining - 1)
+                })
+              yield* until((count) => count > 0)
+              yield* Fiber.interrupt(running)
+              // The job is cancelled on interrupt, so its shell goes away without the test removing it.
+              yield* until((count) => count === 0)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
     { timeout: 15_000 },
   )
 })

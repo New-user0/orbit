@@ -71,7 +71,8 @@ export const Plugin = {
                 ),
               )
               const notebook = Notebook.parse(original.text)
-              if (!notebook) return yield* new ToolFailure({ message: `${input.notebook_path} is not a valid notebook.` })
+              if (!notebook)
+                return yield* new ToolFailure({ message: `${input.notebook_path} is not a valid notebook.` })
               const edit = yield* resolveEdit(input, notebook)
               const next = Notebook.apply(notebook, edit)
               const after = Notebook.serialize(next, original.text)

@@ -38,6 +38,7 @@ describe("the names the model is told", () => {
           "mcp/instructions.ts",
           "session/**/*.txt",
           "agent/**/*.{ts,txt}",
+          "database/**/*.ts",
         ].map(sources),
       )
     ).flat()

@@ -177,7 +177,7 @@ setInterval(() => {
   // Running workflows show elapsed seconds; redraw them about once a second.
   if (state.tick % 7 === 0)
     items.forEach((item) => {
-      if (item.type === "tool" && item.name === "workflow" && item.status === "running") replace(item)
+      if (item.type === "tool" && legacyToolName(item.name) === "workflow" && item.status === "running") replace(item)
     })
   if (state.tick % 7 === 0 && !map.hidden) paintMap()
   const spinner = busy.querySelector(".spin")
@@ -252,7 +252,7 @@ function build(item: Item): HTMLElement {
       return node
     }
     case "tool":
-      return item.name === "workflow" ? workflow(item) : tool(item)
+      return legacyToolName(item.name) === "workflow" ? workflow(item) : tool(item)
     case "permission":
       return permission(item)
   }

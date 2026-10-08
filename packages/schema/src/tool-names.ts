@@ -50,6 +50,15 @@ export const fields = {
 
 const current = new Set<string>(Object.values(tools))
 
+/**
+ * What the shell tool is advertised as when the session shell is PowerShell. It is another spelling of the same action,
+ * so a `Bash` or `shell` rule governs it and a `PowerShell` rule governs `Bash`, but it is not an old name: `canonical`
+ * leaves it alone, so a call recorded as `PowerShell` is replayed as `PowerShell`.
+ */
+export const powershell = "PowerShell"
+
+const family = (name: string) => (name === powershell ? tools.shell : canonical(name))
+
 /** The current name of a tool, whichever spelling it is given in. Names the table does not list pass through. */
 export function canonical(name: string): string {
   return Object.hasOwn(tools, name) ? tools[name as keyof typeof tools] : name
@@ -57,7 +66,7 @@ export function canonical(name: string): string {
 
 /** The name a tool had before the rename, or the name itself when it never had another. */
 export function legacy(name: string): string {
-  return Object.entries(tools).find(([, value]) => value === name)?.[0] ?? name
+  return Object.entries(tools).find(([, value]) => value === family(name))?.[0] ?? name
 }
 
 /**
@@ -65,10 +74,10 @@ export function legacy(name: string): string {
  * A rule or matcher written with any one of them stands for the same tool, and for no other.
  */
 export function spellings(name: string): readonly string[] {
-  const now = canonical(name)
+  const now = family(name)
   if (!current.has(now)) return [name]
   const olds = Object.entries(tools).flatMap(([old, value]) => (value === now ? [old] : []))
-  return Array.from(new Set([name, now, ...olds]))
+  return Array.from(new Set([name, now, ...olds, ...(now === tools.shell ? [powershell] : [])]))
 }
 
 /** The input of a call recorded with old field names, under the current names. Fields already current pass through. */
@@ -97,20 +106,55 @@ export function raiseInput(tool: string, input: unknown): unknown {
  * so a plugin hook that deletes or reads `tools.write` still acts on `Write`. Keys the table does not list pass through.
  */
 export function aliased<T>(record: Record<string, T>): Record<string, T> {
-  const key = (property: string | symbol) => (typeof property === "string" ? canonical(property) : property)
+  // An entry under the exact key wins: a plugin tool called `write` beside the built-in `Write` is a different entry.
+  const key = (target: Record<string, T>, property: string | symbol) =>
+    typeof property !== "string" || Object.hasOwn(target, property) ? property : canonical(property)
   return new Proxy(record, {
-    get: (target, property) => target[key(property) as string],
+    get: (target, property) => target[key(target, property) as string],
     set: (target, property, value: T) => {
-      target[key(property) as string] = value
+      target[key(target, property) as string] = value
       return true
     },
-    has: (target, property) => key(property) in target,
-    deleteProperty: (target, property) => delete target[key(property) as string],
-    getOwnPropertyDescriptor: (target, property) => Object.getOwnPropertyDescriptor(target, key(property)),
+    has: (target, property) => key(target, property) in target,
+    deleteProperty: (target, property) => delete target[key(target, property) as string],
+    getOwnPropertyDescriptor: (target, property) => Object.getOwnPropertyDescriptor(target, key(target, property)),
   })
 }
 
+const viewed = new WeakMap<object, object>()
+
+/**
+ * The input of a current call as a plugin hook sees it: the current fields, and a read or write of a field under its old
+ * name reaches the current one, so a guard keyed on `input.path` still sees the path. Own keys are untouched, so a copy
+ * of the view has the current names only. Inputs that are not plain objects, and tools whose fields did not change, are
+ * returned as they are. `unview` gives the real input back.
+ */
+export function view(tool: string, input: unknown): unknown {
+  const table = fieldTable(tool)
+  if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
+  const renames = new Map(Object.entries(table).map(([next, old]) => [old, next]))
+  const key = (target: object, property: string | symbol) =>
+    typeof property !== "string" || Object.hasOwn(target, property) ? property : (renames.get(property) ?? property)
+  const record = input as Record<string | symbol, unknown>
+  const proxy = new Proxy(record, {
+    get: (target, property) => target[key(target, property)],
+    set: (target, property, value) => {
+      target[key(target, property)] = value
+      return true
+    },
+    has: (target, property) => key(target, property) in target,
+    deleteProperty: (target, property) => delete target[key(target, property)],
+  })
+  viewed.set(proxy, input)
+  return proxy
+}
+
+/** The input behind a `view`, or the value itself when it is not one. */
+export function unview(input: unknown): unknown {
+  return typeof input === "object" && input !== null ? (viewed.get(input) ?? input) : input
+}
+
 function fieldTable(tool: string): Readonly<Record<string, string>> | undefined {
-  const now = canonical(tool)
+  const now = family(tool)
   return Object.hasOwn(fields, now) ? fields[now as keyof typeof fields] : undefined
 }

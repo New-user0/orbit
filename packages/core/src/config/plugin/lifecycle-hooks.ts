@@ -26,8 +26,9 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * run is logged and skipped, so a broken script never stops the session.
  *
  * A matcher accepts every spelling of a built-in tool's name (`ToolNames`), so a hook written for `shell` still fires
- * for `Bash`. A hook whose matcher accepts only an old name is told that name as `tool_name`, and its `tool_input`
- * carries the old field names beside the current ones, so a guard keyed on either keeps blocking.
+ * for `Bash`. A native hook is told the old name as `tool_name` whenever its matcher accepts it (an absent, `*` or
+ * `.*` matcher included), and its `tool_input` always carries the old field names beside the current ones, so a guard
+ * keyed on either keeps blocking. Only a matcher that names just the current spelling is told the current name.
  *
  * While compatibility is on, a matcher also accepts the names other products give a tool, so a hook written for
  * `Bash` fires for `shell`, and a hook that comes from another product's settings file is told that product's name

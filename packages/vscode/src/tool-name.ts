@@ -35,6 +35,7 @@ const current = {
 } as const satisfies Record<string, string>
 
 export function legacyToolName(name: string): string {
+  if (name === "PowerShell") return current.Bash
   return Object.hasOwn(current, name) ? current[name as keyof typeof current] : name
 }
 
