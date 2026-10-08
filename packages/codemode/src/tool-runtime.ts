@@ -194,6 +194,8 @@ export type SearchEntry = {
   readonly description: ToolDescription
   /** The path split into words, so `zones` matches `get_zones` as a word rather than as a substring of `timezones`. */
   readonly pathWords: ReadonlyArray<string>
+  /** The tool's `searchHint` in lower case, empty when it has none. */
+  readonly hint: string
   readonly searchText: string
 }
 
@@ -223,6 +225,9 @@ const rank = (entries: ReadonlyArray<SearchEntry>, query: string): Array<SearchE
           (forms.some((form) => path === form || path.endsWith(`.${form}`)) ? 20 : 0) +
           (forms.some((form) => entry.pathWords.includes(form)) ? 12 : 0) +
           (forms.some((form) => path.includes(form)) ? 8 : 0) +
+          // The words a tool's author chose for finding it rank below every match in its path, so an exact name still
+          // wins, and above a match in the prose that describes it.
+          (forms.some((form) => entry.hint.includes(form)) ? 6 : 0) +
           (forms.some((form) => description.includes(form)) ? 4 : 0) +
           (forms.some((form) => entry.searchText.includes(form)) ? 2 : 0),
         0,
@@ -287,9 +292,11 @@ export const searchSignature = (() => {
 const toSearchEntry = <R>(visible: VisibleTool<R>): SearchEntry => ({
   description: describeTool(visible),
   pathWords: tokenize(visible.path),
+  hint: (visible.tool.searchHint ?? "").toLowerCase(),
   searchText: [
     visible.path,
     visible.tool.description,
+    ...(visible.tool.searchHint === undefined ? [] : [visible.tool.searchHint]),
     ...visible.namespaces.flatMap((namespace) => (namespace.description === undefined ? [] : [namespace.description])),
     ...inputProperties(visible.tool).flatMap(({ name, description: property }) =>
       property === undefined ? [name] : [name, property],

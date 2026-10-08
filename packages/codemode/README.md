@@ -188,6 +188,10 @@ The synchronous `search(...)` built-in is always available. It supports exact-pa
 empty-query browsing, and pagination, and returns callable paths with full signatures. Search counts toward
 `maxToolCalls`. Search also matches descriptions from enclosing `Namespace` values.
 
+A tool can declare a `searchHint`: a few words that help `search` find it when its path and description do not say what
+it is for. A match in the hint ranks below a match in the tool's path and above one in its description. The hint only
+ranks the tool; it is not part of the catalog or of what `search` returns.
+
 ## Execution Limits
 
 | Limit            | Default   | Controls                        |

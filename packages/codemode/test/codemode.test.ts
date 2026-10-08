@@ -1209,6 +1209,92 @@ describe("CodeMode public contract", () => {
     }
   })
 
+  describe("search hints", () => {
+    const hinted = (description: string, searchHint?: string) =>
+      Tool.make({
+        description,
+        searchHint,
+        input: Schema.Struct({}),
+        output: Schema.String,
+        execute: () => Effect.succeed("ok"),
+      })
+    const found = async (runtime: CodeMode.Runtime, query: string, namespace?: string) => {
+      const input = JSON.stringify({ query, namespace })
+      const result = await Effect.runPromise(runtime.execute(`return search(${input})`))
+      expect(result.ok).toBe(true)
+      return result.ok ? (result.value as { items: Array<{ path: string }> }).items.map((item) => item.path) : []
+    }
+
+    test("finds a tool through its hint alone, and shows the hint to nobody", async () => {
+      const runtime = CodeMode.make({
+        tools: {
+          billing: { charge: hinted("Charge a card", "refund invoice receipt") },
+          files: { upload: hinted("Send a document") },
+        },
+      })
+
+      expect(await found(runtime, "invoice")).toStrictEqual(["tools.billing.charge"])
+      // The hint is matched as the description is: in any case, and by the plural or the singular of a word.
+      expect(await found(runtime, "REFUND")).toStrictEqual(["tools.billing.charge"])
+      expect(await found(runtime, "receipts")).toStrictEqual(["tools.billing.charge"])
+      expect(await found(runtime, "zebra")).toStrictEqual([])
+
+      // The hint ranks the tool and is no part of what search or the catalog say about it.
+      const entry = {
+        path: "tools.billing.charge",
+        description: "Charge a card",
+        signature: "tools.billing.charge(): Promise<string>",
+      }
+      const result = await Effect.runPromise(runtime.execute(`return search({ query: "refund" })`))
+      expect(result.ok && result.value).toStrictEqual({ items: [entry], remaining: 0, next: null })
+      expect(runtime.catalog).toContainEqual({ ...entry, path: "billing.charge" })
+    })
+
+    test("does not find a tool through the hint of another", async () => {
+      const runtime = CodeMode.make({
+        tools: {
+          billing: { charge: hinted("Charge a card") },
+          files: { upload: hinted("Send a document", "invoice") },
+        },
+      })
+
+      expect(await found(runtime, "invoice")).toStrictEqual(["tools.files.upload"])
+    })
+
+    test("ranks every match in the path above a match in the hint", async () => {
+      // Alphabetical order puts the hinted tool first, so only the ranking can put the tool that matches by path ahead.
+      const hint = (word: string) => ({ a: { hinted: hinted("Does one thing", word) } })
+
+      // The last name in the path, a whole word in it, and a part of a word in it.
+      const exact = CodeMode.make({ tools: { ...hint("zones"), z: { zones: hinted("Does another thing") } } })
+      expect(await found(exact, "zones")).toStrictEqual(["tools.z.zones", "tools.a.hinted"])
+      const word = CodeMode.make({ tools: { ...hint("zones"), z: { get_zones: hinted("Does another thing") } } })
+      expect(await found(word, "zones")).toStrictEqual(["tools.z.get_zones", "tools.a.hinted"])
+      const part = CodeMode.make({ tools: { ...hint("zone"), z: { get_timezones: hinted("Does another thing") } } })
+      expect(await found(part, "zone")).toStrictEqual(["tools.z.get_timezones", "tools.a.hinted"])
+    })
+
+    test("ranks a match in the hint above a match in the description", async () => {
+      const runtime = CodeMode.make({
+        // Alphabetical order would put the tool with the described word first.
+        tools: { a: { described: hinted("Lists the zones of an account") }, b: { other: hinted("Does it", "zones") } },
+      })
+
+      expect(await found(runtime, "zones")).toStrictEqual(["tools.b.other", "tools.a.described"])
+    })
+
+    test("reads the hint in a search scoped to a namespace and in the suggestion for an unknown tool", async () => {
+      const runtime = CodeMode.make({
+        tools: { github: { list: hinted("List things", "issues") }, linear: { list: hinted("List other things") } },
+      })
+
+      expect(await found(runtime, "issues", "github")).toStrictEqual(["tools.github.list"])
+      expect(await found(runtime, "issues", "linear")).toStrictEqual([])
+      const unknown = await Effect.runPromise(runtime.execute(`return await tools.github.issues({})`))
+      expect(!unknown.ok && unknown.error.message).toBe("Unknown tool 'github.issues'. Did you mean tools.github.list?")
+    })
+  })
+
   test("empty query lists everything alphabetically by path", async () => {
     const simple = (description: string) =>
       Tool.make({

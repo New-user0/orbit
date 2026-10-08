@@ -44,6 +44,8 @@ export type SchemaType = Schema.Decoder<unknown> | JsonSchema
 export type Tool<R = never> = {
   readonly _tag: "CodeModeTool"
   readonly description: string
+  /** Words that `search` matches beside the description. It only ranks the tool: `search` never returns it. */
+  readonly searchHint?: string
   readonly input: SchemaType
   readonly output: SchemaType | undefined
   readonly execute: (input: unknown) => Effect.Effect<unknown, unknown, R>
@@ -56,6 +58,11 @@ type ResultType<S> = S extends undefined ? void : S extends Schema.Decoder<unkno
 /** Options for declaring one CodeMode tool. */
 export type Options<I extends SchemaType, O extends SchemaType | undefined, R = never> = {
   readonly description: string
+  /**
+   * A few words that help `search` find the tool, for a name or purpose the description does not say. A match in the
+   * hint ranks below a match in the tool's path and above one in its description.
+   */
+  readonly searchHint?: string
   readonly input: I
   readonly output?: O
   readonly execute: (input: InputType<I>) => Effect.Effect<ResultType<O>, unknown, R>
@@ -76,6 +83,7 @@ export const make = <I extends SchemaType, const O extends SchemaType | undefine
 ): Tool<R> => ({
   _tag: "CodeModeTool",
   description: options.description,
+  ...(options.searchHint === undefined ? {} : { searchHint: options.searchHint }),
   input: options.input,
   output: options.output,
   execute: (input) => options.execute(input as InputType<I>),
