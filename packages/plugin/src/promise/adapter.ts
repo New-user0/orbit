@@ -645,7 +645,10 @@ const effectPredicate = (predicate: Predicate<any>): Tool.Predicate<any> => {
 }
 
 const effectTraits = (traits: Info["traits"]): Tool.Info["traits"] => {
-  if (traits === undefined) return undefined
+  // A plugin is not bound by the types. Anything that is not an object goes to the registry as it is, and the registry
+  // refuses it with a log line. Taking it apart here would throw on null, which disables the whole plugin, and would
+  // turn text, numbers and arrays into traits that nobody declared.
+  if (typeof traits !== "object" || traits === null || Array.isArray(traits)) return traits as Tool.Info["traits"]
   const { readOnly, concurrencySafe, destructive, ...rest } = traits
   return {
     ...rest,

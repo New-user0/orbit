@@ -10,6 +10,7 @@ import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Cause, Deferred, Effect, Exit, Fiber, Logger, Schema } from "effect"
 import { testEffect } from "../lib/effect"
+import { invalidTraits } from "../lib/tool"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
@@ -141,13 +142,14 @@ it.live("a Promise predicate that rejects or throws makes the call take the cons
           editor.add({
             ...classified([]),
             name: "rejects",
-            traits: { readOnly: true, destructive: () => Promise.reject(new Error("boom")) },
+            traits: { readOnly: true, openWorld: true, destructive: () => Promise.reject(new Error("boom")) },
           })
           editor.add({
             ...classified([]),
             name: "throws",
             traits: {
               readOnly: true,
+              cancelSiblingsOnFailure: true,
               concurrencySafe: () => {
                 throw new Error("boom")
               },
@@ -156,17 +158,116 @@ it.live("a Promise predicate that rejects or throws makes the call take the cons
           editor.add({
             ...classified([]),
             name: "answers",
-            traits: { readOnly: () => "yes" as never },
+            traits: { readOnly: () => "yes" as never, displayName: "Answers" },
           })
         })
       },
     }).effect(yield* PluginHost.make(plugins))
 
     const snapshot = yield* tools.snapshot()
-    for (const name of ["rejects", "throws", "answers"])
-      expect(yield* snapshot.traits({ call: call(name, "read") })).toEqual(ToolTraits.conservative)
+    // What a tool declares about itself holds for the call, and everything that depends on the call is withheld.
+    expect(yield* snapshot.traits({ call: call("rejects", "read") })).toEqual({
+      ...ToolTraits.conservative,
+      openWorld: true,
+    })
+    expect(yield* snapshot.traits({ call: call("throws", "read") })).toEqual({
+      ...ToolTraits.conservative,
+      cancelSiblingsOnFailure: true,
+    })
+    expect(yield* snapshot.traits({ call: call("answers", "read") })).toEqual({
+      ...ToolTraits.conservative,
+      displayName: "Answers",
+    })
   }).pipe(Effect.provide(Logger.layer([logger])))
 })
+
+// The adapter converts a Promise plugin's traits before the registry sees them. Whatever the registry refuses must still
+// reach it, so the plugin stays active, the tools beside the bad one register, and one line says what was skipped.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+for (const [name, traits, problem] of invalidTraits) {
+  it.live(`a Promise plugin that adds a tool with ${name} stays active and registers the tools beside it`, () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const exit = yield* PluginPromise.fromPromise({
+        id: "invalid-traits-add",
+        async setup(context) {
+          await context.tool.transform((editor) => {
+            editor.add({ ...classified([]), name: "before" })
+            editor.add({ ...classified([]), name: "broken", traits } as unknown as Info)
+            editor.add({ ...classified([]), name: "after" })
+          })
+        },
+      })
+        .effect(yield* PluginHost.make(plugins))
+        .pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(output).toEqual([
+        [
+          "Skipping invalid tool registration",
+          { name: "broken", namespace: undefined, error: `Invalid tool traits broken: ${problem}` },
+        ],
+      ])
+      const snapshot = yield* tools.snapshot()
+      expect(snapshot.describe("before")).toBeDefined()
+      expect(snapshot.describe("after")).toBeDefined()
+      expect(snapshot.describe("broken")).toBeUndefined()
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+
+  it.live(`a Promise plugin update that leaves ${name} keeps the earlier definition and the plugin active`, () => {
+    const output: unknown[] = []
+    const logger = Logger.map(Logger.formatStructured, (entry) => {
+      output.push(entry.message)
+    })
+    return Effect.gen(function* () {
+      const plugins = yield* Plugin.Service
+      const tools = yield* Tool.Service
+      const exit = yield* PluginPromise.fromPromise({
+        id: "invalid-traits-update",
+        async setup(context) {
+          await context.tool.transform((editor) => editor.add(classified([])))
+          await context.tool.transform((editor) => {
+            editor.update("classified", (tool) => {
+              tool.description = "Updated"
+              Object.assign(tool, { traits: isRecord(traits) ? { ...tool.traits, ...traits } : traits })
+            })
+            editor.add({ ...classified([]), name: "after" })
+          })
+        },
+      })
+        .effect(yield* PluginHost.make(plugins))
+        .pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(output).toEqual([
+        [
+          "Skipping invalid tool registration",
+          { name: "classified", namespace: undefined, error: `Invalid tool traits classified: ${problem}` },
+        ],
+      ])
+      const snapshot = yield* tools.snapshot()
+      expect(snapshot.definitions.find((definition) => definition.name === "classified")?.description).toBe(
+        "Declares its traits",
+      )
+      expect(yield* snapshot.traits({ call: call("classified", "read") })).toEqual({
+        ...ToolTraits.defaults,
+        readOnly: true,
+        concurrencySafe: true,
+        openWorld: true,
+        displayName: "Classified",
+      })
+      expect(snapshot.describe("after")).toBeDefined()
+    }).pipe(Effect.provide(Logger.layer([logger])))
+  })
+}
 
 it.live("Promise plugins read tools back with Promise predicates, and updates keep them working", () =>
   Effect.gen(function* () {

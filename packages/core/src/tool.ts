@@ -15,7 +15,7 @@ export type {
 import { ToolDefinition, type ToolCall } from "@orbit/ai"
 import { Tool } from "@orbit/schema/tool"
 import { AddressGuard } from "@orbit/util/address-guard"
-import { Context, Effect, Layer, Result, Schema, SchemaIssue, Types } from "effect"
+import { Cause, Context, Effect, Layer, Result, Schema, SchemaIssue, Types } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import type { Agent } from "./agent.js"
 import { CodeModeCatalog } from "./codemode/catalog.js"
@@ -87,9 +87,10 @@ export interface Snapshot {
   /**
    * The traits of a call, resolved the way `execute` resolves its tool but before any hook runs, on the input the
    * model sent. A hook that renames the tool or rewrites the input is not seen here; `Tool.Context.traits` is
-   * resolved after the hooks and is the answer for permissions and hooks. A call that cannot be resolved gets the
-   * conservative traits: a tool that is unknown or not offered in `definitions`, or input the schema rejects for a
-   * tool whose traits depend on it. A tool whose traits are all fixed never looks at the input.
+   * resolved after the hooks and is the answer the tool receives. A call that cannot be resolved gets conservative
+   * traits: the conservative record when the tool is unknown or not offered in `definitions`, and, for a tool whose
+   * traits depend on the input, the conservative answers beside what the tool declares about itself when the schema
+   * rejects or throws on the input. A tool whose traits are all fixed never looks at the input.
    */
   readonly traits: (input: {
     readonly call: ToolCall
@@ -409,10 +410,23 @@ const layer = Layer.effect(
               // The input is decoded for the predicates, so a tool without any does not pay for it.
               if (!ToolTraits.dynamic(found.tool)) return yield* ToolTraits.resolve(found.tool, undefined)
               return yield* decode(found.tool, input.call.input).pipe(
-                Effect.matchEffect({
-                  onFailure: () => Effect.succeed(ToolTraits.conservative),
-                  onSuccess: (decoded) => ToolTraits.resolve(found.tool, decoded),
-                }),
+                Effect.flatMap((decoded) => ToolTraits.resolve(found.tool, decoded)),
+                // No predicate can read input that the schema rejects, which is routine and which `execute` reports, or
+                // input that the schema throws on, which is a defect in the tool and is logged. Neither may fail the
+                // answer, and only an interrupt gets past.
+                Effect.tapCauseIf(
+                  (cause) => Cause.hasDies(cause) && !Cause.hasInterrupts(cause),
+                  (cause) =>
+                    Effect.logError(
+                      "Tool input could not be decoded to resolve its traits; the call takes the conservative traits",
+                      { tool: found.tool.name, cause },
+                    ),
+                ),
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterrupts(cause),
+                  () => Effect.succeed(ToolTraits.conservativeFor(found.tool)),
+                ),
+                Effect.orDie,
               )
             }),
             describe: (name: string, definitions?: ReadonlyMap<string, ToolDefinition>) => {

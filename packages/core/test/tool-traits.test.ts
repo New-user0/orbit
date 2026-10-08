@@ -18,9 +18,10 @@ import { ToolTraits } from "@orbit/core/tool/traits"
 import { Money } from "@orbit/schema/money"
 import type { Info } from "@orbit/schema/tool"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema, SchemaGetter } from "effect"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
+import { invalidTraits } from "./lib/tool"
 import { PluginTestLayer } from "./plugin/fixture"
 
 const registryLayer = AppNodeBuilder.build(LayerNode.group([Tool.node, PluginHooks.node]), [
@@ -52,10 +53,8 @@ const make = (traits?: Echo["traits"], seen?: Array<Tool.ResolvedTraits>): Echo 
 const register = (service: Tool.Interface, tool: Info) =>
   service.transform((editor) => editor.add({ ...tool, options: { codemode: false } }))
 
-const declared = {
-  readOnly: true,
-  concurrencySafe: true,
-  destructive: false,
+// What a tool says about itself whatever the call is.
+const fixed = {
   openWorld: true,
   requiresUserInteraction: true,
   cancelSiblingsOnFailure: true,
@@ -64,6 +63,23 @@ const declared = {
   searchHint: "find a count",
   displayName: "Counter",
 } satisfies NonNullable<Echo["traits"]>
+
+const declared = {
+  readOnly: true,
+  concurrencySafe: true,
+  destructive: false,
+  ...fixed,
+} satisfies NonNullable<Echo["traits"]>
+
+// A call of that tool whose traits cannot be resolved: what it says about itself still holds, and the answers that
+// depend on the call are the conservative ones.
+const withheld = {
+  ...fixed,
+  readOnly: false,
+  concurrencySafe: false,
+  destructive: true,
+  interruptBehavior: "block",
+} satisfies Tool.ResolvedTraits
 
 describe("ToolTraits", () => {
   it.effect("pins the default and conservative records", () =>
@@ -108,7 +124,34 @@ describe("ToolTraits", () => {
       expect(yield* ToolTraits.resolve(make({ readOnly: () => Effect.fail("boom") }), { count: 5 })).not.toBe(
         ToolTraits.conservative,
       )
+      expect(ToolTraits.conservativeFor(make())).not.toBe(ToolTraits.conservative)
+      expect(ToolTraits.conservativeFor(make())).not.toBe(ToolTraits.conservativeFor(make()))
     }).pipe(Effect.provide(Logger.layer([]))),
+  )
+
+  it.effect("keeps the shared records out of reach of a write", () =>
+    Effect.sync(() => {
+      // One stray write would otherwise make every later unresolvable call read-only or parallel. Frozen is checked
+      // first so that a failure here never lets the write below reach the real record.
+      for (const shared of [ToolTraits.defaults, ToolTraits.conservative]) {
+        expect(Object.isFrozen(shared)).toBe(true)
+        expect(() => {
+          ;(shared as { readOnly: boolean }).readOnly = true
+        }).toThrow(TypeError)
+        expect(shared.readOnly).toBe(false)
+      }
+    }),
+  )
+
+  it.effect("keeps what a tool declares about itself in the conservative traits of one of its calls", () =>
+    Effect.sync(() => {
+      expect(ToolTraits.conservativeFor(make(declared))).toEqual(withheld)
+      expect(ToolTraits.conservativeFor(make({ readOnly: true, concurrencySafe: true }))).toEqual(
+        ToolTraits.conservative,
+      )
+      // Optional traits are present only when declared.
+      expect(ToolTraits.conservativeFor(make())).toStrictEqual({ ...ToolTraits.conservative })
+    }),
   )
 
   it.effect("evaluates predicates, direct or from an Effect, on the decoded input", () =>
@@ -176,16 +219,17 @@ describe("ToolTraits", () => {
     ]
 
     for (const [name, traits, trait] of cases) {
-      it.effect(`resolves the whole record conservatively and logs once when one ${name}`, () => {
+      it.effect(`resolves the call conservatively and logs once when one ${name}`, () => {
         const output: Array<ReadonlyArray<unknown>> = []
         const logger = Logger.map(Logger.formatStructured, (entry) => {
           output.push(entry.message as ReadonlyArray<unknown>)
         })
         return Effect.gen(function* () {
-          const exit = yield* Effect.exit(ToolTraits.resolve(make({ ...traits, openWorld: true }), { count: 5 }))
+          const exit = yield* Effect.exit(ToolTraits.resolve(make({ ...traits, ...fixed }), { count: 5 }))
           expect(Exit.isSuccess(exit)).toBe(true)
-          // Static traits come from `describe`; the record of an unresolvable call is the fixed one.
-          if (Exit.isSuccess(exit)) expect(exit.value).toEqual(ToolTraits.conservative)
+          // Every answer that depends on the call is conservative, including the ones that came out true. What the tool
+          // declares about itself does not depend on the call, so a broken predicate does not take a caution away.
+          if (Exit.isSuccess(exit)) expect(exit.value).toEqual(withheld)
           expect(output).toEqual([
             [
               "Tool trait could not be resolved; the call takes the conservative traits",
@@ -236,34 +280,7 @@ describe("ToolTraits", () => {
   })
 
   describe("registration", () => {
-    const invalid: ReadonlyArray<readonly [string, unknown, string]> = [
-      ["a zero maxResultChars", { maxResultChars: 0 }, "maxResultChars must be a positive number"],
-      ["a negative maxResultChars", { maxResultChars: -1 }, "maxResultChars must be a positive number"],
-      ["a NaN maxResultChars", { maxResultChars: Number.NaN }, "maxResultChars must be a positive number"],
-      ["a textual maxResultChars", { maxResultChars: "5" }, "maxResultChars must be a positive number"],
-      ["an empty displayName", { displayName: "" }, "displayName must be a non-empty string"],
-      ["a blank displayName", { displayName: "  \t" }, "displayName must be a non-empty string"],
-      ["a displayName that is not text", { displayName: 5 }, "displayName must be a non-empty string"],
-      ["an empty searchHint", { searchHint: "" }, "searchHint must be a non-empty string"],
-      ["an unknown interruptBehavior", { interruptBehavior: "queue" }, 'interruptBehavior must be "cancel" or "block"'],
-      ["a textual readOnly", { readOnly: "yes" }, "readOnly must be a boolean or a function"],
-      ["a null concurrencySafe", { concurrencySafe: null }, "concurrencySafe must be a boolean or a function"],
-      ["a numeric openWorld", { openWorld: 1 }, "openWorld must be a boolean"],
-      [
-        "a textual requiresUserInteraction",
-        { requiresUserInteraction: "yes" },
-        "requiresUserInteraction must be a boolean",
-      ],
-      [
-        "a function cancelSiblingsOnFailure",
-        { cancelSiblingsOnFailure: () => true },
-        "cancelSiblingsOnFailure must be a boolean",
-      ],
-      ["traits that are not an object", "fast", "traits must be an object"],
-      ["traits that are null", null, "traits must be an object"],
-    ]
-
-    for (const [name, traits, problem] of invalid) {
+    for (const [name, traits, problem] of invalidTraits) {
       it.effect(`logs and skips a tool with ${name}, and keeps its neighbours`, () => {
         const output: unknown[] = []
         const logger = Logger.map(Logger.formatStructured, (entry) => {
@@ -301,7 +318,8 @@ describe("ToolTraits", () => {
             editor.update("echo", (tool) => {
               tool.description = "Updated"
               // The update works on a copy, so a write in place cannot reach the registered traits either.
-              if (typeof traits === "object" && traits !== null) Object.assign(tool.traits!, traits)
+              if (typeof traits === "object" && traits !== null && !Array.isArray(traits))
+                Object.assign(tool.traits!, traits)
               else Object.assign(tool, { traits })
             })
           })
@@ -435,7 +453,7 @@ describe("ToolTraits", () => {
       }),
     )
 
-    it.effect("resolves what cannot be resolved to the conservative record without failing", () => {
+    it.effect("resolves what cannot be resolved to the conservative traits without failing", () => {
       const output: unknown[] = []
       const logger = Logger.map(Logger.formatStructured, (entry) => {
         output.push(entry.message)
@@ -444,29 +462,143 @@ describe("ToolTraits", () => {
         const service = yield* Tool.Service
         yield* register(service, make({ readOnly: (input) => input.count > 1, concurrencySafe: true }))
         yield* register(service, { ...make({ readOnly: true }), name: "other" })
+        yield* register(service, { ...make({ ...declared, readOnly: (input) => input.count > 1 }), name: "flagged" })
         const snapshot = yield* service.snapshot()
         const definition = snapshot.definitions.find((candidate) => candidate.name === "echo")!
         const resolve = (name: string, input: unknown, definitions?: ReadonlyMap<string, typeof definition>) =>
           Effect.exit(snapshot.traits({ call: toolCall(name, input), definitions }))
 
+        // A call with no tool behind it has nothing declared to keep: a tool that is unknown, or that this request did
+        // not offer, whether or not it is registered.
         for (const exit of [
-          // Input that the schema rejects: the call will fail validation, and nothing about it is read-only.
-          yield* resolve("echo", { count: "abc" }),
-          yield* resolve("echo", {}),
-          yield* resolve("echo", null),
           yield* resolve("missing", { count: "5" }),
-          // A tool that this request did not offer, whether or not it is registered.
           yield* resolve("echo", { count: "5" }, new Map([["other", definition]])),
           yield* resolve("other", { count: "5" }, new Map([["echo", definition]])),
           yield* resolve("execute", {}, new Map([["echo", definition]])),
         ])
           expect(exit).toEqual(Exit.succeed(ToolTraits.conservative))
+        // Input that the schema rejects: the call will fail validation, and nothing about it is read-only. The tool
+        // is known, so what it declares about itself holds.
+        for (const exit of [
+          yield* resolve("echo", { count: "abc" }),
+          yield* resolve("echo", {}),
+          yield* resolve("echo", null),
+        ])
+          expect(exit).toEqual(Exit.succeed(ToolTraits.conservative))
+        for (const exit of [
+          yield* resolve("flagged", { count: "abc" }),
+          yield* resolve("flagged", {}),
+          yield* resolve("flagged", null),
+        ])
+          expect(exit).toEqual(Exit.succeed(withheld))
         // A tool that is offered resolves normally, and the log stayed quiet about all of it.
         expect(yield* snapshot.traits({ call: toolCall("echo", { count: "5" }) })).toEqual({
           ...ToolTraits.defaults,
           readOnly: true,
           concurrencySafe: true,
         })
+        expect(output).toEqual([])
+      }).pipe(Effect.provide(Logger.layer([logger])))
+    })
+
+    describe("a schema transformation that throws", () => {
+      // The throw is a defect of the tool's schema, not input the schema rejected.
+      const Throwing = Schema.Struct({
+        count: Schema.String.pipe(
+          Schema.decodeTo(Schema.Number, {
+            decode: SchemaGetter.transform((): number => {
+              throw new Error("decoder threw")
+            }),
+            encode: SchemaGetter.transform(String),
+          }),
+        ),
+      })
+      const thrower: Info<typeof Throwing> = {
+        name: "thrower",
+        description: "Its schema throws",
+        input: Throwing,
+        execute: () => Effect.succeed({ content: "unreachable" }),
+        traits: { ...fixed, readOnly: (input) => input.count > 1 },
+      }
+
+      it.effect("resolves the call conservatively without failing, and logs it once", () => {
+        const output: Array<ReadonlyArray<unknown>> = []
+        const logger = Logger.map(Logger.formatStructured, (entry) => {
+          output.push(entry.message as ReadonlyArray<unknown>)
+        })
+        return Effect.gen(function* () {
+          const service = yield* Tool.Service
+          yield* register(service, thrower)
+          const snapshot = yield* service.snapshot()
+
+          const exit = yield* Effect.exit(snapshot.traits({ call: toolCall("thrower", { count: "5" }) }))
+          expect(exit).toEqual(Exit.succeed(withheld))
+          expect(output).toEqual([
+            [
+              "Tool input could not be decoded to resolve its traits; the call takes the conservative traits",
+              expect.objectContaining({ tool: "thrower" }),
+            ],
+          ])
+        }).pipe(Effect.provide(Logger.layer([logger])))
+      })
+
+      it.effect("is told apart from input the schema rejects, which is not logged", () => {
+        const output: unknown[] = []
+        const logger = Logger.map(Logger.formatStructured, (entry) => {
+          output.push(entry.message)
+        })
+        return Effect.gen(function* () {
+          const service = yield* Tool.Service
+          yield* register(service, thrower)
+          const snapshot = yield* service.snapshot()
+
+          // A missing field never reaches the transformation, so this is a rejection and not a defect.
+          expect(yield* Effect.exit(snapshot.traits({ call: toolCall("thrower", {}) }))).toEqual(Exit.succeed(withheld))
+          expect(output).toEqual([])
+        }).pipe(Effect.provide(Logger.layer([logger])))
+      })
+    })
+
+    it.effect("passes an interrupt during decoding through instead of resolving", () => {
+      const output: unknown[] = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        output.push(entry.message)
+      })
+      return Effect.gen(function* () {
+        const service = yield* Tool.Service
+        const started = yield* Deferred.make<void>()
+        // A tool whose schema decodes by running the effect it is given, so a predicate never gets to read the input.
+        const decodes = (name: string, decoding: Effect.Effect<number>): Info => ({
+          name,
+          description: "Its schema runs the effect it was given",
+          input: Schema.Struct({
+            count: Schema.String.pipe(
+              Schema.decodeTo(Schema.Number, {
+                decode: SchemaGetter.transformOrFail(() => decoding),
+                encode: SchemaGetter.transform(String),
+              }),
+            ),
+          }),
+          execute: () => Effect.succeed({ content: "unreachable" }),
+          traits: { readOnly: (input) => input.count > 1 },
+        })
+        yield* register(service, decodes("interrupting", Effect.interrupt))
+        yield* register(
+          service,
+          decodes("waiting", Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
+        )
+        const snapshot = yield* service.snapshot()
+
+        // The schema interrupts itself, so the cause holds an interrupt and must not be resolved away.
+        const inside = yield* Effect.exit(snapshot.traits({ call: toolCall("interrupting", { count: "5" }) }))
+        expect(Exit.isFailure(inside) && Cause.hasInterrupts(inside.cause)).toBe(true)
+
+        // The call is interrupted from outside while the schema decodes.
+        const fiber = yield* snapshot.traits({ call: toolCall("waiting", { count: "5" }) }).pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        yield* Fiber.interrupt(fiber)
+        const outside = yield* Fiber.await(fiber)
+        expect(Exit.isFailure(outside) && Cause.hasInterruptsOnly(outside.cause)).toBe(true)
         expect(output).toEqual([])
       }).pipe(Effect.provide(Logger.layer([logger])))
     })
@@ -609,18 +741,18 @@ describe("ToolTraits", () => {
       }),
     )
 
-    it.effect("runs a tool whose predicate is broken, as an unsafe call", () => {
+    it.effect("runs a tool whose predicate is broken, as an unsafe call that keeps its declared cautions", () => {
       const logger = Logger.map(Logger.formatStructured, () => {})
       return Effect.gen(function* () {
         const service = yield* Tool.Service
         const seen: Array<Tool.ResolvedTraits> = []
-        yield* register(service, make({ readOnly: true, destructive: () => Effect.fail("boom") }, seen))
+        yield* register(service, make({ ...fixed, readOnly: true, destructive: () => Effect.fail("boom") }, seen))
         const snapshot = yield* service.snapshot()
 
         expect((yield* snapshot.execute({ sessionID, ...identity, call: toolCall("echo") })).content).toEqual([
           { type: "text", text: "5" },
         ])
-        expect(seen).toEqual([ToolTraits.conservative])
+        expect(seen).toEqual([withheld])
       }).pipe(Effect.provide(Logger.layer([logger])))
     })
 

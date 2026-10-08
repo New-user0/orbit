@@ -732,16 +732,20 @@ values such as `openWorld`, `interruptBehavior`, `maxResultChars`, `searchHint` 
 resolves them and passes the answers to the tool as `context.traits`. A trait a tool leaves out takes its default: not
 read-only, not concurrency-safe, not destructive, and `block` on interrupt.
 
-A call whose traits cannot be resolved gets the conservative traits instead, which are the defaults except that the call
-counts as destructive. That happens for a tool that is unknown or was not offered in the request, for input the schema
-rejects when a predicate needs to read it, and for a predicate that throws, fails or answers with anything but a
-boolean; the last case is also logged. Only `readOnly` may relax a permission decision, and a failing predicate never
-leaves it true. Nothing schedules, cancels or limits calls by these traits yet, so tools run as they did before.
+A call whose traits cannot be resolved gets conservative traits instead: not read-only, not concurrency-safe,
+destructive, and `block` on interrupt. That happens for a tool that is unknown or was not offered in the request, for
+input the schema rejects or fails to decode when a predicate needs to read it, and for a predicate that throws, fails
+or answers with anything but a boolean; the last case, and a schema that throws, are also logged. What a known tool
+declares about itself (`openWorld`, `requiresUserInteraction`, `cancelSiblingsOnFailure`, `maxResultChars`,
+`searchHint` and `displayName`) does not depend on the call, so a broken predicate leaves it as declared. Only
+`readOnly` may relax a permission decision, and a failing predicate never leaves it true. Nothing schedules, cancels
+or limits calls by these traits yet, so tools run as they did before.
 
 A registration whose traits are invalid is skipped with a log line, as other invalid registrations are, and the tools
-beside it still register. Invalid means an empty `displayName` or `searchHint`, a `maxResultChars` that is not a
-positive number (`Infinity` is allowed, and declares that the result is never to be written to a file), an
-`interruptBehavior` other than `cancel` or `block`, or a trait of the wrong type. An update that would leave a tool with
+beside it still register, in an Effect plugin and in a Promise plugin alike. Invalid means an empty `displayName` or
+`searchHint`, a `maxResultChars` that is not a positive number (`Infinity` is allowed, and declares that the result is
+never to be written to a file), an `interruptBehavior` other than `cancel` or `block`, a trait of the wrong type, or
+`traits` that is not an object, such as text, a number, `null` or an array. An update that would leave a tool with
 invalid traits keeps the earlier definition.
 
 **Affects:** plugin authors and code built on the SDK. `Tool.Context` gains a required `traits` field, so code that

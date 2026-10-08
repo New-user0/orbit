@@ -156,14 +156,21 @@ tools.add({
     concurrencySafe: async ({ id }) => id !== "*",
     displayName: "Lookup",
   },
-  execute: async ({ id }, context) => ({ content: context.traits.readOnly ? `read ${id}` : `wrote ${id}` }),
+  // The context reports what was resolved for this call. Report it, but do not branch on it.
+  execute: async ({ id }, context) => ({
+    content: `read ${id}`,
+    metadata: { concurrencySafe: context.traits.concurrencySafe },
+  }),
 })
 ```
 
-A predicate that throws, rejects or answers with anything but a boolean is logged, and that call takes the
-conservative traits: not read-only, not concurrency-safe and destructive. Only `readOnly` may relax a permission
-decision, and a failing predicate never leaves it true. A registration with invalid traits, such as an empty
-`displayName` or a `maxResultChars` that is not positive, is skipped with a log line.
+A predicate that throws, rejects or answers with anything but a boolean is logged, and that call takes conservative
+answers: not read-only, not concurrency-safe, destructive and left to finish on interrupt. What the tool declares
+about itself, such as `openWorld`, stays as declared. The conservative answers are not what the tool declared, so a
+tool that did something different when `context.traits.readOnly` is true would switch branches whenever a predicate
+broke. Only `readOnly` may relax a permission decision, and a failing predicate never leaves it true. A registration
+with invalid traits, such as an empty `displayName`, a `maxResultChars` that is not positive or traits that are not an
+object, is skipped with a log line, and the tools beside it still register.
 
 ## Reloading A Domain
 

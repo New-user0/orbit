@@ -65,11 +65,14 @@ export type InterruptBehavior = "cancel" | "block"
  * `requiresUserInteraction` and `cancelSiblingsOnFailure` are `false`, `interruptBehavior` is `"block"`, and there is
  * no `maxResultChars`, `searchHint` or `displayName`.
  *
- * A call whose traits cannot be resolved gets the conservative record instead: `readOnly` and `concurrencySafe` are
- * `false`, `destructive` is `true`, `interruptBehavior` is `"block"`, and the rest are the defaults. Calls that cannot
- * be resolved are a tool that is unknown or was not offered for the request, input that the schema rejects when a
- * predicate needs to read it, and a predicate that fails, dies or answers with anything but a boolean. A broken
- * predicate can therefore only withhold what `readOnly` and `concurrencySafe` would have allowed.
+ * A call whose traits cannot be resolved takes conservative answers wherever its traits depend on the call:
+ * `readOnly` and `concurrencySafe` are `false`, `destructive` is `true` and `interruptBehavior` is `"block"`. The
+ * others do not depend on the call, so they stay as the tool declared them, and they are the defaults when no tool
+ * stands behind the call. A call cannot be resolved when its tool is unknown or was not offered for the request, when a
+ * predicate needs to read input that the schema rejects or fails to decode, and when a predicate fails, dies or answers
+ * with anything but a boolean. A broken predicate can therefore only withhold what `readOnly` and `concurrencySafe`
+ * would have allowed, and it never takes a declared `openWorld`, `requiresUserInteraction` or `cancelSiblingsOnFailure`
+ * away.
  *
  * Among these traits only `readOnly` may relax a permission decision, and only when Orbit or plugin code declares it.
  * Values derived from MCP annotations never set it. `destructive` and `openWorld` are advisory: consumers may add

@@ -3,8 +3,11 @@ export * as ToolTraits from "./traits.js"
 import type { Tool } from "@orbit/schema/tool"
 import { Cause, Effect } from "effect"
 
-/** The traits of a tool that declares none. */
-export const defaults: Tool.ResolvedTraits = {
+/**
+ * The traits of a tool that declares none. Frozen, because it is shared: one stray write would change what every later
+ * call reads.
+ */
+export const defaults: Tool.ResolvedTraits = Object.freeze({
   readOnly: false,
   concurrencySafe: false,
   destructive: false,
@@ -12,10 +15,17 @@ export const defaults: Tool.ResolvedTraits = {
   requiresUserInteraction: false,
   cancelSiblingsOnFailure: false,
   interruptBehavior: "block",
-}
+})
 
-/** The traits of a call that cannot be resolved: not read-only, not parallel, and destructive until shown otherwise. */
-export const conservative: Tool.ResolvedTraits = { ...defaults, destructive: true }
+// What a call takes when the answers that depend on it are in doubt, whatever its tool declares: not read-only, not
+// parallel, destructive until shown otherwise, and left to finish.
+const doubt = { readOnly: false, concurrencySafe: false, destructive: true, interruptBehavior: "block" } as const
+
+/**
+ * The traits of a call that no tool stands behind, such as a tool that is unknown or was not offered. Frozen, because
+ * it is shared. A call of a known tool that cannot be resolved takes `conservativeFor`.
+ */
+export const conservative: Tool.ResolvedTraits = Object.freeze({ ...defaults, ...doubt })
 
 /** The traits that are the same for every call of a tool. */
 export type Static = Omit<Tool.ResolvedTraits, "readOnly" | "concurrencySafe" | "destructive">
@@ -38,6 +48,13 @@ export const describe = (tool: Tool.Info<any, any>): Static => {
   }
 }
 
+/**
+ * The traits of a call of a known tool that cannot be resolved. What the tool declares about itself does not depend on
+ * the call, so it holds: a broken predicate must not take a `cancelSiblingsOnFailure` or an `openWorld` away. The
+ * answers that do depend on the call are the conservative ones.
+ */
+export const conservativeFor = (tool: Tool.Info<any, any>): Tool.ResolvedTraits => ({ ...describe(tool), ...doubt })
+
 /** Whether `resolve` needs the decoded input: a predicate is a function, or is something other than a boolean. */
 export const dynamic = (tool: Tool.Info<any, any>) =>
   predicates.some((key) => {
@@ -47,9 +64,9 @@ export const dynamic = (tool: Tool.Info<any, any>) =>
 
 /**
  * Resolves the traits of one call, given the input after the tool's schema has decoded it. It never fails: a predicate
- * that fails, dies or answers with anything but a boolean is logged and the whole call takes the conservative record,
- * so a broken predicate withholds what `readOnly` and `concurrencySafe` would have granted and never grants more.
- * Interrupts are not caught.
+ * that fails, dies or answers with anything but a boolean is logged and the whole call takes `conservativeFor` its
+ * tool, so a broken predicate withholds what `readOnly` and `concurrencySafe` would have granted, never grants more and
+ * never takes away a caution the tool declared. Interrupts are not caught.
  */
 export const resolve = (tool: Tool.Info<any, any>, decoded: unknown): Effect.Effect<Tool.ResolvedTraits> => {
   const fixed = describe(tool)
@@ -68,7 +85,7 @@ export const resolve = (tool: Tool.Info<any, any>, decoded: unknown): Effect.Eff
   }).pipe(
     Effect.catchCauseIf(
       (cause) => !Cause.hasInterrupts(cause),
-      () => Effect.succeed({ ...conservative }),
+      () => Effect.succeed(conservativeFor(tool)),
     ),
     // Only a cause that also holds an interrupt gets past the catch above, and the interrupt decides how it ends.
     Effect.orDie,
@@ -81,7 +98,8 @@ export const resolve = (tool: Tool.Info<any, any>, decoded: unknown): Effect.Eff
  */
 export const problem = (traits: Tool.Traits<any> | undefined) => {
   if (traits === undefined) return undefined
-  if (typeof traits !== "object" || traits === null) return "traits must be an object"
+  // An array is an object to `typeof`, but its entries are not traits, and spreading one would invent some.
+  if (typeof traits !== "object" || traits === null || Array.isArray(traits)) return "traits must be an object"
   const interrupt = traits.interruptBehavior
   const limit = traits.maxResultChars
   return [
@@ -114,7 +132,7 @@ function fixedAnswer(tool: Tool.Info<any, any>, key: (typeof predicates)[number]
 }
 
 // One trait of one call. Anything but a boolean, directly or from an Effect, fails. The failure is logged here, where
-// the trait is known, and then `resolve` replaces the whole record.
+// the trait is known, and then `resolve` gives the whole call the conservative answers.
 function ask(tool: Tool.Info<any, any>, key: (typeof predicates)[number], decoded: unknown) {
   return Effect.suspend(() => {
     const predicate = tool.traits?.[key]

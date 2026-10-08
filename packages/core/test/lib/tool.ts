@@ -30,6 +30,46 @@ export const stubSnapshot = (
   describe: () => undefined,
 })
 
+/**
+ * Declared traits that registration must refuse, each with the reason it logs. Plugins are not bound by the types, so
+ * this is what one can hand over: a single wrong field, and a `traits` that is not an object at all, falsy values
+ * included. Every door that registers a tool runs the whole table.
+ */
+export const invalidTraits: ReadonlyArray<readonly [name: string, traits: unknown, problem: string]> = [
+  ["a zero maxResultChars", { maxResultChars: 0 }, "maxResultChars must be a positive number"],
+  ["a negative maxResultChars", { maxResultChars: -1 }, "maxResultChars must be a positive number"],
+  ["a NaN maxResultChars", { maxResultChars: Number.NaN }, "maxResultChars must be a positive number"],
+  ["a textual maxResultChars", { maxResultChars: "5" }, "maxResultChars must be a positive number"],
+  ["an empty displayName", { displayName: "" }, "displayName must be a non-empty string"],
+  ["a blank displayName", { displayName: "  \t" }, "displayName must be a non-empty string"],
+  ["a displayName that is not text", { displayName: 5 }, "displayName must be a non-empty string"],
+  ["an empty searchHint", { searchHint: "" }, "searchHint must be a non-empty string"],
+  ["an unknown interruptBehavior", { interruptBehavior: "queue" }, 'interruptBehavior must be "cancel" or "block"'],
+  ["a textual readOnly", { readOnly: "yes" }, "readOnly must be a boolean or a function"],
+  ["a null concurrencySafe", { concurrencySafe: null }, "concurrencySafe must be a boolean or a function"],
+  ["a numeric openWorld", { openWorld: 1 }, "openWorld must be a boolean"],
+  [
+    "a textual requiresUserInteraction",
+    { requiresUserInteraction: "yes" },
+    "requiresUserInteraction must be a boolean",
+  ],
+  [
+    "a function cancelSiblingsOnFailure",
+    { cancelSiblingsOnFailure: () => true },
+    "cancelSiblingsOnFailure must be a boolean",
+  ],
+  ["traits that are text", "fast", "traits must be an object"],
+  ["traits that are empty text", "", "traits must be an object"],
+  ["traits that are null", null, "traits must be an object"],
+  ["traits that are a number", 5, "traits must be an object"],
+  ["traits that are zero", 0, "traits must be an object"],
+  ["traits that are true", true, "traits must be an object"],
+  ["traits that are false", false, "traits must be an object"],
+  ["traits that are an empty array", [], "traits must be an object"],
+  ["traits that are an array of traits", [{ readOnly: true }], "traits must be an object"],
+  ["traits that are a function", () => ({ readOnly: true }), "traits must be an object"],
+]
+
 export const codeModeListings = (catalog: CodeModeCatalog.Inventory) =>
   CodeModeCatalog.summarize(catalog, { budget: Infinity }).namespaces.flatMap((namespace) => namespace.entries)
 
