@@ -5,7 +5,7 @@ import { bodyText, destroyRenderer, outputText, terminalTitle } from "../../src/
 
 // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
 // a model, a tool or a stored prompt can put into a message body.
-const hostile = "a\u001b]0;x\u0007 b\u001b[2K c\u009b d‮ e"
+const hostile = "a\u001b]0;x\u0007 b\u001b[2K c\u009b d\u202e e"
 const written = "a\\x1b]0;x\\x07 b\\x1b[2K c\\x9b d\\u{202e} e"
 
 const syntaxStyle = SyntaxStyle.fromStyles({
@@ -51,7 +51,7 @@ test("writes out each control, keeps line breaks and tabs, and leaves a lone car
   expect(bodyText("a\tb\nc\r\nd")).toBe("a\tb\nc\nd")
   expect(bodyText("a\rb")).toBe("a\\x0db")
   expect(bodyText("\u007f\u0085\u009d")).toBe("\\x7f\\x85\\x9d")
-  expect(bodyText("‪‮⁦⁩‏")).toBe("\\u{202a}\\u{202e}\\u{2066}\\u{2069}\\u{200f}")
+  expect(bodyText("\u202a\u202e\u2066\u2069\u200f")).toBe("\\u{202a}\\u{202e}\\u{2066}\\u{2069}\\u{200f}")
 })
 
 test("draws ordinary Unicode, emoji and wide characters unchanged, and markdown still renders", async () => {

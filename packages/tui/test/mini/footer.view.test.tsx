@@ -583,7 +583,7 @@ test("direct footer draws the control characters of a form's external URL and op
         key: "target",
         type: "string",
         title: "Target",
-        options: [{ value: "x", label: "L\u001b[2Kx", description: "d‮e" }],
+        options: [{ value: "x", label: "L\u001b[2Kx", description: "d\u202ee" }],
       },
     ],
   }
@@ -607,7 +607,7 @@ test("direct footer draws the control characters of a form's external URL and op
     const options = choice.captureCharFrame()
     expect(options).toContain("L\\x1b[2Kx")
     expect(options).not.toContain("\u001b")
-    expect(options).not.toContain("‮")
+    expect(options).not.toContain("\u202e")
   } finally {
     choice.cleanup()
   }
@@ -2611,5 +2611,29 @@ test("direct variant panel renders current variant selector", async () => {
     expectPaletteList(list, 1)
   } finally {
     app.renderer.destroy()
+  }
+})
+
+test.each([
+  ["hostile", "later\u001b]0;pwn\u0007 \u202eand", "later\\x1b]0;pwn\\x07 \\u{202e}and"],
+  ["ordinary", "later and more", "later and more"],
+])("direct footer draws a %s queued prompt in the picker written out", async (_name, text, shown) => {
+  const app = await renderFooter({
+    height: RUN_SUBAGENT_PANEL_ROWS,
+    state: { phase: "running" },
+    queuedPrompts: [{ messageID: "m-1", prompt: { text, parts: [] }, delivery: "queue" }],
+  })
+  try {
+    await app.renderOnce()
+    app.mockInput.pressKey("x", { ctrl: true })
+    app.mockInput.pressKey("q")
+    await app.renderOnce()
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Pending prompts")
+    expect(frame).toContain(shown)
+    expect(frame).not.toContain("\u001b")
+    expect(frame).not.toContain("\u202e")
+  } finally {
+    app.cleanup()
   }
 })

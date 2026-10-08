@@ -643,7 +643,7 @@ export function Session(props: {
       <DialogSelect
         title="Queued prompts"
         options={queuedPrompts().map((prompt, index) => ({
-          title: prompt.text,
+          title: bodyText(prompt.text),
           value: prompt.id,
           footer: `${index + 1} of ${queuedPrompts().length}`,
         }))}
@@ -1901,7 +1901,7 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
       <box paddingLeft={3} marginTop={props.message.retry || (props.message.error && !interrupted()) ? 1 : 0}>
         <text>
           <span style={{ fg: props.message.error ? theme.text.muted : local.agent.color(props.message.agent) }}>
-            {Locale.titlecase(props.message.agent)}
+            {bodyText(Locale.titlecase(props.message.agent))}
           </span>
           <Show when={ctx.terminal.width >= 28}>
             <span style={{ fg: theme.text.muted }}> · {model()}</span>
@@ -1935,9 +1935,9 @@ function SessionSwitchMessageV2(props: { message: SessionMessageInfo }) {
     )
   const text = () => {
     if (props.message.type === "agent-switched") {
-      const agent = Locale.titlecase(props.message.agent)
+      const agent = bodyText(Locale.titlecase(props.message.agent))
       if (props.message.previous && props.message.previous !== props.message.agent)
-        return `Switched agent from ${Locale.titlecase(props.message.previous)} to ${agent}`
+        return `Switched agent from ${bodyText(Locale.titlecase(props.message.previous))} to ${agent}`
       return `Switched agent to ${agent}`
     }
     if (props.message.type === "model-switched")
@@ -1962,7 +1962,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   const completion = () => source() === "subagent" || source() === "shell"
   const childID = () => (source() === "subagent" ? stringValue(metadata()?.childID) : undefined)
   const state = () => stringValue(metadata()?.state)
-  const actor = () => (source() === "shell" ? "Shell" : Locale.titlecase(displayValue(metadata()?.agent) ?? "Subagent"))
+  const actor = () => (source() === "shell" ? "Shell" : Locale.titlecase(stringValue(metadata()?.agent) ?? "Subagent"))
   const text = () => {
     if (props.message.type === "system") return props.message.description ?? "Instructions updated"
     if (props.message.type === "synthetic") return props.message.description ?? ""
@@ -2817,8 +2817,8 @@ function Shell(props: ToolProps) {
     <ShellDisplay
       part={props.part}
       shellID={stringValue(props.metadata.shellID)}
-      command={displayValue(props.input.command)}
-      workdir={displayValue(props.input.workdir)}
+      command={stringValue(props.input.command)}
+      workdir={stringValue(props.input.workdir)}
       status={props.part.state.status}
       background={props.part.state.status === "completed" && props.metadata.status === "running"}
       output={stringValue(props.metadata.shellID) ? undefined : props.output}
@@ -2925,7 +2925,7 @@ function ShellDisplay(props: {
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6 - (isRunning() ? 2 : 0)))
   const prefix = createMemo(() => (workdir() && workdir() !== "." ? `cd ${workdir()} && ` : ""))
-  const input = createMemo(() => (props.command ? `${isRunning() ? "" : "$ "}${prefix()}${bodyText(props.command)}` : ""))
+  const input = createMemo(() => (props.command ? bodyText(`${isRunning() ? "" : "$ "}${prefix()}${props.command}`) : ""))
   const collapsed = createMemo(() => collapseShellOutput(input(), output(), maxLines, maxChars()))
   const limitedInput = createMemo(() => (expanded() ? input() : collapsed().input))
   const limitedOutput = createMemo(() => (expanded() ? output() : collapsed().output))
@@ -2987,7 +2987,7 @@ function Write(props: ToolProps) {
   const { currentSyntax: syntax } = useThemes()
   const pathFormatter = usePathFormatter()
   const code = createMemo(() => {
-    return displayValue(props.input.content) ?? ""
+    return stringValue(props.input.content) ?? ""
   })
 
   return (
@@ -3141,7 +3141,7 @@ function Subagent(props: ToolProps) {
         ) : undefined
       }
     >
-      {`${continuation() ? "Continue subagent" : `${Locale.titlecase(displayValue(props.input.agent) ?? displayValue(props.input.subagent_type) ?? "General")} Subagent`} — ${description() ?? "Subagent"}${model() ? ` · ${model()}` : ""}`}
+      {`${continuation() ? "Continue subagent" : `${bodyText(Locale.titlecase(stringValue(props.input.agent) ?? stringValue(props.input.subagent_type) ?? "General"))} Subagent`} — ${description() ?? "Subagent"}${model() ? ` · ${model()}` : ""}`}
     </InlineTool>
   )
 }
@@ -3304,13 +3304,13 @@ function Edit(props: ToolProps) {
   })
 
   const file = createMemo(() => parseApplyPatchFiles(props.metadata.files)[0])
-  const path = createMemo(() => file()?.relativePath ?? displayValue(props.input.path))
+  const path = createMemo(() => file()?.relativePath ?? stringValue(props.input.path))
 
   return (
     <Switch>
       <Match when={file()}>
         {(item) => (
-          <BlockTool path={{ label: "← Edit", value: pathFormatter.format(path()) }} part={props.part}>
+          <BlockTool path={{ label: "← Edit", value: bodyText(pathFormatter.format(path())) }} part={props.part}>
             <box paddingLeft={1}>
               <PatchDiff
                 diff={bodyText(item().patch)}
@@ -3389,7 +3389,7 @@ function ApplyPatch(props: ToolProps) {
               <BlockTool
                 path={{
                   label: file.type === "add" ? "# Created" : file.type === "delete" ? "# Deleted" : "← Patched",
-                  value: pathFormatter.format(file.relativePath),
+                  value: bodyText(pathFormatter.format(file.relativePath)),
                 }}
                 part={props.part}
               >
@@ -3600,7 +3600,7 @@ export function parseApplyPatchFiles(value: unknown) {
     const type =
       stringValue(file.type) ??
       (status === "added" ? "add" : status === "deleted" ? "delete" : status === "modified" ? "update" : undefined)
-    const relativePath = displayValue(file.file) ?? displayValue(file.relativePath)
+    const relativePath = stringValue(file.file) ?? stringValue(file.relativePath)
     const filePath = stringValue(file.filePath) ?? relativePath
     const patch = stringValue(file.patch)
     const additions = finiteNumber(file.additions)
@@ -3614,7 +3614,7 @@ export function parseApplyPatchFiles(value: unknown) {
       deletions === undefined
     )
       return []
-    return [{ type, relativePath, filePath, patch, additions, deletions, movePath: displayValue(file.movePath) }]
+    return [{ type, relativePath, filePath, patch, additions, deletions, movePath: stringValue(file.movePath) }]
   })
 }
 

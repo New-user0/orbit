@@ -601,7 +601,7 @@ describe("run entry body", () => {
 })
 
 describe("message bodies", () => {
-  const hostile = "a\u001b]0;x\u0007b\u001b[2K\u009b‮c"
+  const hostile = "a\u001b]0;x\u0007b\u001b[2K\u009b\u202ec"
   const written = "a\\x1b]0;x\\x07b\\x1b[2K\\x9b\\u{202e}c"
 
   test.each([

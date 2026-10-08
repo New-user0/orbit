@@ -18,12 +18,12 @@ import { createApi, createEventStream, createFetch, json } from "../fixture/tui-
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
-async function setup(width: number, output = "") {
+async function setup(width: number, output = "", command = "render-scene --quality high") {
   const temporary = await tmpdir()
   const location = { directory: `${temporary.path}/original` }
   const shell: ShellInfo = {
     id: "sh_fixture",
-    command: "render-scene --quality high",
+    command,
     cwd: location.directory,
     shell: "/bin/sh",
     file: `${temporary.path}/capture.out`,
@@ -88,7 +88,7 @@ async function setup(width: number, output = "") {
     { width, height: 30, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes(shell.command))
+  await app.waitForFrame((frame) => frame.includes(shell.command.split("\u001b")[0]))
   return {
     ...app,
     state,
@@ -216,4 +216,41 @@ test("large captures open at a bounded tail and clicking a shell opens the viewe
   expect(reads[0]?.url.searchParams.get("cursor")).toBe(String(Number.MAX_SAFE_INTEGER))
   expect(reads[1]?.url.searchParams.get("cursor")).toBe(String(Buffer.byteLength(app.state.output) - 65536))
   expect(reads[1]?.url.searchParams.get("limit")).toBe("65536")
+})
+
+// A background command and its output are written by the program, so they reach the screen written out. Strip-ansi removes
+// whole sequences; what it leaves is a lone ESC, BEL and BS, and the bidi controls.
+const hostileCommand = "sleep a\u001b]0;pwn\u0007b\u202ec"
+const hostileOutput = "out a\u0007b\u0008c\u001b\u202ed"
+const shown = {
+  command: "sleep a\\x1b]0;pwn\\x07b\\u{202e}c",
+  output: "out a\\x07b\\x08c\\x1b\\u{202e}d",
+}
+
+test("draws a background command and its output written out in the shell tab and the output dialog", async () => {
+  await using app = await setup(100, hostileOutput, hostileCommand)
+  // The shell tab lists the first line of the command.
+  const tab = app.captureCharFrame()
+  expect(tab).toContain(shown.command)
+  app.mockInput.pressEnter()
+  await app.waitForFrame((frame) => frame.includes("Shell output") && frame.includes("out a"))
+  const dialog = app.captureCharFrame()
+  // The dialog header and the body each draw their own text.
+  expect(dialog.split(shown.command).length).toBeGreaterThan(2)
+  expect(dialog).toContain(shown.output)
+  for (const frame of [tab, dialog]) {
+    expect(frame).not.toContain("\u001b")
+    expect(frame).not.toContain("\u0007")
+    expect(frame).not.toContain("\u0008")
+    expect(frame).not.toContain("\u202e")
+  }
+})
+
+test("draws an ordinary background command and its output unchanged", async () => {
+  await using app = await setup(100, "out plain text\r\nand a second line\r", "sleep 30 && echo done")
+  app.mockInput.pressEnter()
+  await app.waitForFrame((frame) => frame.includes("Shell output") && frame.includes("and a second line"))
+  const frame = app.captureCharFrame()
+  expect(frame).toContain("out plain text")
+  expect(frame).not.toContain("\\x")
 })

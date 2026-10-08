@@ -5,6 +5,7 @@ import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "./border"
 import { TextAttributes } from "@opentui/core"
 import { errorMessage } from "../util/error"
+import { bodyText } from "../util/renderer"
 export type ToastOptions = {
   title?: string
   message: string
@@ -26,6 +27,8 @@ function ToastSurface(props: {
   const theme = useTheme()
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
+  // Toast text comes from events and plugins, so every toast writes control characters out here.
+  const message = () => bodyText(props.toast.message)
   const [hovered, setHovered] = createSignal(false)
   const hover = (value: boolean) => {
     setHovered(value)
@@ -74,7 +77,7 @@ function ToastSurface(props: {
           fallback={
             <box flexDirection="row" width="100%">
               <text fg={theme.text.base} wrapMode="word" flexGrow={1}>
-                {props.toast.message}
+                {message()}
               </text>
               {affordance()}
             </box>
@@ -82,13 +85,13 @@ function ToastSurface(props: {
         >
           <box flexDirection="row" width="100%" marginBottom={1}>
             <text attributes={TextAttributes.BOLD} fg={theme.text.base}>
-              {props.toast.title}
+              {bodyText(props.toast.title)}
             </text>
             <box flexGrow={1} />
             {affordance()}
           </box>
           <text fg={theme.text.base} wrapMode="word" width="100%">
-            {props.toast.message}
+            {message()}
           </text>
         </Show>
         <Show when={props.pending}>

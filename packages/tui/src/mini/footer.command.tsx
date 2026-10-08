@@ -957,7 +957,7 @@ export function RunQueuedPromptSelectBody(props: {
   const entries = createMemo<QueuedPromptEntry[]>(() =>
     props.prompts().map((prompt) => ({
       category: "",
-      display: prompt.prompt.text.replaceAll("\n", " "),
+      display: bodyText(prompt.prompt.text).replaceAll("\n", " "),
       footer: prompt.delivery === "queue" ? "queued" : "steering",
       keywords: prompt.prompt.text,
       prompt,

@@ -105,6 +105,6 @@ test("body keeps line breaks and tabs, writes out what plain does, and leaves em
   expect(body("a\tb\nc\r\nd")).toBe("a\tb\nc\nd")
   expect(body(evil)).toBe("\\x1b]0;pwned\\x07a\\x1b[2K\\u{202e}b\nc")
   expect(body("a\rb")).toBe("a\\x0db")
-  expect(body("\u007f\u009b؜⁦")).toBe("\\x7f\\x9b\\u{61c}\\u{2066}")
+  expect(body("\u007f\u009b؜\u2066")).toBe("\\x7f\\x9b\\u{61c}\\u{2066}")
   expect(body("👨‍👩 ✔️ 世界")).toBe("👨‍👩 ✔️ 世界")
 })
