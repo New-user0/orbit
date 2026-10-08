@@ -348,7 +348,9 @@ its gate, before the first trust task. It names every surface that M1 found over
   yourself) before the load. Pass `imports` for a file that the command imports and `defines` for a file whose commands,
   approvals or agents it carries out. Both refuse an untrusted folder whatever it holds back. Without them the check
   refuses only a folder whose config holds something back, which is right for `orb run` and `orb loop`, because they
-  import nothing. This is `execute` in `packages/cli/src/commands/handlers/flow/execute.ts`:
+  import nothing. `strict` refuses any untrusted folder, and `orb -p` passes it (`handlers/print.ts`): a clean clone's
+  `AGENTS.md` still steers a model whose tool calls run unasked under the default rules. Whether `orb run` and
+  `orb loop` should be strict too is an open owner question. This is `execute` in `packages/cli/src/commands/handlers/flow/execute.ts`:
 
   ```ts
   Effect.gen(function* () {
@@ -1174,7 +1176,7 @@ already guarded elsewhere.
 
 - `requireTrust`, `trustRefusal` and `warnUntrusted` in `packages/cli/src/util/trust.ts`. The handlers for `run`,
   `loop`, `flow run`, `flow resume`, `flow replay`, `eval` and `orb -p` (`handlers/print.ts`, through the `headlessInput`
-  that `run` shares, so the `--server` and 404-stub variants of the `run` rows in `trust.test.ts` cover it) call them
+  that `run` shares, with `strict`; `trust.test.ts` pins a clean folder, `--bare`, `--continue` and the 404 stub) call them
   before any load. `orb acp` cannot stop, because
   the editor chooses the folders, so it warns on stderr and keeps stdout for the protocol.
 - `--trust` forces a private server and trusts for its lifetime without storing the grant (it rejects `--server`).

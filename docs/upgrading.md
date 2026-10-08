@@ -294,8 +294,12 @@ takes the same flags from one shared definition. The flags that `orb` takes only
 `orb run` takes the others too, and keeps its own `--format` in place of `--output-format`. `orb -p --help` lists every flag a printed run accepts,
 including `--trust` and `--fork`.
 
-Like `orb run`, `orb -p` stops in an untrusted folder whose project config is held back, before anything is sent, and
-reports the refusal as a JSON result object under `--output-format json`; `--trust` runs it once.
+Unlike `orb run`, `orb -p` stops in any untrusted folder, before anything is sent, also one whose project config holds
+nothing back (a fresh clone with only an `AGENTS.md`), because the folder's instructions steer the model and the default
+rules let its tool calls run without asking. It reports the refusal as a JSON result object under `--output-format json`
+and exits 1, `--bare` included; `--trust` runs it once, and `orb trust` trusts the folder for good. Against a server
+older than workspace trust, which cannot say whether the folder is trusted, it stops as well. `orb run` and `orb loop`
+still go ahead in a folder that holds nothing back.
 
 `orb run a -- b` used to send the operands after `--` twice ("a b b"). It now sends them once.
 
