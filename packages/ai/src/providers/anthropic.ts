@@ -1,3 +1,4 @@
+import { HttpOptions, mergeHttpOptions } from "../schema/options.js"
 import type { RouteDefaultsInput } from "../route/client.js"
 import { Auth } from "../route/auth.js"
 import type { ProviderAuthOption } from "../route/auth-options.js"
@@ -37,9 +38,10 @@ const auth = (options: ProviderAuthOption<"optional">) => {
 }
 
 export const configure = (input: Config = {}) => {
-  const { apiKey: _, auth: _auth, baseURL, ...rest } = input
+  const { apiKey: _, auth: _auth, baseURL, http, ...rest } = input
   const compatible = AnthropicCompatible.configure({
     ...rest,
+    http: mergeHttpOptions(defaultHttp(baseURL), HttpOptions.make(http)),
     auth: auth(input),
     baseURL: baseURL ?? AnthropicMessages.DEFAULT_BASE_URL,
     provider: id,
@@ -50,6 +52,12 @@ export const configure = (input: Config = {}) => {
     configure,
   }
 }
+
+// Gateways and proxies may buffer a stream or drop its pings, so only the first-party endpoint gets the short limit.
+const defaultHttp = (baseURL: string | undefined) =>
+  baseURL === undefined || baseURL.replace(/\/+$/, "") === AnthropicMessages.DEFAULT_BASE_URL
+    ? new HttpOptions({ chunkTimeout: AnthropicMessages.STREAM_IDLE_TIMEOUT_MS })
+    : undefined
 
 export const provider = configure()
 export const model: ProviderPackage.Definition<Settings, AnthropicMessages.ProviderOptionsInput>["model"] = (

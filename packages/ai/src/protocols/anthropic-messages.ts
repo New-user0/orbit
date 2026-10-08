@@ -35,6 +35,8 @@ import { ToolStream } from "./utils/tool-stream.js"
 
 const ADAPTER = "anthropic-messages"
 export const DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
+/** The first-party stream sends periodic keepalive pings, so this long without a byte means a stall. */
+export const STREAM_IDLE_TIMEOUT_MS = 90_000
 export const PATH = "/messages"
 export const DEFAULT_MAX_TOKENS = 32_000
 const MIN_THINKING_BUDGET = 1_024

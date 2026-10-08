@@ -75,6 +75,25 @@ export interface Check {
 
 export type Mode = "build" | "plan"
 
+/**
+ * What the chat shows about a folder that is not trusted yet and holds something back. Every string came from the
+ * server or from a file in the folder, and arrives written out by `plain`, so none carries a control or format character.
+ */
+export interface TrustView {
+  /** The project's folder, which is the one trust is decided for, granted for and worked in. */
+  readonly directory: string
+  /** The folder VS Code opened, when it is not that folder: a folder inside the project, or a linked worktree. */
+  readonly opened?: string
+  /** Whether a grant can be kept on disk. A home directory or a filesystem root can only be trusted until Orbit restarts. */
+  readonly persistent: boolean
+  /** What is left out, as a list of kinds: "hooks, MCP servers". */
+  readonly summary: string
+  /** The files and directories of the project that hold something back, by path from its folder. */
+  readonly held: ReadonlyArray<{ readonly name: string; readonly kinds: string }>
+  /** Folders above the project that hold config back until each is trusted on its own. */
+  readonly above: ReadonlyArray<string>
+}
+
 /** A question the server needs answered: the question tool's questions or a plan to approve. */
 export interface FormRequest {
   readonly id: string
@@ -105,6 +124,7 @@ export type ToView =
   | { readonly type: "mode"; readonly mode: Mode }
   | { readonly type: "title"; readonly title: string }
   | { readonly type: "plan"; readonly todos: ReadonlyArray<Todo> }
+  | { readonly type: "trust"; readonly trust: TrustView | undefined }
 
 /** From the webview to the extension host. */
 export type FromView =
@@ -116,3 +136,5 @@ export type FromView =
   | { readonly type: "diff"; readonly id: string }
   | { readonly type: "model"; readonly model: string }
   | { readonly type: "mode"; readonly mode: Mode }
+  /** Asks whether to trust the folder; the extension host shows the question, so a click here never trusts by itself. */
+  | { readonly type: "trust" }

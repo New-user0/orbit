@@ -1,5 +1,7 @@
+import { plain } from "@orbit/flow/plain"
 import vscode from "vscode"
-import { decide, nodeItem, nodes, orb, runItem, runs, type Item } from "./runs.js"
+import { find, missing } from "./program.js"
+import { decide, decisionText, nodeItem, nodes, orb, runItem, runs, type Item } from "./runs.js"
 
 type Entry =
   | { readonly kind: "run"; readonly run: string }
@@ -56,7 +58,7 @@ export class RunsView implements vscode.TreeDataProvider<Entry> {
     const key = entry.kind === "run" ? entry.run : `${entry.run}\u0000${entry.node}`
     const item = this.items.get(key)
     const tree = new vscode.TreeItem(
-      item?.label ?? key,
+      item?.label ?? plain(entry.kind === "run" ? entry.run : entry.node),
       entry.kind === "run" ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
     )
     tree.id = key
@@ -79,7 +81,7 @@ export class RunsView implements vscode.TreeDataProvider<Entry> {
     }
     if (entry.kind !== "run") return []
     const list = await nodes(executable, directory, entry.run).catch((error: Error) =>
-      this.fail(`Could not read ${entry.run}`, error),
+      this.fail(`Could not read ${plain(entry.run)}`, error),
     )
     return (list ?? []).map((node) => {
       this.items.set(`${entry.run}\u0000${node.id}`, nodeItem(node))
@@ -89,8 +91,9 @@ export class RunsView implements vscode.TreeDataProvider<Entry> {
 
   private async decide(entry: Entry, approve: boolean) {
     if (entry.kind !== "node") return
+    const text = decisionText(approve, entry.node, entry.run)
     const note = await vscode.window.showInputBox({
-      title: `${approve ? "Approve" : "Reject"} ${entry.node}`,
+      title: text.title,
       prompt: "An optional note the workflow receives with the decision",
       placeHolder: "Note (optional)",
     })
@@ -101,20 +104,20 @@ export class RunsView implements vscode.TreeDataProvider<Entry> {
       approve,
       note: note || undefined,
     }).catch((error: Error) => error)
-    if (result instanceof Error) return this.fail(`Could not decide ${entry.node}`, result)
+    if (result instanceof Error) return this.fail(text.failure, result)
     this.refresh()
-    const choice = await vscode.window.showInformationMessage(
-      `${approve ? "Approved" : "Rejected"} ${entry.node}. Resume ${entry.run} now?`,
-      "Resume",
-    )
+    const choice = await vscode.window.showInformationMessage(text.done, "Resume")
     if (choice === "Resume") this.terminal(["flow", "resume", entry.run])
   }
 
-  // Long-running commands get a terminal of their own, so their progress stays visible and Ctrl+C works.
+  // Long-running commands get a terminal of their own, so their progress stays visible and Ctrl+C works. The program is
+  // the one found on PATH, by its full path: a name left to the terminal could be found in the workspace folder first.
   private terminal(args: string[]) {
+    const program = find(this.executable())
+    if (!program) return void this.fail("Could not open a terminal", new Error(missing(this.executable())))
     const terminal = vscode.window.createTerminal({
       name: `orb ${args.slice(0, 2).join(" ")}`,
-      shellPath: this.executable(),
+      shellPath: program,
       shellArgs: args,
       cwd: this.directory(),
       env: { PWD: this.directory() },
@@ -123,8 +126,8 @@ export class RunsView implements vscode.TreeDataProvider<Entry> {
   }
 
   private fail(message: string, error: Error) {
-    this.log.appendLine(`${message}: ${error.message}`)
-    vscode.window.showErrorMessage(`${message}: ${error.message.split("\n")[0]}`)
+    this.log.appendLine(plain(`${message}: ${error.message}`))
+    vscode.window.showErrorMessage(plain(`${message}: ${error.message.split("\n")[0]}`))
     return undefined
   }
 }
