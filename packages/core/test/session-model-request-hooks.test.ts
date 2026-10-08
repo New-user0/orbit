@@ -1,4 +1,6 @@
 import { describe, expect } from "bun:test"
+import { HttpOptions, LanguageModel, mergeHttpOptions } from "@orbit/ai"
+import { Anthropic } from "@orbit/ai/providers"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Agent } from "@orbit/schema/agent"
 import { Money } from "@orbit/schema/money"
@@ -79,6 +81,86 @@ describe("SessionModelRequest HTTP hooks", () => {
       )
     }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
   )
+
+  describe("stream idle limit after a model.request reroute", () => {
+    const firstParty = (chunkTimeout?: number) => {
+      const anthropic = Anthropic.configure({ apiKey: "test" }).model("claude-sonnet-4-6")
+      return SessionRunnerModel.resolved(
+        chunkTimeout === undefined
+          ? anthropic
+          : LanguageModel.update(anthropic, { defaults: { http: new HttpOptions({ chunkTimeout }) } }),
+        {
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          cost: [],
+          limit: { context: 200_000, output: 32_000 },
+        },
+      )
+    }
+    const cases = [
+      {
+        name: "keeps the first-party 90 s limit when no hook moves the endpoint",
+        baseURL: undefined,
+        expected: 90_000,
+      },
+      {
+        name: "resets to 300 s when a hook moves the endpoint to a gateway",
+        baseURL: "https://gateway.example.test/v1",
+        expected: 300_000,
+      },
+    ]
+    for (const item of cases)
+      it.effect(item.name, () =>
+        Effect.gen(function* () {
+          const hooks = yield* PluginHooks.Service
+          if (item.baseURL !== undefined)
+            yield* hooks.register("session", "model.request", (event) =>
+              Effect.sync(() => {
+                event.baseURL = item.baseURL
+              }),
+            )
+          const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+          const prepared = yield* requests.primary({
+            session,
+            agent: Agent.ID.make("build"),
+            model: firstParty(),
+            system: [],
+            messages: [],
+          })
+          // The client merges route defaults, then model defaults, then the request.
+          const http = mergeHttpOptions(
+            prepared.request.model.route.defaults.http,
+            prepared.request.model.defaults?.http,
+            prepared.request.http,
+          )
+          expect(http?.chunkTimeout).toBe(item.expected)
+        }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+      )
+
+    it.effect("lets a configured chunkTimeout win over the reset", () =>
+      Effect.gen(function* () {
+        const hooks = yield* PluginHooks.Service
+        yield* hooks.register("session", "model.request", (event) =>
+          Effect.sync(() => {
+            event.baseURL = "https://gateway.example.test/v1"
+          }),
+        )
+        const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+        const prepared = yield* requests.primary({
+          session,
+          agent: Agent.ID.make("build"),
+          model: firstParty(600_000),
+          system: [],
+          messages: [],
+        })
+        const http = mergeHttpOptions(
+          prepared.request.model.route.defaults.http,
+          prepared.request.model.defaults?.http,
+          prepared.request.http,
+        )
+        expect(http?.chunkTimeout).toBe(600_000)
+      }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+    )
+  })
 
   it.effect("offers the WebSocket executor alongside HTTP hooks and routes the WebSocket hooks", () =>
     Effect.gen(function* () {

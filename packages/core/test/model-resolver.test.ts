@@ -672,14 +672,15 @@ describe("ModelResolver", () => {
       readonly name: string
       readonly packageName: string
       readonly settings: Info["settings"]
-      readonly expected: number | false
+      // undefined leaves the limit to the transport, whose 300 s default http-timeout.test.ts pins.
+      readonly expected: number | false | undefined
     }> = [
       { name: "the default endpoint", packageName: "@ai-sdk/anthropic", settings: {}, expected: 90_000 },
       {
         name: "a proxy baseURL",
         packageName: "@ai-sdk/anthropic",
         settings: { baseURL: "https://proxy.example/v1" },
-        expected: 300_000,
+        expected: undefined,
       },
       {
         name: "a configured chunkTimeout",
@@ -687,20 +688,23 @@ describe("ModelResolver", () => {
         settings: { chunkTimeout: 600_000 },
         expected: 600_000,
       },
-      { name: "chunkTimeout false", packageName: "@ai-sdk/anthropic", settings: { chunkTimeout: false }, expected: false },
+      {
+        name: "chunkTimeout false",
+        packageName: "@ai-sdk/anthropic",
+        settings: { chunkTimeout: false },
+        expected: false,
+      },
       {
         name: "another provider package",
         packageName: "@ai-sdk/openai-compatible",
         settings: { baseURL: "https://compatible.example/v1" },
-        expected: 300_000,
+        expected: undefined,
       },
     ]
     for (const item of cases)
-      it.effect(`resolves ${item.expected} for ${item.name}`, () =>
+      it.effect(`resolves ${item.expected ?? "no route limit"} for ${item.name}`, () =>
         Effect.gen(function* () {
-          const resolved = yield* chunkTimeout(item.packageName, item.settings)
-          // Routes without a default leave the limit unset, and the transport applies its own 300 s.
-          expect(resolved ?? 300_000).toBe(item.expected)
+          expect(yield* chunkTimeout(item.packageName, item.settings)).toBe(item.expected)
         }),
       )
   })

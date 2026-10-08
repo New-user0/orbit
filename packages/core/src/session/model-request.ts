@@ -1,6 +1,7 @@
 export * as SessionModelRequest from "./model-request.js"
 
 import {
+  DEFAULT_HTTP_TIMEOUT_MS,
   GenerationOptions,
   type GenerationOptionsFields,
   HttpOptions,
@@ -306,7 +307,12 @@ export const layer = Layer.effect(
       })
       const route =
         modelHook.baseURL !== undefined && modelHook.baseURL !== baseURL
-          ? base.model.route.with({ endpoint: { baseURL: modelHook.baseURL } })
+          ? // A route default such as a shorter stream idle limit was chosen for the original endpoint, which a
+            // plugin just replaced (possibly with a buffering gateway). A configured chunkTimeout still wins.
+            base.model.route.with({
+              endpoint: { baseURL: modelHook.baseURL },
+              http: { chunkTimeout: DEFAULT_HTTP_TIMEOUT_MS },
+            })
           : base.model.route
       const request = LLMRequest.update(base, {
         model: route === base.model.route ? base.model : LanguageModel.update(base.model, { route }),

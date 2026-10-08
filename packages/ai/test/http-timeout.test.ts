@@ -259,6 +259,53 @@ describe("route-level chunk timeout default", () => {
   )
 })
 
+// Sends a ping each time `ping()` is called and completes on `finish()`, so a test paces the stream with the clock.
+const pacedPings = Effect.gen(function* () {
+  const started = yield* Deferred.make<void>()
+  const encoder = new TextEncoder()
+  const queue: Array<string | undefined> = []
+  let wake = () => {}
+  const push = (chunk: string | undefined) => {
+    queue.push(chunk)
+    wake()
+  }
+  const layer = dynamicResponse((input) =>
+    Effect.sync(() =>
+      input.respond(
+        new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            Deferred.doneUnsafe(started, Effect.void)
+            while (queue.length === 0) await new Promise<void>((resolve) => (wake = resolve))
+            const next = queue.shift()
+            if (next === undefined) return controller.close()
+            controller.enqueue(encoder.encode(next))
+          },
+        }),
+        SSE,
+      ),
+    ),
+  )
+  return {
+    layer,
+    started,
+    ping: () => push(sseRaw(sseNamedEvent("ping", { type: "ping" }))),
+    finish: () => {
+      push(
+        sseRaw(
+          sseNamedEvent("message_start", { type: "message_start", message: { usage: { input_tokens: 5 } } }),
+          sseNamedEvent("message_delta", {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          }),
+          sseNamedEvent("message_stop", { type: "message_stop" }),
+        ),
+      )
+      push(undefined)
+    },
+  }
+})
+
 describe("first-party stream idle limit", () => {
   const model = (baseURL?: string) => Anthropic.configure({ apiKey: "test", baseURL }).model("claude-sonnet-4-6")
 
@@ -280,6 +327,27 @@ describe("first-party stream idle limit", () => {
       )
 
       yield* failsAt(fiber, 300_000)
+    }),
+  )
+
+  it.effect("keeps a default-endpoint stream alive while pings arrive, past 90 seconds in total", () =>
+    Effect.gen(function* () {
+      const server = yield* pacedPings
+      const fiber = yield* LLMClient.generate(LLM.request({ model: model(), prompt: "Hello" })).pipe(
+        Effect.provide(server.layer),
+        Effect.forkChild({ startImmediately: true }),
+      )
+      yield* Deferred.await(server.started)
+      // Five minutes in total, each gap shorter than the 90 second limit.
+      for (let minute = 0; minute < 5; minute++) {
+        yield* TestClock.adjust(60_000)
+        server.ping()
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+        expect(fiber.pollUnsafe()).toBeUndefined()
+      }
+      server.finish()
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+      yield* Fiber.join(fiber)
     }),
   )
 })

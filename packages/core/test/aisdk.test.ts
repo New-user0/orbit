@@ -23,10 +23,15 @@ import {
 } from "@orbit/ai"
 import { LLMClient, RequestExecutor } from "@orbit/ai/route"
 import { compileRequest } from "@orbit/ai/route/client"
-import { expect, jest } from "bun:test"
+import { afterEach, expect, jest } from "bun:test"
 import { Effect, Layer } from "effect"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "./lib/effect"
+
+// A timed-out test never reaches its own cleanup, so restore real timers for the next test.
+afterEach(() => {
+  jest.useRealTimers()
+})
 
 const it = testEffect(AISDK.locationLayer)
 
@@ -561,11 +566,19 @@ it.effect("normalizes file data across AI SDK prompt parts", () =>
           Message.user([
             { type: "media", media: Media.bytes(bytes, "image/png"), filename: "bytes.png" },
             { type: "media", media: Media.base64("AAAA", "image/png"), filename: "base64.png" },
-            { type: "media", media: Media.fromDataUrl("data:image/png;charset=utf-8;base64,AQID"), filename: "inline.png" },
+            {
+              type: "media",
+              media: Media.fromDataUrl("data:image/png;charset=utf-8;base64,AQID"),
+              filename: "inline.png",
+            },
             { type: "media", media: Media.url("https://example.com/image.png", { mediaType: "image/png" }) },
             { type: "media", media: Media.base64("s3://bucket/image.png", "image/png") },
           ]),
-          Message.assistant({ type: "media", media: Media.url("http://example.com/document.pdf", { mediaType: "application/pdf" }), filename: "document.pdf" }),
+          Message.assistant({
+            type: "media",
+            media: Media.url("http://example.com/document.pdf", { mediaType: "application/pdf" }),
+            filename: "document.pdf",
+          }),
           Message.tool({
             id: "call_1",
             name: "screenshot",
@@ -801,12 +814,7 @@ it.effect("routes AI SDK requests and responses through HTTP hook middleware", (
     expect(sent[0]?.headers.get("x-hook")).toBe("applied")
     expect(sent[0]?.headers.get("authorization")).toBe("Bearer test")
     expect(JSON.parse(sent[0]?.body ?? "")).toMatchObject({ model: "api-model" })
-    expect(seen).toEqual([
-      "POST https://example.test/v1/chat/completions",
-      sent[0]?.body,
-      sent[0]?.body,
-      "status 200",
-    ])
+    expect(seen).toEqual(["POST https://example.test/v1/chat/completions", sent[0]?.body, sent[0]?.body, "status 200"])
     expect(response.events.filter(LLMEvent.is.textDelta).map((event) => event.text)).toEqual(["rewritten"])
   }),
 )
