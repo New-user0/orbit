@@ -91,8 +91,11 @@ test("-p prints the answer, and --output-format json prints one result object", 
 test("-p --bare runs as orb run --bare does: on a private server, with no project instructions", async () => {
   const print = await sent(["-p", "--bare", "--model", model.model, "say ok"])
   const run = await sent(["run", "--bare", "--model", model.model, "say ok"])
+  // Neither run started a background service under the isolated root: --bare implies a private server.
+  const status = await orb(["service", "status"])
   const plain = await sent(["-p", ...base, "say ok"])
 
+  expect(status.stdout.trim()).toBe("stopped")
   expect(print.stdout).toBe(run.stdout)
   expect(print.requests.map((request) => request.system).join("")).not.toContain(instructions)
   expect(run.requests.map((request) => request.system).join("")).not.toContain(instructions)

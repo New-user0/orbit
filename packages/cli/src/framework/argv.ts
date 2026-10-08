@@ -44,7 +44,13 @@ type Token =
 function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
   const result: Token[] = []
   let expectsValue = false
-  for (const text of flags) {
+  // The true or false right after a boolean flag written without a value is that flag's value, which the flag carries.
+  let literalAt = -1
+  for (const [index, text] of flags.entries()) {
+    if (index === literalAt) {
+      result.push({ kind: "value", rewritten: [] })
+      continue
+    }
     if (expectsValue) {
       expectsValue = false
       result.push({ kind: "value", rewritten: [text] })
@@ -55,11 +61,21 @@ function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
       const name = equals === -1 ? text.slice(2) : text.slice(2, equals)
       if (equals === -1 && valueLong.has(name)) expectsValue = true
       const boolean = equals === -1 && name in PrintBooleanFlags
+      const next = flags[index + 1]
+      const literal = boolean && (next === "true" || next === "false") ? next : undefined
+      if (literal) literalAt = index + 1
+      // The parser reads --no-<name> as <name> turned off.
+      const negated = equals === -1 && name.startsWith("no-") && name.slice(3) in PrintBooleanFlags
       result.push({
         kind: "flag",
-        print: name === "print",
-        rewritten: [boolean ? `${text}=true` : text],
+        print: name === "print" && literal !== "false" && text !== "--print=false",
+        rewritten: [negated ? `--${name.slice(3)}=false` : boolean ? `${text}=${literal ?? "true"}` : text],
       })
+      continue
+    }
+    // A short flag with an inline value takes no word after it.
+    if (/^-[A-Za-z]+=/.test(text)) {
+      result.push({ kind: "flag", print: false, rewritten: [text] })
       continue
     }
     if (/^-[A-Za-z]+$/.test(text)) {

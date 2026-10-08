@@ -97,7 +97,9 @@ const SessionParams = {
 
 const PrintFlag = Flag.boolean("print").pipe(
   Flag.withAlias("p"),
-  Flag.withDescription("Send the words after the flags as one message, print the answer and exit"),
+  Flag.withDescription(
+    "Send the words after the flags as one message, print the answer and exit. A word right after a flag that takes a value is that flag's value; run orb -p --help to list every flag it accepts",
+  ),
   Flag.withDefault(false),
 )
 

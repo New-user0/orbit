@@ -27,6 +27,9 @@ test.each([
   [["-p"], ["--print=true"]],
   [["-p", "--thinking", "yes"], ["--print=true", "--thinking=true", "yes"]],
   [["-p", "--bare=false", "x"], ["--print=true", "--bare=false", "x"]],
+  [["-p", "--no-thinking", "yes", "do", "it"], ["--print=true", "--thinking=false", "yes", "do", "it"]],
+  [["-p", "--thinking", "false", "yes"], ["--print=true", "--thinking=false", "yes"]],
+  [["-s=abc", "-p", "run"], ["-s=abc", "--print=true", "run"]],
 ])("%j is a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
 })
@@ -38,6 +41,8 @@ test.each([
   [["mcp", "add", "x", "--", "server", "-p"]],
   [["--standalone", "run", "-p", "yes"]],
   [["--server", "-p", "run", "a"]],
+  [["-s=abc", "run", "-p"]],
+  [["--standalone", "true", "run", "-p"]],
   [["--", "-p"]],
   [["service", "start"]],
   [["dir"]],
@@ -52,27 +57,40 @@ test("a subcommand name is any command the root dispatches on", () => {
   expect(Subcommands).toContain("debug")
 })
 
-test("the flag tables match the flags that orb --help prints", async () => {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", "--help"], {
+async function helpFlags(args: string[]) {
+  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
   })
   const [, help] = await Promise.all([child.exited, new Response(child.stdout).text()])
-  const flags = help.split(/\r?\n/).flatMap((line) => {
+  return help.split(/\r?\n/).flatMap((line) => {
     const match = line.match(/^ {2}--([\w-]+)(?:, -(\w))?(?: (string|integer|float|choice|<[^>]+>))?(?: {2,}|$)/)
     return match ? [{ long: match[1], short: match[2], value: match[3] !== undefined }] : []
   })
+}
 
-  const values = flags.filter((flag) => flag.value)
-  expect(values.map((flag) => flag.long).sort()).toEqual([...RootValueFlags.long].sort())
-  expect(values.flatMap((flag) => (flag.short ? [flag.short] : [])).sort()).toEqual([...RootValueFlags.short].sort())
-  // Every boolean flag the help prints, apart from the ones every command has, is one that -p rewrites.
+// `orb -p --help` lists what a print line is parsed with, and `orb --help` is what a person reads first, so both are checked.
+test("the flag tables match the flags that orb --help and orb -p --help print", async () => {
+  const root = await helpFlags(["--help"])
+  const print = await helpFlags(["-p", "--help"])
+
+  const values = [...root, ...print].filter((flag) => flag.value)
+  expect([...new Set(values.map((flag) => flag.long))].sort()).toEqual([...RootValueFlags.long].sort())
+  expect([...new Set(values.flatMap((flag) => (flag.short ? [flag.short] : [])))].sort()).toEqual(
+    [...RootValueFlags.short].sort(),
+  )
+  // Apart from the ones every command has, the booleans a print line prints are exactly the ones -p rewrites, and the
+  // root help lists only ones of those.
   const builtin = ["help", "version", "wizard"]
-  const booleans = flags.filter((flag) => !flag.value && !builtin.includes(flag.long))
-  for (const flag of booleans) {
-    expect(Object.keys(PrintBooleanFlags)).toContain(flag.long)
-    expect(PrintBooleanFlags[flag.long]).toBe(flag.short)
-  }
-})
+  const booleans = (flags: typeof root) => flags.filter((flag) => !flag.value && !builtin.includes(flag.long))
+  // yolo and dangerously-skip-permissions are aliases of auto that the help does not print.
+  const hidden = ["yolo", "dangerously-skip-permissions"]
+  expect(booleans(print).map((flag) => flag.long).sort()).toEqual(
+    Object.keys(PrintBooleanFlags)
+      .filter((name) => !hidden.includes(name))
+      .sort(),
+  )
+  for (const flag of [...booleans(print), ...booleans(root)]) expect(PrintBooleanFlags[flag.long]).toBe(flag.short)
+}, 60_000)
