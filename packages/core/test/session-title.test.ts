@@ -36,6 +36,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Money } from "@orbit/schema/money"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { testEffect } from "./lib/effect"
+import { overloaded } from "./lib/provider-failure"
 
 let requests: LLMRequest[] = []
 let selectedSmall: Model.Info | undefined
@@ -536,6 +537,25 @@ it.effect("does not rename after a failed title stream", () =>
           reason: new TransportError({ message: "Disconnected", transport: "http", operation: "request" }),
         }),
       )
+
+    const title = yield* SessionTitle.Service
+    yield* title.generate(sessionID)
+
+    const store = yield* SessionStore.Service
+    expect(requests).toHaveLength(1)
+    expect((yield* store.get(sessionID))?.title).toBeUndefined()
+  }),
+)
+
+// A title is background work: nobody waits on it, so an overloaded provider is asked once and the title waits for the
+// next attempt, where foreground work would back off and send the request again.
+it.effect("makes one request when the provider is overloaded", () =>
+  Effect.gen(function* () {
+    yield* enableTitleAgent
+    const sessionID = Session.ID.make("ses_title_overloaded")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "Name this while the provider is overloaded")
+    titleStream = () => Stream.fail(overloaded())
 
     const title = yield* SessionTitle.Service
     yield* title.generate(sessionID)

@@ -8,6 +8,7 @@ import {
   Message,
   SystemPart,
   ToolDefinition,
+  type AIError,
   type LLMRequest,
 } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
@@ -54,20 +55,24 @@ import { Tool } from "@orbit/core/tool"
 import { asc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
+import { overloaded } from "./lib/provider-failure"
 import { stubSnapshot } from "./lib/tool"
 
 const requests: LLMRequest[] = []
 const options: Array<StreamOptions | undefined> = []
 let instruction: string | Instructions.Unavailable = "Initial context"
+// When set, the provider rejects every request with it.
+let rejection: AIError | undefined
 const sessionID = SessionSchema.ID.make("ses_generate_test")
 
 const model = LanguageModel.make({ id: "generate-model", provider: "test", route: OpenAIChat.route })
 const client = Layer.mock(LLMClient.Service)({
   stream: () => Stream.die(new Error("unused")),
   generate: (request, requestOptions) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       requests.push(request)
       options.push(requestOptions)
+      if (rejection) return Effect.fail(rejection)
       const response = LLMResponse.fromEvents([
         LLMEvent.stepStart({ index: 0 }),
         LLMEvent.textStart({ id: "generate" }),
@@ -80,8 +85,8 @@ const client = Layer.mock(LLMClient.Service)({
         }),
         LLMEvent.finish({ reason: { normalized: "stop" } }),
       ])
-      if (!response) throw new Error("Incomplete generate response")
-      return response
+      if (!response) return Effect.die(new Error("Incomplete generate response"))
+      return Effect.succeed(response)
     }),
 })
 const models = Layer.mock(SessionRunnerModel.Service)({
@@ -416,5 +421,37 @@ it.effect(
       expect(requests).toEqual([])
       expect(yield* durableState(db, sessionID)).toEqual(before)
     }),
+  { timeout: 15_000 },
+)
+
+// Generation is background work: nobody waits on it, so an overloaded provider is asked once and the caller gets the
+// failure, where foreground work would back off and send the request again.
+it.effect(
+  "makes one request when the provider is overloaded",
+  () =>
+    Effect.gen(function* () {
+      requests.length = 0
+      instruction = "Initial context"
+      const failure = overloaded()
+      rejection = failure
+      const { db, bus, instructions, session, instances } = yield* setup
+      yield* InstructionState.prepare(db, bus, instructions, sessionID)
+      const before = yield* durableState(db, sessionID)
+
+      const error = yield* SessionGenerate.generate({ session, prompt: "Summarize privately" }).pipe(
+        Effect.provideService(Instance.Service, instances),
+        Effect.flip,
+      )
+
+      expect(error).toBe(failure)
+      expect(requests).toHaveLength(1)
+      expect(yield* durableState(db, sessionID)).toEqual(before)
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          rejection = undefined
+        }),
+      ),
+    ),
   { timeout: 15_000 },
 )

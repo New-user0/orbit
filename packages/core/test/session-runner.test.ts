@@ -86,6 +86,7 @@ import { promptLocationNode } from "./fixture/prompt-location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { Expected } from "./lib/session-message"
 import { permissionLayer } from "./lib/permission"
+import { overloaded } from "./lib/provider-failure"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
 
@@ -600,11 +601,15 @@ const scenario = (
     }),
   )
 
-// Nominal retry gaps: exponential from 2s capped at 10s, for 10 retries.
-const RETRY_GAPS = [2_000, 4_000, 8_000, ...Array<number>(7).fill(10_000)]
-// Longest possible gap per retry (+20% jitter); advancing the clock by these always fires the retry.
+// Nominal retry gaps: exponential from 500ms capped at 32s, for 10 retries.
+const RETRY_GAPS = [500, 1_000, 2_000, 4_000, 8_000, 16_000, ...Array<number>(4).fill(32_000)]
+// Shortest and longest possible gap per retry (-20% and +20% jitter); advancing the clock by the longest always fires
+// the retry, and by less than the shortest never does.
+const RETRY_GAPS_MIN = RETRY_GAPS.map((gap) => gap * 0.8)
 const RETRY_GAPS_MAX = RETRY_GAPS.map((gap) => gap * 1.2)
 const RETRY_ATTEMPTS = RETRY_GAPS.map((_, index) => index + 2)
+// Advancing the clock by this fires the first retry, whatever the jitter.
+const FIRST_RETRY = RETRY_GAPS_MAX[0]
 
 // Subscribe before resuming; model requests can arrive before retry backoff is scheduled.
 const subscribeRetries = (s: Scenario) =>
@@ -2717,6 +2722,33 @@ describe("SessionRunnerLLM", () => {
     expect((yield* s.context).some((message) => message.type === "user" && message.text === "Earlier question")).toBe(
       true,
     )
+  })
+
+  // Compaction is foreground work, so an overload is retried under the policy's own backoff.
+  scenario("retries compaction when the provider is overloaded", function* (s) {
+    yield* s.llm.push(TestLLM.text("Earlier answer", "history"))
+    yield* s.runPrompt("Earlier question")
+    s.requests.length = 0
+    const hooks = yield* PluginHooks.Service
+    const proposed = yield* Queue.unbounded<PluginHooks.Domains["session"]["retry"]>()
+    // Only observes: the decision stays the policy's, and the compaction waits out its backoff.
+    yield* hooks.register("session", "retry", (event) => Queue.offer(proposed, { ...event }).pipe(Effect.asVoid))
+    yield* s.llm.push(
+      Stream.fail(overloaded()),
+      TestLLM.textWithUsage("## Objective\n- Accepted summary", "accepted", 30),
+    )
+    const compaction = yield* s.session.compact({ sessionID })
+    const run = yield* s.resume.pipe(Effect.forkChild)
+
+    expect((yield* Queue.take(proposed)).decision).toMatchObject({ retry: true })
+    yield* TestClock.adjust(FIRST_RETRY)
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
+      status: "completed",
+      summary: "## Objective\n- Accepted summary",
+    })
   })
 
   for (const header of [false, true]) {
@@ -5507,10 +5539,12 @@ describe("SessionRunnerLLM", () => {
 
   for (const failure of [providerUnavailable, websocketDisconnected]) {
     scenario(`bounds jittered exponential backoff before output for ${failure.name}`, function* (s) {
+      // The retried request takes this long to answer, on top of the backoff.
+      const answer = 400
       yield* s.admit("Retry transport")
       yield* s.llm.push(TestLLM.failAfter(failure(), LLMEvent.stepStart({ index: 0 })))
       yield* s.llm.push(
-        Stream.fromEffect(Effect.sleep(400)).pipe(
+        Stream.fromEffect(Effect.sleep(answer)).pipe(
           Stream.flatMap(() => Stream.fromIterable(TestLLM.text("Recovered", "retry-success"))),
         ),
       )
@@ -5518,9 +5552,12 @@ describe("SessionRunnerLLM", () => {
       const scheduled = yield* subscribeRetries(s)
       const run = yield* s.resume.pipe(Effect.forkChild)
       yield* Queue.take(scheduled)
-      yield* TestClock.adjust("1599 millis")
+      // One millisecond short of the shortest first gap: too early for any jitter.
+      const early = RETRY_GAPS_MIN[0] - 1
+      yield* TestClock.adjust(early)
       expect(s.requests).toHaveLength(1)
-      yield* TestClock.adjust("1201 millis")
+      // Then past the longest first gap and the retried request's own wait.
+      yield* TestClock.adjust(FIRST_RETRY + answer - early)
       yield* Fiber.join(run)
 
       expect(s.requests).toHaveLength(2)
@@ -5536,7 +5573,7 @@ describe("SessionRunnerLLM", () => {
       expect((yield* s.context).filter((message) => message.type === "assistant")).toHaveLength(1)
       const assistant = requireAssistant(yield* s.context)
       expect(DateTime.toEpochMillis(assistant.time.streamed!) - DateTime.toEpochMillis(assistant.time.created)).toBe(
-        400,
+        answer,
       )
     })
   }
@@ -5589,7 +5626,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(2)
@@ -5611,7 +5648,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(2)
@@ -5636,6 +5673,34 @@ describe("SessionRunnerLLM", () => {
     yield* Fiber.join(run)
     expect(s.requests).toHaveLength(2)
   })
+
+  // A runner step is foreground work, and so is a subagent's child session, which runs the same step.
+  for (const child of [false, true]) {
+    scenario(`retries an overloaded provider in ${child ? "a child session" : "a primary session"}`, function* (s) {
+      if (child)
+        yield* s.db
+          .update(SessionTable)
+          .set({ parent_id: Session.ID.make("ses_runner_parent") })
+          .where(eq(SessionTable.id, sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      yield* s.admit("Retry overload")
+      yield* s.llm.push(Stream.fail(overloaded()))
+      yield* s.llm.push(TestLLM.text("Recovered", "overload-success"))
+
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(FIRST_RETRY)
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      expect(yield* s.context).toMatchObject([
+        { type: "user" },
+        Expected.assistant({ finish: "stop" }, [Expected.text("Recovered")]),
+      ])
+    })
+  }
 
   scenario("caps an excessive provider retry-after delay at fifteen minutes", function* (s) {
     yield* s.admit("Retry capped rate limit")
@@ -5668,7 +5733,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(2)
@@ -5718,7 +5783,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(2)
@@ -5788,7 +5853,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(2)
@@ -5819,7 +5884,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests[1]?.messages.at(-2)).toMatchObject({
@@ -5863,7 +5928,7 @@ describe("SessionRunnerLLM", () => {
       const scheduled = yield* subscribeRetries(s)
       const run = yield* s.resume.pipe(Effect.forkChild)
       yield* Queue.take(scheduled)
-      yield* TestClock.adjust("2400 millis")
+      yield* TestClock.adjust(FIRST_RETRY)
       yield* Fiber.join(run)
 
       expect(s.requests).toHaveLength(2)
@@ -5901,7 +5966,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.executions).toEqual(["settled"])
@@ -5937,7 +6002,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "user"])
@@ -6073,7 +6138,7 @@ describe("SessionRunnerLLM", () => {
     const scheduled = yield* subscribeRetries(s)
     const run = yield* s.resume.pipe(Effect.forkChild)
     yield* Queue.take(scheduled)
-    yield* TestClock.adjust("2400 millis")
+    yield* TestClock.adjust(FIRST_RETRY)
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(3)
