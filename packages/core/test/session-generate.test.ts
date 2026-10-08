@@ -54,6 +54,7 @@ import { Tool } from "@orbit/core/tool"
 import { asc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
+import { stubSnapshot } from "./lib/tool"
 
 const requests: LLMRequest[] = []
 const options: Array<StreamOptions | undefined> = []
@@ -117,20 +118,22 @@ const references = Layer.mock(ReferenceInstructions.Service, { load: () => Effec
 const mcp = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
 const tools = Layer.mock(Tool.Service, {
   snapshot: () =>
-    Effect.succeed({
-      codeModeCatalog: {
-        tools: [
-          {
-            type: "tool",
-            name: "captured.lookup",
-            description: "Captured Code Mode catalog",
-            signature: "tools.captured.lookup(): Promise<string>",
-          },
-        ],
-      },
-      definitions: [ToolDefinition.make({ name: "lookup", description: "Lookup", inputSchema: { type: "object" } })],
-      execute: () => Effect.die(new Error("unused")),
-    }),
+    Effect.succeed(
+      stubSnapshot({
+        codeModeCatalog: {
+          tools: [
+            {
+              type: "tool",
+              name: "captured.lookup",
+              description: "Captured Code Mode catalog",
+              signature: "tools.captured.lookup(): Promise<string>",
+            },
+          ],
+        },
+        definitions: [ToolDefinition.make({ name: "lookup", description: "Lookup", inputSchema: { type: "object" } })],
+        execute: () => Effect.die(new Error("unused")),
+      }),
+    ),
   transform: () => Effect.die(new Error("unused")),
 })
 

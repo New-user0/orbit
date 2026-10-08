@@ -3,6 +3,7 @@ import { CodeModeTool } from "@orbit/core/codemode/tool"
 import { Permission } from "@orbit/core/permission"
 import { Tool } from "@orbit/core/tool"
 import { execute } from "@orbit/core/tool/runtime"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import { Agent } from "@orbit/schema/agent"
 import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
@@ -15,6 +16,7 @@ const context = {
   messageID: SessionMessage.ID.make("msg_execute"),
   id: Tool.CallID.make("call_execute"),
   progress: () => Effect.void,
+  traits: ToolTraits.defaults,
 }
 
 // The hosts these tests call are addresses, which a request connects to as they are, so by default nothing is pinned.

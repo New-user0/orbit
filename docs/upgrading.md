@@ -720,6 +720,65 @@ scripts reach local dev servers, set `experimental.allow_local_fetch` to `true` 
 loopback and private-network addresses and no others, and like the rest of `experimental` it is ignored in the config of
 a folder that is not trusted.
 
+## Plugins and SDK
+
+Changes to the tool API that plugins and code built on the SDK use.
+
+### Tools can declare traits, and a tool's context carries them
+
+A tool registered through a plugin or the SDK can now declare `traits`: whether a call is read-only, safe to run beside
+others or destructive (each a boolean, or a function of the decoded input that answers with a boolean), and fixed
+values such as `openWorld`, `interruptBehavior`, `maxResultChars`, `searchHint` and `displayName`. For every call, Orbit
+resolves them and passes the answers to the tool as `context.traits`. A trait a tool leaves out takes its default: not
+read-only, not concurrency-safe, not destructive, and `block` on interrupt.
+
+A call whose traits cannot be resolved gets conservative traits instead: not read-only, not concurrency-safe,
+destructive, and `block` on interrupt. That happens for a tool that is unknown or was not offered in the request, for
+input the schema rejects or fails to decode when a predicate needs to read it, and for a predicate that throws, fails
+or answers with anything but a boolean; the last case, and a schema that throws, are also logged. What a known tool
+declares about itself (`openWorld`, `requiresUserInteraction`, `cancelSiblingsOnFailure`, `maxResultChars`,
+`searchHint` and `displayName`) does not depend on the call, so a broken predicate leaves it as declared. Only
+`readOnly` may relax a permission decision, and a failing predicate never leaves it true. Nothing schedules, cancels
+or limits calls by these traits yet, so tools run as they did before.
+
+A registration whose traits are invalid is skipped with a log line, as other invalid registrations are, and the tools
+beside it still register, in an Effect plugin and in a Promise plugin alike. Invalid means an empty `displayName` or
+`searchHint`, a `maxResultChars` that is not a positive number (`Infinity` is allowed, and declares that the result is
+never to be written to a file), an `interruptBehavior` other than `cancel` or `block`, a trait of the wrong type, or
+`traits` that is not an object, such as text, a number, `null` or an array. An update that would leave a tool with
+invalid traits keeps the earlier definition.
+
+**Affects:** plugin authors and code built on the SDK. `Tool.Context` gains a required `traits` field, so code that
+builds a context by hand, for example to call a tool's `execute` in a test, must add it. `Tool.Snapshot` gains `traits`
+and `describe`, and the prepared model request gains `toolTraits` and `describeTool`, so code that implements either
+must add them. The SDK exports `Traits` and `ResolvedTraits`, and a Promise plugin declares predicates that answer with
+a boolean or a Promise of one.
+
+**What to do:** Nothing for plugins that are already running; declaring `traits` is optional. If your code builds a
+context by hand, add a `traits` record to it; the defaults are every boolean `false` and `interruptBehavior: "block"`.
+
+### A tool's `searchHint` helps Code Mode search find it
+
+A tool's `traits.searchHint` was accepted and ignored. Code Mode's `search` now matches it: a program that searches for a
+word in the hint finds the tool. A match in the hint counts for less than a match in the tool's name and for more than
+one in its description. The hint only ranks the tool; `search` and the catalog return the same fields as before. It
+applies to the tools that Code Mode offers, which is every tool that does not set `codemode: false`. A tool that sets it
+is advertised to the model directly and is not searched. `Tool.make` in `@orbit/codemode` takes the same `searchHint`
+option.
+
+How a tool is offered did not change, and `Tool.Options` now documents it: `codemode: false` advertises the tool
+directly, leaving `codemode` out or setting anything else defers it into Code Mode, and `pinned: true` also keeps a
+deferred tool in the catalog that the model sees first. There is no separate `defer` or `alwaysLoad` option. Core reads
+these two options in one place, `ToolTraits.exposure` and `ToolTraits.pinned` in `@orbit/core/tool/traits`.
+
+**Affects:** plugin authors and code built on the SDK or `@orbit/codemode` whose tools declare a `searchHint`: the order
+of their Code Mode search results changes, and a tool can now appear for a word that only its hint contains. Code that
+reads `options.codemode` or `options.pinned` of a registration to tell where a tool goes can ask the two functions
+instead.
+
+**What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
+would use for it.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.

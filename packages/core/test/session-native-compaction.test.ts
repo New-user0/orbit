@@ -26,6 +26,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { DateTime, Deferred, Effect, Fiber, Schema } from "effect"
 import { testEffect } from "./lib/effect"
+import { stubSnapshot } from "./lib/tool"
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -198,12 +199,12 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
       initial: history.initial,
       messages: history.messages,
       agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
-      tools: {
+      tools: stubSnapshot({
         definitions: [
           ToolDefinition.make({ name: "read", description: "Read a file", inputSchema: { type: "object" } }),
         ],
         execute: () => Effect.die("Compaction must never dispatch tools"),
-      },
+      }),
     }
   })
   // Opens the compaction's message as the runner does when it delivers `/compact`.

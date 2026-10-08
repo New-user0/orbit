@@ -30,6 +30,7 @@ import { Shell } from "@orbit/schema/shell"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { stubSnapshot } from "./lib/tool"
 
 let requests: LLMRequest[] = []
 const model = LanguageModel.make({
@@ -189,12 +190,12 @@ it.effect("auto compaction estimates current content against the buffered prompt
         info: { ...Agent.Info.default(Agent.defaultID), system: "You are a helpful assistant." },
       },
       initial: "Project instructions.",
-      tools: {
+      tools: stubSnapshot({
         definitions: [
           ToolDefinition.make({ name: "read", description: "Read files", inputSchema: { type: "object" } }),
         ],
         execute: () => Effect.die("unused"),
-      },
+      }),
     })
     // An automatic compaction that is not due is skipped.
     const due = (context: SessionContext.Loaded) =>
@@ -325,7 +326,7 @@ const loaded = (session: Session.Info, messages: readonly SessionMessage.Info[])
   model: resolved,
   agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
   initial: "Session instructions",
-  tools: { definitions: [], execute: () => Effect.die("Compaction must not execute tools") },
+  tools: stubSnapshot({ definitions: [], execute: () => Effect.die("Compaction must not execute tools") }),
 })
 
 /** Opens the compaction's message as the runner does when it delivers `/compact`, then compacts. */
