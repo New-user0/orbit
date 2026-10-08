@@ -736,8 +736,8 @@ arrived complete is not affected, and still runs when a later call in the same r
 stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
 still runs with empty arguments.
 
-A cut-off call never counts as the evidence that its response finished. Two kinds of stream used to report `tool-calls`
-because such a call was in them, which released the call: a Responses-style stream that the provider ended as
+A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
+`tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
 incomplete, with no reason or a reason Orbit does not know, and a Chat-style stream that ended without a finish reason
 from a model whose `compatibility.requireFinishReason` is `false`. Both now report an unknown finish, so the call is
 dropped, and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
