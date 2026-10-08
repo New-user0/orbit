@@ -263,8 +263,10 @@ not. Leave compatibility on if you want Zed's selection in the TUI.
 message, so `orb -p run the tests` sends "run the tests" and never starts `orb run`; the flag may come anywhere before
 a literal `--`, except that when the first word is a subcommand `-p` must come before it: `orb debug this -p` goes to
 the `debug` subcommand and `orb run -p` is still a `run` command line (a usage error). A word right after a flag that takes a value is that
-flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the next word, so `orb -p yes do it` sends
-"yes do it". `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
+flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the next word into the message, so `orb -p yes do it` sends
+"yes do it" and `orb -p --thinking false positives` sends "false positives" with thinking on; write `--no-thinking` or
+`--thinking=false` to turn a flag off. Only to find the subcommand does `orb` treat a yes/no/true/false word after a
+boolean flag as its value, so `orb --standalone yes serve -p` is still a `serve` command line. `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
 object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
 takes the same flags from one shared definition. The flags that `orb` takes only with `-p` (`--output-format`,
 `--model`, `--agent`, `--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error on `orb` without `-p`;

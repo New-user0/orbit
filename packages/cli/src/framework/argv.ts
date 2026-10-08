@@ -8,6 +8,7 @@ export type Classified = {
 const valueLong = new Set<string>(RootValueFlags.long)
 const valueShort = new Set<string>(RootValueFlags.short)
 const booleanShort = new Map(Object.entries(PrintBooleanFlags).flatMap(([name, short]) => (short ? [[short, name]] : [])))
+const literals = new Set(["true", "1", "y", "yes", "on", "false", "0", "n", "no", "off"])
 const subcommands = new Set<string>(Subcommands)
 
 /**
@@ -17,8 +18,10 @@ const subcommands = new Set<string>(Subcommands)
  * flag's value. A line is a print line when `-p` or `--print` (alone or in a cluster of short flags) is there and either
  * the first word is not a subcommand or the flag comes before it, so `orb -p run the tests` sends "run the tests" and
  * `orb run -p` stays a `run` command line. For a print line every boolean flag is rewritten to its inline form
- * (`--print=true`), so a following word such as `yes` stays in the message instead of becoming the flag's value. The
- * tokens from `--` on are never touched.
+ * (`--print=true`), so a following word such as `yes` stays in the message instead of becoming the flag's value. When
+ * finding the first word, though, a yes/no/true/false literal right after a bare boolean flag is that flag's value, as
+ * the parser reads it on an ordinary line, so `orb --standalone yes serve -p` is still a `serve` line. The tokens from
+ * `--` on are never touched.
  */
 export function classify(argv: ReadonlyArray<string>): Classified {
   const separator = argv.indexOf("--")
@@ -44,11 +47,14 @@ type Token =
 function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
   const result: Token[] = []
   let expectsValue = false
-  // The true or false right after a boolean flag written without a value is that flag's value, which the flag carries.
-  let literalAt = -1
-  for (const [index, text] of flags.entries()) {
-    if (index === literalAt) {
-      result.push({ kind: "value", rewritten: [] })
+  // The parser takes a literal right after a boolean flag written without a value as that flag's value. It is only
+  // classified that way here, so it is never the first word; a print line still sends it as part of the message.
+  let afterBoolean = false
+  for (const text of flags) {
+    const bare = afterBoolean
+    afterBoolean = false
+    if (bare && literals.has(text)) {
+      result.push({ kind: "value", rewritten: [text] })
       continue
     }
     if (expectsValue) {
@@ -60,16 +66,14 @@ function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
       const equals = text.indexOf("=")
       const name = equals === -1 ? text.slice(2) : text.slice(2, equals)
       if (equals === -1 && valueLong.has(name)) expectsValue = true
-      const boolean = equals === -1 && name in PrintBooleanFlags
-      const next = flags[index + 1]
-      const literal = boolean && (next === "true" || next === "false") ? next : undefined
-      if (literal) literalAt = index + 1
+      const boolean = equals === -1 && Object.hasOwn(PrintBooleanFlags, name)
+      afterBoolean = boolean
       // The parser reads --no-<name> as <name> turned off.
-      const negated = equals === -1 && name.startsWith("no-") && name.slice(3) in PrintBooleanFlags
+      const negated = equals === -1 && name.startsWith("no-") && Object.hasOwn(PrintBooleanFlags, name.slice(3))
       result.push({
         kind: "flag",
-        print: name === "print" && literal !== "false" && text !== "--print=false",
-        rewritten: [negated ? `--${name.slice(3)}=false` : boolean ? `${text}=${literal ?? "true"}` : text],
+        print: name === "print" && text !== "--print=false",
+        rewritten: [negated ? `--${name.slice(3)}=false` : boolean ? `${text}=true` : text],
       })
       continue
     }
@@ -81,6 +85,7 @@ function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
     if (/^-[A-Za-z]+$/.test(text)) {
       const cluster = expand(text.slice(1))
       expectsValue = cluster.value
+      afterBoolean = !cluster.value && booleanShort.has(text.at(-1) ?? "")
       result.push({ kind: "flag", print: cluster.names.includes("print"), rewritten: cluster.rewritten })
       continue
     }

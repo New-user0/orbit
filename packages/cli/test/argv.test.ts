@@ -28,7 +28,11 @@ test.each([
   [["-p", "--thinking", "yes"], ["--print=true", "--thinking=true", "yes"]],
   [["-p", "--bare=false", "x"], ["--print=true", "--bare=false", "x"]],
   [["-p", "--no-thinking", "yes", "do", "it"], ["--print=true", "--thinking=false", "yes", "do", "it"]],
-  [["-p", "--thinking", "false", "yes"], ["--print=true", "--thinking=false", "yes"]],
+  [["-p", "--thinking", "false", "yes"], ["--print=true", "--thinking=true", "false", "yes"]],
+  [["-p", "--bare", "true", "or", "false:"], ["--print=true", "--bare=true", "true", "or", "false:"]],
+  [["-p", "-c", "false", "story"], ["--print=true", "--continue=true", "false", "story"]],
+  [["--print", "no", "x"], ["--print=true", "no", "x"]],
+  [["-p", "--constructor", "x"], ["--print=true", "--constructor", "x"]],
   [["-s=abc", "-p", "run"], ["-s=abc", "--print=true", "run"]],
 ])("%j is a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
@@ -43,6 +47,8 @@ test.each([
   [["--server", "-p", "run", "a"]],
   [["-s=abc", "run", "-p"]],
   [["--standalone", "true", "run", "-p"]],
+  [["--standalone", "yes", "serve", "-p"]],
+  [["-c", "false", "run", "-p"]],
   [["--", "-p"]],
   [["service", "start"]],
   [["dir"]],
@@ -92,5 +98,8 @@ test("the flag tables match the flags that orb --help and orb -p --help print", 
       .filter((name) => !hidden.includes(name))
       .sort(),
   )
-  for (const flag of [...booleans(print), ...booleans(root)]) expect(PrintBooleanFlags[flag.long]).toBe(flag.short)
+  for (const flag of [...booleans(print), ...booleans(root)]) {
+    expect(Object.keys(PrintBooleanFlags)).toContain(flag.long)
+    expect(PrintBooleanFlags[flag.long]).toBe(flag.short)
+  }
 }, 60_000)
