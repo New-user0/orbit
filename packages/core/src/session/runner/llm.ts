@@ -3,7 +3,7 @@ export * as SessionRunnerLLM from "./llm.js"
 import { Message } from "@orbit/ai"
 import { Model } from "@orbit/schema/model"
 import { plain } from "@orbit/util/plain"
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
 import { Bus } from "../../bus.js"
@@ -48,29 +48,46 @@ const ESCALATE_OUTPUT_LIMIT =
   "The previous response reached the output cap, so the request is repeated with a larger one."
 
 /**
- * The messages since the last response that ended normally. A failed or interrupted response (a retry or an
- * incomplete stream) does not end the stretch, so one logical step cannot resume or escalate without bound.
+ * The resume and escalation notices since the last response that ended normally (a user message, an idle marker or a
+ * response that finished with `stop` or `tool-calls`). A failed or interrupted response does not end the stretch, so
+ * one logical step cannot resume or escalate without bound. Read from the durable rows rather than the runner's
+ * history, which starts at the latest compaction: a compaction between resumes would otherwise reset both counts.
  */
-const sinceNormalEnd = (messages: ReadonlyArray<SessionMessage.Info>) =>
-  messages.slice(
-    messages.findLastIndex(
-      (message) =>
-        message.type === "user" ||
-        message.type === "idle" ||
-        (message.type === "assistant" && (message.finish === "stop" || message.finish === "tool-calls")),
-    ) + 1,
-  )
-
-const countNotices = (messages: ReadonlyArray<SessionMessage.Info>, notice: string) =>
-  messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === notice).length
-
-/** Resume notices in the current stretch; read from history. */
-const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>) =>
-  countNotices(sinceNormalEnd(messages), "output-limit")
-
-/** Whether the output cap was escalated in the current stretch; the maximum lasts until a response ends normally. */
-const outputEscalated = (messages: ReadonlyArray<SessionMessage.Info>) =>
-  countNotices(sinceNormalEnd(messages), "output-escalation") > 0
+const outputRecovery = Effect.fnUntraced(function* (db: Database.Interface["db"], sessionID: SessionSchema.ID) {
+  const notice = sql`json_extract(${SessionMessageTable.data}, '$.metadata.notice')`
+  const normalEnd = db
+    .select({ seq: sql<number>`coalesce(max(${SessionMessageTable.seq}), -1)` })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        or(
+          inArray(SessionMessageTable.type, ["user", "idle"]),
+          and(
+            eq(SessionMessageTable.type, "assistant"),
+            sql`json_extract(${SessionMessageTable.data}, '$.finish') in ('stop', 'tool-calls')`,
+          ),
+        ),
+      ),
+    )
+  const row = yield* db
+    .select({
+      streak: sql<number>`coalesce(sum(${notice} = 'output-limit'), 0)`,
+      escalations: sql<number>`coalesce(sum(${notice} = 'output-escalation'), 0)`,
+    })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "synthetic"),
+        gt(SessionMessageTable.seq, sql`(${normalEnd})`),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  // The maximum lasts until a response ends normally.
+  return { streak: row?.streak ?? 0, escalated: (row?.escalations ?? 0) > 0 }
+})
 
 /** Consecutive overloads on one model before the step moves to the turn's fallback model. */
 const FALLBACK_AFTER_OVERLOADS = 3
@@ -337,6 +354,7 @@ const layer = Layer.effect(
           assistantMessageID = SessionMessage.ID.create()
           continue
         }
+        const recovery = yield* outputRecovery(db, sessionID)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
@@ -359,7 +377,7 @@ const layer = Layer.effect(
           webSocket: "session",
           inputTokens: SessionCompaction.estimatePrompt(loaded),
           outputTokenCap: loaded.outputTokenCap,
-          outputEscalated: outputEscalated(loaded.messages),
+          outputEscalated: recovery.escalated,
         })
         const outcome = yield* steps.attempt({
           isLocationClosed: lifecycle.isClosed,
@@ -396,7 +414,7 @@ const layer = Layer.effect(
             const limit = yield* turnLimit(loaded, current.options)
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
-            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return "limited" as const
+            if (recovery.streak >= MAX_OUTPUT_RECOVERIES) return "limited" as const
             // A text-only resume never reaches the step boundary, so a waiting steered message would sit behind up to
             // three requests. Return now: the boundary delivers it and its user message starts a fresh streak.
             if (
@@ -412,8 +430,8 @@ const layer = Layer.effect(
             if (
               !outcome.toolCalled &&
               prepared.escalation &&
-              outputLimitStreak(loaded.messages) === 0 &&
-              !outputEscalated(loaded.messages)
+              recovery.streak === 0 &&
+              !recovery.escalated
             ) {
               yield* bus.publish(SessionEvent.Synthetic, {
                 sessionID,

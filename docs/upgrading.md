@@ -1461,8 +1461,8 @@ When a model response stops because it reached its output limit, Orbit now adds 
 resume where it stopped and sends the request again, up to three times in a row. Before, the turn ended with the cut-off
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
 `tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
-the next cut-off stays as it is. The count comes from the session history and starts over after any response that
-finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the
+the next cut-off stays as it is. The count comes from the session's stored messages and starts over after any response
+that finishes with `stop` or `tool-calls` and after a new message from you. A compaction does not reset it. The limit holds whether the
 cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
 `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
 no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
@@ -1553,8 +1553,8 @@ never repeated, since a repeat would run and bill the call again. The cut-off at
 note with `metadata.notice` set to `output-escalation` (and `metadata.replaces` naming that attempt) stay in the
 session's messages but are left out of every later request, token estimate, compaction summary and regenerated title, including in a fork,
 whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
-`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction empties the history
-the runner reads, so a long stretch can escalate again after one. A `session.context` hook that changes or removes the
+`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction does not end it, and
+a stretch escalates at most once however often it compacts. A `session.context` hook that changes or removes the
 output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
 
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.

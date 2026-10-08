@@ -9026,6 +9026,89 @@ describe("SessionRunnerLLM", () => {
     expect(JSON.stringify(s.requests[0]?.messages)).not.toContain("FirstCut")
   })
 
+  // A compaction between resumes drops the runner's history before it, so the caps must come from the durable rows.
+  // Each cut-off fills the 4k window, which makes the next pass compact before it resumes.
+  const overflowing = {
+    reason: { normalized: "length", raw: "max_tokens" },
+    usage: { nonCachedInputTokens: 3_950, outputTokens: 10 },
+  } as const
+  const text = (id: string, value: string) => [
+    LLMEvent.textStart({ id }),
+    LLMEvent.textDelta({ id, text: value }),
+    LLMEvent.textEnd({ id }),
+  ]
+  const withSummaries = (cuts: ReadonlyArray<ReturnType<typeof TestLLM.complete>>) =>
+    cuts.flatMap((cut, index) => [cut, TestLLM.text("## Objective\n- Keep going", `cmp-summary-${index}`)])
+  for (const row of [
+    { name: "text only", cut: (n: number) => TestLLM.complete(overflowing, ...text(`cmp-${n}`, String(n))) },
+    {
+      name: "a cut-off tool call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          overflowing,
+          LLMEvent.toolInputStart({ id: `cmp-call-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cmp-call-${n}`, name: "echo", text: '{"text":"par' }),
+          LLMEvent.toolCall({ id: `cmp-call-${n}`, name: "echo", input: { text: "par" }, partialInput: true }),
+        ),
+    },
+    {
+      name: "an input that never became a call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          overflowing,
+          LLMEvent.toolInputStart({ id: `cmp-input-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cmp-input-${n}`, name: "echo", text: '{"text":' }),
+        ),
+    },
+    {
+      name: "a tool call that ran",
+      cut: (n: number) =>
+        TestLLM.complete(overflowing, LLMEvent.toolCall({ id: `cmp-ran-${n}`, name: "echo", input: { text: String(n) } })),
+    },
+  ])
+    scenario(`stops resuming after three output-limit stops with a compaction between them: ${row.name}`, function* (s) {
+      s.currentModel = compactModel
+      yield* s.admit("Never finishes")
+      yield* s.llm.push(
+        ...withSummaries(Array.from({ length: 8 }, (_, index) => row.cut(index + 1))),
+        TestLLM.text("Done", "cmp-done"),
+      )
+
+      yield* s.resume
+
+      const all = yield* s.session.messages({ sessionID })
+      expect(all.filter((message) => message.type === "assistant" && message.finish === "length")).toHaveLength(4)
+      expect(notices(all, "output-limit")).toHaveLength(3)
+    })
+
+  scenario("escalates a capped reply once even when a compaction follows the escalation", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+    ])
+    s.currentModel = fittedOutputModel
+    const full = {
+      reason: { normalized: "length", raw: "max_tokens" },
+      usage: { nonCachedInputTokens: 99_000, outputTokens: 10 },
+    } as const
+    yield* s.admit("Never finishes")
+    yield* s.llm.push(
+      // The escalated retry follows its cut-off directly; a compaction runs before each request after that.
+      TestLLM.complete(full, ...text("cmp-esc-0", "x")),
+      TestLLM.complete(full, ...text("cmp-esc-1", "x")),
+      ...Array.from({ length: 6 }, (_, index) => [
+        TestLLM.text("## Objective\n- Keep going", `cmp-esc-summary-${index}`),
+        TestLLM.complete(full, ...text(`cmp-esc-${index + 2}`, "x")),
+      ]).flat(),
+      TestLLM.text("Done", "cmp-esc-done"),
+    )
+
+    yield* s.resume
+
+    const all = yield* s.session.messages({ sessionID })
+    expect(notices(all, "output-escalation")).toHaveLength(1)
+    expect(notices(all, "output-limit")).toHaveLength(3)
+  })
+
   scenario("does not escalate when a hook set the output limit", function* (s) {
     const hooks = yield* PluginHooks.Service
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
