@@ -741,6 +741,21 @@ const recordedEventTypes = (id: Session.ID) =>
       )
   })
 
+const batchBoundaryEvents = (id: Session.ID) =>
+  recordedEventTypes(id).pipe(
+    Effect.map((types) => {
+      const relevant = types.filter((type) =>
+        [
+          "session.tool.success.2",
+          "session.step.started.1",
+          "session.step.ended.1",
+          "session.inbox.delivered.1",
+        ].includes(type),
+      )
+      return relevant.slice(relevant.indexOf("session.tool.success.2"))
+    }),
+  )
+
 const recordedStepSettlementEvents = (id: Session.ID, assistantMessageID: SessionMessage.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -1271,21 +1286,22 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[0])).toEqual(["Start background work"])
     expect((yield* s.context).map((message) => message.type)).toEqual(["user", "assistant", "synthetic", "assistant"])
     expect(yield* s.inbox).toEqual([])
-    expect(
-      (yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1"),
-    ).toHaveLength(2)
+    expect(yield* batchBoundaryEvents(sessionID)).toEqual([
+      "session.tool.success.2",
+      "session.step.ended.1",
+      "session.inbox.delivered.1",
+      "session.step.started.1",
+      "session.step.ended.1",
+    ])
   })
 
   scenario("delivers a notice only after every tool in the batch has joined", function* (s) {
     yield* s.admit("Echo twice in parallel")
     yield* s.llm.push(
-      Stream.fromIterable([
-        LLMEvent.stepStart({ index: 0 }),
+      TestLLM.toolCalls(
         LLMEvent.toolCall({ id: "call-echo-0", name: "echo", input: { text: "0" } }),
         LLMEvent.toolCall({ id: "call-echo-1", name: "echo", input: { text: "1" } }),
-        LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" } }),
-        LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
-      ]),
+      ),
       TestLLM.text("Handled notice", "text-notice"),
     )
     const tools = yield* s.blockTools(2)
@@ -1293,7 +1309,6 @@ describe("SessionRunnerLLM", () => {
     yield* tools.started
     expect(yield* tools.maxActive).toBe(2)
     yield* s.session.synthetic({ sessionID, text: "Shell job finished" })
-    yield* Effect.yieldNow
     expect(s.requests).toHaveLength(1)
 
     yield* tools.release
@@ -1303,6 +1318,14 @@ describe("SessionRunnerLLM", () => {
     expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "tool", "user"])
     expect(userTexts(s.requests[1])).toEqual(["Echo twice in parallel", "Shell job finished"])
     expect(yield* s.inbox).toEqual([])
+    expect(yield* batchBoundaryEvents(sessionID)).toEqual([
+      "session.tool.success.2",
+      "session.tool.success.2",
+      "session.step.ended.1",
+      "session.inbox.delivered.1",
+      "session.step.started.1",
+      "session.step.ended.1",
+    ])
   })
 
   scenario("keeps a queued prompt admitted during a tool batch out of the tool continuation", function* (s) {
@@ -1323,6 +1346,7 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests).toHaveLength(3)
     expect(userTexts(s.requests[1])).toEqual(["Echo before queue"])
     expect(userTexts(s.requests[2])).toEqual(["Echo before queue", "Queued for later"])
+    expect(messageRoles(s.requests[2])).toEqual(["user", "assistant", "tool", "assistant", "user"])
     expect(yield* s.inbox).toEqual([])
   })
 
