@@ -1400,3 +1400,15 @@ a step. No new event type is added.
 **Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
 
 **What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.
+
+### A new message from you cancels tools that can be cancelled
+
+Sending a message while a step is still running (the default delivery, "steer") now cancels the tool calls that are
+safe to drop, such as reads, searches and web lookups, including ones still waiting to start. The model sees them as
+cancelled and your message is delivered at the next step boundary. Tools that must finish, such as shell commands,
+subagents and MCP tools, keep running, and calls queued behind them still run in order. Queued messages and background
+completion notices never cancel anything. Before, every call ran to the end before your message was delivered.
+
+**Affects:** anyone who types or sends a prompt while Orbit is running tools, including SDK and API callers.
+
+**What to do:** Nothing. Send the message with delivery "queue" to let running calls finish first.

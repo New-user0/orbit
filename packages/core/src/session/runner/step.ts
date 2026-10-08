@@ -15,6 +15,7 @@ import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@orbit/schema/session-error"
 import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
+import { Database } from "../../database/database.js"
 import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { Permission } from "../../permission.js"
 import { Snapshot } from "../../snapshot.js"
@@ -23,6 +24,7 @@ import { ToolOutput } from "../../tool-output.js"
 import { QuestionTool } from "../../tool/plugin/question.js"
 import { StepFailedError } from "../error.js"
 import { SessionEvent } from "../event.js"
+import { SessionInbox } from "../inbox.js"
 import { SessionMessage } from "../message.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionSchema } from "../schema.js"
@@ -80,12 +82,18 @@ const SKIPPED_AFTER_REJECTION = {
   type: Tool.ErrorCode.Cancelled,
   message: "Not run: the user rejected an earlier tool call and gave feedback",
 } as const
+// A new user message settles the calls that can be cancelled as cancelled, so the model sees they never finished.
+const STEERED = {
+  type: Tool.ErrorCode.Cancelled,
+  message: "Cancelled because the user sent a new message",
+} as const
 const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
 
 /** Captures Location-scoped dependencies without introducing another service or execution loop. */
 export const make = Effect.gen(function* () {
   const bus = yield* Bus.Service
   const config = yield* Config.Service
+  const db = (yield* Database.Service).db
   const llm = yield* LLMClient.Service
   const snapshots = yield* Snapshot.Service
   const toolOutput = yield* ToolOutput.Service
@@ -108,6 +116,33 @@ export const make = Effect.gen(function* () {
       onQueued: (id) => publisher.hint(id, { queued: true }),
       onStarted: (id) => publisher.hint(id, {}),
     })
+    // Traits resolve after a call registers, so a steer cancels the calls whose traits are known and each later call
+    // checks the flag once its own traits arrive.
+    const interruptBehavior = new Map<string, "cancel" | "block">()
+    let steered = false
+    const cancelSteered = scheduler.cancel(
+      { running: true, future: false, select: (id) => steered && interruptBehavior.get(id) === "cancel" },
+      STEERED,
+    )
+    // A steer is a user message that the next step boundary delivers; queued and synthetic input cancels nothing.
+    yield* bus.subscribe([SessionEvent.InboxEnqueued, SessionEvent.InboxDeliveryChanged]).pipe(
+      Stream.filter((event) => event.data.sessionID === input.sessionID),
+      Stream.filterEffect((event) =>
+        event.type === "session.inbox.enqueued"
+          ? Effect.succeed(event.data.item.type === "user" && event.data.item.delivery === "steer")
+          : event.data.delivery === "steer"
+            ? // A row that is gone has already been delivered.
+              SessionInbox.find(db, event.data.inboxID).pipe(Effect.map((item) => item?.type === "user"))
+            : Effect.succeed(false),
+      ),
+      Stream.runForEach(() =>
+        Effect.suspend(() => {
+          steered = true
+          return cancelSteered
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
     const toolRuns: Array<{
       readonly call: ToolCall
       readonly fiber: Fiber.Fiber<void, Permission.DeclinedError | QuestionTool.CancelledError>
@@ -157,6 +192,12 @@ export const make = Effect.gen(function* () {
               // A forked child does not inherit the mask, so keep it: publishing the outcome must not be interrupted.
               return Effect.forkScoped(
                 restore(input.prepared.toolTraits(event)).pipe(
+                  Effect.tap((traits) =>
+                    Effect.suspend(() => {
+                      interruptBehavior.set(event.id, traits.interruptBehavior)
+                      return steered ? cancelSteered : Effect.void
+                    }),
+                  ),
                   Effect.flatMap((traits) =>
                     restore(
                       scheduler.run(
