@@ -12,7 +12,7 @@ import { TaskTools } from "@orbit/core/tool/plugin/tasks"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
-import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
+import { executeTool, expectRegistryAsks, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const node = makeLocationNode({
   name: "test/task-tools-plugin",
@@ -38,6 +38,7 @@ describe("task tools", () => {
   it.effect("create tasks with dependencies, update and delete them, and keep sessions apart", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
+      yield* expectRegistryAsks(registry, ["task_create", "task_update", "task_list"])
       expect(yield* toolTraits(registry, "task_create")).toMatchObject({ readOnly: false, concurrencySafe: false })
       expect(yield* toolTraits(registry, "task_update")).toMatchObject({ readOnly: false, concurrencySafe: false })
       expect(yield* toolTraits(registry, "task_list")).toMatchObject({ readOnly: true, concurrencySafe: true })

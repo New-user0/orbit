@@ -91,6 +91,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
   hints and permissions` in `core/test/mcp.test.ts`.
+- A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
+  model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
+  a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
+  gate in `executeTool` (`packages/core/src/tool.ts`). Plugin code is trusted and can still call a listed tool's
+  `execute` directly, which skips hooks, validation and the gate. A tool asks about a call itself only when
+  `options.authorizes` is `true` or a predicate answers `true`; a tool that leaves it out, or whose predicate throws, fails,
+  dies or answers with anything else, is asked about on its permission action or its name. MCP annotations never set it.
+  Proof: `core/test/tool-gate.test.ts` (`every door into tool execution`, including the Promise adapter's add and
+  update, and `MCP tools`), `core/test/session-runner.test.ts` (`does not authorize itself`, `registry gate is declined`),
+  `plugin-browser/test/tools.test.ts` (the browser tools ask on `browser`), and the `expectRegistryAsks` line in the suite
+  of each built-in the registry asks about.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:
@@ -740,13 +751,13 @@ runs" is a permission.
   choose which rules, agent or mode apply? Then it is a permission, `withhold("permissions")`, and a permission list
   keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming` keeps only
   `false`.
-- A field that picks a model, a provider or a step budget is not covered by that rule, and the table does not treat it
-  as a permission: `model` (in the config, in every agent and in every command) and an agent's `steps` are `inert`. An
-  untrusted folder can therefore choose the most expensive of the models that you configured, or another provider that
-  you configured, and raise how many steps an agent takes. It cannot add a provider, because `providers` and an agent's
-  `request` are withheld. Whether that is acceptable is an open decision (Known gaps). Until it is made, do not write
-  "model or provider" into a rule as if it were settled, and ask before you classify a new field of that kind as inert
-  on the example of these.
+- A field that picks a model, a provider or a budget is withheld too, as `providers`, so that an untrusted folder
+  cannot choose the most expensive of the models that you configured, another provider that you configured, or a larger
+  step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
+  receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
+  `withhold("providers")`.
+  `fallback_model` is withheld the same way. There is no `output_token_cap` field in the config today; when it is
+  added, classify it the same way. Never classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
   enforced, as `hooks.disabled` has yet to be, read it in policy-authority order and not by value precedence, or a
   repository could switch off the user's guard hooks (#7).
@@ -771,7 +782,7 @@ runs" is a permission.
 **Review questions:**
 
 - Does this field choose which rules, agent or mode apply? Then it is a permission: where is it classified?
-- Does it pick a model, a provider or a step budget? Then it is the open decision above: ask before you call it inert.
+- Does it pick a model, a provider or a budget? Then it is withheld as `providers`, never inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
 - Does a default or fallback name an agent or a mode by constant instead of by configuration?
@@ -1121,7 +1132,7 @@ gray-matter's default engines, or a marker test per reader written with the spec
 ### 12. Entry points and process boundaries each need the gate
 
 **Rule:** List every command, subprocess and process that can start work or load a file (`run`, `loop`, `flow run`,
-`resume` and `replay`, `eval`, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
+`resume` and `replay`, `eval`, `orb -p`, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
 route each one through the one gate. A gate in the server does not reach the CLI or the terminal UI process.
 
 **Why:** The same loader had several doors. A check on `orb flow run` did not cover replay or resume, the server's
@@ -1138,7 +1149,9 @@ already guarded elsewhere.
 **How to comply:**
 
 - `requireTrust`, `trustRefusal` and `warnUntrusted` in `packages/cli/src/util/trust.ts`. The handlers for `run`,
-  `loop`, `flow run`, `flow resume`, `flow replay` and `eval` call them before any load. `orb acp` cannot stop, because
+  `loop`, `flow run`, `flow resume`, `flow replay`, `eval` and `orb -p` (`handlers/print.ts`, through the `headlessInput`
+  that `run` shares, so the `--server` and 404-stub variants of the `run` rows in `trust.test.ts` cover it) call them
+  before any load. `orb acp` cannot stop, because
   the editor chooses the folders, so it warns on stderr and keeps stdout for the protocol.
 - `--trust` forces a private server and trusts for its lifetime without storing the grant (it rejects `--server`).
   `orb trust [folder] [--revoke] [--list]` refuses home and filesystem roots.
@@ -1371,14 +1384,15 @@ fixes it or asks.
   is no revoke-by-directory route for a deleted folder. The VS Code extension names such a folder and gives no command
   for it (`packages/vscode/test/trust-text.test.ts`), which leaves the terminal UI, `orb run` and `orb trust` with the
   advice.
-- **`model` and `steps` are inert.** `ConfigTrust.classification` keeps `model` (in the config, in every agent and in
-  every command) and an agent's `steps` as written while a folder is untrusted. A folder can therefore switch a session
-  to the most expensive model of a provider that you configured, or send your prompts to another provider that you
-  configured, and raise how many steps an agent takes. It cannot add a provider or an endpoint, because `providers` and
-  an agent's `request` are withheld. The promise says that no file may spend your money, and the user-facing note lists
-  `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
-  [upgrading](upgrading.md) note. Until it is made, class 8 calls a field a permission only when it selects which rules,
-  agent or mode apply.
+- **Decided: `model`, a provider and a budget are withheld.** The owner decided on 2026-10-08, choosing "Withhold
+  all, now": "Every field that picks a model, provider or budget (top-level model, agent model and steps, side/title
+  models, fallback_model, output_token_cap) is withheld in untrusted folders; Orbit uses your own settings until you
+  trust the folder." `ConfigTrust.classification` therefore withholds, as `providers`, the top-level `model`, the
+  `model` and `steps` of every agent (so also `agents.title.model` and `agents.side.model`) and the `model` of
+  every command, from the config and from agent and command files (`test/config/trust.test.ts`,
+  `test/config/agent.test.ts`), and `fallback_model` the same way. The config has no `output_token_cap` field yet;
+  the task that adds it classifies it the same way. No command-file test pins the `model` of a command: `sanitizeCommands` is tested
+  on a command record only.
 - **Text that the person did not write, in `orb run`, and sinks without their own test.** The terminal UI and Mini
   write control characters out of message bodies with `bodyText` (task `clients-ux-60`), and
   `test/body-sinks.test.tsx` pins the sinks listed in the inventory. Changed in the code but not pinned by a test: the
@@ -1510,7 +1524,7 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
       validator, templates count, and a gate-versus-runner test covers replay, resume and eval (2).
 - [ ] Every config key, agent field and command field is classified in `ConfigTrust.classification`. A field that
       chooses which rules, agent or mode apply is a permission, and untrusted sources get deny rules only. A field that
-      picks a model, a provider or a step budget is the open decision in Known gaps: ask before calling it inert (8).
+      picks a model, a provider or a budget is withheld as `providers`, never inert (8).
 
 **It runs commands** (spawns, shell, hooks, plugins, workflow nodes, git)
 

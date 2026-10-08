@@ -921,6 +921,16 @@ export type SessionUsageRecorded = {
   data: { sessionID: string; source: "title" | "compaction"; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
+export type SessionSideQueryRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.side_query.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; purpose: string; cost: MoneyUSD; tokens: TokenUsageInfo }
+}
+
 export type LocationShutdown = {
   id: string
   created: number
@@ -2192,6 +2202,7 @@ export type ConfigEntry =
         $schema?: string
         shell?: string
         model?: string | { providerID: string; model: string; variant?: string }
+        fallback_model?: string | { providerID: string; model: string; variant?: string }
         default_agent?: string
         output_style?: string
         update?: "disable" | "notify" | "auto"
@@ -2542,6 +2553,7 @@ export type SessionEventDurable =
   | SessionRevertCleared
   | SessionRevertCommitted
   | SessionUsageRecorded
+  | SessionSideQueryRecorded
   | SessionMessageContentUpdated
 
 export type IntegrationInfo = {

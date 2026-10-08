@@ -1,5 +1,6 @@
 export * as SessionContext from "./context.js"
 
+import { Config } from "../config.js"
 import { Model } from "../model.js"
 import { Permission } from "../permission.js"
 import { Context, Effect, Layer } from "effect"
@@ -56,8 +57,15 @@ export interface Interface {
   readonly resolveModel: (
     session: SessionSchema.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved, SessionRunnerModel.Error>
-  /** Selects auxiliary title capabilities without instruction or tool preflight. */
-  readonly selectTitle: (session: SessionSchema.Info) => Effect.Effect<
+  /**
+   * Selects the agent and model for work beside the Session, such as titles and side queries, without instruction or
+   * tool preflight. The agent's configured model comes first, then the small model of the primary provider, then the
+   * primary model; all three use the variant that reasons least, so `primary` is the Session model without its own variant.
+   */
+  readonly selectAuxiliary: (
+    session: SessionSchema.Info,
+    agentID: Agent.ID,
+  ) => Effect.Effect<
     | {
         readonly agent: Agent.Info
         readonly primary: SessionRunnerModel.Resolved | undefined
@@ -65,6 +73,14 @@ export interface Interface {
       }
     | undefined
   >
+  /**
+   * Resolves the fallback model: `requested`, else the configured `fallback_model`. Undefined when neither is set,
+   * the model is unavailable, or it is the session's own model (the same provider and model, whatever the variant).
+   */
+  readonly resolveFallback: (
+    session: SessionSchema.Info,
+    requested?: Model.Ref,
+  ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
   readonly request: SessionModelRequest.Interface
 }
 
@@ -89,33 +105,61 @@ const layer = Layer.effect(
     const skillInstructions = yield* SkillInstructions.Service
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
+    const config = yield* Config.Service
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
-    const selectTitle = Effect.fn("SessionContext.selectTitle")(function* (session: SessionSchema.Info) {
-      const agent = yield* agents.get(Agent.ID.make("title"))
+    const selectAuxiliary = Effect.fn("SessionContext.selectAuxiliary")(function* (
+      session: SessionSchema.Info,
+      agentID: Agent.ID,
+    ) {
+      const agent = yield* agents.get(agentID)
       if (!agent) return
-      const primary = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
-      const info = yield* Effect.gen(function* () {
-        if (agent.model) return yield* model.get(agent.model.providerID, agent.model.id)
-        if (!primary) return
-        return yield* model.small(primary.ref.providerID)
-      })
-      const variant =
-        agent.model?.variant ?? MINIMAL_REASONING_VARIANTS.find((id) => info?.variants.some((item) => item.id === id))
-      const preferred =
-        info &&
-        (yield* resolveModel({
-          ...session,
-          model: Model.Ref.make({
-            providerID: info.providerID,
-            id: info.id,
-            ...(variant ? { variant } : {}),
-          }),
-        }).pipe(Effect.orElseSucceed(() => undefined)))
+      const sessionModel = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
+      // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
+      const leastReasoning = (info: Model.Info | undefined, pinned?: Model.VariantID) =>
+        Effect.gen(function* () {
+          if (!info) return
+          const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
+          return yield* resolveModel({
+            ...session,
+            model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
+          }).pipe(Effect.orElseSucceed(() => undefined))
+        })
+      const pinned = agent.model ? yield* model.get(agent.model.providerID, agent.model.id) : undefined
+      const small = pinned ?? (sessionModel ? yield* model.small(sessionModel.ref.providerID) : undefined)
+      const preferred = yield* leastReasoning(small, pinned ? agent.model?.variant : undefined)
+      const primary = sessionModel
+        ? ((yield* leastReasoning(yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
+        : undefined
       const selected = preferred ?? primary
       if (!selected) return
       return { agent, primary, selected }
+    })
+
+    const resolveFallback = Effect.fn("SessionContext.resolveFallback")(function* (
+      session: SessionSchema.Info,
+      requested?: Model.Ref,
+    ) {
+      const configured = Config.latest(yield* config.entries(), "fallback_model")
+      const ref =
+        requested ??
+        (configured &&
+          Model.Ref.make({
+            providerID: configured.providerID,
+            id: configured.model,
+            ...(configured.variant ? { variant: configured.variant } : {}),
+          }))
+      if (!ref) return
+      // Compare identity before resolving: the session's own ref, or else what it would default to.
+      const own = session.model ?? (yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined)))?.ref
+      if (own?.providerID === ref.providerID && own.id === ref.id) return
+      return yield* resolveModel({ ...session, model: ref }).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("fallback model skipped", { providerID: ref.providerID, model: ref.id, error }),
+        ),
+        Effect.orElseSucceed(() => undefined),
+      )
     })
 
     const select = Effect.fn("SessionContext.select")(function* (sessionID: SessionSchema.ID) {
@@ -178,7 +222,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ select, load, resolveModel, selectTitle, request })
+    return Service.of({ select, load, resolveModel, selectAuxiliary, resolveFallback, request })
   }),
 )
 
@@ -190,6 +234,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Agent.node,
+    Config.node,
     Model.node,
     Database.node,
     InstructionBuiltIns.node,

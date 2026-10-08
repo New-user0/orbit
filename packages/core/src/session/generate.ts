@@ -16,13 +16,40 @@ import type { SessionSchema } from "./schema.js"
 
 export type Error = AgentNotFoundError | Instructions.InitializationBlocked | SessionRunnerModel.Error | AIError
 
+/**
+ * The settled Session history as the start of a request for `model`, without mutating the Session. Generation and
+ * side queries share it, so both see the same transcript and pending instruction update.
+ */
+export const transcript = Effect.fn("SessionGenerate.transcript")(function* (
+  selection: SessionContext.Selection,
+  model: SessionRunnerModel.Resolved,
+) {
+  const database = yield* Database.Service
+  const history = yield* SessionHistory.preview(
+    database.db,
+    selection.session.id,
+    selection.instructions,
+    SessionProviderContext.provenance(model) ?? "local",
+  )
+  const base = SessionModelRequest.baseTranscript({
+    agent: selection.agent.info,
+    model,
+    tools: selection.tools,
+    initial: history.initial,
+    messages: history.messages,
+  })
+  return {
+    system: base.system,
+    messages: [...base.messages, ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : [])],
+  }
+})
+
 /** Generates text from current Session context without mutating the Session. */
 export const generate = Effect.fn("SessionGenerate.generate")(function* (input: {
   session: SessionSchema.Info
   prompt: string
 }) {
   const instances = yield* Instance.Service
-  const database = yield* Database.Service
   const llm = yield* LLMClient.Service
 
   return yield* Effect.gen(function* () {
@@ -30,30 +57,14 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
     const context = yield* SessionContext.Service
     const selection = yield* context.select(input.session.id)
     const model = yield* context.resolveModel(selection.session)
-    const history = yield* SessionHistory.preview(
-      database.db,
-      selection.session.id,
-      selection.instructions,
-      SessionProviderContext.provenance(model) ?? "local",
-    )
-    const transcript = SessionModelRequest.baseTranscript({
-      agent: selection.agent.info,
-      model,
-      tools: selection.tools,
-      initial: history.initial,
-      messages: history.messages,
-    })
+    const history = yield* transcript(selection, model)
     const prepared = yield* context.request.generate({
       session: selection.session,
       agent: selection.agent.id,
       model,
       tools: selection.tools,
-      system: transcript.system,
-      messages: [
-        ...transcript.messages,
-        ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : []),
-        Message.user(input.prompt),
-      ],
+      system: history.system,
+      messages: [...history.messages, Message.user(input.prompt)],
     })
     yield* Effect.logInfo("sending session generation request", {
       sessionID: selection.session.id,

@@ -144,13 +144,13 @@ describe("Config under workspace trust", () => {
         const mcp = named(entries, path.join(folders.repo, CompatNames.mcp))
 
         expect(project).toMatchObject({ scope: "project", trusted: false })
-        expect(project?.withheld).toEqual(["hooks", "mcp", "permissions", "shell", "network"])
+        expect(project?.withheld).toEqual(["hooks", "mcp", "permissions", "providers", "shell", "network"])
         expect(project?.info.hooks).toBeUndefined()
         expect(project?.info.mcp).toBeUndefined()
         expect(project?.info.shell).toBeUndefined()
         expect(project?.info.websearch).toBeUndefined()
         expect(project?.info.permissions).toEqual([{ action: "shell", resource: "rm *", effect: "deny" }])
-        expect<unknown>(project?.info.model).toEqual({ providerID: "project", model: "model" })
+        expect(project?.info.model).toBeUndefined()
 
         expect(local).toMatchObject({ scope: "local", trusted: false, withheld: ["plugins"] })
         expect(local?.info.plugins).toBeUndefined()
@@ -180,8 +180,8 @@ describe("Config under workspace trust", () => {
         expect(flag?.info.shell).toBe("flag-shell")
         expect(directories.filter((entry) => entry.scope !== "project" && entry.trusted !== undefined)).toEqual([])
 
-        // The repository's inert settings still outrank the user's. Everything else it asked for is out of reach.
-        expect<unknown>(Config.latest(entries, "model")).toEqual({ providerID: "project", model: "model" })
+        // Everything the repository asked for is out of reach, its model included: the user's choice stands.
+        expect<unknown>(Config.latest(entries, "model")).toEqual({ providerID: "user", model: "model" })
         expect(Config.latest(entries, "shell")).toBe("flag-shell")
         expect(Config.latest(entries, "mcp")).toBeUndefined()
         expect(Config.latest(entries, "sandbox")).toEqual({ enabled: true })
@@ -229,7 +229,7 @@ describe("Config under workspace trust", () => {
         const withheld = named(yield* config.entries(), project)
         expect(withheld).toMatchObject({
           trusted: false,
-          withheld: ["hooks", "mcp", "permissions", "shell", "network"],
+          withheld: ["hooks", "mcp", "permissions", "providers", "shell", "network"],
         })
         expect(withheld?.info.hooks).toBeUndefined()
         expect(Config.latest(yield* config.entries(), "websearch")).toBe(false)
@@ -271,7 +271,7 @@ describe("Config under workspace trust", () => {
         expect<unknown>(untrusted.withheld).toEqual([
           { path: files.vendor, kinds: ["hooks"] },
           { path: files.mcp, kinds: ["mcp"] },
-          { path: files.project, kinds: ["hooks", "mcp", "permissions", "shell", "network"] },
+          { path: files.project, kinds: ["hooks", "mcp", "permissions", "providers", "shell", "network"] },
           { path: files.local, kinds: ["plugins"] },
         ])
 
@@ -328,7 +328,7 @@ describe("Config under workspace trust", () => {
         expect(revoked.withheld.map((item) => [path.relative(folders.repo, item.path), item.kinds])).toEqual([
           [path.join(CompatNames.vendor.directory, "settings.json"), ["hooks"]],
           [CompatNames.mcp, ["mcp"]],
-          ["orbit.json", ["hooks", "mcp", "permissions", "shell", "network"]],
+          ["orbit.json", ["hooks", "mcp", "permissions", "providers", "shell", "network"]],
           ["orbit.local.json", ["plugins"]],
         ])
         // It is the answer the loaded config gives once it has caught up.
@@ -443,9 +443,9 @@ describe("Config under workspace trust", () => {
         const afterProject = yield* config.entries()
         expect(stamps(afterProject)).toEqual([false, true, true])
         expect(named(afterProject, own)?.info.hooks).toBeDefined()
-        expect(named(afterProject, above)).toMatchObject({ withheld: ["hooks", "shell"] })
+        expect(named(afterProject, above)).toMatchObject({ withheld: ["hooks", "providers", "shell"] })
         expect(named(afterProject, above)?.info.hooks).toBeUndefined()
-        expect<unknown>(named(afterProject, above)?.info.model).toEqual({ providerID: "above", model: "model" })
+        expect(named(afterProject, above)?.info.model).toBeUndefined()
         expect(named(afterProject, vendorAbove)?.info.hooks).toBeUndefined()
         // The status says what is still held back, though the project is trusted, and which folder lifts it: the one
         // around the file, and around the vendor directory that holds the other.
@@ -453,7 +453,7 @@ describe("Config under workspace trust", () => {
         expect(status).toMatchObject({ directory: folders.repo, trusted: true })
         expect<unknown>(status.withheld).toEqual([
           { path: vendorAbove, kinds: ["hooks"], directory: folders.work },
-          { path: above, kinds: ["hooks", "shell"], directory: folders.work },
+          { path: above, kinds: ["hooks", "providers", "shell"], directory: folders.work },
         ])
 
         // The folder above is trusted on its own.

@@ -9,7 +9,7 @@ import { OrbitTools } from "@orbit/core/tool/plugin/orbit"
 import { Model } from "@orbit/schema/model"
 import { Effect } from "effect"
 import { testEffect } from "./lib/effect"
-import { executeTool, toolIdentity, toolTraits } from "./lib/tool"
+import { executeTool, expectRegistryAsks, toolIdentity, toolTraits } from "./lib/tool"
 import { PluginTestLayer } from "./plugin/fixture"
 
 const it = testEffect(PluginTestLayer)
@@ -69,6 +69,7 @@ it.effect("groups available models by provider with paging", () =>
       model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("alpha") }),
     })
     const registry = yield* Tool.Service
+    yield* expectRegistryAsks(registry, ["orbit_models", "orbit_session_rename", "orbit_session_move"])
     expect(yield* toolTraits(registry, "orbit_models")).toMatchObject({ readOnly: true, concurrencySafe: true })
     for (const name of ["orbit_session_rename", "orbit_session_move"])
       expect(yield* toolTraits(registry, name)).toMatchObject({ readOnly: false, concurrencySafe: false })
