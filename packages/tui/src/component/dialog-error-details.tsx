@@ -8,6 +8,7 @@ import { useLocation } from "../context/location"
 import { useRoute } from "../context/route"
 import { getScrollAcceleration } from "../util/scroll"
 import { useTheme } from "../context/theme"
+import { bodyText } from "../util/renderer"
 import { emptyPrompt } from "../prompt/history"
 import { dialogWidth, useDialog } from "../ui/dialog"
 import { FilePath } from "../ui/file-path"
@@ -107,7 +108,7 @@ export function DialogErrorDetails(props: {
           scrollAcceleration={getScrollAcceleration(config)}
         >
           <text fg={theme.text.base} wrapMode="word">
-            {props.error}
+            {bodyText(props.error)}
           </text>
         </scrollbox>
         <Show when={props.diagnosticRef}>

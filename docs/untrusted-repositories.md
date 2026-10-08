@@ -91,6 +91,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
   hints and permissions` in `core/test/mcp.test.ts`.
+- A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
+  model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
+  a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
+  gate in `executeTool` (`packages/core/src/tool.ts`). Plugin code is trusted and can still call a listed tool's
+  `execute` directly, which skips hooks, validation and the gate. A tool asks about a call itself only when
+  `options.authorizes` is `true` or a predicate answers `true`; a tool that leaves it out, or whose predicate throws, fails,
+  dies or answers with anything else, is asked about on its permission action or its name. MCP annotations never set it.
+  Proof: `core/test/tool-gate.test.ts` (`every door into tool execution`, including the Promise adapter's add and
+  update, and `MCP tools`), `core/test/session-runner.test.ts` (`does not authorize itself`, `registry gate is declined`),
+  `plugin-browser/test/tools.test.ts` (the browser tools ask on `browser`), and the `expectRegistryAsks` line in the suite
+  of each built-in the registry asks about.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:
@@ -147,7 +158,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
   step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
   thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
-  are message content, which waits for the renderer sanitizer (see Known gaps). Proof:
+  are message content and still open (see Known gaps; close them with `body` from `@orbit/flow/plain`). Proof:
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
@@ -158,6 +169,19 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
+- Message bodies on the session screen and in Mini: `bodyText` and `outputText` (`src/util/renderer.ts`),
+  `entryBody` (`src/mini/entry.body.ts`) and `permissionPresentation` (`src/util/permission.ts`). Proof: one
+  table-driven `captureCharFrame` test on the real components, each with a hostile row and a trusted control row that
+  draws ordinary text unchanged. `test/body-sinks.test.tsx` holds the session screen: the user message, assistant
+  text, reasoning, compaction, the assistant error and retry lines, the shell message and the shell, `execute`,
+  generic, write, edit, patch and question tools (output, command, diff, path, error and diagnostic), plan, notices,
+  skill names, loaded paths, workflow cards, the queued-prompt dock and its dialog, and the "Session failed" toast.
+  `test/component/dialog-shell-output.test.tsx` holds the background shell views (the composer tab, the dialog header
+  and the dialog body), `test/component/dialog-error-details.test.tsx` the error text of the details dialog, and
+  `test/mini/footer.view.test.tsx` Mini's queued-prompt picker and its form rows. Also `test/util/renderer.test.ts`
+  (the escaping), `test/cli/tui/form.test.tsx`, `test/mini/entry.body.test.ts` and
+  `test/util/permission-body.test.ts`. Sinks that are routed through `bodyText` but have no frame test, and the
+  places that are still open, are listed in Known gaps.
 - Window titles, the exit summary and the Mini splash: `terminalTitle`, `sessionEpilogue` and the splash's own filter.
   Proof: `test/util/renderer.test.ts`, `test/util/presentation.test.ts`, `test/mini/splash.test.ts`.
 - The keybindings file: `Config.read` reads `keybindings.json` from the folder that holds `cli.json`, the person's own
@@ -733,7 +757,9 @@ runs" is a permission.
 - Classify each new field in `ConfigTrust.classification` (`info`, `agent` and `command`). Ask of every field: does it
   choose which rules, agent or mode apply? Then it is a permission, `withhold("permissions")`, and a permission list
   keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming` keeps only
-  `false`.
+  `false`. `tool_execution` keeps a `max_concurrency` at or below the default of 10 (`toolExecution`): the user's own
+  value is not visible to the filter, so a repository cannot raise the cap above 10. It can still set a higher value
+  than a user's own lower one, up to 10.
 - A field that picks a model, a provider or a budget is withheld too, as `providers`, so that an untrusted folder
   cannot choose the most expensive of the models that you configured, another provider that you configured, or a larger
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
@@ -775,8 +801,8 @@ runs" is a permission.
 **Rule:** Every string that came from a file, a run store or a workflow, and every session title, that reaches a person
 (stdout, stderr, JSON, a terminal UI frame, a toast, a session title, a commit subject, an exit summary, a splash)
 passes through `plain`, `progress`, `json` or `terminalTitle` at the sink. Keep a sink inventory per command. The text
-of a session's messages is not covered: `plain` trims and writes line breaks out, so it cannot be the sink for a message
-body, and only a sanitizer in the renderer closes that (Known gaps).
+of a session's messages is not `plain`'s: it trims and writes line breaks out, so it cannot be the sink for a message
+body. A body passes `bodyText` at the renderer instead (see "How to comply").
 
 **Why:** A clone can name its files and workflows with escape sequences. Printed raw, an OSC sequence sets the window
 title, an erase-line or a carriage return hides the command that a refusal asks the person to look over, and a
@@ -807,6 +833,26 @@ repository text.
   renderer.setTerminalTitle(terminalTitle(title))
   ```
 
+- A message body, which is model text, tool output, a question or its answer, a plan, a notice, a skill or file name from a
+  tool, or a tool error, passes `bodyText` (`packages/tui/src/util/renderer.ts`) where the terminal UI and Mini draw
+  it. It is `body` in `packages/flow/src/plain.ts`, so the escaping is the one `plain` uses: line breaks and tabs stay,
+  a carriage return alone, C0 controls, DEL, C1 controls and the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E
+  and U+2066 to U+2069) are written out as `\x1b` or `\u{202e}`, where the person can see them. Other format characters
+  stay, since a zero-width joiner holds an emoji sequence together. Program output (shell, `execute` and generic tool
+  output) passes `outputText` instead, which first turns a lone carriage return into a line break, as Mini's
+  `cleanRunText` does, because progress meters redraw a line with one; commands and approval prompts use `bodyText`,
+  where a carriage return is an ordinary character for the shell. Mini passes every body through `entryBody`
+  (`packages/tui/src/mini/entry.body.ts`); the session screen passes its sinks through `bodyText` or `outputText`
+  one by one, and the approval prompt goes through `permissionPresentation` and `permissionAlwaysLines`
+  (`packages/tui/src/util/permission.ts`), which serve both clients. In `routes/session/index.tsx`, `stringValue` only
+  parses (IDs, lookup keys and comparisons read the value as it came) and `displayValue` is the parsed value for
+  drawing, so a path with a control character still finds its diagnostics. A parser stays raw and the drawing site
+  writes out (`parseApplyPatchFiles` returns paths and patches as they came), and a name that is title-cased is
+  title-cased first and written out after, because `Locale.titlecase` would otherwise turn `\x1b` into `\X1b`.
+  Each value is written out once, at the place that draws it. Shell output goes through `stripAnsi` first, so whole
+  sequences are removed, and `outputText` writes out what it leaves, such as a lone ESC, BEL and backspace. A new place
+  that draws such text calls `bodyText` or `outputText`, and a new row goes into the test of the component that draws
+  it, with a trusted control row.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
   the Mini splash (`packages/tui/src/mini/splash.ts`), and `DialogFlowRuns` passes every store string through `plain`
@@ -827,7 +873,8 @@ repository text.
   `JSON.parse` of printed JSON equals the original value. In terminal UI tests poll `renderOnce` and `captureCharFrame`.
 - Tests: `packages/flow/test/plain.test.ts`, `packages/flow/test/agents.test.ts` (titles and commit subjects),
   `packages/cli/test/flow.test.ts`, `packages/cli/test/run/noninteractive.test.ts` (`orb run`),
-  `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts`,
+  `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts` (bodies drawn
+  with `captureCharFrame`), `packages/tui/test/mini/entry.body.test.ts`,
   `packages/tui/test/util/presentation.test.ts` and `packages/tui/test/mini/splash.test.ts`. Mutation: revert each sink
   one at a time.
 
@@ -1359,11 +1406,20 @@ fixes it or asks.
   `test/config/agent.test.ts`), and `fallback_model` the same way. The config has no `output_token_cap` field yet;
   the task that adds it classifies it the same way. No command-file test pins the `model` of a command: `sanitizeCommands` is tested
   on a command record only.
-- **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
-  reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
-  bodies need a sanitizer in the renderer (#22 round 7). In `orb run` that is the answer, the thinking lines and the
-  tool blocks of the default format, which are written as the model and the tools made them; its JSON formats write the
-  same text out with `jsonLine`.
+- **Text that the person did not write: sinks without a frame test, and what is still open.** The terminal UI and
+  Mini write control characters out of message bodies with `bodyText` or `outputText` (task `clients-ux-60`), and the
+  inventory lists the rows that pin that. Routed through the sanitizer but pinned by no frame test: the tool list of the
+  token-usage view (`TurnTokenToolCalls`), the details dialog of `execute` (`dialog-execute.tsx`), the timeline and
+  fork lists (`dialog-timeline.tsx`, `dialog-fork.tsx`), the `/btw` answer (`btw.tsx`), the attachment names of a user
+  message, the terminal and subagent rows of the composer (`terminals-tab.tsx`, `subagents-tab.tsx`, whose titles are
+  session titles), the Mini subagent picker and footer (`footer.subagent.tsx`), and the width checks of Mini form
+  rows. Open, with no sanitizer: `orb run`, whose default format writes the answer, the thinking lines and the tool
+  blocks as the model and the tools made them (its JSON formats write the same text out with `jsonLine`); the text of
+  the desktop notification that `notifications.ts` sends through `context.attention.notify`, which carries the
+  "Session failed" message and the session title; the markdown export of a session; the prompt history search and the
+  stash list, which draw text that the person typed or pasted; and the session titles in the tab rail, the session list
+  and the sidebar, which belong to the session-title work. Recaps are not drawn anywhere yet; they pass `bodyText`
+  when `clients-ux-27` lands.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
@@ -1433,6 +1489,11 @@ fixes it or asks.
   run from there. `node-gyp/bin/node-gyp.js`, which the bundle does leave to the runtime, is only a path that npm looks
   up with `require.resolve` and does not load, and Orbit installs with scripts off. Replace the first before the binary
   imports the npm `ws`, and re-check the second before Orbit installs with scripts on.
+- **A rejection with feedback inside Code Mode, and ACP.** The step stops its tool queue when a direct tool call fails
+  with a permission correction (`session-runner.test.ts`, `mcp.test.ts`). A Code Mode program turns the same rejection
+  into an error result, so the calls queued behind its `execute` call still start and can ask (task `tool-runtime-6`
+  and `tool-runtime-7`). The ACP client does not close the permission prompt of an interrupted call yet, and no
+  bundled client reads `metadata.queued`.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
   saved "always allow" approvals.
 - **Git in the folder.** Orbit runs git in a folder to resolve its project, and git applies that folder's own
@@ -1520,8 +1581,8 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 **It prints or stores text** (CLI, terminal UI, titles, commit subjects, logs, JSON)
 
 - [ ] Every place where a string from a file, a store or a workflow, or a session title, can reach a person is listed,
-      and the function that escapes it at that sink is named. Message bodies wait for a sanitizer in the renderer (Known
-      gaps) (9).
+      and the function that escapes it at that sink is named. A message body passes `bodyText` in the terminal UI and
+      Mini (9).
 - [ ] The text also reaches no title, commit message, log line, toast or failure message that is built before the trust
       check without being escaped (9).
 - [ ] JSON is printed with `json()` and not `JSON.stringify`, numeric columns from a store are read with `Number()`, and

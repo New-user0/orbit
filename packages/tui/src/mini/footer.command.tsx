@@ -15,6 +15,7 @@ import {
   type RunFooterMenuItem,
 } from "./footer.menu"
 import { stringWidth } from "../util/string-width"
+import { bodyText } from "../util/renderer"
 import { monoShortcut } from "./mono"
 import type { RunFooterTheme } from "./theme"
 import type {
@@ -878,8 +879,8 @@ export function RunSubagentSelectBody(props: {
         const title = item.description || item.title || item.label
         return {
           category: "",
-          display: title,
-          description: title === item.label ? undefined : item.label,
+          display: bodyText(title),
+          description: title === item.label ? undefined : bodyText(item.label),
           footer: subagentStatusLabel(item.status),
           footerTone:
             item.status === "running" || item.status === "error"
@@ -956,7 +957,7 @@ export function RunQueuedPromptSelectBody(props: {
   const entries = createMemo<QueuedPromptEntry[]>(() =>
     props.prompts().map((prompt) => ({
       category: "",
-      display: prompt.prompt.text.replaceAll("\n", " "),
+      display: bodyText(prompt.prompt.text).replaceAll("\n", " "),
       footer: prompt.delivery === "queue" ? "queued" : "steering",
       keywords: prompt.prompt.text,
       prompt,

@@ -8,6 +8,7 @@ import {
 } from "@opentui/core"
 import { For, Match, Switch, createMemo } from "solid-js"
 import { entryBody, entryFlags } from "./entry.body"
+import { bodyText } from "../util/renderer"
 import { monoMarkdownRenderable, monoMarkdownTableOptions } from "./mono"
 import { entryColor, entryLook, entrySyntax } from "./scrollback.shared"
 import { toolFiletype, toolStructuredFinal } from "./tool"
@@ -129,7 +130,7 @@ export function RunEntryContent(props: {
         <box width="100%" flexDirection="row" alignItems="center">
           <box border={["top"]} borderColor={theme().block.muted} flexGrow={1} />
           <box paddingLeft={1} paddingRight={1}>
-            <text fg={theme().block.muted}>{props.commit.text}</text>
+            <text fg={theme().block.muted}>{bodyText(props.commit.text)}</text>
           </box>
           <box border={["top"]} borderColor={theme().block.muted} flexGrow={1} />
         </box>

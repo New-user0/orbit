@@ -8,7 +8,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { TodoTool } from "../src/tool/plugin/todo"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
-import { registerToolPlugin, toolTraits } from "./lib/tool"
+import { expectRegistryAsks, registerToolPlugin, toolTraits } from "./lib/tool"
 
 const node = makeLocationNode({
   name: "test/todo-tool-plugin",
@@ -36,6 +36,13 @@ describe("todo tool", () => {
       Schema.decodeUnknownSync(TodoTool.Input)({ todos: [{ content: "Ship it", status: "blocked" }] }),
     ).toThrow()
   })
+
+  it.effect("leaves its calls to the registry gate", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      yield* expectRegistryAsks(registry, ["todo"])
+    }),
+  )
 
   it.effect("changes the session's plan, so it is neither read-only nor safe beside other calls", () =>
     Effect.gen(function* () {

@@ -1207,6 +1207,7 @@ describe("Config", () => {
                   image: { auto_resize: false, max_width: 1200, max_height: 900, max_base64_bytes: 1048576 },
                 },
                 tool_output: { max_lines: 1000, max_bytes: 32768 },
+                tool_execution: { max_concurrency: 4 },
                 mcp: {
                   timeout: { startup: 5000, catalog: 60000, execution: 43200000 },
                   servers: {
@@ -1292,6 +1293,7 @@ describe("Config", () => {
               image: { auto_resize: false, max_width: 1200, max_height: 900, max_base64_bytes: 1048576 },
             })
             expect(documents[0]?.info.tool_output).toEqual({ max_lines: 1000, max_bytes: 32768 })
+            expect(documents[0]?.info.tool_execution).toEqual({ max_concurrency: 4 })
             expect(documents[0]?.info.mcp).toEqual({
               timeout: { startup: 5000, catalog: 60000, execution: 43200000 },
               servers: {

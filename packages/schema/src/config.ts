@@ -20,6 +20,7 @@ import { ConfigProvider } from "./config/provider.js"
 import { ConfigReference } from "./config/reference.js"
 import { ConfigSandbox } from "./config/sandbox.js"
 import { ConfigWebSearch } from "./config/websearch.js"
+import { ConfigToolExecution } from "./config/tool-execution.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
 import { ConfigWarming } from "./config/warming.js"
@@ -92,6 +93,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
     description: "Tool output truncation thresholds",
+  }),
+  tool_execution: ConfigToolExecution.Info.pipe(optional).annotate({
+    description: "How the tool calls of one step are scheduled",
   }),
   mcp: ConfigMCP.Info.pipe(optional).annotate({
     description: "MCP server configuration",

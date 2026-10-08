@@ -1,7 +1,7 @@
 export * as Permission from "./permission.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
 import { Permission } from "@orbit/schema/permission"
 import { Bus } from "./bus.js"
 import { Location } from "./location.js"
@@ -12,6 +12,7 @@ import { SessionStore } from "./session/store.js"
 import { Wildcard } from "./util/wildcard.js"
 import { PermissionSaved } from "./permission/saved.js"
 import { PluginHooks } from "./plugin/hooks.js"
+import { ToolCurrentCall } from "./tool/current-call.js"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -120,6 +121,8 @@ export interface Interface {
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
+  /** The tool call that was executing when a still-pending request was made, if one was. */
+  readonly callOf: (id: ID) => Effect.Effect<ToolCurrentCall.Call | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Permission") {}
@@ -130,6 +133,8 @@ interface Pending {
   // Kept here rather than on the public Request so re-evaluating a pending request after an "always" reply sees them.
   readonly aliases?: AssertInput["aliases"]
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
+  // The tool call that was executing when the request was made, for deciding and explaining it. Never on the public Request.
+  readonly call?: ToolCurrentCall.Call
 }
 
 const layer = Layer.effect(
@@ -224,7 +229,7 @@ const layer = Layer.effect(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
-          const item = { request, agent, aliases, deferred }
+          const item: Pending = { request, agent, aliases, deferred, call: yield* ToolCurrentCall.Current }
           if (closed) {
             yield* Deferred.fail(deferred, new DeclinedError())
             return item
@@ -270,6 +275,17 @@ const layer = Layer.effect(
               // WITH feedback (CorrectedError) intentionally stays typed so the leaf can turn
               // it into ToolFailure and the model continues.
               Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
+              // A prompt whose waiter is interrupted (a cancelled call, an interrupted step) is closed for clients
+              // the way `close` closes it, so none is left showing a stale question.
+              Effect.onExit((exit) =>
+                Exit.hasInterrupts(exit) && pending.has(item.request.id)
+                  ? bus.publish(Permission.Event.Replied, {
+                      sessionID: item.request.sessionID,
+                      requestID: item.request.id,
+                      reply: "reject",
+                    })
+                  : Effect.void,
+              ),
               Effect.ensuring(
                 Effect.sync(() => {
                   pending.delete(item.request.id)
@@ -355,7 +371,11 @@ const layer = Layer.effect(
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ ask, assert, reply, get, forSession, list, close })
+    const callOf = Effect.fn("Permission.callOf")(function* (id: ID) {
+      return pending.get(id)?.call
+    })
+
+    return Service.of({ ask, assert, reply, get, forSession, list, callOf, close })
   }),
 )
 

@@ -268,6 +268,29 @@ test("local failure metadata completes the progress snapshot", async () => {
   })
 })
 
+test("a scheduling hint is published live but never reaches a failure's metadata", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(call))
+  await Effect.runPromise(publisher.hint(call.id, { queued: true }))
+  await Effect.runPromise(publisher.failTool(call.id, { type: "tool.cancelled", message: "Not run" }))
+
+  expect(published.find((event) => event.type === SessionEvent.Tool.Progress.type)?.data).toMatchObject({
+    id: call.id,
+    metadata: { queued: true },
+  })
+  const failed = published.find((event) => event.type === "session.tool.failed.2")?.data
+  expect(failed).not.toHaveProperty("metadata")
+})
+
+test("a hint for a call that has settled is dropped", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(call))
+  await Effect.runPromise(publisher.failTool(call.id, { type: "tool.cancelled", message: "Not run" }))
+  await Effect.runPromise(publisher.hint(call.id, {}))
+
+  expect(published.filter((event) => event.type === SessionEvent.Tool.Progress.type)).toEqual([])
+})
+
 test("failure snapshot retains canonical progress above the default byte limit", async () => {
   const { published, publisher } = capture("anthropic", { interruptProgress: true })
   await Effect.runPromise(publisher.publish(call))

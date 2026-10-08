@@ -122,7 +122,8 @@ rest:
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
-  keyless search pool, and it cannot start generations that you pay for.
+  keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
+  10 or less, so a repository cannot raise the limit above 10.
 - **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
@@ -768,8 +769,9 @@ dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count t
 cost that is not above zero, a `fallbackModel` that is not a model reference, or a key that `turn` does not define
 (`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
 fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
-message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
-turn and no fallback model is used.
+message, and the latest options in a turn are the ones that apply to it. Orbit acts on them: a limit ends the
+turn (see the note on enforced limits), and the fallback model is used after repeated overloads (see the note on the
+fallback switch).
 
 A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
 cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
@@ -874,6 +876,37 @@ running session. Lines written by earlier builds are read as before.
 
 **What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
 `prompt.history_limit` to keep more or fewer prompts.
+
+### Control characters in messages are written out on screen
+
+The terminal UI and Mini used to draw model text, tool output, tool errors, approval prompts, shell commands and the
+labels of tools as they were. A body that carried an escape sequence or a right-to-left override could set the window
+title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape and
+`\u{202e}` for an override, so you can see that they were there. The places include the text of questions and their
+answers, the plan, the notices that a background shell or subagent finished, skill names, the paths that a read loaded,
+the queued-prompt line, the cards of a workflow, the call lines of `execute`, the external link and the review rows of
+a form. Line breaks, tabs, emoji and other Unicode are unchanged, and so is Markdown formatting. Text that the model
+meant to color with escape sequences shows the written-out form instead.
+
+A carriage return is handled by where it is drawn. In program output (shell, `execute` and the output of other tools)
+a lone carriage return, which progress meters use to redraw a line, is drawn as a line break, as Mini already did, and
+the color sequences of shell output are removed rather than written out. In a command line, an approval prompt or any
+other text, a carriage return is written out as `\x0d`, because a shell treats it as an ordinary character.
+
+The background shell views follow the same rule: the command in the shell tab of the composer, and the command and the
+output in the output dialog, show `\x1b` and `\x07` where a program wrote them. So do toasts, the error text of the
+details dialog, the queued-prompt dialog and Mini's queued-prompt picker.
+
+A few places also write controls out but have no frame test of their own yet: the tool list of the token-usage view, the
+details dialog of `execute`, the timeline and fork lists, the `/btw` answer, the Mini subagent picker and the
+composer's terminal and subagent rows. Three places do not write them out yet: the desktop notification text, the
+markdown export, and the prompt history and stash lists. Known gaps in
+[untrusted-repositories.md](untrusted-repositories.md) names all of them, and `orb run` is unchanged.
+
+**Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
+`orb run` and the stored messages are unchanged.
+
+**What to do:** nothing.
 
 ## Permissions
 
@@ -986,6 +1019,14 @@ rule that denies `edit`, whose bad edits get the specific failure first. The fai
 the note on error types describes.
 
 **What to do:** Nothing.
+
+### Tools that do not ask for themselves are now asked about
+
+Ask and deny rules now govern a tool that does not take care of its own permission question, and nothing changes under the default rules (`* * allow`). Tools that plugins and the SDK add used to run unasked unless they asked for themselves; they now ask on their permission action (or their name), on every resource, once per call, and "always" saves `*` for that action. The same goes for Code Mode: a program that calls such a tool is asked for each call. A tool opts out by setting `options.authorizes` to `true`, or to a function of the decoded input that answers `true` (a Promise plugin's function may answer with a Promise); a function that throws, fails, rejects or answers with anything else counts as not opting out. The desktop browser tools pass the same gate on `browser`, and the browser plugin's own rules (`browser * deny` for every agent, `browser * allow` for a session it is attached to) decide, so they never prompt. Orbit's own tools that check each file, command or address (`read`, `edit`, `shell`, `webfetch`, the MCP tools and the like) and MCP tools are unchanged, and annotations from an MCP server never relax anything. Orbit's tools that never asked are now governed by rules on their own name, and ask once per call when a rule says `ask`: `memory`, `enter_worktree`, `exit_worktree`, `orbit_session_rename`, `orbit_session_move`, `orbit_models`, `task_create`, `task_update`, `task_list`, `todo`, `shell_output`, `shell_watch`, `shell_stop`, `enter_plan_mode` and `exit_plan_mode`. Under the default rules (`* * allow`) none of them asks, but an `ask` or `deny` rule, or an agent whose rules deny everything it does not name, now reaches them. The tool's name is also its action, so a tool that names a shared action, such as `edit`, `read` or `shell`, asks for the whole action, and "always" saves `<action> *`; saved rules are evaluated after the configured ones, so that saved rule outranks a configured narrower `ask` such as `read *.env ask`. Answer "once" for these tools if you want the narrower rule to keep applying.
+
+**Affects:** plugin and SDK authors whose tools did not ask, and people whose rules ask or deny for these tools: an `ask` rule now prompts, and a `deny` rule now applies. A refusal reaches clients as a `permission.rejected` error, as it does for the built-in tools.
+
+**What to do:** approve the prompt, or add an allow rule for the tool's action. Authors of a tool that asks in `execute` set `options.authorizes: true` to avoid the second question.
 
 ## Plugins and SDK
 
@@ -1302,6 +1343,33 @@ when the names collide both appear in autocomplete.
 
 **What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
 
+### Tool calls in one step run in order, and only safe ones run together
+
+A step used to start every tool call the moment the model finished writing it, all at once. Calls now start in the order
+the model wrote them, and each waits for its turn. A call that a tool declares concurrency-safe (reads, searches, fetches)
+runs beside other safe calls, up to `tool_execution.max_concurrency` at a time (default 10). A call that is not safe
+(an edit, a shell command, a Code Mode `execute` call) runs alone, after the calls before it have finished, and the calls
+after it wait for it. Calls start while the model is still writing later ones, and results still reach the model in
+the order of the calls. A call that is waiting reports `{ "queued": true }` in its metadata until it starts; the bundled
+clients do not show it yet.
+
+A decline stops the queue. When you decline a call, the calls that have not started are not run and finish as
+"aborted", as the declined call does. When you reject a call with feedback, the calls that have not started finish as
+`tool.cancelled`, and the model sees your feedback and carries on. Calls that are already running are left to finish.
+This holds for a call the model makes directly, including a direct MCP tool. It does not yet hold when the rejected call
+is inside a Code Mode program: that program receives the feedback as an error result, and the calls queued behind it
+still start and can ask. A permission prompt whose call is interrupted now closes in the terminal UI and the other
+clients that follow permission events; the ACP client does not close it yet.
+
+Subagents are tool calls too, so one step starts at most `max_concurrency` of them at once.
+
+**Affects:** people whose model writes several edits, shell commands or other calls that change things in one response,
+which used to overlap and now take turns; anyone who set no limit and relied on a large number of safe calls running
+together; clients that show tool progress, which may now see `{ "queued": true }` on a call that has not started.
+
+**What to do:** nothing in most setups. To change how many safe calls run together, set `tool_execution.max_concurrency`
+to a positive whole number in your own config. A project's config cannot raise it above 10 until you trust the folder.
+
 ### A failed certificate check is no longer retried
 
 When a connection to a model endpoint failed because its certificate could not be verified (a self-signed or unknown
@@ -1321,9 +1389,8 @@ trust it, and scripts that waited out the retries.
 ### New `fallback_model` setting
 
 The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
-use for the rest of a turn after the selected model is repeatedly overloaded. This change only adds and resolves the
-setting; the switch itself follows in a later change. A model that is unavailable, or is the session's own model, is
-ignored.
+use for the rest of a turn after the selected model is repeatedly overloaded (see the note on switching below). A
+model that is unavailable, or is the session's own model, is ignored.
 
 In a folder that is not trusted yet, `fallback_model` is left out whole, so a repository cannot choose your fallback
 model. Orbit uses your own setting until you trust the folder.
@@ -1331,3 +1398,21 @@ model. Orbit uses your own setting until you trust the folder.
 **Affects:** people who want a backup model, and anyone reading `config.get`, which now lists the key.
 
 **What to do:** nothing. Set `fallback_model` in your own config to use it.
+
+### A run switches to the fallback model after three overloads in a row
+
+When the provider reports that the model is overloaded three times in a row within one step, Orbit now switches to the
+fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
+session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
+other failure between two overloads, such as a rate limit, restarts the count. If the overloaded response had already
+produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
+`synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
+also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
+prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
+or a moved location keeps it. The message comes before the fallback model's answer, never after it. The failed
+attempt's empty draft stays ahead of the message; it is closed without a finish, left out of requests and not counted as
+a step. No new event type is added.
+
+**Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
+
+**What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.

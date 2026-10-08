@@ -42,7 +42,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { codemode: false },
+          options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
           description:
             "Ask the project's language server about code: go to a definition, find references, show a symbol's type, list a file's symbols, or list its errors. Only works for languages with a language server installed. Lines and columns are 1-based, as in read output.",
