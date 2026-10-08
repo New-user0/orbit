@@ -24,7 +24,7 @@ import { tmpdir, withTempDir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const editToolNode = makeLocationNode({
   name: "test/edit-tool-plugin",
@@ -156,6 +156,20 @@ const validateEdit = (registry: Tool.Interface, input: typeof EditTool.Input.Typ
 const it = testEffect(Layer.empty)
 
 describe("EditTool", () => {
+  it.live("changes files, so it is neither read-only nor safe beside other calls", () =>
+    withTempDir((tmp) =>
+      withTool(tmp.path, makeEditFixture(), (registry) =>
+        Effect.gen(function* () {
+          expect(yield* toolTraits(registry, "edit", { path: "a.txt", oldString: "a", newString: "b" })).toMatchObject({
+            readOnly: false,
+            concurrencySafe: false,
+            destructive: false,
+          })
+        }),
+      ),
+    ),
+  )
+
   it.live("registers and replaces relative exact text through FileMutation once", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()

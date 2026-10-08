@@ -780,6 +780,21 @@ to `leader` or to an `input.*` key in `cli.json` now also applies while the term
 
 **What to do:** nothing. Run `/keybindings` to start from the template.
 
+### VS Code hides recovered step failures and shows loop notices
+
+The VS Code chat used to show an error note the moment a step failed, even when the next step went on to finish the
+run. It now holds the failure back: a later step of the same run drops it. It shows when the run ends, or when the
+run is stopped for a reason other than a Stop. A Stop from any client drops the failure of the step it cut short (`orb run`
+drops it only for a Stop it made itself). A failure held when the event stream ends or drops is dropped too, so a stale
+one does not show above a later stop. A run that fails keeps just
+its own error. The chat also shows the runner's own notices that carry a description, such as "Continuing after
+restart", as a muted note, with control and format characters in the text written out as escapes. Other notices, such
+as a model fallback, appear in the same way once those features land.
+
+**Affects:** VS Code users.
+
+**What to do:** Nothing.
+
 ### Ctrl+R in the prompt searches earlier prompts, and prompt history keeps 500 entries
 
 `ctrl+r` in the prompt of the terminal UI now opens a search over the prompts you sent before. The list narrows as you
@@ -1002,6 +1017,33 @@ instead.
 **What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
 would use for it.
 
+### Built-in, Code Mode and MCP tools declare traits, and simulated tools can
+
+Orbit's own tools now declare their traits: `read`, `glob`, `grep`, `lsp`, `webfetch`, `websearch`, the MCP resource
+tools, `skill`, `models`, `task_list`, `shell_output` and `shell_watch` are read-only and safe beside other calls, and
+the file-changing tools, `todo`, `task_create`, `task_update` and the session tools are not. `question` and the plan-mode tools wait
+for the person, `patch` is destructive when it deletes or moves a file or cannot be parsed, `memory` is read-only for
+`read` and `list` and destructive for `delete`, and the Code Mode `execute` tool is neither read-only nor safe and reaches the network.
+The shell declares only that a failure cancels its siblings. Nothing schedules or limits calls by these traits yet, so
+tools run as they did before.
+
+An MCP server's annotations map onto the traits of its tools, and they are treated as claims, not facts. `readOnlyHint:
+true` makes a tool safe to run beside other calls and nothing else: an MCP tool is never read-only, its permission
+request is the same with or without the hint, and plan mode and the read-only allowances never apply to it. A tool is
+destructive unless it says `readOnlyHint: true` or `destructiveHint: false`, and open-world unless it says
+`openWorldHint: false`, as the MCP specification defaults; both only inform how a call is shown. A `title`, or the
+title in the annotations when that is blank, becomes the tool's `displayName`, trimmed. It is text the server chose, so
+control characters and format characters such as a right-to-left override are stored written out (`\x1b`, `\u{202e}`).
+A blank title gives no display name and the tool still registers.
+
+A simulated tool registration (`tool.attach` in the simulation protocol) can carry a static `traits` record with the same
+booleans, `interruptBehavior`, `maxResultChars` and `displayName`. Without it the tool is not safe and runs alone.
+
+**Affects:** plugin authors who read `Tool.Info.traits` of the built-in or MCP tools, and drivers of the simulation
+protocol, which accepts one more optional field.
+
+**What to do:** Nothing.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
@@ -1051,6 +1093,38 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+
+### A prompt's step, cost and token limits are enforced
+
+A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the options were recorded but ignored. The
+runner now checks them at the start of every model step, before the automatic compaction and the request of that step,
+and again before each retry of a step. When the turn has reached a limit, the busy period ends as failed with the
+session error type `limit.steps`, `limit.cost` or `limit.tokens`, after the tools of the last response have settled and
+with no partial response left behind.
+
+Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
+compaction start without the check, and their spend counts at the next one. A subagent is checked only at the parent's
+step boundaries: it runs all its own steps between two checks, so a turn can overshoot by a whole subagent run, and a
+background subagent that is still running when a limit ends the turn keeps running. Its completion notice then wakes
+the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
+a cost or token limit by one response.
+
+The window starts at the prompt that set the options. A queued prompt without options, or a prompt sent after the busy
+period ended, runs without limits, and a steered prompt with its own options starts a new window. A prompt sent while a
+limited turn is finishing joins that turn, and fails at once if the limit is already spent. Only responses that ended
+count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
+responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
+
+A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It fails with `limit.cost`
+when the model has no tier-less price above zero (a catalog model without a price is listed as zero), and when anything
+in the window, the Session's own or a subagent's, carries tokens with a cost of zero, a finished response carries no
+cost or no tokens, or a response failed mid-stream with no cost. So a free model cannot run under a cost limit; use a
+step or token limit for it.
+
+**Affects:** SDK and HTTP callers that send `turn` limits and clients that show session errors.
+
+**What to do:** Nothing unless you send limits. Handle the three `limit.*` error types, and give models that you run
+with a cost limit a price.
 
 ### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
 

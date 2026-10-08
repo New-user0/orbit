@@ -160,6 +160,21 @@ export interface ToolExecution {
   readonly error?: SessionError.Error
 }
 
+/**
+ * The traits `registry` resolves for a call of `name` with `input`, as scheduling and permissions read them. A tool that
+ * is loaded directly is asked of the snapshot, as the runner does. A tool that Code Mode defers is not in the snapshot's
+ * request, so its declaration is resolved the way an inner call resolves it, on `input` as given.
+ */
+export const toolTraits = (registry: Tool.Interface, name: string, input: unknown = {}) =>
+  Effect.gen(function* () {
+    const deferred = (yield* registry.list()).find(
+      (tool) => tool.id === name && ToolTraits.exposure(tool) === "deferred",
+    )
+    if (deferred) return yield* ToolTraits.resolve(deferred, input)
+    const tools = yield* registry.snapshot()
+    return yield* tools.traits({ call: { type: "tool-call", id: "call_traits", name, input } })
+  })
+
 export const executeTool = (
   registry: Tool.Interface,
   input: Parameters<Tool.Snapshot["execute"]>[0],

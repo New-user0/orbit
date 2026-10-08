@@ -31,7 +31,16 @@ import { McpClient } from "@orbit/core/mcp/client"
 import { McpStdio } from "@orbit/core/mcp/stdio"
 import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
+import { Agent } from "@orbit/core/agent"
+import { Database } from "@orbit/core/database/database"
+import { PermissionSaved } from "@orbit/core/permission/saved"
+import { PluginHooks } from "@orbit/core/plugin/hooks"
+import { Project } from "@orbit/core/project"
+import { ProjectTable } from "@orbit/core/project/sql"
 import { Session } from "@orbit/core/session"
+import { SessionStore } from "@orbit/core/session/store"
+import { SessionTable } from "@orbit/core/session/sql"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import { State } from "@orbit/core/state"
 import { McpTool } from "@orbit/core/tool/mcp"
 import { McpResourceTools } from "@orbit/core/tool/plugin/mcp-resource"
@@ -73,6 +82,7 @@ import {
   registerToolPlugin,
   toolDefinitions,
   toolIdentity,
+  toolTraits,
   waitForTool,
 } from "./lib/tool"
 
@@ -1468,6 +1478,13 @@ it.live("discovers and reads MCP resources through Code Mode", () =>
       yield* settled(mcp)
       yield* registerToolPlugin(McpResourceTools.Plugin).pipe(Effect.provide(permissions))
       const tools = yield* Tool.Service
+      for (const name of ["orbit_list_mcp_resources", "orbit_read_mcp_resource"])
+        expect(yield* toolTraits(tools, name)).toMatchObject({
+          readOnly: true,
+          concurrencySafe: true,
+          openWorld: true,
+          interruptBehavior: "cancel",
+        })
       const snapshot = yield* tools.snapshot()
       const sessionID = Session.ID.make("ses_resource_tools")
       const run = (code: string) =>
@@ -2795,3 +2812,309 @@ it.live("connects to a server over the HTTP+SSE transport", () =>
     expect(posted).toContain("initialize")
   }).pipe(Effect.scoped),
 )
+
+describe("MCP tool traits", () => {
+  const server = Mcp.ServerName.make("traits")
+  const tool = (input: Partial<Mcp.Tool> = {}) =>
+    ({ server, name: "t", inputSchema: { type: "object" }, ...input }) satisfies Mcp.Tool
+  const info: Parameters<typeof ToolTraits.resolve>[0] = {
+    name: "t",
+    description: "",
+    input: Schema.Struct({}),
+    execute: () => Effect.succeed({}),
+  }
+  const resolved = (input: Partial<Mcp.Tool>) =>
+    Effect.runPromise(ToolTraits.resolve({ ...info, traits: McpTool.traits(tool(input)) }, {}))
+
+  test.each([
+    ["no annotations", {}, { concurrencySafe: false, destructive: true, openWorld: true, interruptBehavior: "block" }],
+    [
+      "a read-only hint with a title",
+      { title: "Look up", annotations: { readOnlyHint: true } },
+      { concurrencySafe: true, destructive: false, openWorld: true, displayName: "Look up" },
+    ],
+    [
+      "a read-only hint beside a destructive one",
+      { annotations: { readOnlyHint: true, destructiveHint: true } },
+      { concurrencySafe: true, destructive: false },
+    ],
+    [
+      "every hint false",
+      { annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
+      { concurrencySafe: false, destructive: false, openWorld: false },
+    ],
+    ["a title and an annotation title", { title: "Top", annotations: { title: "Inner" } }, { displayName: "Top" }],
+    ["an annotation title only", { annotations: { title: "  Find  " } }, { displayName: "Find" }],
+    [
+      "a blank title before an annotation title",
+      { title: "  ", annotations: { title: "Find" } },
+      { displayName: "Find" },
+    ],
+  ] as const)("maps %s", async (_, input, expected) => {
+    const traits = McpTool.traits(tool(input))
+    expect(traits).toMatchObject(expected)
+    // A hint never declares readOnly, so a call of an MCP tool resolves as not read-only whatever the server says.
+    expect(Object.keys(traits)).not.toContain("readOnly")
+    expect((await resolved(input)).readOnly).toBe(false)
+  })
+
+  test.each([
+    ["an empty title", { title: "" }],
+    ["a blank annotation title", { annotations: { title: "  " } }],
+    ["both blank", { title: " ", annotations: { title: "\t" } }],
+    ["neither", {}],
+  ] as const)("gives no display name for %s", (_, input) => {
+    expect(Object.keys(McpTool.traits(tool(input)))).not.toContain("displayName")
+  })
+
+  test("writes out the control and format characters of a title a server chose", () => {
+    const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b\u202ee\r\nf\ng\rh"
+    const displayName = McpTool.traits(tool({ title: hostile })).displayName
+    expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e\\nf\\ng\\x0dh")
+    expect(displayName).not.toMatch(/\p{C}/u)
+    expect(McpTool.traits(tool({ annotations: { title: hostile } })).displayName).toBe(displayName)
+    // A title that is only a format character is still a title once written out.
+    expect(McpTool.traits(tool({ title: "\u202e" })).displayName).toBe("\\u{202e}")
+  })
+
+  const fixture = (codemode: boolean, environment?: Record<string, string>) =>
+    Effect.gen(function* () {
+      const connection = yield* connect(
+        "traits",
+        new ConfigMCP.Local({
+          type: "local",
+          command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-traits.ts")],
+          ...(environment ? { environment } : {}),
+        }),
+        import.meta.dir,
+      )
+      // The server's tools as the SDK parsed them, tagged the way the service tags them.
+      const tools = (yield* connection.tools()).map((entry) => ({ ...entry, server, codemode }) satisfies Mcp.Tool)
+      const service = Layer.mock(Mcp.Service, {
+        tools: () => Effect.succeed(tools),
+        callTool: (input) =>
+          connection.callTool({ name: input.name, args: input.args }).pipe(
+            Effect.map((result) => ({ ...result, server, tool: input.name })),
+            Effect.orDie,
+          ),
+      })
+      return { tools, service }
+    })
+
+  const registered = Effect.gen(function* () {
+    const registration = yield* McpTool.Service
+    yield* registration.flush
+    return yield* Tool.Service
+  })
+
+  testEffect(Layer.empty).live("maps the hints of a stdio server onto the traits of a directly loaded tool", () =>
+    Effect.gen(function* () {
+      const loaded = yield* fixture(false)
+      expect(loaded.tools.map((entry) => entry.name)).toEqual(["lookup", "remove", "plain", "local", "untitled"])
+      yield* Effect.gen(function* () {
+        const registry = yield* registered
+        expect(yield* toolTraits(registry, "traits_lookup")).toMatchObject({
+          readOnly: false,
+          concurrencySafe: true,
+          destructive: false,
+          openWorld: true,
+          interruptBehavior: "block",
+        })
+        expect(yield* toolTraits(registry, "traits_remove")).toMatchObject({
+          concurrencySafe: false,
+          destructive: true,
+        })
+        expect(yield* toolTraits(registry, "traits_plain")).toMatchObject({
+          readOnly: false,
+          concurrencySafe: false,
+          destructive: true,
+          openWorld: true,
+        })
+        expect(yield* toolTraits(registry, "traits_local")).toMatchObject({
+          concurrencySafe: false,
+          destructive: false,
+          openWorld: false,
+        })
+        const snapshot = yield* registry.snapshot()
+        expect(snapshot.describe("traits_lookup")?.displayName).toBe("Look up")
+        // The empty titles are not a reason to drop the tool: it registers, has no display name, and runs.
+        expect(snapshot.describe("traits_untitled")).toBeDefined()
+        expect(snapshot.describe("traits_untitled")?.displayName).toBeUndefined()
+        expect(
+          yield* executeTool(registry, {
+            sessionID: Session.ID.make("ses_mcp_traits"),
+            ...toolIdentity,
+            call: { type: "tool-call", id: "call_untitled", name: "traits_untitled", input: {} },
+          }),
+        ).toMatchObject({ status: "completed", output: "x" })
+      }).pipe(Effect.provide(traitsLayer(loaded.service)))
+    }),
+  )
+
+  testEffect(Layer.empty).live("registers the same traits for a server that Code Mode reaches", () =>
+    Effect.gen(function* () {
+      const loaded = yield* fixture(true)
+      yield* Effect.gen(function* () {
+        const registry = yield* registered
+        expect(yield* toolTraits(registry, "traits_lookup")).toMatchObject({
+          readOnly: false,
+          concurrencySafe: true,
+          destructive: false,
+        })
+        expect(yield* toolTraits(registry, "traits_plain")).toMatchObject({
+          readOnly: false,
+          concurrencySafe: false,
+          destructive: true,
+        })
+        expect((yield* registry.list()).find((entry) => entry.id === "traits_lookup")?.traits).toMatchObject({
+          displayName: "Look up",
+        })
+      }).pipe(Effect.provide(traitsLayer(loaded.service)))
+    }),
+  )
+
+  testEffect(Layer.empty).live("carries a hostile title to every client as written-out text", () =>
+    Effect.gen(function* () {
+      const loaded = yield* fixture(false, {
+        MCP_TRAITS_TITLE: "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b\u202ee\rf",
+      })
+      yield* Effect.gen(function* () {
+        const registry = yield* registered
+        const displayName = (yield* registry.snapshot()).describe("traits_lookup")?.displayName
+        expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e\\x0df")
+        expect(displayName).not.toMatch(/\p{C}/u)
+      }).pipe(Effect.provide(traitsLayer(loaded.service)))
+    }),
+  )
+
+  const traitsLayer = (service: Layer.Layer<Mcp.Service>) =>
+    Layer.fresh(
+      AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node]), [
+        Mcp.node.replace(service),
+        Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
+        Image.node.replace(imagePassthrough),
+      ]),
+    )
+})
+
+describe("MCP hints and permissions", () => {
+  const permissionStack = (mcp: Layer.Layer<Mcp.Service>) =>
+    AppNodeBuilder.build(
+      LayerNode.group([
+        Database.node,
+        Bus.node,
+        SessionStore.node,
+        PermissionSaved.node,
+        Agent.node,
+        PluginHooks.node,
+        Permission.node,
+        Tool.node,
+        McpTool.node,
+      ]),
+      [
+        Mcp.node.replace(mcp),
+        Location.node.replace(
+          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make("/project") }))),
+        ),
+        Image.node.replace(imagePassthrough),
+      ],
+    )
+
+  testEffect(Layer.empty).live("asks the same question for a tool that claims it is read-only", () =>
+    Effect.gen(function* () {
+      const server = Mcp.ServerName.make("traits")
+      const connection = yield* connect(
+        "traits",
+        new ConfigMCP.Local({
+          type: "local",
+          command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-traits.ts")],
+        }),
+        import.meta.dir,
+      )
+      const tools = (yield* connection.tools()).map(
+        (entry) => ({ ...entry, server, codemode: false }) satisfies Mcp.Tool,
+      )
+      const mcpService = Layer.mock(Mcp.Service, {
+        tools: () => Effect.succeed(tools),
+        callTool: (input) =>
+          connection.callTool({ name: input.name, args: input.args }).pipe(
+            Effect.map((result) => ({ ...result, server, tool: input.name })),
+            Effect.orDie,
+          ),
+      })
+      const sessionID = Session.ID.make("ses_mcp_hints")
+
+      yield* Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db
+          .insert(ProjectTable)
+          .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "hints",
+            directory: "/project",
+            title: "hints",
+            version: "test",
+            agent: "build",
+          })
+          .onConflictDoNothing()
+          .run()
+          .pipe(Effect.orDie)
+        const agents = yield* Agent.Service
+        yield* agents.transform((editor) =>
+          editor.update(toolIdentity.agent, (agent) => {
+            agent.permissions = [{ action: "traits_*", resource: "*", effect: "ask" }]
+          }),
+        )
+        const registry = yield* Tool.Service
+        const mcpTool = yield* McpTool.Service
+        yield* mcpTool.flush
+        const permission = yield* Permission.Service
+        const bus = yield* Bus.Service
+
+        const ask = (name: string) =>
+          Effect.gen(function* () {
+            const asked = yield* Deferred.make<Permission.Request>()
+            const unsubscribe = yield* bus.listen((event) =>
+              event.type === Permission.Event.Asked.type
+                ? Deferred.succeed(asked, event.data as Permission.Request).pipe(Effect.asVoid)
+                : Effect.void,
+            )
+            const fiber = yield* executeTool(registry, {
+              sessionID,
+              ...toolIdentity,
+              call: { type: "tool-call", id: `call_${name}`, name, input: {} },
+            }).pipe(Effect.exit, Effect.forkScoped)
+            const request = yield* Deferred.await(asked).pipe(
+              Effect.timeoutOrElse({
+                duration: "2 seconds",
+                orElse: () => Effect.die(new Error(`${name} did not ask for permission`)),
+              }),
+            )
+            yield* permission.reply({ requestID: request.id, reply: "reject" })
+            yield* Fiber.join(fiber)
+            yield* unsubscribe
+            return request
+          })
+
+        const lookup = yield* ask("traits_lookup")
+        const plain = yield* ask("traits_plain")
+        expect(lookup.action).toBe("traits_lookup")
+        expect(plain.action).toBe("traits_plain")
+        const withoutIdentity = (request: Permission.Request) => ({
+          ...request,
+          id: undefined,
+          action: undefined,
+          source: { ...request.source, id: undefined },
+        })
+        expect(withoutIdentity(lookup)).toEqual(withoutIdentity(plain))
+      }).pipe(Effect.provide(Layer.fresh(permissionStack(mcpService))))
+    }),
+  )
+})

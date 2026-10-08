@@ -179,6 +179,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { codemode: false },
+          traits: { concurrencySafe: true, interruptBehavior: "block" },
           description,
           input: Input,
           output: Output,

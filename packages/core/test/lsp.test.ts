@@ -13,6 +13,14 @@ import { location } from "./fixture/location"
 import { Layer } from "effect"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
+import { Tool } from "@orbit/core/tool"
+import { FSUtil } from "@orbit/util/fs-util"
+import { FileAccess } from "@orbit/core/file-access"
+import { Permission } from "@orbit/core/permission"
+import { LspTool } from "@orbit/core/tool/plugin/lsp"
+import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { permissionLayer } from "./lib/permission"
+import { registerToolPlugin, toolTraits } from "./lib/tool"
 
 const server = path.join(import.meta.dir, "fixtures", "lsp", "fake-server.ts")
 const configured = (lsp: unknown) =>
@@ -32,7 +40,38 @@ const withLsp = <A, E>(directory: string, lsp: unknown, body: (service: Lsp.Inte
     ),
   )
 
+const lspToolNode = makeLocationNode({
+  name: "test/lsp-tool-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(LspTool.Plugin)),
+  deps: [Tool.node, FileAccess.node, Lsp.node, Permission.node, Config.node, FSUtil.node, Location.node],
+})
+
 describe("Lsp", () => {
+  it.live("the lsp tool only reads, so it is read-only, safe beside other calls and ended by a new message", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      expect(yield* toolTraits(registry, "lsp", { action: "hover", path: "a.ts" })).toMatchObject({
+        readOnly: true,
+        concurrencySafe: true,
+        destructive: false,
+        interruptBehavior: "cancel",
+      })
+    }).pipe(
+      Effect.provide(
+        AppNodeBuilder.build(LayerNode.group([Tool.node, lspToolNode]), [
+          Config.node.replace(configured(false)),
+          Permission.node.replace(permissionLayer()),
+          Location.node.replace(
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),
+            ),
+          ),
+        ]),
+      ),
+    ),
+  )
+
   it.live("reports a configured server's diagnostics after each change, and answers requests", () =>
     Effect.gen(function* () {
       const directory = (yield* tmpdirScoped()).path
