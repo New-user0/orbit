@@ -16,6 +16,19 @@ import { errorMessage } from "../../util/error"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
+    // The flags of a printed run mean nothing to the interface, so say so instead of dropping them.
+    const printOnly = [
+      ["--output-format", Option.isSome(input.outputFormat)],
+      ["--json-schema", Option.isSome(input.jsonSchema)],
+      ["--file", input.file.length > 0],
+      ["--title", Option.isSome(input.title)],
+      ["--model", Option.isSome(input.model)],
+      ["--agent", Option.isSome(input.agent)],
+      ["--bare", input.bare],
+      ["--thinking", input.thinking],
+    ].flatMap(([flag, given]) => (given ? [flag] : []))
+    if (printOnly.length > 0)
+      return yield* Effect.fail(new Error(`${printOnly.join(", ")} can only be used with -p, as in: orb -p <message>`))
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)

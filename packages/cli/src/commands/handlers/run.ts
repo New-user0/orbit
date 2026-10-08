@@ -8,10 +8,36 @@ import { errorMessage } from "../../util/error"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
-export default Runtime.handler(Commands.commands.run, (input) =>
-  Effect.gen(function* () {
+type Format = "default" | "json" | "stream-json" | "result"
+
+type HeadlessInput = {
+  readonly server: Option.Option<string>
+  readonly standalone: boolean
+  readonly trust: boolean
+  readonly bare: boolean
+  readonly message: ReadonlyArray<string>
+  readonly continue: boolean
+  readonly session: Option.Option<string>
+  readonly fork: boolean
+  readonly model: Option.Option<string>
+  readonly agent: Option.Option<string>
+  readonly format: Format
+  readonly jsonSchema: Option.Option<string>
+  readonly file: ReadonlyArray<string>
+  readonly title: Option.Option<string>
+  readonly thinking: boolean
+  readonly auto: boolean
+  readonly yolo: boolean
+  readonly dangerouslySkipPermissions: boolean
+}
+
+/**
+ * Sends one message and prints the answer, for `orb run` and `orb -p`: both are a door that starts work, so both settle
+ * trust for the folder before the first prompt and report a refusal in the format that was asked for.
+ */
+export function headlessInput(input: HeadlessInput) {
+  return Effect.gen(function* () {
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
-    const separator = process.argv.indexOf("--", 2)
     const schemaFile = Option.getOrUndefined(input.jsonSchema)
     const jsonSchema = schemaFile ? yield* Effect.promise(() => Bun.file(schemaFile).json()) : undefined
     const format = jsonSchema === undefined ? input.format : "result"
@@ -37,7 +63,8 @@ export default Runtime.handler(Commands.commands.run, (input) =>
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
-        message: [...input.message, ...(separator === -1 ? [] : process.argv.slice(separator + 1))],
+        // The parser already appends the operands after a literal -- to the message.
+        message: [...input.message],
         continue: input.continue,
         session: Option.getOrUndefined(input.session),
         fork: input.fork,
@@ -51,5 +78,7 @@ export default Runtime.handler(Commands.commands.run, (input) =>
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       }),
     )
-  }),
-)
+  })
+}
+
+export default Runtime.handler(Commands.commands.run, headlessInput)

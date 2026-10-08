@@ -1098,7 +1098,7 @@ gray-matter's default engines, or a marker test per reader written with the spec
 ### 12. Entry points and process boundaries each need the gate
 
 **Rule:** List every command, subprocess and process that can start work or load a file (`run`, `loop`, `flow run`,
-`resume` and `replay`, `eval`, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
+`resume` and `replay`, `eval`, `orb -p`, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
 route each one through the one gate. A gate in the server does not reach the CLI or the terminal UI process.
 
 **Why:** The same loader had several doors. A check on `orb flow run` did not cover replay or resume, the server's
@@ -1115,7 +1115,9 @@ already guarded elsewhere.
 **How to comply:**
 
 - `requireTrust`, `trustRefusal` and `warnUntrusted` in `packages/cli/src/util/trust.ts`. The handlers for `run`,
-  `loop`, `flow run`, `flow resume`, `flow replay` and `eval` call them before any load. `orb acp` cannot stop, because
+  `loop`, `flow run`, `flow resume`, `flow replay`, `eval` and `orb -p` (`handlers/print.ts`, through the `headlessInput`
+  that `run` shares, so the `--server` and 404-stub variants of the `run` rows in `trust.test.ts` cover it) call them
+  before any load. `orb acp` cannot stop, because
   the editor chooses the folders, so it warns on stderr and keeps stdout for the protocol.
 - `--trust` forces a private server and trusts for its lifetime without storing the grant (it rejects `--server`).
   `orb trust [folder] [--revoke] [--list]` refuses home and filesystem roots.
