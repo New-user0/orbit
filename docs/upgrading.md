@@ -900,6 +900,20 @@ markdown export, and the prompt history and stash lists. Known gaps in
 
 **What to do:** nothing.
 
+### Footers for continued and truncated replies
+
+The line under an assistant reply in the terminal UI now ends with a muted label when the reply was not the end of the
+run. "continued" marks a step that hit an error or the output limit and was followed by another step, and its error
+line is no longer shown, since the run recovered. "truncated at output limit" marks a final reply that was cut off and
+that the run did not resume; while the next step is still starting it has no label. A prompt that is queued but not yet
+delivered does not end the turn. The terminal UI can also show "retried" for an attempt that a retry with a larger
+output limit replaced, which appears once Orbit makes such retries in a later change. Before, a recovered error stayed on
+screen and a cut-off reply had no marker.
+
+**Affects:** people who use the terminal UI.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -1186,11 +1200,12 @@ When a response ended in the middle of a tool call, for example because the mode
 rebuilt the arguments from the half-written text and ran the tool with them, so a `write` call cut off inside its
 `content` wrote a truncated file. Routes that close each call before the finish reason arrives did this. A call rebuilt
 from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
-any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped:
-the tool does not run, and the response ends with an input that was started and never called. A call whose arguments
-arrived complete is not affected, and still runs when a later call in the same response was cut off. A call that
-stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
-still runs with empty arguments.
+any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped
+and the tool does not run. After an output limit the input is recorded as failed with `tool.input-truncated` and the
+response is resumed up to three times in a row (see "A response cut off by the output limit is resumed"); otherwise it
+fails with the response's own error. A call whose arguments arrived complete is not affected, and still runs when a
+later call in the same response was cut off. A call that stopped before its first argument is not caught: it cannot be
+told from a call to a tool that takes no arguments, so it still runs with empty arguments.
 
 A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
 `tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
@@ -1207,8 +1222,7 @@ session now retries or continues instead of treating as finished. It also affect
 call back until the response finishes and drop it unless the finish is `tool-calls` or `stop`, and `TestLLM` follows the
 same rule for scripted responses.
 
-**What to do:** nothing. To carry on after a cut-off, send a follow-up message, and if a large write keeps being cut
-off, ask the model to split it.
+**What to do:** nothing. If a large write keeps being cut off, ask the model to split it.
 
 ### Overloaded providers are classified, and an overload sent as a 429 is no longer a rate limit
 
@@ -1416,21 +1430,44 @@ model. Orbit uses your own setting until you trust the folder.
 
 **What to do:** nothing. Set `fallback_model` in your own config to use it.
 
+### A response cut off by the output limit is resumed
+
+When a model response stops because it reached its output limit, Orbit now adds a short hidden note asking the model to
+resume where it stopped and sends the request again, up to three times in a row. Before, the turn ended with the cut-off
+text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
+`tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
+the next cut-off stays as it is. The count comes from the session history and starts over after any response that
+finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the
+cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
+`maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
+no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
+an incomplete stream's continuation does; the allowance is bounded. A text-only cut-off is not resumed when a steered
+message from you is already waiting: that message is delivered at once and starts a new count. A steer that arrives
+during a resume waits for at most the three resumes.
+
+**Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
+session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
+
+**What to do:** nothing. Raise the model's output limit, and raise or unset `output_token_cap` if you set it, if you
+would rather avoid the extra requests.
+
 ### New `output_token_cap` setting
 
 The root `output_token_cap` setting is a positive whole number of tokens that caps how much a model may write in one
-agent step. A reply that runs several steps can write more than the cap in total. Compaction summaries and titles keep
-their own limits. Every agent request, including a subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied before `session.context`
-hooks run, so a hook can still change it. It reaches every provider, including one whose adapter otherwise omits the
-default limit, and `session.context` hooks see it as `outputTokenCap` when it lowered the model's limit. The one exception is a model that rejects an
-output limit at its highest reasoning effort, where Orbit sends none. The cap never raises a limit. Left unset, requests
-are unchanged. Zero, a negative number or a fraction is reported and ignored. With a cap of 1,024 or less, every request
-from a model with a fixed reasoning budget is refused; below about 2,000, most of the cap goes to reasoning.
+request. A reply cut off at the cap is resumed like any other cut-off (see the output-limit note above), so the cap
+limits each model request, not the whole reply. Compaction summaries and titles keep their own limits. Every agent
+request, including a subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied
+before `session.context` hooks run, so a hook can still change it. It reaches every provider, including one whose
+adapter otherwise omits the default limit, and `session.context` hooks see it as `outputTokenCap` when it lowered the
+model's limit. The one exception is a model that rejects an output limit at its highest reasoning effort, where Orbit
+sends none. The cap never raises a limit. Left unset, requests are unchanged. Zero, a negative number or a fraction is
+reported and ignored. With a cap of 1,024 or less, every request from a model with a fixed reasoning budget is refused;
+below about 2,000, most of the cap goes to reasoning.
 
 In a folder that is not trusted yet, `output_token_cap` is left out whole, like the other settings that choose a model
 or a budget. Orbit uses your own setting until you trust the folder.
 
-**Affects:** people who want shorter replies, and anyone reading `config.get`, which now lists the key.
+**Affects:** people who want to bound each model request, and anyone reading `config.get`, which now lists the key.
 
 **What to do:** nothing. Set `output_token_cap` in your own config to use it.
 
@@ -1439,14 +1476,14 @@ or a budget. Orbit uses your own setting until you trust the folder.
 When the provider reports that the model is overloaded three times in a row within one step, Orbit now switches to the
 fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
 session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
-other failure between two overloads, such as a rate limit, restarts the count. If the overloaded response had already
-produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
-`synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
-also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
-prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
-or a moved location keeps it. The message comes before the fallback model's answer, never after it. The failed
-attempt's empty draft stays ahead of the message; it is closed without a finish, left out of requests and not counted as
-a step. No new event type is added.
+other failure between two overloads, such as a rate limit, restarts the count, and so does a response cut off by the
+output limit. If the overloaded response had already produced text, that response stays failed and the step continues
+from it on the fallback model. The conversation gets a `synthetic` message with `metadata.notice` of `fallback` and a
+one-line `description` naming both models; the message also tells the model that it was switched. The fallback lasts
+until the next turn starts (a queued prompt, or the first prompt after the session went idle) or until you switch model
+yourself. Orbit reads it from that message, so a restart or a moved location keeps it. The message comes before the
+fallback model's answer, never after it. The failed attempt's empty draft stays ahead of the message; it is closed
+without a finish, left out of requests and not counted as a step. No new event type is added.
 
 **Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
 
