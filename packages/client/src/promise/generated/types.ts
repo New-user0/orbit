@@ -921,6 +921,16 @@ export type SessionUsageRecorded = {
   data: { sessionID: string; source: "title" | "compaction"; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
+export type SessionSideQueryRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.side_query.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; purpose: string; cost: MoneyUSD; tokens: TokenUsageInfo }
+}
+
 export type LocationShutdown = {
   id: string
   created: number
@@ -2543,6 +2553,7 @@ export type SessionEventDurable =
   | SessionRevertCleared
   | SessionRevertCommitted
   | SessionUsageRecorded
+  | SessionSideQueryRecorded
   | SessionMessageContentUpdated
 
 export type IntegrationInfo = {

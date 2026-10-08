@@ -109,12 +109,21 @@ rest:
   from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
   a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
   project's value outranks yours, so it would otherwise replace the one in your own config.
+
+- **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
+  `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
+  agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
+  own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
+  model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
+  the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
+  that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours,
+  so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for.
-- **Kept as written:** everything else, such as `model`, `output_style`, `username`, `snapshots`, `watcher`, `media`,
+- **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
@@ -168,8 +177,8 @@ The files in a project's `.orbit` directory are held to the same decision, becau
   in backticks) fails with a message that names the command and the folder to trust, which is the folder around the
   `.orbit` directory or config file that defines it. Nothing is asked about or started first. A command that names an
   `agent` runs as the session's current agent instead, as a subtask as well.
-- **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt, model and description, and loses
-  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, `disabled`, `mode` and
+- **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt and description, and loses
+  what the same entry in `orbit.json` would lose: its `model`, `steps`, `request`, its `allow` and `ask` rules, `disabled`, `mode` and
   `hidden`, so a file cannot remove or hide one of the agents that are already there, or make one of them spawnable by
   the model.
 
@@ -231,6 +240,25 @@ run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit:
 also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" and "The
 terminal UI asks whether to trust a folder" under Clients.
 
+### A folder's model, provider and budget settings wait for it to be trusted
+
+An untrusted folder can no longer pick a model, a provider or a budget, because every one of them is paid for by you.
+While a folder is untrusted, `ConfigTrust` takes these out of its config documents and out of its agent and command
+files, keeps the rest of each entry, and reports the `providers` kind as withheld: the top-level `model`, the `model`
+and `steps` of every agent (so also `agents.title.model`, which `small_model` migrates to, and `agents.side.model`,
+which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
+Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
+
+A folder whose only config is one of these now counts as holding config back. The headless commands (`orb run` and
+the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
+trust prompt, which lists the `providers` kind.
+
+**Affects:** a repository that sets `model`, an agent's `model` or `steps`, or a command's `model` in its own
+`orbit.json` or in a file of its `.orbit` directory, until its folder is trusted.
+
+**What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in
+your user config.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -256,6 +284,31 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
+
+### `orb -p` sends a message and prints the answer
+
+`orb -p <message>` (or `--print`) runs one message the way `orb run` does and exits. The words after the flags are the
+message, so `orb -p run the tests` sends "run the tests" and never starts `orb run`; the flag may come anywhere before
+a literal `--`, except that when the first word is a subcommand `-p` must come before it: `orb debug this -p` goes to
+the `debug` subcommand and `orb run -p` is still a `run` command line (a usage error). A word right after a flag that takes a value is that
+flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the next word into the message, so `orb -p yes do it` sends
+"yes do it" and `orb -p --thinking false positives` sends "false positives" with thinking on; write `--no-thinking` or
+`--thinking=false` to turn a flag off. Only to find the subcommand does `orb` treat a yes/no/true/false word after a
+boolean flag as its value, so `orb --standalone yes serve -p` is still a `serve` command line. `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
+object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
+takes the same flags from one shared definition. The flags that `orb` takes only with `-p` (`--output-format`,
+`--model`, `--agent`, `--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error on `orb` without `-p`;
+`orb run` takes the others too, and keeps its own `--format` in place of `--output-format`. `orb -p --help` lists every flag a printed run accepts,
+including `--trust` and `--fork`.
+
+Like `orb run`, `orb -p` stops in an untrusted folder whose project config is held back, before anything is sent, and
+reports the refusal as a JSON result object under `--output-format json`; `--trust` runs it once.
+
+`orb run a -- b` used to send the operands after `--` twice ("a b b"). It now sends them once.
+
+**Affects:** scripts that passed operands after `--` to `orb run` and relied on the repeat.
+
+**What to do:** nothing for `-p`; to send a message that starts with a dash, put it after `--`.
 
 ### The sidebar's getting-started text no longer lists model families
 
@@ -1016,6 +1069,27 @@ instead.
 
 **What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
 would use for it.
+
+### Side queries run on the small model
+
+`SideQuery` in `@orbit/core/side-query` runs one non-streaming model call on behalf of a session: `text` returns text
+and `object` returns a value decoded from a single forced tool call. It uses the small model of the session's
+provider, then the session's own model, always with the variant that reasons least (a session on `#high` still runs
+its side queries at the lowest variant its model lists), and `agents.side.model` pins the choice; a pinned model that
+the catalog does not list falls through to the small model. With `history: true` the session's tool definitions go
+along, and the model may not call them. Nothing is added to the conversation. The cost lands on the session through a new durable event,
+`session.side_query.recorded`, which `orb stats` counts in its cost and token totals; `session.usage.recorded` is
+unchanged. A side query fails with `UnavailableError`, `InvalidOutputError` or `TimeoutError`, and never fails the
+session. Title generation now picks its model through the same `SessionContext.selectAuxiliary`.
+
+**Affects:** plugin authors, and anyone who reads the event log or `orb stats`: `generate` hooks see side queries with
+`agent` set to `side`, and the new event type appears in the log. An older Orbit build that shares the database skips
+the event, so only its `orb stats` totals leave side queries out; the cost still reaches the session row.
+
+`agents.side.model` is withheld in an untrusted folder; see "A folder's model, provider and budget settings wait for
+it to be trusted" under Configuration.
+
+**What to do:** Nothing. A `generate` hook that should ignore side queries can return early when `agent` is `side`.
 
 ### Built-in, Code Mode and MCP tools declare traits, and simulated tools can
 

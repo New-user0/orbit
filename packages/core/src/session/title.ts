@@ -2,7 +2,7 @@ export * as SessionTitle from "./title.js"
 
 import { isDeepStrictEqual } from "node:util"
 import { LLMClient, LLMEvent, Message, SystemPart } from "@orbit/ai"
-import type { Agent } from "@orbit/schema/agent"
+import { Agent } from "../agent.js"
 import { Context, DateTime, Effect, Layer, Stream } from "effect"
 import { Database } from "../database/database.js"
 import { Bus } from "../bus.js"
@@ -124,7 +124,7 @@ export const layer = Layer.effect(
             Effect.orElseSucceed(() => firstUser.text),
           )
         : firstUser.text
-      const selection = yield* context.selectTitle(session)
+      const selection = yield* context.selectAuxiliary(session, Agent.ID.make("title"))
       if (!selection) return
       const title =
         (yield* attempt({ session, agent: selection.agent, text, model: selection.selected })) ??

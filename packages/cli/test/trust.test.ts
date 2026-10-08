@@ -153,7 +153,7 @@ async function hooked(name: string) {
 // A folder whose config holds nothing back.
 async function quiet(name: string) {
   const directory = path.join(root, "work", name)
-  await Bun.write(path.join(directory, "orbit.json"), JSON.stringify({ model }))
+  await Bun.write(path.join(directory, "orbit.json"), JSON.stringify({ username: "dev" }))
   return directory
 }
 
@@ -302,6 +302,47 @@ test("the hook of a repository trusted for a run is in force from the first step
   expect(await Bun.file(blocked).exists()).toBe(false)
 }, 240_000)
 
+test("orb -p is a door that starts work: it stops in an untrusted repository, in the format it was asked for, and --trust runs it", async () => {
+  const repository = await hooked("print-refused")
+  const marker = path.join(repository, "print.marker")
+  // Loading this plugin leaves a marker, so a marker means the folder's code ran before the check.
+  await Bun.write(
+    path.join(repository, ".orbit", "plugins", "mark.ts"),
+    `import { writeFileSync } from "node:fs"\nwriteFileSync(${JSON.stringify(marker)}, "loaded")\nexport default { id: "mark", async setup() {} }`,
+  )
+  const before = runs
+
+  const text = await orb(repository, ["-p", "--standalone", "--model", model, "say", "ok"])
+  const json = await orb(repository, ["-p", "--standalone", "--output-format", "json", "--model", model, "say ok"])
+  // The words of the message are not subcommands, and the flag may come last.
+  const words = await orb(repository, ["-p", "--standalone", "--model", model, "run", "the", "tests"])
+  const last = await orb(repository, ["--standalone", "--model", model, "say ok", "-p"])
+
+  for (const result of [text, words, last]) {
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("is not trusted")
+    expect(result.stderr).toContain("--trust")
+  }
+  expect(json.code).toBe(1)
+  expect(JSON.parse(json.stdout)).toMatchObject({
+    type: "result",
+    sessionID: "",
+    is_error: true,
+    error: expect.stringContaining("is not trusted"),
+  })
+  // Nothing of the folder ran and the model heard nothing.
+  expect(await Bun.file(marker).exists()).toBe(false)
+  expect(runs).toBe(before)
+
+  const trusted = await orb(repository, ["-p", "--trust", "--model", model, "say ok"])
+
+  succeeded(trusted)
+  expect(trusted.stdout).toContain("ran fine")
+  // A folder that holds nothing back runs without a grant, as orb run does.
+  succeeded(await orb(await quiet("print-quiet"), ["-p", "--standalone", "--model", model, "say ok"]))
+}, 300_000)
+
 test("after orb trust a plain orb run proceeds, and orb trust --revoke takes the grant back", async () => {
   const repository = await hooked("granted")
 
@@ -360,7 +401,7 @@ test("orb trust names a folder that is not there instead of passing a server err
 
 test("a repository with nothing withheld runs without being trusted, as does --bare, and --trust works in the home directory", async () => {
   const clean = path.join(root, "work", "clean")
-  await Bun.write(path.join(clean, "orbit.json"), JSON.stringify({ model }))
+  await Bun.write(path.join(clean, "orbit.json"), JSON.stringify({ username: "dev" }))
 
   succeeded(await orb(clean, ["run", "--standalone", "--model", model, "say ok"]))
   // --bare leaves the project config unread, so a repository that holds back plenty has nothing left to hold back.
