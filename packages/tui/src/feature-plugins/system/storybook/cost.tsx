@@ -20,6 +20,7 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: 1.2345,
       partial: false,
+      subagents: undefined,
       other: undefined,
       loaded: undefined,
       tokens: tokens(3),
@@ -36,6 +37,7 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: undefined,
       partial: false,
+      subagents: undefined,
       other: undefined,
       loaded: undefined,
       tokens: tokens(1),
@@ -51,6 +53,7 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: 0.5,
       partial: true,
+      subagents: undefined,
       other: undefined,
       loaded: undefined,
       tokens: tokens(2),
@@ -67,6 +70,7 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: 0.5,
       partial: false,
+      subagents: undefined,
       other: undefined,
       loaded: 1,
       tokens: tokens(2),
@@ -78,10 +82,27 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     },
   },
   {
+    label: "with subagents",
+    summary: {
+      cost: 2,
+      partial: false,
+      subagents: 0.8,
+      other: undefined,
+      loaded: undefined,
+      tokens: tokens(2),
+      wall: 95_000,
+      api: 40_000,
+      models: [
+        { providerID: "a", modelID: "large", name: "Large", responses: 2, tokens: tokens(2), cost: 1.2, unpriced: 0 },
+      ],
+    },
+  },
+  {
     label: "other usage",
     summary: {
       cost: 0.62,
       partial: false,
+      subagents: undefined,
       other: 0.12,
       loaded: undefined,
       tokens: tokens(2),
@@ -94,7 +115,7 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
   },
   {
     label: "no responses",
-    summary: { cost: 0, partial: false, other: undefined, loaded: undefined, tokens: tokens(0), wall: undefined, api: undefined, models: [] },
+    summary: { cost: 0, partial: false, subagents: undefined, other: undefined, loaded: undefined, tokens: tokens(0), wall: undefined, api: undefined, models: [] },
   },
 ]
 

@@ -199,3 +199,50 @@ test("the dialog counts several loaded responses in the plural", async () => {
   const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
   expect(frame.replace(/\s+/g, " ")).toContain("cover only the 2 newest loaded responses")
 })
+
+test("the dialog shows the family total the footer uses, with a Subagents line", async () => {
+  const root = { ...sessionFixture("root"), cost: 0.4 }
+  const child = { ...sessionFixture("child"), parentID: "root", cost: 0.8 }
+  await using setup = await renderLocal({ sessions: [root, child] })
+  await setup.data.session.sync("root")
+  await setup.data.session.sync("child")
+  expect(setup.data.session.cost("root")).toBeCloseTo(1.2)
+  setup.dialog.replace(() => <DialogCost sessionID="root" />)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
+  expect(frame).toMatch(/Session cost\s+\$1\.20/)
+  expect(frame).toMatch(/Subagents\s+\$0\.80/)
+  expect(frame.replace(/\s+/g, " ")).toContain("this session's own")
+})
+
+test("subagent spend is split from the session's own and keeps the rows against the own cost", () => {
+  const summary = costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5)], [priced("big")], false, 1.3)
+  expect(summary).toMatchObject({ cost: 1.3, other: undefined })
+  expect(summary.subagents).toBeCloseTo(0.8)
+  expect(costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5)], [priced("big")]).subagents).toBeUndefined()
+  // Own spend unknown, subagents known: the known part is shown and flagged as incomplete.
+  const unknown = costSummary(info(0, 100), [assistant("a", "local", 100, 0)], [model("local")], false, 0.8)
+  expect(unknown).toMatchObject({ cost: 0.8, partial: true })
+})
+
+test("a cost that no loaded response explains shows as not itemized, also with no responses left", async () => {
+  const undone = costSummary(info(0.4, 0), [], [priced("big")])
+  expect(undone.other).toBeCloseTo(0.4)
+  await using setup = await renderLocal()
+  setup.dialog.replace(() => <CostView summary={undone} />)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
+  expect(frame).toContain("No model response yet")
+  expect(frame).toContain("undone responses")
+})
+
+test("a response that failed with no cost and no tokens is unknown spend", () => {
+  const failed = {
+    ...assistant("f", "big", 0, undefined),
+    tokens: undefined,
+    finish: "error",
+  } as unknown as SessionMessageInfo
+  const summary = costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5), failed], [priced("big")])
+  expect(summary.partial).toBe(true)
+  expect(summary.models[0]).toMatchObject({ responses: 2, unpriced: 1, cost: 0.5 })
+  const stopped = { ...failed, finish: "stop" } as unknown as SessionMessageInfo
+  expect(costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5), stopped], [priced("big")]).partial).toBe(false)
+})

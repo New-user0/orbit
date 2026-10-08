@@ -29,6 +29,8 @@ export function costSummary(
   history: ReadonlyArray<SessionMessageInfo>,
   models: ReadonlyArray<ModelInfo> | undefined,
   windowed = false,
+  /** The root session's whole loaded family (`data.session.cost`), which is what the footer and sidebar show. */
+  family = session.cost,
 ) {
   // A fork copies its parent's settled messages with their original timestamps, but its own totals start at zero:
   // messages older than the fork belong to the parent and stay out of the rows and times.
@@ -37,7 +39,13 @@ export function costSummary(
   const used = messages.flatMap((message) => {
     if (message.type === "compaction" && message.status !== "completed") return []
     if (message.type !== "assistant" && message.type !== "compaction") return []
-    if (!message.tokens || !message.model) return []
+    if (!message.model) return []
+    // A response that failed mid-stream carries neither tokens nor cost: its spend is unknown, as for the turn cost limit.
+    if (!message.tokens) {
+      if (message.type === "assistant" && message.finish === "error" && message.cost === undefined)
+        return [{ ...message, tokens: undefined, model: message.model }]
+      return []
+    }
     return [{ ...message, tokens: message.tokens, model: message.model }]
   })
   used.forEach((message) => {
@@ -55,6 +63,11 @@ export function costSummary(
         unpriced: 0,
       } satisfies ModelCost)
     row.responses += 1
+    rows.set(key, row)
+    if (!message.tokens) {
+      row.unpriced += 1
+      return
+    }
     row.tokens.input += message.tokens.input
     row.tokens.output += message.tokens.output
     row.tokens.reasoning += message.tokens.reasoning
@@ -78,17 +91,26 @@ export function costSummary(
   const priced = all.some((row) => row.cost !== undefined)
   const remainder = session.cost - all.reduce((total, row) => total + (row.cost ?? 0), 0)
 
+  // A subagent's usage is never rolled into its parent's totals; the footer adds the family up, so the dialog does too.
+  const subagents = family - session.cost > 0.00005 ? family - session.cost : undefined
+  // Everything loaded was unpriced and nothing older is missing: the session's own cost is unknown, not zero.
+  // A recorded amount above zero is known even when no row is priced (for example title generation on a priced model).
+  const unknown = !priced && all.length > 0 && !windowed && session.cost === 0
+
   return {
-    // Everything loaded was unpriced and nothing older is missing: the cost is unknown, not zero.
-    // A recorded amount above zero is known even when no row is priced (for example title generation on a priced model).
-    cost: !priced && all.length > 0 && !windowed && session.cost === 0 ? undefined : session.cost,
-    partial: all.some((row) => row.unpriced > 0) && (priced || windowed || session.cost > 0),
+    cost: unknown ? subagents : session.cost + (subagents ?? 0),
+    subagents,
+    partial:
+      all.some((row) => row.unpriced > 0) && (priced || windowed || session.cost > 0 || subagents !== undefined),
     tokens: session.tokens,
     wall: completed.length > 0 ? Math.max(0, Math.max(...completed) - session.time.created) : undefined,
     api: spans.length > 0 ? spans.reduce((total, span) => total + span, 0) : undefined,
     models: all.toSorted((left, right) => (right.cost ?? -1) - (left.cost ?? -1)),
-    /** Spend the rows do not itemize (titles and other usage records); only known when every response is loaded. */
-    other: !windowed && priced && remainder > 0.00005 ? remainder : undefined,
+    /**
+     * Spend the rows do not itemize (titles, undone responses and other usage records); only known when every response
+     * is loaded. Undone responses leave the history but keep their cost, so it also shows when no row is left.
+     */
+    other: !windowed && (priced || all.length === 0) && remainder > 0.00005 ? remainder : undefined,
     /** Set when older responses are not loaded: the breakdown and API time cover only this many. */
     loaded: windowed ? used.length : undefined,
   }

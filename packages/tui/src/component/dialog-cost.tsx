@@ -25,6 +25,7 @@ export function DialogCost(props: { readonly sessionID: string }) {
       data.session.message.list(props.sessionID) ?? [],
       data.location.model.list(session.location),
       data.session.message.more(props.sessionID),
+      data.session.cost(props.sessionID),
     )
   })
   return <CostView summary={summary()} />
@@ -43,9 +44,15 @@ export function CostView(props: { readonly summary?: CostSummary }) {
           <>
             <box>
               <Row label="Session cost" value={price(value().cost, value().partial)} />
+              <Show when={value().subagents !== undefined}>
+                <Row label="Subagents" value={`${price(value().subagents)} (included above)`} />
+              </Show>
               <Row label="Wall-clock time" value={span(value().wall)} />
               <Row label="API time" value={span(value().api)} />
             </box>
+            <Show when={value().subagents !== undefined}>
+              <text fg={theme.text.muted}>Times, tokens and the breakdown are this session's own.</text>
+            </Show>
             <box>
               <Row label="Input tokens" value={Locale.number(value().tokens.input)} />
               <Row label="Output tokens" value={Locale.number(value().tokens.output)} />
@@ -62,7 +69,17 @@ export function CostView(props: { readonly summary?: CostSummary }) {
             </Show>
             <Show
               when={value().models.length > 0}
-              fallback={<text fg={theme.text.muted}>No model response yet in this session.</text>}
+              fallback={
+                <box>
+                  <text fg={theme.text.muted}>No model response yet in this session.</text>
+                  <Show when={value().other !== undefined}>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={theme.text.base}>Other</text>
+                      <text fg={theme.text.muted}>{`${price(value().other)} · titles, undone responses and other usage`}</text>
+                    </box>
+                  </Show>
+                </box>
+              }
             >
               <box>
                 <text fg={theme.text.base}>By model</text>
@@ -80,7 +97,7 @@ export function CostView(props: { readonly summary?: CostSummary }) {
                 <Show when={value().other !== undefined}>
                   <box flexDirection="row" gap={1}>
                     <text fg={theme.text.base}>Other</text>
-                    <text fg={theme.text.muted}>{`${price(value().other)} · titles and other usage not itemized`}</text>
+                    <text fg={theme.text.muted}>{`${price(value().other)} · titles, undone responses and other usage`}</text>
                   </box>
                 </Show>
               </box>
