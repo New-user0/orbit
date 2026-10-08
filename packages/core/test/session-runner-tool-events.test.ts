@@ -248,6 +248,22 @@ test("interrupted subagent failures expose their existing child session to the m
   })
 })
 
+test("cancelled subagent failures expose their existing child session to the model", async () => {
+  const { published, publisher } = capture("anthropic", { interruptProgress: true })
+  const subagent = LLMEvent.toolCall({
+    id: "call-subagent",
+    name: "subagent",
+    input: { agent: "general", description: "Recover child", prompt: "Continue working" },
+  })
+  await Effect.runPromise(publisher.publish(subagent))
+  await Effect.runPromiseExit(publisher.progress(subagent.id, { sessionID: "ses_existing_child", status: "running" }))
+  await Effect.runPromise(publisher.failTool(subagent.id, { type: "tool.cancelled", message: "Cancelled: a call failed" }))
+
+  expect(published.find((event) => event.type === "session.tool.failed.2")?.data).toMatchObject({
+    error: { type: "tool.cancelled", message: "Cancelled: a call failed (sessionID: ses_existing_child)" },
+  })
+})
+
 test("interrupted non-subagent failures do not expose their progress session IDs", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(call))
@@ -756,4 +772,33 @@ test("content-filter failure explains the refusal when the provider gives a reas
       message: "Provider blocked the response (cyber): This request was declined because it could enable cyber harm.",
     },
   })
+})
+
+test("failing uncalled tool inputs leaves called and settled tools alone", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(
+    Effect.forEach(
+      [
+        LLMEvent.toolInputStart({ id: "cut", name: "read" }),
+        LLMEvent.toolInputDelta({ id: "cut", name: "read", text: '{"path":' }),
+        LLMEvent.toolCall({ id: "whole", name: "read", input: { path: "file.txt" } }),
+        LLMEvent.toolInputStart({ id: "done", name: "read" }),
+      ],
+      publisher.publish,
+      { discard: true },
+    ),
+  )
+  await Effect.runPromise(publisher.failTool("done", { type: "tool.execution", message: "settled" }))
+  const settledBefore = published.filter((event) => event.type === "session.tool.failed.2").length
+
+  expect(
+    await Effect.runPromise(
+      publisher.failUnsettledTools({ type: "tool.input-truncated", message: "cut off" }, "uncalled"),
+    ),
+  ).toBe(true)
+
+  const failed = published.filter((event) => event.type === "session.tool.failed.2")
+  expect(settledBefore).toBe(1)
+  expect(failed).toHaveLength(2)
+  expect(failed[1]?.data).toMatchObject({ id: "cut", error: { type: "tool.input-truncated" } })
 })
