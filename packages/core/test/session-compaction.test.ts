@@ -590,3 +590,95 @@ it.effect("forked session compaction reuses the fork root prompt cache key", () 
     expect(requests[0]?.promptCacheKey).toBe(rootID)
   }),
 )
+
+/** A cut-off attempt, the output-escalation notice that replaces it, then the answer that followed. */
+const escalatedHistory = (tokens = 0) => {
+  const user = SessionMessage.User.make({
+    id: SessionMessage.ID.create(),
+    type: "user",
+    text: "Question",
+    time: { created: DateTime.makeUnsafe(0) },
+  })
+  const assistant = (id: SessionMessage.ID, text: string, input: number) =>
+    Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id,
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [{ type: "text", text }],
+      tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 0, completed: 0 },
+    })
+  const cut = assistant(SessionMessage.ID.create(), "FirstCutText", tokens)
+  const notice = SessionMessage.Synthetic.make({
+    id: SessionMessage.ID.create(),
+    type: "synthetic",
+    text: "escalated",
+    metadata: { notice: "output-escalation", replaces: cut.id },
+    time: { created: DateTime.makeUnsafe(1) },
+  })
+  return { user, cut, notice, answer: assistant(SessionMessage.ID.create(), "WholeAnswerText", 0) }
+}
+
+it.effect("summary compaction leaves out an escalated attempt and its notice", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_escalated_summary"))
+    const history = escalatedHistory()
+    expect(yield* compactManually(session, [history.user, history.cut, history.notice, history.answer])).toEqual({
+      status: "completed",
+    })
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).toContain("WholeAnswerText")
+    expect(sent).not.toContain("FirstCutText")
+    expect(sent).not.toContain("escalated")
+  }),
+)
+
+it.effect("the recent text of a summary leaves out an escalated attempt and its notice", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_escalated_recent"))
+    const history = escalatedHistory()
+    // An earlier user message gives the summary something older, so the exchange below is kept as recent text.
+    const earlier = SessionMessage.User.make({ ...history.user, id: SessionMessage.ID.create(), text: "Earlier question" })
+    expect(
+      yield* compactManually(session, [earlier, history.user, history.cut, history.notice, history.answer]),
+    ).toEqual({ status: "completed" })
+    const stored = (yield* (yield* SessionStore.Service).context(session.id))[0]
+    const recent = stored?.type === "compaction" && stored.status === "completed" ? stored.recent : ""
+    expect(recent).toContain("WholeAnswerText")
+    expect(recent).not.toContain("FirstCutText")
+    expect(recent).not.toContain("escalated")
+  }),
+)
+
+it.effect("native compaction finds nothing to compact in a replaced attempt", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    const session = yield* insertSession(Session.ID.make("ses_escalated_native"))
+    const history = escalatedHistory()
+    expect(
+      yield* compaction.compact({
+        reason: "manual",
+        context: {
+          ...loaded(session, [history.cut, history.notice]),
+          model: { ...resolved, compaction: { type: "native" } },
+        },
+        inputID: SessionMessage.ID.create(),
+      }),
+    ).toMatchObject({ status: "failed", error: { type: "compaction.unavailable" } })
+  }),
+)
+
+it.effect("a replaced attempt is not the measured anchor of a prompt estimate", () =>
+  Effect.gen(function* () {
+    const session = yield* insertSession(Session.ID.make("ses_escalated_estimate"))
+    const history = escalatedHistory(40_000)
+    const estimate = SessionCompaction.estimatePrompt(
+      loaded(session, [history.user, history.cut, history.notice, history.answer]),
+    )
+    expect(estimate.measured).toBe(0)
+  }),
+)

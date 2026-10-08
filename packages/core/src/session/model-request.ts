@@ -75,6 +75,11 @@ export interface Prepared<Event = SessionRequest> {
   readonly toolTraits: (call: ToolCall) => Effect.Effect<Tool.ResolvedTraits>
   /** The traits of an advertised tool that do not depend on the call, by the name the model uses. */
   readonly describeTool: (name: string) => ToolTraits.Static | undefined
+  /**
+   * Whether a larger output limit exists to send instead: this request carried the runner's own lowered cap untouched
+   * by hooks and the model's maximum is larger.
+   */
+  readonly escalation: boolean
 }
 
 export interface Input {
@@ -91,6 +96,8 @@ export interface Input {
   readonly inputTokens?: { readonly measured: number; readonly estimated: number }
   /** The configured `output_token_cap`. Lowers the primary request's default limit before hooks see it. */
   readonly outputTokenCap?: number
+  /** Ignore `outputTokenCap` and ask for the model's maximum (the cap was escalated earlier in this response). */
+  readonly outputEscalated?: boolean
 }
 
 const modelOutputMax = (limit: Model.Info["limit"]) =>
@@ -262,16 +269,16 @@ export const layer = Layer.effect(
       )
       // Hooks see the default output limit and may change or remove it. Titles and generate keep the provider default,
       // because their reasoning is hard to budget.
+      const cap = input.outputEscalated ? undefined : input.outputTokenCap
+      const defaultLimit =
+        kind === "primary" || kind === "compaction" ? outputLimit(model.limit, kind, input.inputTokens, cap) : undefined
       const shaped = yield* shape(
         {
           sessionID: session.id,
           model: model.ref,
           system: input.system,
           messages: input.messages,
-          options:
-            kind === "primary" || kind === "compaction"
-              ? { maxTokens: outputLimit(model.limit, kind, input.inputTokens, input.outputTokenCap) }
-              : {},
+          options: kind === "primary" || kind === "compaction" ? { maxTokens: defaultLimit } : {},
         },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
@@ -401,9 +408,17 @@ export const layer = Layer.effect(
             )
           : undefined
 
+      // Only the runner's own cap escalates: a hook that changed or removed the limit pins it.
+      const maximum = kind === "primary" ? outputLimit(model.limit, kind, input.inputTokens) : undefined
+      const escalation =
+        maximum !== undefined &&
+        defaultLimit !== undefined &&
+        shaped.options.maxTokens === defaultLimit &&
+        maximum > defaultLimit
       return {
         event: shaped,
         request,
+        escalation,
         options: { ...(http ? { http } : {}), ...(webSocket ? { webSocket } : {}) },
         retry: (event: Parameters<Prepared["retry"]>[0]) =>
           hooks.trigger("session", "retry", event).pipe(Effect.asVoid),
@@ -445,7 +460,9 @@ export const layer = Layer.effect(
           agentHook(
             "context",
             input.agent,
-            input.outputTokenCap !== undefined && input.outputTokenCap < modelOutputMax(input.model.limit)
+            !input.outputEscalated &&
+              input.outputTokenCap !== undefined &&
+              input.outputTokenCap < modelOutputMax(input.model.limit)
               ? input.outputTokenCap
               : undefined,
           ),
