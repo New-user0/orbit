@@ -4740,7 +4740,7 @@ describe("SessionRunnerLLM", () => {
     yield* tools.started
     return { tools, run }
   }
-  const finishSteered = (s: Scenario, fixture: { tools: { release: Effect.Effect<void> }; run: Fiber.Fiber<unknown, unknown> }) =>
+  const finishSteered = (fixture: { tools: { release: Effect.Effect<void> }; run: Fiber.Fiber<unknown, unknown> }) =>
     Effect.gen(function* () {
       yield* fixture.tools.release
       yield* Fiber.join(fixture.run)
@@ -4749,7 +4749,7 @@ describe("SessionRunnerLLM", () => {
   scenario("cancels only the cancel-behavior calls when the user steers", function* (s) {
     const fixture = yield* steerFixture(s)
     yield* s.admit("STEER")
-    yield* finishSteered(s, fixture)
+    yield* finishSteered(fixture)
 
     expect(s.requests).toHaveLength(2)
     expect(yield* s.context).toMatchObject([
@@ -4762,18 +4762,25 @@ describe("SessionRunnerLLM", () => {
       { type: "assistant", finish: "stop" },
     ])
     expect(userTexts(s.requests[1])).toEqual(["Look and echo", "STEER"])
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-cancelable", "call-echo"])
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain("Cancelled because the user sent a new message")
   })
 
-  scenario("cancels when a steer is admitted by the inbox with delivery steer", function* (s) {
+  scenario("cancels when a prompt is sent with the default delivery and resume", function* (s) {
     const fixture = yield* steerFixture(s)
-    yield* s.session.prompt({ sessionID, text: "STEER", delivery: "steer", resume: false })
-    yield* finishSteered(s, fixture)
+    yield* s.session.prompt({ sessionID, text: "STEER" })
+    yield* finishSteered(fixture)
     expect((yield* s.context)[1]).toMatchObject({
       content: [{ id: "call-cancelable", state: { error: { type: "tool.cancelled" } } }, { id: "call-echo" }],
     })
   })
 
   for (const [name, admit] of [
+    ["a steer in another session", (s: Scenario) =>
+      Effect.gen(function* () {
+        yield* insertSession(otherSessionID)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "OTHER", delivery: "steer", resume: false })
+      })],
     ["a queued prompt", (s: Scenario) => s.session.prompt({ sessionID, text: "LATER", delivery: "queue", resume: false })],
     ["a synthetic notice", (s: Scenario) => s.session.synthetic({ sessionID, text: "Shell job finished" })],
   ] as const)
@@ -4781,7 +4788,7 @@ describe("SessionRunnerLLM", () => {
       const fixture = yield* steerFixture(s)
       yield* admit(s)
       yield* Effect.yieldNow
-      yield* finishSteered(s, fixture)
+      yield* finishSteered(fixture)
       expect(JSON.stringify(yield* s.context)).not.toContain("tool.cancelled")
     })
 
@@ -4793,7 +4800,7 @@ describe("SessionRunnerLLM", () => {
     expect(JSON.stringify(yield* s.context)).not.toContain("tool.cancelled")
     const queued = yield* s.session.prompt({ sessionID, text: "LATER", delivery: "queue", resume: false })
     yield* s.session.steerInbox({ sessionID, inboxID: queued.id })
-    yield* finishSteered(s, fixture)
+    yield* finishSteered(fixture)
     expect((yield* s.context)[1]).toMatchObject({
       content: [{ id: "call-cancelable", state: { error: { type: "tool.cancelled" } } }, { id: "call-echo" }],
     })

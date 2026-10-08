@@ -118,10 +118,10 @@ export const make = Effect.gen(function* () {
     })
     // Traits resolve after a call registers, so a steer cancels the calls whose traits are known and each later call
     // checks the flag once its own traits arrive.
-    const interruptBehavior = new Map<string, "cancel" | "block">()
+    const interruptBehavior = new Map<string, Tool.ResolvedTraits["interruptBehavior"]>()
     let steered = false
     const cancelSteered = scheduler.cancel(
-      { running: true, future: false, select: (id) => steered && interruptBehavior.get(id) === "cancel" },
+      { running: true, future: false, select: (id) => interruptBehavior.get(id) === "cancel" },
       STEERED,
     )
     // A steer is a user message that the next step boundary delivers; queued and synthetic input cancels nothing.
