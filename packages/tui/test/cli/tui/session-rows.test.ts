@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { SessionMessageAssistant, SessionMessageInfo } from "@orbit/client"
-import { ASSISTANT_FOOTER_FIXTURES } from "../../../src/feature-plugins/system/storybook/assistant-footer.fixtures"
+import { assistantFooterFixtures } from "../../../src/feature-plugins/system/storybook/assistant-footer.fixtures"
 import { createMemo, createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import {
@@ -689,9 +689,53 @@ test("a replaced attempt is retried, not continued or truncated, and the retry k
   expect(footerOutcome(other, 1)).toBe("truncated")
 })
 
+test("a resume note with nothing after it is not yet a truncation, and a closed turn is", () => {
+  const resumed = [userMessage("u"), limited("a"), note("n", { notice: "output-limit" })]
+  expect(footerOutcome(resumed, 1)).toBeUndefined()
+  expect(footerOutcome([...resumed, idle("i")], 1)).toBe("truncated")
+  expect(footerOutcome([...resumed, userMessage("u2")], 1)).toBe("truncated")
+  expect(footerOutcome([...resumed, limited("b")], 1)).toBe("continued")
+})
+
+test("a prompt that is queued but not delivered does not end the turn", () => {
+  const queued = new Set(["q"])
+  const lines = [userMessage("u"), failed("a"), userMessage("q"), assistant("b", [])]
+  expect(footerOutcome(lines, 1)).toBeUndefined()
+  expect(footerOutcome(lines, 1, queued)).toBe("continued")
+  const resumed = [userMessage("u"), limited("a"), userMessage("q"), note("n", { notice: "output-limit" })]
+  expect(footerOutcome(resumed, 1)).toBe("truncated")
+  expect(footerOutcome(resumed, 1, queued)).toBeUndefined()
+})
+
+test("a footer outcome does not subscribe to messages after its turn", () => {
+  createRoot((dispose) => {
+    try {
+      const [messages, setMessages] = createStore<SessionMessageInfo[]>([
+        userMessage("u"),
+        limited("a"),
+        idle("i"),
+        userMessage("u2"),
+        assistant("b", []),
+      ])
+      let runs = 0
+      const outcome = createMemo(() => {
+        runs++
+        return footerOutcome(messages, 1)
+      })
+      expect(outcome()).toBe("truncated")
+      setMessages(messages.length, assistant("c", []))
+      setMessages(4, "time", "created", 9)
+      expect(outcome()).toBe("truncated")
+      expect(runs).toBe(1)
+    } finally {
+      dispose()
+    }
+  })
+})
+
 test("the footer story fixtures cover each outcome", () => {
   expect(
-    ASSISTANT_FOOTER_FIXTURES.map((item) =>
+    assistantFooterFixtures().map((item) =>
       footerOutcome(
         item.messages,
         item.messages.findIndex((message) => message.id === item.target),

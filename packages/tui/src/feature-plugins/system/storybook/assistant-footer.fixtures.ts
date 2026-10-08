@@ -27,48 +27,54 @@ export type AssistantFooterFixture = {
   target: string
 }
 
-export const ASSISTANT_FOOTER_FIXTURES: AssistantFooterFixture[] = [
-  { label: "plain", messages: [user, step("a", { finish: "stop" })], target: "a" },
-  {
-    label: "recovered error",
-    messages: [user, step("a", { error: failure }), step("b", { finish: "stop" })],
-    target: "a",
-  },
-  {
-    label: "continued after output limit",
-    messages: [
-      user,
-      step("a", { finish: "length" }),
-      { type: "synthetic", id: "note", text: "Continue", metadata: { notice: "output-limit" }, time: { created: 7_000 } },
-      step("b", { finish: "stop" }),
-    ],
-    target: "a",
-  },
-  {
-    label: "retried attempt",
-    messages: [
-      user,
-      step("a", { finish: "length" }),
-      {
-        type: "synthetic",
-        id: "note",
-        text: "Retrying with a larger output limit",
-        description: "Retrying with a larger output limit",
-        metadata: { notice: "output-escalation", replaces: "a" },
-        time: { created: 7_000 },
-      },
-      step("b", { finish: "stop" }),
-    ],
-    target: "a",
-  },
-  { label: "final truncation", messages: [user, step("a", { finish: "length" })], target: "a" },
-  { label: "terminal error", messages: [user, step("a", { error: failure })], target: "a" },
-  {
-    label: "retrying",
-    messages: [
-      user,
-      step("a", { error: failure, retry: { attempt: 2, at: Date.now() + 30_000, error: failure } }),
-    ],
-    target: "a",
-  },
-]
+/** Built on demand so the retry countdown starts when a fixture is selected, not when the storybook loads. */
+export function assistantFooterFixtures(now = Date.now()): AssistantFooterFixture[] {
+  return [
+    { label: "plain", messages: [user, step("a", { finish: "stop" })], target: "a" },
+    {
+      label: "recovered error",
+      messages: [user, step("a", { error: failure }), step("b", { finish: "stop" })],
+      target: "a",
+    },
+    {
+      label: "continued after output limit",
+      messages: [
+        user,
+        step("a", { finish: "length" }),
+        {
+          type: "synthetic",
+          id: "note",
+          text: "Continue",
+          metadata: { notice: "output-limit" },
+          time: { created: 7_000 },
+        },
+        step("b", { finish: "stop" }),
+      ],
+      target: "a",
+    },
+    {
+      label: "retried attempt",
+      messages: [
+        user,
+        step("a", { finish: "length" }),
+        {
+          type: "synthetic",
+          id: "note",
+          text: "Retrying with a larger output limit",
+          description: "Retrying with a larger output limit",
+          metadata: { notice: "output-escalation", replaces: "a" },
+          time: { created: 7_000 },
+        },
+        step("b", { finish: "stop" }),
+      ],
+      target: "a",
+    },
+    { label: "final truncation", messages: [user, step("a", { finish: "length" })], target: "a" },
+    { label: "terminal error", messages: [user, step("a", { error: failure })], target: "a" },
+    {
+      label: "retrying",
+      messages: [user, step("a", { error: failure, retry: { attempt: 2, at: now + 30_000, error: failure } })],
+      target: "a",
+    },
+  ]
+}

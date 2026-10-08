@@ -57,7 +57,7 @@ export function AssistantFooter(props: {
             <span style={{ fg: theme.text.muted }}> · interrupted</span>
           </Show>
           <Show when={props.outcome}>
-            {(outcome) => <span style={{ fg: theme.text.muted }}> · {bodyText(OUTCOME_LABEL[outcome()])}</span>}
+            {(outcome) => <span style={{ fg: theme.text.muted }}> · {OUTCOME_LABEL[outcome()]}</span>}
           </Show>
         </text>
       </box>

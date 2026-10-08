@@ -1,19 +1,20 @@
 import type { Plugin } from "@orbit/plugin/tui"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createMemo, createSignal } from "solid-js"
+import { createMemo, createSignal, Show } from "solid-js"
 import { AssistantFooter } from "../../../routes/session/assistant-footer"
 import { footerOutcome, turnDuration } from "../../../routes/session/rows"
 import { errorMessage } from "../../../util/error"
 import { StoryFooter } from "./footer"
 import type { Story } from "./index"
-import { ASSISTANT_FOOTER_FIXTURES } from "./assistant-footer.fixtures"
+import { assistantFooterFixtures } from "./assistant-footer.fixtures"
 
 function AssistantFooterStory(props: { context: Plugin.Context }) {
   const dimensions = useTerminalDimensions()
   const theme = props.context.theme
   const [index, setIndex] = createSignal(0)
   const [narrow, setNarrow] = createSignal(false)
-  const fixture = createMemo(() => ASSISTANT_FOOTER_FIXTURES[index()]!)
+  const [fixtures, setFixtures] = createSignal(assistantFooterFixtures())
+  const fixture = createMemo(() => fixtures()[index()]!)
   const position = createMemo(() => fixture().messages.findIndex((message) => message.id === fixture().target))
   const message = createMemo(() => {
     const found = fixture().messages[position()]
@@ -32,7 +33,10 @@ function AssistantFooterStory(props: { context: Plugin.Context }) {
         bind: "ctrl+g",
         title: "Next fixture",
         group: "Storybook",
-        run: () => setIndex((value) => (value + 1) % ASSISTANT_FOOTER_FIXTURES.length),
+        run: () => {
+          setFixtures(assistantFooterFixtures())
+          setIndex((value) => (value + 1) % fixtures().length)
+        },
       },
       { bind: "ctrl+w", title: "Toggle narrow width", group: "Storybook", run: () => setNarrow((value) => !value) },
       {
@@ -40,6 +44,7 @@ function AssistantFooterStory(props: { context: Plugin.Context }) {
         title: "Reset",
         group: "Storybook",
         run: () => {
+          setFixtures(assistantFooterFixtures())
           setIndex(0)
           setNarrow(false)
         },
@@ -51,20 +56,22 @@ function AssistantFooterStory(props: { context: Plugin.Context }) {
     <box width={dimensions().width} height={dimensions().height} backgroundColor={theme.background.raised.base}>
       <box paddingTop={1} flexGrow={1} flexDirection="column">
         {/* The outcome comes from the production helper over the fixture conversation; nothing is sent anywhere. */}
-        {message() && (
-          <AssistantFooter
-            agent={message()!.agent}
-            color={theme.text.base}
-            model="Fixture model"
-            duration={turnDuration(message()!, fixture().messages, position(), false)}
-            tokensPerSecond={42.5}
-            error={message()!.error ? errorMessage(message()!.error) : undefined}
-            retry={message()!.retry}
-            interrupted={false}
-            outcome={footerOutcome(fixture().messages, position())}
-            width={narrow() ? 27 : dimensions().width}
-          />
-        )}
+        <Show when={message()}>
+          {(current) => (
+            <AssistantFooter
+              agent={current().agent}
+              color={theme.text.base}
+              model="Fixture model"
+              duration={turnDuration(current(), fixture().messages, position(), false)}
+              tokensPerSecond={42.5}
+              error={current().error ? errorMessage(current().error!) : undefined}
+              retry={current().retry}
+              interrupted={false}
+              outcome={footerOutcome(fixture().messages, position())}
+              width={narrow() ? 27 : dimensions().width}
+            />
+          )}
+        </Show>
       </box>
       <StoryFooter
         context={props.context}

@@ -1890,7 +1890,8 @@ function SessionAssistantFooter(props: { message: SessionMessageAssistant }) {
   const tokensPerSecond = createMemo(() =>
     turnTokensPerSecond(props.message, messages(), ctx.messageIndex(props.message.id), ctx.legacyTurns()),
   )
-  const outcome = createMemo(() => footerOutcome(messages(), ctx.messageIndex(props.message.id) ?? -1))
+  const queued = createMemo(() => new Set(data.session.pending.list(ctx.sessionID).map((item) => item.id)))
+  const outcome = createMemo(() => footerOutcome(messages(), ctx.messageIndex(props.message.id) ?? -1, queued()))
   return (
     <AssistantFooter
       agent={props.message.agent}
