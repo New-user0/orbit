@@ -318,8 +318,8 @@ export function isCommand(name: string): name is CommandName {
 
 /**
  * The places a keymap layer can belong to. A layer names its place with `context`, and the keybindings file can give a
- * command other keys in one place only, as `session.rename` can have one key in the session list and another in a
- * session. The set is closed: a layer that names anything else is read as having no place.
+ * command other keys in one place only, as `dialog.session.rename` can have one key in the session list while
+ * `session.rename` has another in a session. The set is closed: a layer that names anything else is read as having no place.
  */
 export const Contexts = [
   "global",

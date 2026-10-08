@@ -30,7 +30,7 @@ import { expandPromptInputPastedText, realignPromptInputMentions } from "../../p
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
-import { emptyPrompt, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
+import { emptyPrompt, PASTE_NOT_SAVED, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
 import { saveDraft, takeDraft } from "./draft-stash"
 import { Skill } from "@orbit/schema/skill"
 import { computePromptTraits } from "../../prompt/traits"
@@ -1156,6 +1156,13 @@ export function Prompt(props: PromptProps) {
               entries={history.entries()}
               directory={historyDirectory()}
               onSelect={(item) => {
+                // A draft that the entry would replace goes to the stash, where "Stash pop" brings it back.
+                if (store.prompt.text && store.prompt.text !== item.text) {
+                  stash.push({ prompt: store.prompt })
+                  toast.show({ message: "Your draft was moved to the stash", variant: "info" })
+                }
+                if (item.pasted.some((part) => part.text === PASTE_NOT_SAVED))
+                  toast.show({ message: "A large paste in this prompt was not kept in history", variant: "warning" })
                 input.setText(item.text)
                 setStore("prompt", item)
                 setStore("mode", item.mode ?? "normal")

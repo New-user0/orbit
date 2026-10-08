@@ -1,6 +1,7 @@
 import { createMemo, createSignal } from "solid-js"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
+import { plain } from "@orbit/flow/plain"
 import { Locale } from "../../util/locale"
 import { searchPromptHistory, type PromptInfo } from "../../prompt/history"
 
@@ -20,7 +21,7 @@ export function DialogHistorySearch(props: {
     searchPromptHistory(props.entries, query(), props.directory).map((entry) => {
       const lines = entry.text.split("\n")
       return {
-        title: `${entry.mode === "shell" ? "! " : ""}${Locale.truncate(lines[0]?.trim() || "(empty)", 60)}`,
+        title: `${entry.mode === "shell" ? "! " : ""}${Locale.truncate(plain(lines[0]?.trim() || "(empty)"), 60)}`,
         value: entry,
         description: entry.time ? Locale.datetime(entry.time) : undefined,
         footer: lines.length > 1 ? `~${lines.length} lines` : undefined,

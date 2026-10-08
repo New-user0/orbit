@@ -4,6 +4,7 @@ import {
   MAX_HISTORY_BYTES,
   parsePromptInfo,
   savedEntry,
+  savedLines,
   searchPromptHistory,
   isDuplicateEntry,
   DEFAULT_HISTORY_LIMIT,
@@ -95,6 +96,21 @@ describe("prompt history", () => {
     )
   })
 
+  test("keeps the older entries when the newest one is over the byte cap by itself", () => {
+    const lines = savedLines([entry("first"), entry("second"), entry("z".repeat(MAX_HISTORY_BYTES + 100))])
+    expect(lines.map((line) => (JSON.parse(line) as PromptInfo).text)).toEqual(["first", "second"])
+  })
+
+  test.each([
+    ["files that are an empty object", { files: [{}] }],
+    ["a paste that is an empty object", { pasted: [{}] }],
+    ["files that are a string", { files: "x" }],
+  ])("skips a line with %s and loads the lines around it", (_name, value) => {
+    const bad = JSON.stringify({ ...entry("bad"), ...value })
+    const input = [entry("one"), bad, entry("two")].map((item) => (typeof item === "string" ? item : JSON.stringify(item)))
+    expect(parsePromptHistory(input.join(String.fromCharCode(10))).map((item) => item.text)).toEqual(["one", "two"])
+  })
+
   test.each([
     ["an image", { files: [{ uri: "data:image/png;base64,AAAA" }] }],
     ["a pdf", { files: [{ uri: "data:application/pdf;base64,AAAA" }] }],
@@ -137,8 +153,8 @@ describe("prompt history", () => {
 
     test("keeps only the entries that match the query", () => {
       expect(searchPromptHistory(history, "deploy").map((item) => item.text)).toEqual([
-        "old deploy notes",
         "deploy staging",
+        "old deploy notes",
         "deploy production",
       ])
       expect(searchPromptHistory(history, "zzz")).toEqual([])
@@ -151,6 +167,15 @@ describe("prompt history", () => {
         "/b:deploy production",
       ])
       expect(searchPromptHistory(history, "", "/a")[0]?.text).toBe("run the tests")
+    })
+
+    test("ranks a closer match above a newer spread-out one within the same directory", () => {
+      const ranked = [
+        at("run the tests"),
+        at("take a look at the first real error in my session"),
+        at("tell me about every single thing in this project"),
+      ]
+      expect(searchPromptHistory(ranked, "test")[0]?.text).toBe("run the tests")
     })
 
     test("treats the same text in another mode as another prompt", () => {

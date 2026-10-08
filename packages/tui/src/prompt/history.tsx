@@ -1,5 +1,5 @@
 import path from "path"
-import * as fuzzysort from "fuzzysort"
+import fuzzysort from "fuzzysort"
 import { onMount } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
 import type { PromptInput } from "@orbit/schema"
@@ -91,8 +91,11 @@ export function savedLines(entries: PromptInfo[], limit = DEFAULT_HISTORY_LIMIT)
   let bytes = 0
   const lines: string[] = []
   for (const line of kept.toReversed()) {
-    bytes += Buffer.byteLength(line) + 1
-    if (bytes > MAX_HISTORY_BYTES) break
+    const size = Buffer.byteLength(line) + 1
+    // An entry that is over the cap by itself is dropped, so that it cannot take every older entry with it.
+    if (size > MAX_HISTORY_BYTES) continue
+    if (bytes + size > MAX_HISTORY_BYTES) break
+    bytes += size
     lines.push(line)
   }
   return lines.toReversed()
@@ -114,18 +117,21 @@ export function parsePromptHistory(text: string, limit = DEFAULT_HISTORY_LIMIT) 
 }
 
 /**
- * The entries whose text matches the query, best place first: those sent from the given directory, then the newest.
+ * The entries whose text matches the query, best place first: those sent from the given directory, then the closest
+ * match, then the newest.
  * Without a query every entry matches. The same prompt sent twice shows once, in its best place.
  */
 export function searchPromptHistory(entries: readonly PromptInfo[], query: string, directory?: string) {
-  const all = entries.map((entry, index) => ({ entry, index }))
+  const all = entries.map((entry, index) => ({ entry, index, score: 0 }))
   const matched = query.trim()
-    ? fuzzysort.go(query.trim(), all, { key: (item) => item.entry.text }).map((result) => result.obj)
+    ? fuzzysort
+        .go(query.trim(), all, { key: (item) => item.entry.text })
+        .map((result) => ({ ...result.obj, score: result.score }))
     : all
   const here = (entry: PromptInfo) => (directory !== undefined && entry.directory === directory ? 0 : 1)
   const seen = new Set<string>()
   return matched
-    .toSorted((a, b) => here(a.entry) - here(b.entry) || b.index - a.index)
+    .toSorted((a, b) => here(a.entry) - here(b.entry) || b.score - a.score || b.index - a.index)
     .map((item) => item.entry)
     .filter((entry) => {
       const key = `${entry.mode ?? "normal"}\n${entry.text}`
@@ -144,7 +150,19 @@ export function parsePromptInfo(value: unknown): PromptInfo | undefined {
   if (!value || typeof value !== "object") return
   const input = value as Record<string, unknown>
   if (typeof input.text !== "string" || !Array.isArray(input.pasted)) return
+  if (!input.pasted.every(isPastedText)) return
+  if (input.files !== undefined && !(Array.isArray(input.files) && input.files.every(isFilePart))) return
   return input as PromptInfo
+}
+
+function isPastedText(value: unknown) {
+  if (!value || typeof value !== "object") return false
+  const part = value as { text?: unknown; source?: unknown }
+  return typeof part.text === "string" && !!part.source && typeof part.source === "object"
+}
+
+function isFilePart(value: unknown) {
+  return !!value && typeof value === "object" && typeof (value as { uri?: unknown }).uri === "string"
 }
 
 export const { use: usePromptHistory, provider: PromptHistoryProvider } = createSimpleContext({
