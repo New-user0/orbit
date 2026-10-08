@@ -1279,7 +1279,7 @@ token limits of every turn above it before each of its own steps, counting what 
 included, so a subagent stops with `limit.cost` or `limit.tokens` instead of overshooting by a whole run; the parent's
 step limit counts only the parent's own responses and never stops a subagent. A response is still priced after it
 arrives, so the overshoot is at most one response. A background subagent that is still running when a limit ends the turn
-keeps running until it reaches one of those limits itself. Its completion notice then wakes
+keeps running, because the turn is over and no longer limits it. Its completion notice then wakes
 the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
 a cost or token limit by one response.
 
