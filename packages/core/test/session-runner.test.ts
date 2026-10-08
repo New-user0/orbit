@@ -6682,6 +6682,212 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests).toHaveLength(2)
   })
 
+  const fallbackModel = { providerID: Provider.ID.make("fake"), id: ID.make("replacement") }
+  const primaryRef = { providerID: Provider.ID.make("fake"), id: ID.make("fake-model") }
+  const retriesBefore = (s: Scenario, retries: number) =>
+    Effect.gen(function* () {
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      for (let index = 0; index < retries; index++) {
+        yield* Queue.take(scheduled)
+        yield* TestClock.adjust("1 minute")
+      }
+      yield* Fiber.join(run)
+    })
+  const retryCount = () =>
+    recordedEventTypes(sessionID).pipe(
+      Effect.map((types) => types.filter((type) => type === "session.retry.scheduled.1").length),
+    )
+  const fallbackNotices = (s: Scenario) =>
+    s.context.pipe(
+      Effect.map((messages) =>
+        messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === "fallback"),
+      ),
+    )
+
+  scenario("switches to the fallback model after three overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "fallback-success"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel])
+    expect(yield* retryCount()).toBe(2)
+    expect(s.closedTransports).toContain(sessionID)
+    const context = yield* s.context
+    // The failed attempt's empty draft is closed without a finish, so the only finished assistant is the fallback's.
+    expect(context.filter((message) => message.type === "assistant" && message.finish !== undefined)).toMatchObject([
+      { model: { id: "replacement" }, finish: "stop" },
+    ])
+    expect(yield* fallbackNotices(s)).toMatchObject([
+      {
+        description: "Switched from fake/fake-model to fake/replacement after repeated overloads",
+        metadata: { notice: "fallback", model: fallbackModel, previous: primaryRef },
+      },
+    ])
+  })
+
+  scenario("records the notice before the fallback's answer and keeps it out of the tail after a tool call", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.tool("call-fallback", "echo", { text: "fallback" }), TestLLM.text("Done", "after-tool"))
+    yield* retriesBefore(s, 2)
+
+    const types = (yield* s.context).flatMap((message) =>
+      message.type === "synthetic" || (message.type === "assistant" && message.finish !== undefined)
+        ? [message.type]
+        : [],
+    )
+    expect(types).toEqual(["synthetic", "assistant", "assistant"])
+    const tail = s.requests.at(-1)
+    expect(tail?.model).toBe(replacementModel)
+    expect(tail?.messages.at(-1)?.role).not.toBe("user")
+  })
+
+  scenario("tells the fallback model about the switch and gives it a fresh retry allowance", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Recovered", "fresh-allowance"))
+    const attempts: number[] = []
+    yield* s.bus.subscribe(SessionEvent.RetryScheduled).pipe(
+      Stream.filter((event) => event.data.sessionID === sessionID),
+      Stream.runForEach((event) => Effect.sync(() => attempts.push(event.data.attempt))),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, replacementModel])
+    expect(userTexts(s.requests[3]!)).toContain(
+      "The previous model was overloaded, so this turn continues on a different model.",
+    )
+    // Without a fresh allowance the fallback's first retry would continue the primary's count.
+    expect(attempts.at(-1)).toBe(attempts[0])
+  })
+
+  scenario("fails the step on the primary model once the retry allowance is spent", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", resume: false })
+    yield* s.llm.push(...Array.from({ length: 11 }, () => Stream.fail(overloaded())))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
+    for (let index = 0; index < 10; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(s.requests).toHaveLength(11)
+    expect(s.requests.every((request) => request.model === model)).toBe(true)
+  })
+
+  scenario("does not switch when another failure interrupts the overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Mixed", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(rateLimited()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "mixed-success"))
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("restarts the overload count after another failure", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Reset", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      Stream.fail(overloaded()),
+      Stream.fail(overloaded()),
+      Stream.fail(rateLimited()),
+      Stream.fail(overloaded()),
+    )
+    yield* s.llm.push(TestLLM.text("Recovered", "reset-success"))
+    yield* retriesBefore(s, 4)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* retryCount()).toBe(4)
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("fails the partial response and continues on the fallback after mid-stream overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Partial", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      ...[0, 1, 2].map((index) =>
+        TestLLM.failAfter(
+          overloaded(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: `partial-${index}` }),
+          LLMEvent.textDelta({ id: `partial-${index}`, text: `Partial ${index}` }),
+        ),
+      ),
+    )
+    yield* s.llm.push(TestLLM.text("Finished", "partial-fallback-success"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests).toHaveLength(4)
+    expect(s.requests.at(-1)?.model).toBe(replacementModel)
+    const context = yield* s.context
+    const assistants = context.filter((message) => message.type === "assistant")
+    expect(assistants.map((message) => message.finish)).toEqual(["error", "error", "error", "stop"])
+    expect(new Set(assistants.map((message) => message.id)).size).toBe(4)
+    expect(
+      context.flatMap((message) =>
+        message.type === "synthetic" ? [message.metadata?.notice ?? message.text] : [],
+      ),
+    ).toEqual([INCOMPLETE_STREAM_CONTINUATION, INCOMPLETE_STREAM_CONTINUATION, "fallback", INCOMPLETE_STREAM_CONTINUATION])
+  })
+
+  for (const [name, turn] of [
+    ["no fallback is configured", {}],
+    ["the fallback is the primary model", { fallbackModel: primaryRef }],
+  ] as const)
+    scenario(`stays on the primary model when ${name}`, function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Overloaded", turn, resume: false })
+      yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+      yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Recovered", "primary-success"))
+      yield* retriesBefore(s, 4)
+
+      expect(s.requests).toHaveLength(5)
+      expect(s.requests.every((request) => request.model === model)).toBe(true)
+      expect(yield* retryCount()).toBe(4)
+      expect(yield* fallbackNotices(s)).toEqual([])
+    })
+
+  scenario("returns to the primary model on the next turn", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "First", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "turn-one"), TestLLM.text("Next", "turn-two"))
+    yield* retriesBefore(s, 2)
+    // A queued prompt starts the next turn; a steer would join this one and keep its fallback.
+    yield* s.session.prompt({ sessionID, text: "Second", delivery: "queue", resume: false })
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, model])
+  })
+
+  // A restarted or reloaded drain has no memory, so the fallback must come from the durable notice alone.
+  scenario("keeps the fallback for a later drain of the same turn", function* (s) {
+    yield* s.admit("Mid turn")
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Switched",
+      metadata: { notice: "fallback", model: fallbackModel },
+    })
+    yield* s.llm.push(TestLLM.text("Still on fallback", "reloaded"))
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([replacementModel])
+  })
+
+  scenario("clears the fallback when the model is switched explicitly", function* (s) {
+    yield* s.admit("Mid turn")
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Switched",
+      metadata: { notice: "fallback", model: fallbackModel },
+    })
+    yield* s.bus.publish(SessionEvent.ModelSelected, { sessionID, model: primaryRef })
+    yield* s.llm.push(TestLLM.text("Back on primary", "cleared"))
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([model])
+  })
+
   scenario("continues an incomplete stream after observable text", function* (s) {
     const failure = incompleteStream()
     yield* s.admit("Continue partial output")
