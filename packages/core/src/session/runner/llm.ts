@@ -305,9 +305,11 @@ const layer = Layer.effect(
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
-            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return outcome.needsContinuation
-            // The loop-top check fails this turn next; a note now would reach the next prompt's request.
-            if (yield* turnLimit(loaded)) return outcome.needsContinuation
+            // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
+            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return false
+            // Fail with the limit now; a note left behind would reach the next prompt's request.
+            const limit = yield* turnLimit(loaded)
+            if (limit) return yield* new StepFailedError({ error: limit })
             yield* bus.publish(SessionEvent.Synthetic, {
               sessionID,
               text: RESUME_AFTER_OUTPUT_LIMIT,

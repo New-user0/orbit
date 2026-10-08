@@ -245,7 +245,8 @@ const runCutOff = (finish: "length" | "unknown", calls: "input" | "partial-call"
 it.effect("fails inputs that never became calls when the response stops at the output limit", () =>
   Effect.gen(function* () {
     const run = yield* runCutOff("length", "input")
-    expect(run.result).toEqual(Exit.succeed(SessionStep.Outcome.OutputLimited({ needsContinuation: true })))
+    // Nothing ran, so the cut-off input alone must not start another step.
+    expect(run.result).toEqual(Exit.succeed(SessionStep.Outcome.OutputLimited({ needsContinuation: false })))
     expect(run.executions).toBe(0)
     expect(run.types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
     expect(run.types.indexOf("session.tool.failed.2")).toBeLessThan(run.types.indexOf("session.step.ended.1"))
@@ -265,6 +266,7 @@ it.effect("drops a call rebuilt from partial input when the response finishes wi
     // Only an output limit is recorded as truncated; this fails with the response's own error.
     const failed = run.events[run.types.indexOf("session.tool.failed.2")]?.data
     expect(failed).toMatchObject({ executed: false })
-    expect(failed).not.toMatchObject({ error: { type: "tool.input-truncated" } })
+    expect(failed).toMatchObject({ error: { type: "provider.invalid-output" } })
+    expect(Exit.isFailure(run.result)).toBe(true)
   }),
 )

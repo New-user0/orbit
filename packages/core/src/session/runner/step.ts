@@ -231,6 +231,9 @@ export const make = Effect.gen(function* () {
           if (missing && !llmError && !recorded.finish) yield* publisher.failAssistant(RESULT_MISSING)
         }
 
+        // Read before the sweep below: an input cut off by a length stop is settled, not run, and must not start a step.
+        const ran = publisher.record().needsContinuation
+
         // A length stop cuts inputs off before their call: settle them so nothing stays streaming and the model learns.
         if (!llmError && Exit.isSuccess(stream) && !recorded.providerFailed && recorded.finish?.finish === "length")
           yield* publisher.failUnsettledTools(INPUT_TRUNCATED, "uncalled")
@@ -282,7 +285,7 @@ export const make = Effect.gen(function* () {
         if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
-        if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation })
+        if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation: needsContinuation && ran })
         return Outcome.Completed({ needsContinuation })
       }),
     )

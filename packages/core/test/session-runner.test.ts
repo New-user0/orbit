@@ -4700,7 +4700,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
       yield* s.llm.push(lengthStop("limit-note", "Part"), TestLLM.stop())
 
-      yield* s.resume
+      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
 
       expect(s.requests).toHaveLength(1)
       expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
@@ -7144,22 +7144,48 @@ describe("SessionRunnerLLM", () => {
     expect(yield* s.context).toMatchObject(context)
   })
 
-  scenario("stops resuming after three consecutive output-limit stops", function* (s) {
-    yield* s.admit("Never finishes")
-    yield* s.llm.push(
-      lengthStop("cap-1", "1"),
-      lengthStop("cap-2", "2"),
-      lengthStop("cap-3", "3"),
-      lengthStop("cap-4", "4"),
-    )
+  // Every way an output-limited response can start another request; each must stop at the cap of three resumes.
+  for (const row of [
+    { name: "text only", cut: (n: number) => lengthStop(`cap-${n}`, String(n)) },
+    {
+      name: "a cut-off tool call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: `cap-call-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cap-call-${n}`, name: "echo", text: '{"text":"par' }),
+          LLMEvent.toolCall({ id: `cap-call-${n}`, name: "echo", input: { text: "par" }, partialInput: true }),
+        ),
+    },
+    {
+      name: "an input that never became a call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: `cap-input-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cap-input-${n}`, name: "echo", text: '{"text":' }),
+        ),
+    },
+    {
+      name: "a tool call that ran",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolCall({ id: `cap-ran-${n}`, name: "echo", input: { text: String(n) } }),
+        ),
+    },
+  ])
+    scenario(`stops resuming after three consecutive output-limit stops: ${row.name}`, function* (s) {
+      yield* s.admit("Never finishes")
+      yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => row.cut(index + 1)), TestLLM.text("Done", "cap-done"))
 
-    yield* s.resume
+      yield* s.resume
 
-    expect(s.requests).toHaveLength(4)
-    const context = yield* s.context
-    expect(context.filter((message) => message.type === "synthetic")).toHaveLength(3)
-    expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
-  })
+      expect(s.requests).toHaveLength(4)
+      const context = yield* s.context
+      expect(context.filter((message) => message.type === "synthetic")).toHaveLength(3)
+      expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
+    })
 
   scenario("counts the output-limit streak from the last response that finished normally", function* (s) {
     yield* s.admit("Mixed limits")
