@@ -96,6 +96,31 @@ describe("acp turn translation", () => {
     })
   })
 
+  test("ends a turn cleanly when a step starts after a failed one, and reports the failure when none does", () => {
+    const stepFailed = durableEvent("session.step.failed", {
+      sessionID: root,
+      assistantMessageID: "msg_1",
+      error: { type: "provider.stream", message: "stream interrupted" },
+    })
+    const stepStarted = durableEvent("session.step.started", {
+      sessionID: root,
+      assistantMessageID: "msg_2",
+      agent: "build",
+      model: { providerID: "test", id: "test-model" },
+      started: 0,
+    })
+
+    const recovered = started(stepFailed, stepStarted, succeeded(root))
+    expect(recovered.terminal).toBe("succeeded")
+    expect(ACPTranslate.failure(recovered.state)).toBeUndefined()
+    expect(ACPTranslate.response(recovered.state, root, "succeeded").stopReason).toBe("end_turn")
+
+    // The step that starts is what clears the failure: without it the same failure is reported.
+    const unrecovered = started(stepFailed, succeeded(root))
+    expect(unrecovered.terminal).toBe("succeeded")
+    expect(ACPTranslate.failure(unrecovered.state)).toMatchObject({ errorName: "provider.stream" })
+  })
+
   test("marks a compaction that fails before starting, and drops an end with no start", () => {
     const result = started(
       durableEvent("session.compaction.failed", {

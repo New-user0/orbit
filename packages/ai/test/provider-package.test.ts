@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { model } from "@orbit/ai/providers/openai"
-import { LLM } from "../src/index.js"
+import { HttpOptions, LLM } from "../src/index.js"
+import { AnthropicMessages } from "../src/protocols/anthropic-messages.js"
 import { Endpoint } from "../src/route/endpoint.js"
 
 const configuration = (provider: string, message: string) =>
@@ -295,6 +296,52 @@ describe("provider package entrypoints", () => {
 
     expect(selected.route.id).toBe("anthropic-messages")
     expect(selected.route.defaults.providerOptions).toEqual({ thinking: { type: "adaptive" } })
+  })
+
+  test("gives the first-party default endpoint a 90 s stream idle limit and no other endpoint", async () => {
+    const Anthropic = await import("@orbit/ai/providers/anthropic")
+    const AnthropicCompatible = await import("@orbit/ai/providers/anthropic-compatible")
+    const at = (baseURL?: string) => Anthropic.model("claude-sonnet-4-6", { apiKey: "fixture", baseURL })
+    const defaultEndpoint = [
+      at(),
+      at(AnthropicMessages.DEFAULT_BASE_URL),
+      // The route renders its base URL without trailing slashes, so this is the same endpoint.
+      at(`${AnthropicMessages.DEFAULT_BASE_URL}//`),
+      Anthropic.configure({ apiKey: "fixture" }).model("claude-sonnet-4-6"),
+      Anthropic.provider.model("claude-sonnet-4-6"),
+    ]
+    // A gateway or proxy can buffer a stream or drop its pings, so every other URL keeps the transport default.
+    const elsewhere = [
+      at("https://proxy.example.test/v1"),
+      at("https://api.anthropic.com/v2"),
+      at("https://api.anthropic.com"),
+      at("http://api.anthropic.com/v1"),
+      AnthropicCompatible.model("compatible-model", { apiKey: "fixture", baseURL: AnthropicMessages.DEFAULT_BASE_URL }),
+    ]
+
+    expect(AnthropicMessages.STREAM_IDLE_TIMEOUT_MS).toBe(90_000)
+    expect(defaultEndpoint.map((selected) => selected.route.defaults.http?.chunkTimeout)).toEqual(
+      defaultEndpoint.map(() => 90_000),
+    )
+    expect(elsewhere.map((selected) => selected.route.defaults.http?.chunkTimeout)).toEqual(
+      elsewhere.map(() => undefined),
+    )
+  })
+
+  test("lets the caller's http options replace the first-party stream idle limit", async () => {
+    const Anthropic = await import("@orbit/ai/providers/anthropic")
+    const http = (input?: HttpOptions.Input) =>
+      Anthropic.configure({ apiKey: "fixture", http: input }).model("claude-sonnet-4-6").route.defaults.http
+
+    expect(http({ chunkTimeout: 600_000 })?.chunkTimeout).toBe(600_000)
+    expect(http({ chunkTimeout: false })?.chunkTimeout).toBe(false)
+    expect(http(new HttpOptions({ chunkTimeout: 30_000 }))?.chunkTimeout).toBe(30_000)
+    // Options that leave the limit unnamed keep it, and keep their own fields.
+    expect(http({ headerTimeout: 1_000 })).toMatchObject({ chunkTimeout: 90_000, headerTimeout: 1_000 })
+    expect(http(new HttpOptions({ headers: { "x-test": "1" } }))).toMatchObject({
+      chunkTimeout: 90_000,
+      headers: { "x-test": "1" },
+    })
   })
 
   test("requires an Anthropic-compatible base URL at runtime", async () => {

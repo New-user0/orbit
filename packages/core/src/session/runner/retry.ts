@@ -1,3 +1,14 @@
+/**
+ * Decides whether a failed model request is sent again, and after how long.
+ *
+ * Only foreground work retries an overload: a runner step (a subagent's child session included) and compaction. Both
+ * go through this policy before every resend, and a plugin's `retry` hook can override each decision.
+ *
+ * Background calls make exactly one request: session titles (`SessionTitle`) and `SessionGenerate.generate`, with
+ * whatever is built on it, keep-alive warming among them. Nobody is waiting on their answer, and a resend would add
+ * load to a provider that is already shedding it. If a background call ever retries other failures, it must still
+ * leave overloads out; `isOverloaded` from `@orbit/ai` tells them apart.
+ */
 export * as SessionRunnerRetry from "./retry.js"
 
 import { AIError, isRetryable } from "@orbit/ai"
@@ -39,11 +50,11 @@ const retryAfter = (input: Input) => {
   return undefined
 }
 
-// Exponential from 2s capped at 10s per gap, for 10 retries: 2, 4, 8, then 10 × 7, about 84s of
-// waiting when every attempt fails (67–101s with jitter). `min` takes the faster schedule, so the
+// Exponential from 500ms capped at 32s per gap, for 10 retries: 0.5, 1, 2, 4, 8, 16, then 32 × 4, about 160s of
+// waiting when every attempt fails (128–191s with jitter). `min` takes the faster schedule, so the
 // cap applies per gap; `max` with `recurs` bounds the count.
 const schedule = Schedule.max([
-  Schedule.min([Schedule.exponential("2 seconds"), Schedule.spaced("10 seconds")]),
+  Schedule.min([Schedule.exponential("500 millis"), Schedule.spaced("32 seconds")]),
   Schedule.recurs(10),
 ]).pipe(
   Schedule.jittered,
@@ -55,11 +66,16 @@ const schedule = Schedule.max([
   }),
 )
 
-// A timed-out attempt already waited minutes before failing, so the general allowance would let a
-// dead provider hold a step for most of an hour. Cap those attempts well below it.
+// A timed-out attempt has already waited out a watchdog (`headerTimeout` or `chunkTimeout`) before it failed: 5 minutes
+// on HTTP routes and 30 on WebSocket routes unless the provider sets its own, and as little as 90 seconds where the
+// provider sends keepalives. The general allowance would let a dead provider hold a step for close to an hour at the
+// 5-minute end, so cap those attempts well below it.
 const MAX_TIMEOUT_RETRIES = 3
 
-const isTimeout = (error: AIError) => error.reason._tag === "Transport" && error.reason.code === "Timeout"
+// The HTTP routes report their header, idle and whole-request limits as "Timeout" and the WebSocket route reports its
+// idle limit as "idle-timeout"; the AI SDK path maps its own watchdogs to "Timeout" (`networkFailure` in aisdk.ts).
+const isTimeout = (error: AIError) =>
+  error.reason._tag === "Transport" && (error.reason.code === "Timeout" || error.reason.code === "idle-timeout")
 
 export const policy = (sessionID: SessionSchema.ID) =>
   Effect.gen(function* () {

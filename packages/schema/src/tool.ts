@@ -157,9 +157,51 @@ type OutputValue<S> = S extends undefined
 
 export class Error extends Schema.TaggedError<Error>()("Tool.Error", {
   message: Schema.String,
+  /**
+   * Names the failure so that a client or a hook can tell failures apart without reading the message. It becomes the
+   * `type` of the `SessionError` that the call fails with and wins over the type of `error`. A failure without a code is
+   * reported as `tool.execution`. Any string is accepted; `ErrorCode` lists the ones Orbit itself uses.
+   */
+  code: Schema.optional(Schema.String),
   error: Schema.optional(Schema.Defect()),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }) {}
+
+/**
+ * The codes that Orbit gives its own tool failures. They are the `type` of the `SessionError` a failed call carries, so a
+ * value here is a name that clients may match on and that stays as it is.
+ */
+export const ErrorCode = {
+  /** The input does not match the tool's schema. */
+  InputInvalid: "tool.input-invalid",
+  /** The tool's `validate` refused the call without naming a code of its own. */
+  Validation: "tool.validation",
+  /** The model named a tool that does not exist. */
+  Unknown: "tool.unknown",
+  /** The tool exists but was not offered for this request. */
+  Unavailable: "tool.unavailable",
+  /** Tools are switched off for the rest of the run. */
+  Disabled: "tool.disabled",
+  /** The call was ended before it finished. Reserved: nothing reports it yet. */
+  Cancelled: "tool.cancelled",
+  /** The file does not exist. */
+  FileNotFound: "file.not-found",
+  /** The path is a directory, where a file is needed. */
+  FileIsDirectory: "file.is-directory",
+  /** The session has not read the file, so it may not change it. */
+  FileUnread: "file.unread",
+  /** The file changed since the session last read it. */
+  FileStale: "file.stale",
+  /** An edit that replaces a text with itself. */
+  EditNoChange: "edit.no-change",
+  /** An edit that looks for nothing. */
+  EditEmptyOldString: "edit.empty-old-string",
+  /** The text to replace is not in the file. */
+  EditNoMatch: "edit.no-match",
+  /** The text to replace is in the file more than once, and not every occurrence was asked for. */
+  EditAmbiguous: "edit.ambiguous",
+} as const
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode]
 
 export interface TextContent extends Schema.Schema.Type<typeof TextContent> {}
 export const TextContent = Schema.Struct({
@@ -194,6 +236,19 @@ export type Info<
   readonly input: Input
   readonly description: string
   readonly execute: (input: InputValue<Input>, context: Context) => Effect.Effect<Result<Output>, Error>
+  /**
+   * Refuses a call that cannot succeed, before the tool asks anyone about it. It receives what `execute` receives, the
+   * input after the schema has decoded it and the context with the traits of the call, and it runs after the
+   * `execute.before` hooks and before `execute`, so before any permission request the tool makes. A call that fails here
+   * never reaches those requests.
+   *
+   * It must not ask for permission, change anything or look at what the person has not approved, such as a file outside
+   * the project. The state it checks can change before `execute` runs, so `execute` makes every check it relies on again.
+   *
+   * Fail with a `Tool.Error` that carries a `code`. A `Tool.Error` without one, and a failure that is not a
+   * `Tool.Error`, is reported as `tool.validation`. A decline and an interrupt pass through as they do from `execute`.
+   */
+  readonly validate?: (input: InputValue<Input>, context: Context) => Effect.Effect<void, Error>
   readonly output?: Output
   readonly options?: Options
   /** Predicates in `traits` receive the input as `execute` does, after the schema has decoded it. */
