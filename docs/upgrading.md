@@ -122,7 +122,8 @@ rest:
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
-  keyless search pool, and it cannot start generations that you pay for.
+  keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
+  10 or less, so a repository cannot raise the limit above 10.
 - **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
@@ -1340,6 +1341,33 @@ possible before; typing the name and pressing Enter now opens the built-in dialo
 when the names collide both appear in autocomplete.
 
 **What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
+
+### Tool calls in one step run in order, and only safe ones run together
+
+A step used to start every tool call the moment the model finished writing it, all at once. Calls now start in the order
+the model wrote them, and each waits for its turn. A call that a tool declares concurrency-safe (reads, searches, fetches)
+runs beside other safe calls, up to `tool_execution.max_concurrency` at a time (default 10). A call that is not safe
+(an edit, a shell command, a Code Mode `execute` call) runs alone, after the calls before it have finished, and the calls
+after it wait for it. Calls start while the model is still writing later ones, and results still reach the model in
+the order of the calls. A call that is waiting reports `{ "queued": true }` in its metadata until it starts; the bundled
+clients do not show it yet.
+
+A decline stops the queue. When you decline a call, the calls that have not started are not run and finish as
+"aborted", as the declined call does. When you reject a call with feedback, the calls that have not started finish as
+`tool.cancelled`, and the model sees your feedback and carries on. Calls that are already running are left to finish.
+This holds for a call the model makes directly, including a direct MCP tool. It does not yet hold when the rejected call
+is inside a Code Mode program: that program receives the feedback as an error result, and the calls queued behind it
+still start and can ask. A permission prompt whose call is interrupted now closes in the terminal UI and the other
+clients that follow permission events; the ACP client does not close it yet.
+
+Subagents are tool calls too, so one step starts at most `max_concurrency` of them at once.
+
+**Affects:** people whose model writes several edits, shell commands or other calls that change things in one response,
+which used to overlap and now take turns; anyone who set no limit and relied on a large number of safe calls running
+together; clients that show tool progress, which may now see `{ "queued": true }` on a call that has not started.
+
+**What to do:** nothing in most setups. To change how many safe calls run together, set `tool_execution.max_concurrency`
+to a positive whole number in your own config. A project's config cannot raise it above 10 until you trust the folder.
 
 ### New `fallback_model` setting
 

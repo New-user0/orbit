@@ -9,6 +9,7 @@ import {
   Server,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server"
+import { ToolFailure } from "@orbit/ai"
 import { CompatNames } from "@orbit/compat/names"
 import { Document, Event, Info, type Entry } from "@orbit/schema/config"
 import { ConfigMCP } from "@orbit/schema/config/mcp"
@@ -2549,6 +2550,31 @@ it.effect("forwards the invoking session through direct and Code Mode MCP tools"
       args: {},
       sessionID: codeModeSessionID,
     })
+  }),
+)
+
+it.effect("keeps a permission correction as the cause of a direct MCP tool failure", () =>
+  Effect.gen(function* () {
+    calls = 0
+    assertion = yield* Deferred.make<Permission.AssertInput>()
+    decision = Effect.fail(new Permission.CorrectedError({ feedback: "use the other server" }))
+    const registry = yield* Tool.Service
+    const registration = yield* McpTool.Service
+    yield* registration.flush
+    const toolSet = yield* registry.snapshot()
+
+    // The step stops its queue on this cause, so it must survive the tool's own error mapping.
+    const failure = yield* toolSet
+      .execute({
+        sessionID: Session.ID.make("ses_mcp_corrected"),
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call_mcp_corrected", name: "direct_lookup", input: {} },
+      })
+      .pipe(Effect.flip)
+    expect(failure).toBeInstanceOf(ToolFailure)
+    expect((failure as ToolFailure).error).toBeInstanceOf(Permission.CorrectedError)
+    expect((failure as ToolFailure).message).toBe("use the other server")
+    expect(calls).toBe(0)
   }),
 )
 

@@ -2286,6 +2286,7 @@ export type ConfigEntry =
         }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
         tool_output?: { max_lines?: number; max_bytes?: number }
+        tool_execution?: { max_concurrency?: number }
         mcp?: {
           timeout?: { startup?: number; catalog?: number; execution?: number }
           servers?: {
