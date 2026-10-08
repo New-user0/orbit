@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { Orbit } from "@orbit/client"
 import type { OrbitEvent } from "@orbit/client"
 import { Controller } from "../src/controller"
@@ -9,16 +9,24 @@ import type { Item } from "../src/protocol"
 const session = "ses_recovery"
 let count = 0
 
-function chat() {
+const opened: Controller[] = []
+
+// A failed expect must not leave a reconnect loop running.
+afterEach(() => {
+  for (const controller of opened.splice(0)) controller.dispose()
+})
+
+function chat(baseUrl = "http://127.0.0.1:9") {
   const items = new Map<string, Item>()
   const controller = new Controller(
-    Orbit.make({ baseUrl: "http://127.0.0.1:9" }),
+    Orbit.make({ baseUrl }),
     "/tmp/none",
     (update) => {
       if (update.type === "item") items.set(update.item.id, update.item)
     },
     () => Promise.resolve("later"),
   )
+  opened.push(controller)
   controller["session"] = session
   const send = (type: string, data: Record<string, unknown> = {}) =>
     controller.handle({
@@ -81,4 +89,63 @@ test.each([
   send("session.synthetic", { text: "x", ...data })
   expect(notes()).toHaveLength(expected)
   controller.dispose()
+})
+
+test.each([
+  ["user", false],
+  ["shutdown", true],
+  ["superseded", true],
+  ["inactivity", true],
+] as const)("a stop with reason %s shows the held failure: %p", (reason, shown) => {
+  const { send, notes } = chat()
+  send("session.step.failed", failure)
+  send("session.execution.interrupted", { reason })
+  expect(notes()).toMatchObject([
+    ...(shown ? [{ tone: "error", text: failure.error.message }] : []),
+    { tone: "muted", text: "Stopped." },
+  ])
+})
+
+test("a failure that the run's own failure replaced does not come back at a later stop", () => {
+  const { send, notes } = chat()
+  send("session.step.failed", failure)
+  send("session.execution.failed", { error: { type: "unknown", message: "Out of retries." } })
+  send("session.execution.interrupted", { reason: "shutdown" })
+  expect(notes()).toMatchObject([{ text: "Out of retries." }, { text: "Stopped." }])
+})
+
+test("starting over drops a held failure", () => {
+  const { controller, send, notes } = chat()
+  send("session.step.failed", failure)
+  controller.reset()
+  controller["session"] = session
+  send("session.execution.succeeded")
+  expect(notes()).toEqual([])
+})
+
+test("opening a session replays the notices that have a description and skips the rest", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/session/ses_old") return Response.json({ data: { id: "ses_old", title: "Earlier" } })
+      if (url.pathname === "/api/session/ses_old/message")
+        return Response.json({
+          data: [
+            { type: "synthetic", id: "msg_a", text: "x", description: "Switched model\u001b", metadata: { notice: "fallback" } },
+            { type: "synthetic", id: "msg_b", text: "x", metadata: { notice: "fallback" } },
+          ],
+          cursor: {},
+        })
+      return new Response("not found", { status: 404 })
+    },
+  })
+  try {
+    const { controller, notes } = chat(`http://127.0.0.1:${server.port}`)
+    await controller.open("ses_old")
+    expect(notes()).toMatchObject([{ id: "notice:msg_a", tone: "muted", text: "Switched model\\x1b" }])
+  } finally {
+    await server.stop(true)
+  }
 })

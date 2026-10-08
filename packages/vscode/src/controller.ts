@@ -403,7 +403,11 @@ export class Controller {
       )
       if (this.abort.signal.aborted) return
       // The server restarted or the connection dropped: reconnect after a short pause.
-      if (!done) this.emit({ type: "busy", busy: false })
+      if (!done) {
+        // The terminal event of the run may have fallen in the gap, so a failure held for it is stale.
+        this.held = undefined
+        this.emit({ type: "busy", busy: false })
+      }
       await new Promise((resolve) => setTimeout(resolve, 1000))
     }
   }
@@ -550,7 +554,9 @@ export class Controller {
         return
       case "session.execution.interrupted":
         if (event.data.sessionID !== this.session) return
-        this.release()
+        // A stop the person asked for does not report the failure of the step it cut short, as `orb run` does.
+        if (event.data.reason === "user") this.held = undefined
+        else this.release()
         this.update({ type: "note", id: `stopped:${event.id}`, text: "Stopped.", tone: "muted" })
         this.emit({ type: "busy", busy: false })
         return
@@ -583,8 +589,8 @@ export class Controller {
 // What the runner says about its own loop (a model fallback, a stop hook, a plan exit). The text comes from the runner
 // and the model, so it is escaped as `plain` does before it reaches the chat; one without a description says nothing.
 function loopNotice(metadata: Readonly<Record<string, unknown>> | undefined, description: string | undefined) {
-  if (typeof metadata?.notice !== "string" || !description?.trim()) return undefined
-  return plain(description)
+  if (typeof metadata?.notice !== "string" || description === undefined) return undefined
+  return plain(description) || undefined
 }
 
 function changes(metadata: Readonly<Record<string, unknown>> | undefined): ReadonlyArray<FileChange> {

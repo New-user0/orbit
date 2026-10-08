@@ -783,10 +783,12 @@ to `leader` or to an `input.*` key in `cli.json` now also applies while the term
 ### VS Code hides recovered step failures and shows loop notices
 
 The VS Code chat used to show an error note the moment a step failed, even when the next step went on to finish the
-run. It now holds the failure back: a later step of the same run drops it, and it shows only when the run ends
-without one (or ends with a stop), as `orb run` does. A run that fails keeps just its own error. The chat also shows
-the runner's own notices that carry a description, such as a model fallback, a stop hook or a plan exit, as a muted
-note, with control and format characters in the text written out as escapes.
+run. It now holds the failure back: a later step of the same run drops it. It shows when the run ends, or when the
+run is stopped for a reason other than your own Stop; if you press Stop, the failure of the step you cut short is
+dropped, as `orb run` does, and a failure held across a dropped connection is dropped too. A run that fails keeps just
+its own error. The chat also shows the runner's own notices that carry a description, such as "Continuing after
+restart", as a muted note, with control and format characters in the text written out as escapes. Other notices, such
+as a model fallback, appear in the same way once those features land.
 
 **Affects:** VS Code users.
 
