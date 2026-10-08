@@ -249,20 +249,20 @@ test("the reference tool names group and stand alone like the names they replace
 })
 
 test("the plan dock finds a plan recorded under the old or the reference tool names", () => {
-  const withInput = (name: string, input: Record<string, unknown>): SessionMessageAssistantTool => ({
+  const withInput = (name: string, input: { todos: { content: string; status: string }[] }): SessionMessageAssistantTool => ({
     ...tool("p", name),
-    state: { status: "completed", input, content: [], metadata: {} },
+    state: { status: "completed", input, content: [{ type: "text", text: "ok" }], metadata: {} },
   })
   const withTodos = (name: string): SessionMessageAssistantTool => ({
     ...tool("p", name),
     state: {
       status: "completed",
       input: {},
-      content: [],
+      content: [{ type: "text", text: "ok" }],
       metadata: { todos: [{ content: "ship", status: "pending" }] },
     },
   })
-  const expected = [{ content: "ship", status: "pending" }]
+  const expected = [{ content: "ship", status: "pending" as const }]
   for (const name of ["todo", "TodoWrite"])
     expect(planItems([assistant("a", [withInput(name, { todos: expected })])])).toEqual(expected)
   for (const name of ["task_create", "TaskCreate", "TaskUpdate", "TaskList"])

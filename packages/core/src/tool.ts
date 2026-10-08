@@ -38,6 +38,7 @@ import {
   normalizedName,
   normalizeContent,
 } from "./tool/runtime.js"
+import { ToolNames } from "./tool/names.js"
 import { ToolTraits } from "./tool/traits.js"
 
 /** The call that is executing; see `ToolCurrentCall`. */
@@ -530,7 +531,7 @@ function registrationError(tool: Tool.Info) {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(name))
     return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
-  if (ToolTraits.exposure(tool) === "direct" && id === "Execute")
+  if (ToolTraits.exposure(tool) === "direct" && ToolNames.canonical(id) === "Execute")
     return new RegistrationError({ name: id, message: 'Tool name "Execute" is reserved for CodeMode' })
   const result = Result.try({
     try: () => ToolDefinition.make(definition(tool)),

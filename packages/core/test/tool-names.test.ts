@@ -80,7 +80,7 @@ describe("tool names", () => {
   test("a name read from a file is looked up as data, never as a property of the table", () => {
     for (const hostile of ["__proto__", "constructor", "toString", "hasOwnProperty", ""]) {
       // A field key is data too: it keeps its own name and never becomes a function or a prototype.
-      const input = JSON.parse(`{"${hostile}":"x"}`)
+      const input = Object.fromEntries([[hostile, "x"]])
       expect(Object.keys(ToolNames.raiseInput("Edit", input))).toEqual([hostile])
       expect(Object.keys(ToolNames.lowerInput("Edit", input))).toEqual([hostile])
       expect(ToolNames.canonical(hostile)).toBe(hostile)

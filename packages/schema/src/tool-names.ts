@@ -96,15 +96,17 @@ export function raiseInput(tool: string, input: unknown): unknown {
  * A view of a record keyed by tool name in which a key written with an old name reaches the entry of the current one,
  * so a plugin hook that deletes or reads `tools.write` still acts on `Write`. Keys the table does not list pass through.
  */
-export function aliased<T extends object>(record: T): T {
+export function aliased<T>(record: Record<string, T>): Record<string, T> {
   const key = (property: string | symbol) => (typeof property === "string" ? canonical(property) : property)
   return new Proxy(record, {
-    get: (target, property) => Reflect.get(target, key(property)),
-    set: (target, property, value) => Reflect.set(target, key(property), value),
-    has: (target, property) => Reflect.has(target, key(property)),
-    deleteProperty: (target, property) => Reflect.deleteProperty(target, key(property)),
-    defineProperty: (target, property, descriptor) => Reflect.defineProperty(target, key(property), descriptor),
-    getOwnPropertyDescriptor: (target, property) => Reflect.getOwnPropertyDescriptor(target, key(property)),
+    get: (target, property) => target[key(property) as string],
+    set: (target, property, value: T) => {
+      target[key(property) as string] = value
+      return true
+    },
+    has: (target, property) => key(property) in target,
+    deleteProperty: (target, property) => delete target[key(property) as string],
+    getOwnPropertyDescriptor: (target, property) => Object.getOwnPropertyDescriptor(target, key(property)),
   })
 }
 

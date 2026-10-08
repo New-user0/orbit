@@ -859,7 +859,7 @@ describe("Tool", () => {
     Effect.gen(function* () {
       const service = yield* Tool.Service
       expect("definitions" in service).toBe(false)
-      expect("Execute" in service).toBe(false)
+      expect("execute" in service).toBe(false)
       expect("settle" in service).toBe(false)
       expect(typeof service.snapshot).toBe("function")
     }),
@@ -1593,9 +1593,9 @@ describe("Tool exposure", () => {
   // called through Code Mode, and a namespaced one is named `acme_execute`, so neither clashes with it.
   for (const [name, options, refused, direct, deferred] of [
     ["a direct tool", { codemode: false }, true, [], []],
-    ["a tool that leaves codemode out", undefined, false, [], ["Execute"]],
-    ["a tool with codemode: true", { codemode: true }, false, [], ["Execute"]],
-    ["a pinned tool", { pinned: true }, false, [], ["Execute"]],
+    ["a tool that leaves codemode out", undefined, false, [], ["execute"]],
+    ["a tool with codemode: true", { codemode: true }, false, [], ["execute"]],
+    ["a pinned tool", { pinned: true }, false, [], ["execute"]],
     ["a direct tool in a namespace", { namespace: "acme", codemode: false }, false, ["acme_execute"], []],
   ] as const) {
     it.effect(`${refused ? "refuses" : "registers"} ${name} named execute`, () => {
@@ -1605,14 +1605,14 @@ describe("Tool exposure", () => {
       })
       return Effect.gen(function* () {
         const service = yield* Tool.Service
-        yield* service.transform((editor) => editor.add({ ...make(), name: "Execute", options }))
+        yield* service.transform((editor) => editor.add({ ...make(), name: "execute", options }))
 
         expect(output).toEqual(
           refused
             ? [
                 [
                   "Skipping invalid tool registration",
-                  { name: "Execute", namespace: undefined, error: 'Tool name "Execute" is reserved for CodeMode' },
+                  { name: "execute", namespace: undefined, error: 'Tool name "Execute" is reserved for CodeMode' },
                 ],
               ]
             : [],

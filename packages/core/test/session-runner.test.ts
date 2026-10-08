@@ -6624,7 +6624,7 @@ describe("SessionRunnerLLM", () => {
     yield* transformTools(
       registry,
       {
-        question: {
+        AskUserQuestion: {
           name: "AskUserQuestion",
           description: "Ask the user",
           input: Schema.Struct({}),
@@ -6636,7 +6636,7 @@ describe("SessionRunnerLLM", () => {
     )
     yield* s.admit("Ask then stop")
 
-    yield* s.llm.push(TestLLM.tool("call-question", "question", {}), [])
+    yield* s.llm.push(TestLLM.tool("call-question", "AskUserQuestion", {}), [])
 
     const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
     const exit = yield* Fiber.join(run)
