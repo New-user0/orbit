@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -13,8 +13,10 @@ import { FileAccess } from "@orbit/core/file-access"
 import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
+import { toSessionError } from "@orbit/core/session/to-session-error"
 import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
@@ -46,12 +48,15 @@ const makeEditFixture = () => {
     writes: string[]
     reads: number
     denyAction?: string
+    // Makes every read fail the way a file system does.
+    failReads: boolean
     afterRead: () => Effect.Effect<void>
     formatFile: (target: string) => Effect.Effect<boolean>
   } = {
     assertions: [],
     writes: [],
     reads: 0,
+    failReads: false,
     afterRead: () => Effect.void,
     formatFile: () => Effect.succeed(false),
   }
@@ -83,9 +88,14 @@ const makeEditFixture = () => {
 const withTool = <A, E, R>(
   directory: string,
   fixture: ReturnType<typeof makeEditFixture>,
-  body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
-  // The core tests trust every folder, unless the project is untrusted.
-  untrusted = false,
+  body: (registry: Tool.Interface) => Effect.Effect<A, E, R | FileLedger.Service>,
+  options: {
+    // The core tests trust every folder, unless the project is untrusted.
+    readonly untrusted?: boolean
+    // The permissive ledger allows every change, as most of these tests expect. The real one asks that the session
+    // has read the file, and the body records the files it has read.
+    readonly ledger?: "permissive" | "real"
+  } = {},
 ) => {
   const activeLocation = Layer.succeed(
     Location.Service,
@@ -96,25 +106,29 @@ const withTool = <A, E, R>(
     return yield* body(registry)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, editToolNode]), [
-        FileLedger.node.replace(FileLedger.permissiveLayer),
-        Environment.node.replace(
-          transformEnvironmentFiles((files) => ({
-            read: (target, range) =>
-              files
-                .read(target, range)
-                .pipe(
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, FileLedger.node, editToolNode]),
+        [
+          ...(options.ledger === "real" ? [] : [FileLedger.node.replace(FileLedger.permissiveLayer)]),
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              read: (target, range) =>
+                (fixture.failReads
+                  ? Effect.fail(new Environment.Failed({ path: target, cause: "disk on fire" }))
+                  : files.read(target, range)
+                ).pipe(
                   Effect.tap(() => Effect.sync(() => fixture.reads++).pipe(Effect.andThen(() => fixture.afterRead()))),
                 ),
-            write: (target, content) =>
-              Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
-          })),
-        ),
-        Location.node.replace(activeLocation),
-        Formatter.node.replace(fixture.formatter),
-        Permission.node.replace(fixture.permission),
-        ...(untrusted ? untrustedProjectNodes : []),
-      ]),
+              write: (target, content) =>
+                Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
+            })),
+          ),
+          Location.node.replace(activeLocation),
+          Formatter.node.replace(fixture.formatter),
+          Permission.node.replace(fixture.permission),
+          ...(options.untrusted ? untrustedProjectNodes : []),
+        ],
+      ),
     ),
   )
 }
@@ -124,6 +138,20 @@ const call = (input: typeof EditTool.Input.Type, id = "call-edit") => ({
   ...toolIdentity,
   call: { type: "tool-call" as const, id, name: "edit", input },
 })
+
+// Runs the edit tool's own `validate` and nothing else, as the registry does for a call.
+const validateEdit = (registry: Tool.Interface, input: typeof EditTool.Input.Type) =>
+  Effect.gen(function* () {
+    const tool = (yield* registry.list()).find((item) => item.id === EditTool.name)
+    if (tool?.validate === undefined) return yield* Effect.die("The edit tool has no validate")
+    return yield* tool.validate(input, {
+      sessionID,
+      ...toolIdentity,
+      id: Tool.CallID.make("call-validate"),
+      progress: () => Effect.void,
+      traits: ToolTraits.defaults,
+    })
+  })
 
 const it = testEffect(Layer.empty)
 
@@ -332,7 +360,7 @@ describe("EditTool", () => {
                 edit,
                 (registry) =>
                   executeTool(registry, call({ path: "docs/notes.md", oldString: "before", newString: "after" })),
-                item.untrusted,
+                { untrusted: item.untrusted },
               )
               expect(result.status).toBe("completed")
               expect(edit.assertions.map((input) => input.action)).toEqual(item.actions)
@@ -367,7 +395,7 @@ describe("EditTool", () => {
               edit,
               (registry) =>
                 executeTool(registry, call({ path: "docs/notes.md", oldString: "before", newString: "after" })),
-              true,
+              { untrusted: true },
             ),
           ).toEqual({
             status: "error",
@@ -428,40 +456,215 @@ describe("EditTool", () => {
     ),
   )
 
-  it.live("denied edit does not disclose whether oldString matches", () =>
+  // The content checks run before the permission is asked, so a denied edit answers "no match" for a text that is not in
+  // the file. The ledger keeps that from being a way to learn what a file holds: it lets a call get as far as the content
+  // only for a file that the session has read, and the session has then seen the content already.
+  it.live("a denied edit of a file the session has not read says nothing about what the file holds", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()
       edit.denyAction = "edit"
       const target = path.join(tmp.path, "secret.txt")
       return Effect.promise(() => fs.writeFile(target, "secret content")).pipe(
         Effect.andThen(
-          withTool(tmp.path, edit, (registry) =>
-            Effect.gen(function* () {
-              const matching = yield* executeTool(
-                registry,
-                call({ path: "secret.txt", oldString: "secret content", newString: "replacement" }),
-              )
-              const missing = yield* executeTool(
-                registry,
-                call({ path: "secret.txt", oldString: "not present", newString: "replacement" }),
-              )
+          withTool(
+            tmp.path,
+            edit,
+            (registry) =>
+              Effect.gen(function* () {
+                const matching = yield* executeTool(
+                  registry,
+                  call({ path: "secret.txt", oldString: "secret content", newString: "replacement" }),
+                )
+                const missing = yield* executeTool(
+                  registry,
+                  call({ path: "secret.txt", oldString: "not present", newString: "replacement" }),
+                )
 
-              expect(matching).toEqual({
-                status: "error",
-                error: { type: "permission.rejected", message: "Permission denied: edit" },
-              })
-              expect(missing).toEqual(matching)
-              expect(edit.assertions.map((input) => input.action)).toEqual(["edit", "edit"])
-              expect(edit.reads).toBe(2)
-              expect(edit.writes).toEqual([])
-            }),
+                expect(matching).toEqual({
+                  status: "error",
+                  error: {
+                    type: "file.unread",
+                    message: "secret.txt has not been read in this session. Read it before changing it.",
+                  },
+                })
+                expect(missing).toEqual(matching)
+                expect(edit.assertions).toEqual([])
+                expect(edit.reads).toBe(0)
+                expect(edit.writes).toEqual([])
+              }),
+            { ledger: "real" },
           ),
         ),
       )
     }),
   )
 
-  it.live("rejects no-op, empty, missing, and ambiguous exact replacements", () =>
+  it.live("a denied edit of a file the session has read is refused at the permission once it could work", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      edit.denyAction = "edit"
+      const target = path.join(tmp.path, "secret.txt")
+      return Effect.promise(() => fs.writeFile(target, "secret content")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            edit,
+            (registry) =>
+              Effect.gen(function* () {
+                yield* (yield* FileLedger.Service).record(sessionID, target)
+                const matching = yield* executeTool(
+                  registry,
+                  call({ path: "secret.txt", oldString: "secret content", newString: "replacement" }),
+                )
+                const missing = yield* executeTool(
+                  registry,
+                  call({ path: "secret.txt", oldString: "not present", newString: "replacement" }),
+                )
+
+                expect(matching).toEqual({
+                  status: "error",
+                  error: { type: "permission.rejected", message: "Permission denied: edit" },
+                })
+                expect(missing).toMatchObject({ status: "error", error: { type: "edit.no-match" } })
+                expect(edit.assertions.map((input) => input.action)).toEqual(["edit"])
+                expect(edit.writes).toEqual([])
+              }),
+            { ledger: "real" },
+          ),
+        ),
+      )
+    }),
+  )
+
+  // Each of these edits cannot work. Whatever it is that makes them fail, the person is not asked to approve one, and the
+  // call fails with a code that a client can match on. `validate` refuses the ones inside the Location by itself, before
+  // `execute` runs, and `execute` ends the same way when it is the only one to run.
+  const doomed: ReadonlyArray<{
+    readonly name: string
+    readonly input: typeof EditTool.Input.Type
+    // The permissive ledger allows every change. The real one is used when the file was never read, or was read and
+    // has changed since.
+    readonly ledger?: "unread" | "stale"
+    readonly type: string
+    readonly message: string
+  }> = [
+    {
+      name: "identical strings",
+      input: { path: "matches.txt", oldString: "same", newString: "same" },
+      type: "edit.no-change",
+      message: "No changes to apply: oldString and newString are identical.",
+    },
+    {
+      name: "an empty oldString",
+      input: { path: "matches.txt", oldString: "", newString: "after" },
+      type: "edit.empty-old-string",
+      message: "oldString must not be empty. Use write to create or overwrite a file.",
+    },
+    {
+      name: "an oldString that is not in the file",
+      input: { path: "matches.txt", oldString: "missing", newString: "after" },
+      type: "edit.no-match",
+      message: "Could not find oldString in matches.txt. It must match exactly, including whitespace and indentation.",
+    },
+    {
+      name: "an oldString that is in the file twice",
+      input: { path: "matches.txt", oldString: "same", newString: "after" },
+      type: "edit.ambiguous",
+      message:
+        "Found 2 matches for oldString, but expected exactly one. Add more surrounding context to make oldString unique, or set replaceAll to true to replace every occurrence.",
+    },
+    {
+      name: "a file that does not exist",
+      input: { path: "missing.ts", oldString: "before", newString: "after" },
+      type: "file.not-found",
+      message: "File not found: missing.ts",
+    },
+    {
+      name: "a directory",
+      input: { path: "src", oldString: "before", newString: "after" },
+      type: "file.is-directory",
+      message: "Path is a directory, not a file: src",
+    },
+    {
+      name: "a file that the session has not read",
+      input: { path: "matches.txt", oldString: "same", newString: "after", replaceAll: true },
+      ledger: "unread",
+      type: "file.unread",
+      message: "matches.txt has not been read in this session. Read it before changing it.",
+    },
+    {
+      name: "a file that changed since the session read it",
+      input: { path: "matches.txt", oldString: "same", newString: "after", replaceAll: true },
+      ledger: "stale",
+      type: "file.stale",
+      message: "matches.txt changed since it was last read. Read it again before changing it.",
+    },
+  ]
+  for (const item of doomed)
+    it.live(`refuses ${item.name} with ${item.type} and asks for nothing`, () =>
+      withTempDir((tmp) => {
+        const edit = makeEditFixture()
+        const target = path.join(tmp.path, "matches.txt")
+        return Effect.promise(async () => {
+          await fs.writeFile(target, "same same")
+          await fs.mkdir(path.join(tmp.path, "src"))
+        }).pipe(
+          Effect.andThen(
+            withTool(
+              tmp.path,
+              edit,
+              (registry) =>
+                Effect.gen(function* () {
+                  if (item.ledger === "stale") {
+                    yield* (yield* FileLedger.Service).record(sessionID, target)
+                    const later = new Date(Date.now() + 60_000)
+                    yield* Effect.promise(() => fs.utimes(target, later, later))
+                  }
+                  const expected = { type: item.type, message: item.message }
+                  expect(
+                    yield* validateEdit(registry, item.input).pipe(Effect.flip, Effect.map(toSessionError)),
+                  ).toEqual(expected)
+                  expect(yield* executeTool(registry, call(item.input))).toEqual({ status: "error", error: expected })
+                  expect(edit.assertions).toEqual([])
+                  expect(edit.writes).toEqual([])
+                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("same same")
+                }),
+              { ledger: item.ledger === undefined ? "permissive" : "real" },
+            ),
+          ),
+        )
+      }),
+    )
+
+  it.live("accepts an edit that can work, in validate and in execute", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "matches.txt")
+      return Effect.promise(() => fs.writeFile(target, "same same")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            edit,
+            (registry) =>
+              Effect.gen(function* () {
+                yield* (yield* FileLedger.Service).record(sessionID, target)
+                const input = { path: "matches.txt", oldString: "same", newString: "after", replaceAll: true }
+                expect(yield* validateEdit(registry, input).pipe(Effect.exit)).toEqual(Exit.void)
+                expect(yield* executeTool(registry, call(input))).toMatchObject({
+                  status: "completed",
+                  output: { replacements: 2 },
+                })
+                expect(edit.assertions.map((assertion) => assertion.action)).toEqual(["edit"])
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after after")
+              }),
+            { ledger: "real" },
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.live("leaves a path it cannot read to execute, which reports it", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()
       const target = path.join(tmp.path, "matches.txt")
@@ -469,72 +672,15 @@ describe("EditTool", () => {
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
             Effect.gen(function* () {
-              expect(
-                yield* executeTool(registry, call({ path: "matches.txt", oldString: "same", newString: "same" })),
-              ).toEqual({
+              edit.failReads = true
+              const input = { path: "matches.txt", oldString: "same", newString: "after", replaceAll: true }
+              expect(yield* validateEdit(registry, input).pipe(Effect.exit)).toEqual(Exit.void)
+              // The failure is the file system's, so it is not a validation and it has no code of the tool's own.
+              expect(yield* executeTool(registry, call(input))).toEqual({
                 status: "error",
-                error: {
-                  type: "tool.execution",
-                  message: "No changes to apply: oldString and newString are identical.",
-                },
+                error: { type: "tool.execution", message: "Unable to edit matches.txt" },
               })
-              expect(
-                yield* executeTool(registry, call({ path: "matches.txt", oldString: "", newString: "after" })),
-              ).toEqual({
-                status: "error",
-                error: {
-                  type: "tool.execution",
-                  message: "oldString must not be empty. Use write to create or overwrite a file.",
-                },
-              })
-              expect(
-                yield* executeTool(registry, call({ path: "matches.txt", oldString: "missing", newString: "after" })),
-              ).toEqual({
-                status: "error",
-                error: {
-                  type: "tool.execution",
-                  message:
-                    "Could not find oldString in matches.txt. It must match exactly, including whitespace and indentation.",
-                },
-              })
-              expect(
-                yield* executeTool(registry, call({ path: "matches.txt", oldString: "same", newString: "after" })),
-              ).toEqual({
-                status: "error",
-                error: {
-                  type: "tool.execution",
-                  message:
-                    "Found 2 matches for oldString, but expected exactly one. Add more surrounding context to make oldString unique, or set replaceAll to true to replace every occurrence.",
-                },
-              })
-              expect(edit.writes).toEqual([])
-            }),
-          ),
-        ),
-      )
-    }),
-  )
-
-  it.live("returns specific missing file and directory errors", () =>
-    withTempDir((tmp) => {
-      const edit = makeEditFixture()
-      const directory = path.join(tmp.path, "src")
-      return Effect.promise(() => fs.mkdir(directory)).pipe(
-        Effect.andThen(
-          withTool(tmp.path, edit, (registry) =>
-            Effect.gen(function* () {
-              expect(
-                yield* executeTool(registry, call({ path: "missing.ts", oldString: "before", newString: "after" })),
-              ).toEqual({
-                status: "error",
-                error: { type: "tool.execution", message: "File not found: missing.ts" },
-              })
-              expect(
-                yield* executeTool(registry, call({ path: "src", oldString: "before", newString: "after" })),
-              ).toEqual({
-                status: "error",
-                error: { type: "tool.execution", message: "Path is a directory, not a file: src" },
-              })
+              expect(edit.assertions).toEqual([])
               expect(edit.writes).toEqual([])
             }),
           ),
@@ -675,7 +821,8 @@ describe("EditTool", () => {
     withTempDir((tmp) => {
       const edit = makeEditFixture()
       const target = path.join(tmp.path, "concurrent.txt")
-      edit.afterRead = () => (edit.reads === 1 ? Effect.sleep("50 millis") : Effect.void)
+      // Every read is slow, so both calls are between reading and writing at once unless the lock keeps one of them out.
+      edit.afterRead = () => Effect.sleep("50 millis")
       return Effect.promise(() => fs.writeFile(target, "one\ntwo\n")).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
@@ -708,7 +855,8 @@ describe("EditTool", () => {
     withTempDir((tmp) => {
       const edit = makeEditFixture()
       const target = path.join(tmp.path, "concurrent.txt")
-      edit.afterRead = () => (edit.reads === 1 ? Effect.promise(() => fs.writeFile(target, "newer\n")) : Effect.void)
+      // The first read is validate's. The file changes after the one that `execute` matched on.
+      edit.afterRead = () => (edit.reads === 2 ? Effect.promise(() => fs.writeFile(target, "newer\n")) : Effect.void)
       return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
@@ -725,4 +873,120 @@ describe("EditTool", () => {
       )
     }),
   )
+
+  it.live("execute decides when the content changes after validate", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "concurrent.txt")
+      // The first read is validate's, and it matched. The file changes before `execute` reads it.
+      edit.afterRead = () => (edit.reads === 1 ? Effect.promise(() => fs.writeFile(target, "newer\n")) : Effect.void)
+      return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(registry, call({ path: "concurrent.txt", oldString: "before", newString: "after" })),
+          ),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "error", error: { type: "edit.no-match" } })
+            expect(edit.reads).toBe(2)
+            expect(edit.assertions).toEqual([])
+            expect(edit.writes).toEqual([])
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("newer\n")
+          }),
+        ),
+      )
+    }),
+  )
+
+  // A file outside the Location is not read until its folder has been approved, and an edit that cannot work then fails
+  // before anyone is asked to approve it.
+  for (const item of [
+    {
+      name: "is refused",
+      deny: "external_directory",
+      result: () => ({ type: "permission.rejected", message: "Permission denied: external_directory" }),
+      reads: 0,
+    },
+    {
+      name: "is allowed",
+      deny: undefined,
+      result: (external: string) => ({
+        type: "edit.no-match",
+        message: `Could not find oldString in ${external}. It must match exactly, including whitespace and indentation.`,
+      }),
+      reads: 1,
+    },
+  ])
+    it.live(`asks about the folder of an external file before its content when the approval ${item.name}`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        ([active, outside]) =>
+          Effect.gen(function* () {
+            const external = path.join(outside.path, "external.txt")
+            yield* Effect.promise(() => fs.writeFile(external, "before"))
+            const edit = makeEditFixture()
+            edit.denyAction = item.deny
+            const input = { path: external, oldString: "missing", newString: "after" }
+            const { settled, validated } = yield* withTool(active.path, edit, (registry) =>
+              Effect.gen(function* () {
+                // `validate` has nothing to say about it, and has not looked at it.
+                const validated = yield* validateEdit(registry, input).pipe(Effect.exit)
+                expect(edit.reads).toBe(0)
+                expect(edit.assertions).toEqual([])
+                return { validated, settled: yield* executeTool(registry, call(input)) }
+              }),
+            )
+            expect(validated).toEqual(Exit.void)
+            expect(settled).toEqual({ status: "error", error: item.result(external) })
+            // The approval is the only question, and the content is not read before it.
+            expect(edit.assertions.map((assertion) => assertion.action)).toEqual(["external_directory"])
+            expect(edit.reads).toBe(item.reads)
+            expect(edit.writes).toEqual([])
+            expect(yield* Effect.promise(() => fs.readFile(external, "utf8"))).toBe("before")
+          }),
+        ([active, outside]) =>
+          Effect.promise(() =>
+            Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+          ),
+      ),
+    )
+
+  // A link in a project that is not trusted leads out of it, and what it leads to is outside like any other path. The
+  // link is the repository's own, so `validate` must not read through it before the folder is approved. The trusted
+  // project is the control: there the same link is the project's own and the content is checked at once.
+  for (const item of [
+    { project: "untrusted", untrusted: true, actions: ["external_directory"], reads: 0, type: "permission.rejected" },
+    { project: "trusted", untrusted: false, actions: [], reads: 1, type: "edit.no-match" },
+  ])
+    it.live(`reads a file behind a link only when the link is the project's own, in a ${item.project} project`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        ([active, outside]) =>
+          Effect.gen(function* () {
+            const target = path.join(outside.path, "notes.md")
+            yield* Effect.promise(async () => {
+              await fs.writeFile(target, "before")
+              await fs.symlink(outside.path, path.join(active.path, "docs"), "junction")
+            })
+            const edit = makeEditFixture()
+            edit.denyAction = "external_directory"
+            const settled = yield* withTool(
+              active.path,
+              edit,
+              (registry) =>
+                executeTool(registry, call({ path: "docs/notes.md", oldString: "missing", newString: "after" })),
+              { untrusted: item.untrusted },
+            )
+            expect(settled).toMatchObject({ status: "error", error: { type: item.type } })
+            expect(edit.assertions.map((assertion) => assertion.action)).toEqual(item.actions)
+            expect(edit.reads).toBe(item.reads)
+            expect(edit.writes).toEqual([])
+          }),
+        ([active, outside]) =>
+          Effect.promise(() =>
+            Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+          ),
+      ),
+    )
 })

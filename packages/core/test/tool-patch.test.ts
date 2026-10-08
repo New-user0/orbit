@@ -102,8 +102,10 @@ const reset = () => {
 
 const withTool = <A, E, R>(
   directory: string,
-  body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
+  body: (registry: Tool.Interface) => Effect.Effect<A, E, R | FileLedger.Service>,
   projectDirectory = directory,
+  // The permissive ledger allows every change. The real one asks that the session has read the file.
+  ledger: "permissive" | "real" = "permissive",
 ) => {
   const activeLocation = Layer.succeed(
     Location.Service,
@@ -115,32 +117,37 @@ const withTool = <A, E, R>(
     return yield* body(yield* Tool.Service)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, patchToolNode]), [
-        FileLedger.node.replace(FileLedger.permissiveLayer),
-        Environment.node.replace(
-          transformEnvironmentFiles((files) => ({
-            read: (target, range) =>
-              Effect.sync(() => {
-                if (!editApproved) readsBeforeEditApproval++
-              }).pipe(Effect.andThen(files.read(target, range))),
-            remove: (target) => {
-              if (failRemoveTarget && path.basename(target) === failRemoveTarget)
-                return Effect.die("forced remove failure")
-              if (failRemoveErrorTarget && path.basename(target) === failRemoveErrorTarget)
-                return Effect.fail(new Environment.Failed({ path: target, cause: new Error("forced remove failure") }))
-              return files.remove(target)
-            },
-            write: (target, content) => {
-              if (failWriteTarget && path.basename(target) === failWriteTarget)
-                return Effect.fail(new Environment.Failed({ path: target, cause: new Error("forced write failure") }))
-              return files.write(target, content)
-            },
-          })),
-        ),
-        Location.node.replace(activeLocation),
-        Formatter.node.replace(formatter),
-        Permission.node.replace(permission),
-      ]),
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, FileLedger.node, patchToolNode]),
+        [
+          ...(ledger === "real" ? [] : [FileLedger.node.replace(FileLedger.permissiveLayer)]),
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              read: (target, range) =>
+                Effect.sync(() => {
+                  if (!editApproved) readsBeforeEditApproval++
+                }).pipe(Effect.andThen(files.read(target, range))),
+              remove: (target) => {
+                if (failRemoveTarget && path.basename(target) === failRemoveTarget)
+                  return Effect.die("forced remove failure")
+                if (failRemoveErrorTarget && path.basename(target) === failRemoveErrorTarget)
+                  return Effect.fail(
+                    new Environment.Failed({ path: target, cause: new Error("forced remove failure") }),
+                  )
+                return files.remove(target)
+              },
+              write: (target, content) => {
+                if (failWriteTarget && path.basename(target) === failWriteTarget)
+                  return Effect.fail(new Environment.Failed({ path: target, cause: new Error("forced write failure") }))
+                return files.write(target, content)
+              },
+            })),
+          ),
+          Location.node.replace(activeLocation),
+          Formatter.node.replace(formatter),
+          Permission.node.replace(permission),
+        ],
+      ),
     ),
   )
 }
@@ -1266,6 +1273,50 @@ describe("PatchTool", () => {
                 expect(yield* exists(first)).toBe(false)
                 expect(yield* exists(second)).toBe(true)
               }),
+            ),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("names a file the session has not read, and one that changed since, with the ledger's codes", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        const target = path.join(tmp.path, "ledger.txt")
+        return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+          Effect.andThen(
+            withTool(
+              tmp.path,
+              (registry) =>
+                Effect.gen(function* () {
+                  const patch = "*** Begin Patch\n*** Update File: ledger.txt\n@@\n-before\n+after\n*** End Patch"
+                  expect(yield* executeTool(registry, call(patch))).toEqual({
+                    status: "error",
+                    error: {
+                      type: "file.unread",
+                      message: "ledger.txt has not been read in this session. Read it before changing it.",
+                    },
+                  })
+
+                  yield* (yield* FileLedger.Service).record(sessionID, target)
+                  const later = new Date(Date.now() + 60_000)
+                  yield* Effect.promise(() => fs.utimes(target, later, later))
+                  expect(yield* executeTool(registry, call(patch))).toEqual({
+                    status: "error",
+                    error: {
+                      type: "file.stale",
+                      message: "ledger.txt changed since it was last read. Read it again before changing it.",
+                    },
+                  })
+                  expect(assertions).toEqual([])
+                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before\n")
+                }),
+              tmp.path,
+              "real",
             ),
           ),
         )

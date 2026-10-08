@@ -280,10 +280,19 @@ export function fromPromise(plugin: Plugin) {
           }
         }
 
+        const promiseValidator =
+          (validate: NonNullable<Tool.Info["validate"]>): NonNullable<Info["validate"]> =>
+          (input, context) =>
+            Effect.runPromiseWith(runtime)(
+              validate(input, { ...context, progress: (update) => Effect.promise(() => context.progress(update)) }),
+              { signal: context.signal },
+            )
+
         const promiseTool = <T extends Tool.Info>(tool: T) => ({
           ...tool,
           execute: promiseExecutor(tool.execute),
           traits: promiseTraits(tool.traits),
+          ...(tool.validate === undefined ? {} : { validate: promiseValidator(tool.validate) }),
         })
 
         const adaptApiMethod = <PromiseMethod>(
@@ -507,6 +516,7 @@ export function fromPromise(plugin: Plugin) {
                         ...tool,
                         execute: (input, context) => executePromiseTool(tool, input, context),
                         traits: effectTraits(tool.traits),
+                        validate: effectValidate(tool.validate),
                       }),
                     update: (id, update) =>
                       editor.update(id, (tool) => {
@@ -516,6 +526,7 @@ export function fromPromise(plugin: Plugin) {
                           output: value.output,
                           options: value.options,
                           traits: effectTraits(value.traits),
+                          validate: effectValidate(value.validate),
                           execute: (input: Parameters<Info["execute"]>[0], context: Tool.Context) =>
                             executePromiseTool(value, input, context),
                         })
@@ -656,6 +667,26 @@ const effectTraits = (traits: Info["traits"]): Tool.Info["traits"] => {
     ...(concurrencySafe === undefined ? {} : { concurrencySafe: effectPredicate(concurrencySafe) }),
     ...(destructive === undefined ? {} : { destructive: effectPredicate(destructive) }),
   }
+}
+
+// A throw or a rejection refuses the call. The runtime gives a failure that names no code the validation code. A value
+// that is not a function goes to the registry as it is, which refuses the tool with one log line, because a plugin is not
+// bound by the types and a check that cannot run must not register as no check.
+const effectValidate = (validate: Info["validate"]): Tool.Info["validate"] => {
+  if (typeof validate !== "function") return validate
+  return (input, context) =>
+    Effect.tryPromise({
+      try: async (signal) =>
+        validate(input, {
+          ...context,
+          signal,
+          progress: (update) => Effect.runPromise(context.progress(update), { signal }),
+        }),
+      catch: (cause) =>
+        cause instanceof Tool.Error
+          ? cause
+          : new Tool.Error({ message: cause instanceof Error ? cause.message : String(cause) }),
+    })
 }
 
 const executePromiseTool = (tool: Info, input: any, context: Tool.Context) =>

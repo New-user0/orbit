@@ -87,7 +87,10 @@ export const make = Effect.gen(function* () {
     const interruptTools = Effect.suspend(() => Fiber.interruptAll(toolRuns.map((run) => run.fiber)))
     const executeTool = (call: ToolCall) => {
       if (input.prepared.request.toolChoice?.type === "none")
-        return new Tool.Error({ message: "Tools are disabled after the maximum agent steps" })
+        return new Tool.Error({
+          message: "Tools are disabled after the maximum agent steps",
+          code: Tool.ErrorCode.Disabled,
+        })
       return input.prepared.executeTool({
         sessionID: input.sessionID,
         agent: input.agent,

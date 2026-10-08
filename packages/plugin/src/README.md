@@ -172,6 +172,32 @@ broke. Only `readOnly` may relax a permission decision, and a failing predicate 
 with invalid traits, such as an empty `displayName`, a `maxResultChars` that is not positive or traits that are not an
 object, is skipped with a log line, and the tools beside it still register.
 
+A tool can also refuse a call before it asks anyone about it. `validate` receives the decoded input and the same context
+as `execute`. It runs after the `execute.before` hooks and before `execute`, so a call that it refuses never reaches the
+tool's own permission requests. Throw to refuse, with a `Tool.Error` that carries a `code`, so a client can tell the
+failure apart without reading the message. `Tool.ErrorCode` lists the codes that Orbit uses for its own failures, and any
+other string is yours to define.
+
+```ts
+import { Tool } from "@orbit/sdk"
+
+tools.add({
+  name: "move",
+  description: "Move a file",
+  input: Schema.Struct({ from: Schema.String, to: Schema.String }),
+  validate: async ({ from }) => {
+    if (!(await exists(from))) throw new Tool.Error({ message: `No such file: ${from}`, code: "move.not-found" })
+  },
+  execute: async ({ from, to }) => ({ content: await move(from, to) }),
+})
+```
+
+A `Tool.Error` without a `code`, and anything else that `validate` throws or rejects with, is reported as
+`tool.validation` with its message. A call that `validate` refuses reaches the model and the clients with the code as its
+error `type`. `validate` must not ask for permission or change anything, and what it checked can change before `execute`
+runs, so `execute` should check again whatever it relies on. A tool whose `validate` is not a function is skipped with a
+log line, like a tool with invalid traits.
+
 ## Reloading A Domain
 
 When data captured by a transform changes, reload the affected domain:

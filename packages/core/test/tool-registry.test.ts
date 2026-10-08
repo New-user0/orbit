@@ -6,13 +6,14 @@ import { Image } from "@orbit/core/image"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Session } from "@orbit/core/session"
 import { SessionMessage } from "@orbit/core/session/message"
+import { toSessionError } from "@orbit/core/session/to-session-error"
 import { State } from "@orbit/core/state"
 import { Tool } from "@orbit/core/tool"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info } from "@orbit/schema/tool"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { codeModeListings, executeTool, toolDefinitions } from "./lib/tool"
-import { Deferred, Effect, Exit, Fiber, Layer, Logger, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
+import { codeModeListings, executeTool, invalidValidateProblem, invalidValidates, toolDefinitions } from "./lib/tool"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
 import { z } from "zod"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
@@ -69,6 +70,19 @@ const constant = (text: string): Info => ({
   input: Schema.Struct({ text: Schema.String }),
   output: Schema.Struct({ text: Schema.String }),
   execute: () => Effect.succeed({ output: { text }, content: text }),
+})
+
+// A tool that reports each step it takes, and whose read-only trait depends on its input.
+const checked = (steps: string[]): Info => ({
+  name: "checked",
+  description: "Checked before it runs",
+  input: Schema.Struct({ text: Schema.String }),
+  output: Schema.Struct({ text: Schema.String }),
+  traits: { readOnly: (input: { readonly text: string }) => input.text === "rewritten" },
+  validate: (input, context) =>
+    Effect.sync(() => void steps.push(`validate ${input.text} readOnly:${context.traits.readOnly}`)),
+  execute: ({ text }) =>
+    Effect.sync(() => void steps.push(`execute ${text}`)).pipe(Effect.as({ output: { text }, content: text })),
 })
 
 const transform = (service: Tool.Interface, tools: Readonly<Record<string, Info>>, options?: Tool.Options) =>
@@ -808,7 +822,7 @@ describe("Tool", () => {
       ).toEqual({
         status: "error",
         error: {
-          type: "tool.execution",
+          type: "tool.unknown",
           message: 'No tool named "missing" is currently available. Please use a tool from the available tool list.',
         },
       })
@@ -931,6 +945,221 @@ describe("Tool", () => {
       expect(rewrites).toEqual(["classified"])
       expect(contexts.map((context) => [context.traits.readOnly, context.traits.destructive])).toEqual([[true, false]])
       expect(answered).toEqual([{ text: "risky" }, { text: "safe" }])
+    }),
+  )
+
+  it.effect("runs validate on the input an execute.before hook rewrote, with the call's traits, before execute", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const hooks = yield* PluginHooks.Service
+      const steps: string[] = []
+      yield* transform(service, { checked: checked(steps) }, { codemode: false })
+      yield* hooks.register("tool", "execute.before", (event) =>
+        Effect.sync(() => {
+          steps.push("hook")
+          event.input = { text: "rewritten" }
+        }),
+      )
+
+      const snapshot = yield* service.snapshot()
+      yield* snapshot.execute(call("checked"))
+      expect(steps).toEqual(["hook", "validate rewritten readOnly:true", "execute rewritten"])
+    }),
+  )
+
+  it.effect("runs validate for a Code Mode inner call", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const steps: string[] = []
+      yield* transform(service, { checked: checked(steps) })
+
+      const snapshot = yield* service.snapshot()
+      yield* snapshot.execute({
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "call-inner-validate",
+          name: "execute",
+          input: { code: `return await tools.checked({ text: "rewritten" })` },
+        },
+      })
+      expect(steps).toEqual(["validate rewritten readOnly:true", "execute rewritten"])
+    }),
+  )
+
+  class ForeignFailure extends Schema.TaggedError<ForeignFailure>()("Plugin.ForeignFailure", {
+    message: Schema.String,
+  }) {}
+  for (const [name, failure, expected, metadata] of [
+    [
+      "a Tool.Error with a code",
+      new Tool.Error({ message: "Not today.", code: "acme.not-today", metadata: { seen: true } }),
+      { type: "acme.not-today", message: "Not today." },
+      { seen: true },
+    ],
+    [
+      "a Tool.Error without a code",
+      new Tool.Error({ message: "Not valid.", metadata: { seen: true } }),
+      { type: "tool.validation", message: "Not valid." },
+      { seen: true },
+    ],
+    [
+      "a Tool.Error without a code that wraps another error",
+      new Tool.Error({ message: "Wrapped.", error: new Error("inner") }),
+      { type: "tool.validation", message: "Wrapped." },
+      undefined,
+    ],
+    [
+      "a failure that is not a Tool.Error",
+      new ForeignFailure({ message: "transport died" }),
+      { type: "tool.validation", message: "transport died" },
+      undefined,
+    ],
+    ["a failure that is not an error", "plain text", { type: "tool.validation", message: "plain text" }, undefined],
+  ] as const)
+    it.effect(`refuses the call when validate fails with ${name}, and runs nothing after it`, () =>
+      Effect.gen(function* () {
+        const service = yield* Tool.Service
+        const steps: string[] = []
+        yield* transform(
+          service,
+          { checked: { ...checked(steps), validate: () => Effect.fail(failure as never) } },
+          { codemode: false },
+        )
+
+        const error = yield* service.snapshot().pipe(
+          Effect.flatMap((snapshot) => snapshot.execute(call("checked"))),
+          Effect.flip,
+        )
+        expect(toSessionError(error)).toEqual(expected)
+        expect(error.metadata).toEqual(metadata)
+        expect(steps).toEqual([])
+      }),
+    )
+
+  const decline = new Permission.DeclinedError()
+  for (const [name, validate, ended] of [
+    ["an interrupt", () => Effect.interrupt, (exit: Exit.Exit<unknown, unknown>) => Exit.hasInterrupts(exit)],
+    [
+      "a defect",
+      () => Effect.die("validate defect"),
+      (exit: Exit.Exit<unknown, unknown>) => Exit.isFailure(exit) && exit.cause.toString().includes("validate defect"),
+    ],
+    [
+      "a decline",
+      () => Effect.die(decline),
+      (exit: Exit.Exit<unknown, unknown>) =>
+        Exit.isFailure(exit) &&
+        exit.cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect === decline),
+    ],
+  ] as const)
+    it.effect(`leaves ${name} in validate as it is, and runs nothing after it`, () =>
+      Effect.gen(function* () {
+        const service = yield* Tool.Service
+        const steps: string[] = []
+        yield* transform(service, { checked: { ...checked(steps), validate } }, { codemode: false })
+
+        const exit = yield* service.snapshot().pipe(
+          Effect.flatMap((snapshot) => snapshot.execute(call("checked"))),
+          Effect.exit,
+        )
+        expect(ended(exit)).toBe(true)
+        // A defect or an interrupt is not a failure of the call, so it did not become a validation error.
+        expect(Exit.isFailure(exit) && Cause.hasFails(exit.cause)).toBe(false)
+        expect(steps).toEqual([])
+      }),
+    )
+
+  it.effect("names a call to a tool that was not offered for the request tool.unavailable", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(service, { echo: make() }, { codemode: false })
+
+      const snapshot = yield* service.snapshot()
+      const error = yield* snapshot.execute({ ...call("echo"), definitions: new Map() }).pipe(Effect.flip)
+      expect(toSessionError(error)).toEqual({
+        type: "tool.unavailable",
+        message: "Tool is not available for this request: echo",
+      })
+    }),
+  )
+
+  for (const [name, validate] of invalidValidates) {
+    it.effect(`logs and skips a tool with ${name}, and keeps its neighbours`, () => {
+      const output: unknown[] = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        output.push(entry.message)
+      })
+      return Effect.gen(function* () {
+        const service = yield* Tool.Service
+        yield* service.transform((editor) => {
+          editor.add({ ...checked([]), name: "healthy", options: { codemode: false } })
+          editor.add({ ...checked([]), name: "broken", validate, options: { codemode: false } } as unknown as Info)
+        })
+
+        expect(output).toEqual([
+          [
+            "Skipping invalid tool registration",
+            { name: "broken", namespace: undefined, error: `Invalid tool validate broken: ${invalidValidateProblem}` },
+          ],
+        ])
+        const snapshot = yield* service.snapshot()
+        expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["healthy", "execute"])
+      }).pipe(Effect.provide(Logger.layer([logger])))
+    })
+
+    it.effect(`keeps the earlier definition when an update leaves ${name}`, () => {
+      const output: unknown[] = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        output.push(entry.message)
+      })
+      return Effect.gen(function* () {
+        const service = yield* Tool.Service
+        const steps: string[] = []
+        yield* transform(service, { checked: checked(steps) }, { codemode: false })
+        yield* service.transform((editor) => {
+          editor.update("checked", (tool) => {
+            tool.description = "Updated"
+            Object.assign(tool, { validate })
+          })
+        })
+
+        expect(output).toEqual([
+          [
+            "Skipping invalid tool registration",
+            {
+              name: "checked",
+              namespace: undefined,
+              error: `Invalid tool validate checked: ${invalidValidateProblem}`,
+            },
+          ],
+        ])
+        const snapshot = yield* service.snapshot()
+        expect(snapshot.definitions.find((definition) => definition.name === "checked")?.description).toBe(
+          "Checked before it runs",
+        )
+        // The earlier definition still checks its calls.
+        yield* snapshot.execute(call("checked"))
+        expect(steps).toEqual(["validate checked readOnly:false", "execute checked"])
+      }).pipe(Effect.provide(Logger.layer([logger])))
+    })
+  }
+
+  it.effect("keeps validate when an update replaces only execute", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const steps: string[] = []
+      yield* transform(service, { checked: checked(steps) }, { codemode: false })
+      yield* service.transform((editor) =>
+        editor.update("checked", (tool) => {
+          const execute = tool.execute
+          tool.execute = (input, context) =>
+            Effect.sync(() => void steps.push("wrapped")).pipe(Effect.andThen(execute(input, context)))
+        }),
+      )
+
+      yield* (yield* service.snapshot()).execute(call("checked"))
+      expect(steps).toEqual(["validate checked readOnly:false", "wrapped", "execute checked"])
     }),
   )
 
@@ -1150,7 +1379,7 @@ describe("Tool", () => {
       ).toMatchObject({
         status: "error",
         error: {
-          type: "tool.execution",
+          type: "tool.input-invalid",
           message:
             'Invalid arguments for tool "transformed":\n- value: Expected boolean\n\nArguments provided:\n{\n  "value": "yes"\n}\n\nUpdate the arguments and call the tool again.',
         },
