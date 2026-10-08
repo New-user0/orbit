@@ -160,16 +160,25 @@ every other extension):
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
   command, starter and button that sends a prompt ends in. `send` asks the person, once per folder, before a session
   exists. The server decides and enforces; what the extension adds is the question, and it never trusts a folder on its
-  own account. So a read that fails or is late leaves the chat going and costs a log line, as it does in the terminal
-  UI. A server older than workspace trust has no such route and applies a folder's config unasked, and so does the
-  first request that names the folder, because it boots the folder's location and imports its plugins. While that is
-  so, `send` posts an error naming `orb service restart` and asks the model nothing, `models` returns nothing, and
-  choosing a model or a mode changes only the local choice; each of them waits for the first trust read before it sends
-  anything, and the only requests the server sees are the trust read and the event stream. After a grant, the folder
+  own account. So once some read has been answered, a later read that fails or is late leaves the chat going and costs
+  a log line, as it does in the terminal UI. A server older than workspace trust has no such route and applies a
+  folder's config unasked, and so does the first request that names the folder, because it boots the folder's location
+  and imports its plugins. A 404 that comes after the limit looks like no answer, so until some read has been answered,
+  with a status or with a 404, nothing that names a location goes out (`usable` in `Controller`): `models` returns
+  nothing, choosing a model or a mode on a session changes only the local choice, `outputStyle` is not written (it
+  names no folder, so the server would boot its own working folder), and `send` posts an error and creates no
+  session; while nothing has answered each of them reads again first. When the server answered 404, `send` names `orb
+  service restart`. In both states the only requests the server sees are the trust read, the event stream and the
+  reads of a session opened from history, which name no folder. After a grant, the folder
   VS Code opened is read again and must itself answer trusted: a re-read that fails or is late confirms nothing, the
   banner stays and the chat says it could not trust the folder. `orb run` stops on the same failures because it cannot
-  ask. Proof: `test/trust.test.ts`, and the table of commands and the scan of the doors in
-  `test/manifest.test.ts`.
+  ask. A withheld entry in the answer that does not fit is dropped alone (`readStatus`), so the banner and the question
+  stay. Proof: `test/trust.test.ts` ("too late", "older than workspace trust", "only fails", "costs only itself"), and
+  the table of commands and the scan of the doors in `test/manifest.test.ts`.
+- The Runs view: what `orb flow ls` and `orb flow show` print from the clone's run store is decoded once in `runs` and
+  `nodes` (`decodeRuns`, `decodeNodes`), keeping strings and finite numbers, and every string is written out with `plain`
+  before the tree shows it. Proof: `test/runs.test.ts` (the usage with control characters and a cost that is not a
+  number).
 - The folder: the question shows the project's folder that the server names, the grant is made for that folder, and it
   counts only when the answer names it and the folder VS Code opened reads as trusted too. Proof: `test/trust.test.ts`
   ("trusts the folder the server named", "takes the stricter answer", "does not call a folder trusted").
@@ -1380,7 +1389,9 @@ fixes it or asks.
   folder. No task yet.
 - **VS Code, the part that loads `vscode`.** `extension.ts`, `runs-view.ts` and the webview import `vscode` or the DOM,
   so no test loads them. What they do with trust (the banner, the status bar item, the dialog, the command and the
-  terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`, `trust.ts` and `program.ts`, which are tested. No task yet.
+  terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`,
+  `trust.ts` and `program.ts`, which are tested. That includes the refetch of the model list when the trust check starts
+  to answer after a restart of an old service. No task yet.
 - **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`

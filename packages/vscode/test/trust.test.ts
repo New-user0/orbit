@@ -349,6 +349,11 @@ function stub(routes: {
       }
       // Starting work: a session is created. It fails, which is enough to see that the chat got that far.
       if (url.pathname === "/api/session" && request.method === "POST") return new Response("no", { status: 500 })
+      // A session opened from history: reading it and its messages names no folder, so no location is booted.
+      if (url.pathname === "/api/session/ses_old" && request.method === "GET")
+        return Response.json({ data: { id: "ses_old", title: "Earlier", agent: "build" } })
+      if (url.pathname === "/api/session/ses_old/message")
+        return Response.json({ data: [], cursor: {} })
       // The event stream stays open and says nothing.
       if (url.pathname === "/api/event")
         return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "text/event-stream" } })
@@ -370,7 +375,7 @@ const answer = (extra: Record<string, unknown> = {}) =>
   Response.json({ directory: project, trusted: false, persistent: true, withheld: held, ...extra })
 const quick = { read: 300, grant: 300 }
 
-test("carries on when the server does not answer in time, after the time it is given", async () => {
+test("sends nothing, and says so, while the server has not answered the trust read in time", async () => {
   const server = stub({ get: () => new Promise<Response>(() => {}) })
   try {
     const started = performance.now()
@@ -383,12 +388,39 @@ test("carries on when the server does not answer in time, after the time it is g
     expect(limits.read).toBe(2_000)
     expect(waited).toBeGreaterThanOrEqual(1_900)
     expect(waited).toBeLessThan(6_000)
-    // The prompt went on, without a question: the server said nothing about the folder, and it is the one that decides.
-    expect(server.seen).toContain("POST /api/session")
+    // Silence may be an old server that is slow to say it has no such route, so no session was created and the person
+    // was told; no question was asked, because the server is the one that decides.
+    expect(server.seen).not.toContain("POST /api/session")
+    expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining("trust could not be reached")])
     expect(questions).toEqual([])
     expect(trusts(updates)).toEqual([])
     expect(logs(updates).length).toBeGreaterThanOrEqual(1)
     expect(logs(updates)[0]).toStartWith("could not read workspace trust")
+  } finally {
+    await server.stop()
+  }
+}, 30_000)
+
+test("asks a server whose 404 comes too late for nothing but trust and events", async () => {
+  // An old server that is busy answers its unknown route after the limit, which looks like no answer at all.
+  const server = stub({
+    get: () => new Promise<Response>((resolve) => setTimeout(() => resolve(new Response("nf", { status: 404 })), 400)),
+  })
+  try {
+    const { controller, updates } = chat(server.client, project, "trust", quick)
+    await controller.open("ses_old")
+
+    expect(await controller.models()).toEqual([])
+    await controller.select({ providerID: "test", id: "test-model", name: "Test Model" })
+    await controller.mode("plan")
+    expect(await controller.outputStyle("explanatory")).toBe(false)
+    await controller.send("hello").catch(() => undefined)
+
+    // Reading the opened session names no folder. Nothing else may go out until some read has been answered.
+    expect(new Set(server.seen)).toEqual(
+      new Set(["GET /api/location/trust", "GET /api/event", "GET /api/session/ses_old", "GET /api/session/ses_old/message"]),
+    )
+    expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining("trust could not be reached")])
   } finally {
     await server.stop()
   }
@@ -419,14 +451,19 @@ test("asks an old server for nothing but trust and events: no model list, no cho
   try {
     const { controller, updates } = chat(server.client, project, "trust", quick)
     expect((await shown(updates))?.unchecked).toBe(true)
+    // A session continued from history is the case that matters: switching its model or agent carries a location.
+    await controller.open("ses_old")
 
     expect(await controller.models()).toEqual([])
     await controller.select({ providerID: "test", id: "test-model", name: "Test Model" })
     await controller.mode("plan")
+    expect(await controller.outputStyle(null)).toBe(false)
     await controller.send("hello").catch(() => undefined)
 
     // A request that names the folder boots its location, and on such a server that imports the folder's plugins.
-    expect(new Set(server.seen)).toEqual(new Set(["GET /api/location/trust", "GET /api/event"]))
+    expect(new Set(server.seen)).toEqual(
+      new Set(["GET /api/location/trust", "GET /api/event", "GET /api/session/ses_old", "GET /api/session/ses_old/message"]),
+    )
     expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining('"hello"')])
   } finally {
     await server.stop()
@@ -461,14 +498,13 @@ test("does not take a failed re-read of the opened folder for a confirmation, an
   }
 })
 
-test("keeps going, with one line in the log, when the server fails or sends something that is not a trust status", async () => {
+test("sends nothing, with one line in the log, when the server only fails or sends something that is not a trust status", async () => {
   const bad: Array<[string, () => Response]> = [
     ["a server error", () => new Response("boom", { status: 500 })],
     ["credentials refused", () => new Response("no", { status: 401 })],
     ["text that is not JSON", () => new Response("{nope", { headers: { "content-type": "application/json" } })],
     ["JSON that is not an object", () => Response.json(["trusted"])],
     ["a status of the wrong shape", () => Response.json({ directory: project, trusted: "yes" })],
-    ["a status with an entry that does not fit", () => answer({ withheld: [...held, null] })],
   ]
   for (const [name, get] of bad) {
     const server = stub({ get })
@@ -480,15 +516,28 @@ test("keeps going, with one line in the log, when the server fails or sends some
 
       expect({ name, worked: server.seen.includes("POST /api/session"), questions, shown: trusts(updates) }).toEqual({
         name,
-        worked: true,
+        worked: false,
         questions: [],
         shown: [],
       })
+      expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining("trust could not be reached")])
       expect(logs(updates).length).toBeGreaterThanOrEqual(1)
       for (const line of logs(updates)) expect(line).toStartWith("could not read workspace trust")
     } finally {
       await server.stop()
     }
+  }
+})
+
+test("a withheld entry that does not fit costs only itself: the banner and the question stay", async () => {
+  const server = stub({ get: () => answer({ withheld: [null, ...held, { path: 7, kinds: [] }] }) })
+  try {
+    const { updates } = chat(server.client, project, "later", quick)
+
+    expect((await shown(updates))?.trust?.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+    expect(logs(updates)).toEqual([])
+  } finally {
+    await server.stop()
   }
 })
 

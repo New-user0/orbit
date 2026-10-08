@@ -33,23 +33,25 @@ export interface TrustGrant {
 }
 
 /**
- * Whether the answer has the shape of a trust status. The client hands over whatever the server sent, so it is checked
- * here once, and an answer that does not fit is no answer at all.
+ * The trust status in whatever the server sent, or undefined when it has not the shape of one. The client hands over
+ * what arrived, so it is checked here once. A withheld entry that does not fit costs only itself: the server still
+ * withholds it, and the rest of the answer stands.
  */
-export function isStatus(value: unknown): value is TrustStatus {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "directory" in value &&
-    typeof value.directory === "string" &&
-    "trusted" in value &&
-    typeof value.trusted === "boolean" &&
-    "persistent" in value &&
-    typeof value.persistent === "boolean" &&
-    "withheld" in value &&
-    Array.isArray(value.withheld) &&
-    value.withheld.every(isWithheld)
+export function readStatus(value: unknown): TrustStatus | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("directory" in value) ||
+    typeof value.directory !== "string" ||
+    !("trusted" in value) ||
+    typeof value.trusted !== "boolean" ||
+    !("persistent" in value) ||
+    typeof value.persistent !== "boolean" ||
+    !("withheld" in value) ||
+    !Array.isArray(value.withheld)
   )
+    return undefined
+  return { ...(value as TrustStatus), withheld: value.withheld.filter(isWithheld) }
 }
 
 /**

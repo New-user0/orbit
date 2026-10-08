@@ -871,8 +871,7 @@ The extension could not trust a folder, and it started whatever `orbit.executabl
 - **The question.** The extension asks the server whether the folder its chat works in is trusted (see "A project's
   config waits for its folder to be trusted" above) when the chat starts, whenever the server reports a grant, a revoke,
   a change of config or a new connection, and before each message. While the folder is untrusted and holds something
-  of its own back, a banner
-  above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit · untrusted" item in the status
+  of its own back, a banner above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit · untrusted" item in the status
   bar says so too, and **Orbit: Trust This Folder…** (offered only then) asks. Each of the three opens a dialog with
   **Trust this folder** and **Not now**, and closing the dialog is "Not now". The first message in such a folder asks
   before a session exists or the model is asked anything, once per folder until the window is reloaded: "Not now" lets the
@@ -887,13 +886,17 @@ The extension could not trust a folder, and it started whatever `orbit.executabl
   goes on as after "Not now", and says so.
   Config in a folder above the project is named, with no command to trust that folder, because a grant always goes to
   the project's folder and that is not always the folder that holds the config.
-- **When the server cannot say.** Each read of the answer waits two seconds, and a grant ten. A server that does not
-  answer in time, fails or sends something that is not a trust status leaves the last answer in place with a line in the
-  Orbit output channel, and the chat goes on: the server applies the same rules whether the extension asked or not. A
-  server older than workspace trust has no such route and would apply the folder's hooks and servers unasked, so the
-  setup list says that trust was not checked, and nothing else is sent for the folder until then: a message is not
-  sent (the chat says to run `orb service restart`), the model list stays empty, and choosing a model or a mode changes
-  only the extension's own choice.
+- **When the server cannot say.** Each read of the answer waits two seconds, and a grant ten. Once the server has
+  answered, a read that does not come in time, fails or sends something that is not a trust status leaves the last
+  answer in place with a line in the Orbit output channel, and the chat goes on: the server applies the same rules
+  whether the extension asked or not. A withheld entry that does not fit is left out alone. A server older than
+  workspace trust has no such route and would apply the folder's hooks and servers unasked, and one that has not
+  answered at all may be such a server, so nothing that names the folder is sent until some read has been answered.
+  A message is not sent and no session is created (the chat says the server's trust could not be reached, or, when the
+  server answered that it has no such route, to run `orb service restart`), the model list stays empty, the output
+  style is not written, and choosing a model or a mode changes only the extension's own choice. After the service is
+  restarted the model list is fetched again without reloading the chat. The Runs view writes out the text of a run
+  store that a clone ships, and ignores usage figures that are not numbers.
 - **The program.** `orbit.executable` now has machine scope, so only your user settings, or those of the remote machine,
   can set it; a workspace's or a folder's value is ignored. The extension also declares that it does not support
   untrusted workspaces, so it stays off in VS Code's Restricted Mode until you trust the workspace in VS Code, which is a

@@ -41,7 +41,7 @@ test("every command the extension contributes says what stands between it and wo
     "orbit.open": "opens the chat; its model list and choices wait for the first trust read and are not asked of a server that cannot say",
     "orbit.newSession": "starts nothing: clears the chat",
     "orbit.history": "starts nothing: lists this folder's sessions and replays one",
-    "orbit.outputStyle": "starts nothing: writes the output style of the user's own config",
+    "orbit.outputStyle": "writes the output style of the user's own config, which names no folder: Controller.outputStyle waits for a trust read that has been answered",
     "orbit.askSelection": "sends a prompt: Controller.send asks about trust first",
     "orbit.explainSelection": "sends a prompt: Controller.send asks about trust first",
     "orbit.fixDiagnostics": "sends a prompt: Controller.send asks about trust first",

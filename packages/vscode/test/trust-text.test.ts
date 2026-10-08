@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { TrustKind, TrustStatus } from "@orbit/client"
 import path from "node:path"
-import { aboveFolders, holdsBack, isStatus, prompt, trusted, view } from "../src/trust"
+import { aboveFolders, holdsBack, prompt, readStatus, trusted, view } from "../src/trust"
 
 // The client types a kind as the closed set the protocol knows, and the server's answer is not checked against it, so a
 // newer server, or a hostile one, can send another.
@@ -146,14 +146,22 @@ test("accepts a trust status and nothing else", () => {
     { ...untrusted, persistent: undefined },
     { ...untrusted, withheld: undefined },
     { ...untrusted, withheld: {} },
-    // One entry that does not fit costs the whole answer, because an answer that is half understood says nothing.
-    { ...untrusted, withheld: [...untrusted.withheld, null] },
-    { ...untrusted, withheld: [{ path: 7, kinds: [] }] },
-    { ...untrusted, withheld: [{ path: "a", kinds: "hooks" }] },
-    { ...untrusted, withheld: [{ path: "a", kinds: [1] }] },
-    { ...untrusted, withheld: [{ path: "a", kinds: [], directory: 7 }] },
   ]
 
-  for (const value of good) expect({ value, ok: isStatus(value) }).toEqual({ value, ok: true })
-  for (const value of bad) expect({ value, ok: isStatus(value) }).toEqual({ value, ok: false })
+  for (const value of good) expect({ value, ok: readStatus(value) !== undefined }).toEqual({ value, ok: true })
+  for (const value of bad) expect({ value, ok: readStatus(value) !== undefined }).toEqual({ value, ok: false })
+})
+
+test("drops a withheld entry that does not fit and keeps the rest of the answer", () => {
+  const odd: unknown[] = [
+    null,
+    { path: 7, kinds: [] },
+    { path: "a", kinds: "hooks" },
+    { path: "a", kinds: [1] },
+    { path: "a", kinds: [], directory: 7 },
+  ]
+
+  expect(readStatus({ ...untrusted, withheld: [odd[0], ...untrusted.withheld, ...odd.slice(1)] })?.withheld).toEqual(
+    untrusted.withheld,
+  )
 })

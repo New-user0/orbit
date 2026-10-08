@@ -7,7 +7,7 @@ import {
 } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
-import { aboveFolders, holdsBack, isStatus, trusted, view, type TrustGrant } from "./trust.js"
+import { aboveFolders, holdsBack, readStatus, trusted, view, type TrustGrant } from "./trust.js"
 
 export type Update =
   | { readonly type: "item"; readonly item: Item }
@@ -48,6 +48,9 @@ export class Controller {
   private status: TrustStatus | undefined
   // The server has no trust routes: it is older than workspace trust.
   private unchecked = false
+  // Some trust read has been answered, with a status or with a 404. Until then nothing is known about the server, and a
+  // slow 404 from an old server looks the same as no answer, so no call that boots the folder's location goes out.
+  private answered = false
   // The number of the newest read that was applied, so that a slow answer never replaces a newer one.
   private reads = 0
   private applied = 0
@@ -72,8 +75,7 @@ export class Controller {
 
   /** Models available in this folder, for the picker. */
   async models(): Promise<ReadonlyArray<Model>> {
-    await this.first
-    if (this.unchecked) return []
+    if (!(await this.usable())) return []
     const list = await this.client.model.list({ location: { directory: this.directory } })
     return list.data.map((item) => ({ providerID: item.providerID, id: item.id, name: item.name }))
   }
@@ -81,8 +83,7 @@ export class Controller {
   /** The model for the next prompt; applied to the current session too. */
   async select(model: Model) {
     this.model = model
-    await this.first
-    if (this.session && !this.unchecked)
+    if (this.session && (await this.usable()))
       await this.client.session.switchModel({
         sessionID: this.session,
         model: { providerID: model.providerID, id: model.id },
@@ -92,13 +93,18 @@ export class Controller {
   /** Build edits and runs; Plan only reads. Applied to the current session too. */
   async mode(agent: Mode) {
     this.agent = agent
-    await this.first
-    if (this.session && !this.unchecked) await this.client.session.switchAgent({ sessionID: this.session, agent })
+    if (this.session && (await this.usable())) await this.client.session.switchAgent({ sessionID: this.session, agent })
   }
 
-  /** Sets the global output style; null returns to the default. */
+  /**
+   * Sets the global output style; null returns to the default. The call names no folder, so the server answers it in its
+   * own working folder, which an old server would boot: it is made only once the server is known to be new enough.
+   * Returns false when it was not made.
+   */
   async outputStyle(style: string | null) {
+    if (!(await this.usable())) return false
     await this.client.config.update({ output_style: style })
+    return true
   }
 
   /** This folder's sessions, newest first, for the history picker. */
@@ -169,12 +175,17 @@ export class Controller {
    */
   async send(text: string) {
     await this.gate()
-    // A server older than workspace trust applies the folder's hooks and servers without asking, so nothing is sent to it.
-    if (this.unchecked)
+    // A server older than workspace trust applies the folder's hooks and servers without asking, and one that has not
+    // answered may be such a server, so nothing is sent to either.
+    if (this.unchecked || !this.answered)
       return this.update({
         type: "note",
         id: `trust:${crypto.randomUUID()}`,
-        text: "This server is older than workspace trust and cannot say whether the folder is trusted, so the message was not sent. Run `orb service restart`, then send it again: " + JSON.stringify(text),
+        text: this.unchecked
+          ? "This server is older than workspace trust and cannot say whether the folder is trusted, so the message was not sent. Run `orb service restart`, then send it again: " +
+            JSON.stringify(text)
+          : "The server's trust could not be reached, so the message was not sent. Send it again in a moment: " +
+            JSON.stringify(text),
         tone: "error",
       })
     const sessionID = this.session ?? (await this.create())
@@ -230,6 +241,14 @@ export class Controller {
     this.abort.abort()
   }
 
+  // Whether a call that boots the folder's location may go out: the server has answered a trust read, and it is new enough
+  // to have trust routes. While nothing has answered, the read is made again.
+  private async usable() {
+    await this.first
+    if (!this.answered) await this.read()
+    return this.answered && !this.unchecked
+  }
+
   // Asks about trust before the first work in a folder that holds something back and that the person has not said "not
   // now" to. The question is asked once however many prompts arrive meanwhile, and a grant that fails is reported in the
   // chat: the prompt is not lost, it goes on without what the folder holds back, as it does after "not now".
@@ -267,12 +286,13 @@ export class Controller {
   // project of the location it is given, so the location is that root, and the answer has to name the same folder.
   // Then the folder this chat works in is asked about again: both answers must say trusted, and the stricter one stands.
   private async grant(shown: TrustStatus): Promise<TrustGrant> {
-    const granted: unknown = await this.client.location.trust.update(
+    const granted = await this.client.location.trust.update(
       { location: { directory: shown.directory }, trust: true, persist: shown.persistent },
       { signal: AbortSignal.timeout(this.wait.grant) },
     )
     // Folder names are the repository's to choose, so they are written out wherever a person reads them.
-    if (!isStatus(granted) || !granted.trusted || granted.directory !== shown.directory)
+    const confirmed = readStatus(granted)
+    if (!confirmed?.trusted || confirmed.directory !== shown.directory)
       throw new Error(`The server did not trust ${plain(shown.directory)}.`)
     // Not accepted yet: the banner stays until the opened folder itself is confirmed.
     const working = await this.read(true)
@@ -280,7 +300,7 @@ export class Controller {
       throw new Error(
         `The server trusted ${plain(shown.directory)} but does not report ${plain(this.directory)} as trusted.`,
       )
-    return { directory: plain(granted.directory), persistent: granted.persistent, above: aboveFolders(granted) }
+    return { directory: plain(confirmed.directory), persistent: confirmed.persistent, above: aboveFolders(confirmed) }
   }
 
   // Asks the server whether the folder VS Code opened is trusted, and returns the answer that stands afterwards. The
@@ -296,6 +316,7 @@ export class Controller {
         (error: unknown) => ({ error }),
       )
     if ("error" in answer) {
+      if (unsupported(answer.error)) this.answered = true
       if (!unsupported(answer.error)) return this.fail(`could not read workspace trust: ${message(answer.error)}`, confirm)
       if (attempt > this.applied) {
         this.applied = attempt
@@ -305,8 +326,9 @@ export class Controller {
       }
       return this.status
     }
-    if (!isStatus(answer.status)) return this.fail("could not read workspace trust: the answer is not a trust status", confirm)
-    this.accept(answer.status, attempt)
+    const status = readStatus(answer.status)
+    if (!status) return this.fail("could not read workspace trust: the answer is not a trust status", confirm)
+    this.accept(status, attempt)
     return this.status
   }
 
@@ -317,6 +339,7 @@ export class Controller {
   }
 
   private accept(status: TrustStatus, attempt: number) {
+    this.answered = true
     if (attempt < this.applied) return
     this.applied = attempt
     this.unchecked = false

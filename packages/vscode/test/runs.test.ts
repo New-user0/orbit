@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { decide, decisionText, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
+import { decide, decisionText, decodeNodes, decodeRuns, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
 
 // `orb` from source behind a wrapper script. orb reads the working directory from PWD, which the wrapper's own `cd`
 // would change, so it hands on the directory it was called from.
@@ -90,4 +90,35 @@ test("writes out control characters that a run store holds, in labels and toolti
     expect(text).not.toContain("\u202E")
     expect(text).not.toContain("\u001b")
   }
+})
+
+test("decodes a run store's JSON once: strings and finite numbers are kept, anything else costs only itself", () => {
+  const hostile = "a\u202Eb\u001b[2Jc"
+  const items = decodeNodes({
+    nodes: [
+      {
+        id: "odd",
+        status: "succeeded",
+        attempts: 1,
+        started: 0,
+        ended: 1,
+        result: { usage: { input: hostile, output: 2, cost: hostile } },
+      },
+      { id: "loud", status: "succeeded", attempts: 1, started: 0, result: { usage: { input: 1, output: 2, cost: { a: 1 } } } },
+      { id: 7, status: "failed" },
+      null,
+      { id: "plain", status: hostile, attempts: hostile, started: hostile, error: { message: 7 }, message: 3 },
+    ],
+  }).map(nodeItem)
+
+  expect(items.map((item) => item.label)).toEqual(["odd", "loud", "plain"])
+  expect(items[0].description).toBe("2 tokens \u00B7 0s")
+  expect(items[1].description).toBe("3 tokens")
+  expect(items[2]).toMatchObject({ icon: "error", tooltip: "plain" })
+  for (const item of items)
+    for (const text of [item.label, item.description, item.tooltip]) expect(text).not.toMatch(/[\u202E\u001b]/)
+  expect(decodeNodes("nope")).toEqual([])
+  expect(decodeRuns([{ id: "r", workflow: hostile, status: hostile, updated: "x" }, "x", { id: 1 }])).toEqual([
+    { id: "r", workflow: hostile, status: "failed", updated: 0 },
+  ])
 })

@@ -37,12 +37,78 @@ export function orb(executable: string, directory: string, args: ReadonlyArray<s
   return launch(executable, args, { cwd: directory, env: { ...process.env, PWD: directory }, timeout })
 }
 
-export async function runs(executable: string, directory: string): Promise<Run[]> {
-  return JSON.parse(await orb(executable, directory, ["flow", "ls", "--format", "json"]))
+// The run store is a file a clone can ship, so what `orb flow` prints from it is decoded here once: strings and finite
+// numbers are kept, anything else is dropped, and an entry without an id costs only itself.
+export async function runs(executable: string, directory: string) {
+  return decodeRuns(JSON.parse(await orb(executable, directory, ["flow", "ls", "--format", "json"])))
 }
 
-export async function nodes(executable: string, directory: string, run: string): Promise<Node[]> {
-  return JSON.parse(await orb(executable, directory, ["flow", "show", run, "--format", "json"])).nodes
+export function decodeRuns(parsed: unknown): Run[] {
+  return list(parsed).flatMap((entry) =>
+    typeof entry.id === "string"
+      ? [
+          {
+            id: entry.id,
+            workflow: text(entry.workflow) ?? "",
+            status: status(entry.status),
+            updated: number(entry.updated) ?? 0,
+          },
+        ]
+      : [],
+  )
+}
+
+export async function nodes(executable: string, directory: string, run: string) {
+  return decodeNodes(JSON.parse(await orb(executable, directory, ["flow", "show", run, "--format", "json"])))
+}
+
+export function decodeNodes(parsed: unknown): Node[] {
+  return list(record(parsed)?.nodes).flatMap((entry) => {
+    if (typeof entry.id !== "string") return []
+    const usage = record(record(entry.result)?.usage)
+    const message = text(record(entry.error)?.message)
+    return [
+      {
+        id: entry.id,
+        status: status(entry.status),
+        attempts: number(entry.attempts) ?? 1,
+        ...(text(entry.message) === undefined ? {} : { message: text(entry.message) }),
+        ...(usage
+          ? { result: { usage: { input: number(usage.input), output: number(usage.output), cost: number(usage.cost) } } }
+          : {}),
+        ...(message === undefined ? {} : { error: { message } }),
+        started: number(entry.started) ?? 0,
+        ...(number(entry.ended) === undefined ? {} : { ended: number(entry.ended) }),
+      },
+    ]
+  })
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+}
+
+function list(value: unknown) {
+  return Array.isArray(value)
+    ? value.flatMap((entry: unknown) => {
+        const found = record(entry)
+        return found ? [found] : []
+      })
+    : []
+}
+
+function text(value: unknown) {
+  return typeof value === "string" ? value : undefined
+}
+
+function number(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function status(value: unknown): Run["status"] {
+  return value === "running" || value === "waiting" || value === "succeeded" ? value : "failed"
 }
 
 export function decide(

@@ -299,7 +299,11 @@ class Chat implements vscode.WebviewViewProvider {
       { title: "Orbit output style" },
     )
     if (!picked) return
-    await controller.outputStyle(picked.value === "default" ? null : picked.value)
+    const done = await controller.outputStyle(picked.value === "default" ? null : picked.value)
+    if (!done)
+      void vscode.window.showWarningMessage(
+        "Orbit: the output style was not changed, because the server cannot say whether the folder is trusted. Run `orb service restart` if it is old, or try again.",
+      )
   }
 
   async history() {
@@ -344,19 +348,7 @@ class Chat implements vscode.WebviewViewProvider {
         if (this.models.length > 0) this.post({ type: "models", models: this.models, selected: this.selected })
         const controller = await this.connect()
         if (!controller || this.models.length > 0) return
-        this.models = await settledModels(controller)
-        this.post({ type: "models", models: this.models, selected: this.selected })
-        // On a server that cannot say whether the folder is trusted, no models are asked for, and the setup line
-        // about trust already says why.
-        if (this.uncheckedShown) return
-        this.check({
-          ok: this.models.length > 0,
-          text:
-            this.models.length > 0
-              ? `${this.models.length} model${this.models.length === 1 ? "" : "s"} available`
-              : "No models available: run orb doctor in a terminal",
-        })
-        return
+        return this.loadModels(controller)
       }
       case "send": {
         const selection = message.selection ? this.editor.selection() : undefined
@@ -436,8 +428,27 @@ class Chat implements vscode.WebviewViewProvider {
         ok: false,
         text: "Trust not checked: this Orbit service is older than workspace trust, so it applies a folder's project config without asking. Run orb service restart.",
       })
-    else if (this.uncheckedShown) this.check({ ok: true, text: "Trust checked" })
+    else if (this.uncheckedShown) {
+      this.check({ ok: true, text: "Trust checked" })
+      // No models were asked for while the server could not say; now they are, without a reload of the chat.
+      if (this.models.length === 0 && this.controller) void this.controller.then((controller) => controller && this.loadModels(controller))
+    }
     this.uncheckedShown = update.unchecked
+  }
+
+  private async loadModels(controller: Controller) {
+    this.models = await settledModels(controller)
+    this.post({ type: "models", models: this.models, selected: this.selected })
+    // On a server that cannot say whether the folder is trusted, no models are asked for, and the setup line
+    // about trust already says why.
+    if (this.uncheckedShown) return
+    this.check({
+      ok: this.models.length > 0,
+      text:
+        this.models.length > 0
+          ? `${this.models.length} model${this.models.length === 1 ? "" : "s"} available`
+          : "No models available: run orb doctor in a terminal",
+    })
   }
 
   // One background service per machine, shared with the terminal UI; started on first use.
