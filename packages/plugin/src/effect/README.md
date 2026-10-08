@@ -125,6 +125,23 @@ yield *
   )
 ```
 
+Tool and permission hooks are told the tool names the plugin was written for. A plugin that does not say otherwise is
+told `shell`, `edit` and `write` in `tool` (`execute.before`, `execute.after`) and `action` (`permission.evaluate`),
+so a guard written before the reference names keeps matching. Declare `toolNames: "reference"` beside the `id` to be
+told `Bash`, `Edit` and `Write`, and compare with those. A plugin that compares with `Bash` and does not declare it is
+never told that name, so its guard never fires.
+
+```ts
+export default define({
+  id: "guard",
+  toolNames: "reference",
+  effect: (ctx) =>
+    ctx.tool.hook("execute.before", (event) =>
+      event.tool === "Bash" ? Effect.fail(new Tool.Error({ message: "The shell is off in this project." })) : Effect.void,
+    ),
+})
+```
+
 ## Reloading A Domain
 
 When data captured by a transform changes, reload the affected domain:

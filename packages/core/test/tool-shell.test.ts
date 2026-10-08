@@ -1506,6 +1506,30 @@ describe("ShellTool", () => {
     }
   }
 
+  // An output style is the person's own text and is appended to the base prompt before the tool is offered as PowerShell.
+  productionIt.live("rewrites the shell name in the base prompt and leaves an output style as written", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            yield* (yield* ShellSelect.Service).transform((editor) => editor.configure("powershell"))
+            const event = yield* (yield* PluginHooks.Service).trigger("session", "context", {
+              sessionID,
+              model: sessionModel,
+              system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
+              messages: [],
+              options: {},
+              agent: toolIdentity.agent,
+              tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
+            } as never)
+            expect(event.system[0]?.text).toBe("Use PowerShell for it.\n\n# Output style: Terse\nPrefer Git Bash.")
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
   it.live("exposes malformed native syntax without fallback or partial execution", () =>
     Effect.gen(function* () {
       if (isWindows) return

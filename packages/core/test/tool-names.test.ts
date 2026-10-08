@@ -137,6 +137,28 @@ describe("tool names", () => {
     expect(ToolNames.lowerInput("shell", "raw text")).toBe("raw text")
   })
 
+  // A guard that confines a call by `delete event.input.background` withdraws the field, as it did when the field was real.
+  test("deleting an old field name from the input a hook was given withdraws the current field", () => {
+    const rows: ReadonlyArray<readonly [tool: string, input: Record<string, unknown>, old: string, left: Record<string, unknown>]> = [
+      ["Bash", { command: "ls", run_in_background: true }, "background", { command: "ls" }],
+      ["Edit", { file_path: "a", old_string: "b" }, "path", { old_string: "b" }],
+      ["Write", { file_path: "a", content: "c" }, "path", { content: "c" }],
+      ["Read", { file_path: "a", limit: 2 }, "path", { limit: 2 }],
+    ]
+    for (const [tool, input, old, left] of rows) {
+      const given = ToolNames.view(tool, input) as Record<string, unknown>
+      // The control: a view the hook leaves alone lowers to what it was given.
+      expect(ToolNames.lowerInput(tool, given)).toEqual(input)
+      delete given[old]
+      expect(ToolNames.lowerInput(tool, given)).toEqual(left)
+      // A name the hook sets again after deleting it is a write, not a withdrawal.
+      const again = ToolNames.view(tool, input) as Record<string, unknown>
+      delete again[old]
+      again[old] = "x"
+      expect(Object.values(ToolNames.lowerInput(tool, again))).toContain("x")
+    }
+  })
+
   test("a record keyed by tool name answers to the old names too", () => {
     const tools = ToolNames.aliased({ Write: 1, Bash: 2, plugin_tool: 3 } as Record<string, number>)
     expect(tools.write).toBe(1)

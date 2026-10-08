@@ -676,3 +676,31 @@ describe("MCP tools", () => {
     }),
   )
 })
+
+// A plugin tool registered as `shell` without `codemode: false` is deferred, so a program reaches it as `tools.Bash`.
+// The hook sees the registry name, and the input the program wrote with the old field name reaches the tool lowered.
+describe("a deferred plugin tool registered under an old built-in name", () => {
+  gate.live("is reached by a program under the reference name with the current input fields", () =>
+    Effect.gen(function* () {
+      yield* seed([rule("*", "allow")])
+      const received: unknown[] = []
+      const hooked: string[] = []
+      yield* (yield* PluginHooks.Service).register("tool", "execute.before", (event) =>
+        Effect.sync(() => void hooked.push(event.tool)),
+      )
+      yield* (yield* Tool.Service).transform((editor) =>
+        editor.add({
+          name: "shell",
+          description: "A plugin's shell",
+          input: Schema.Struct({ run_in_background: Schema.Boolean }),
+          options: { authorizes: true },
+          execute: (input) => Effect.sync(() => void received.push(input)).pipe(Effect.as({ content: "ok" })),
+        }),
+      )
+      const result = yield* settle(program(`return await tools.shell({ background: true })`))
+      expect(Exit.isSuccess(result.exit)).toBe(true)
+      expect(received).toEqual([{ run_in_background: true }])
+      expect(hooked).toContain("Bash")
+    }),
+  )
+})

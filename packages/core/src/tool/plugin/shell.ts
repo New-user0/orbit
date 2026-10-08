@@ -17,6 +17,7 @@ import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
+import { STYLE_HEADING } from "../../plugin/output-style.js"
 import { ShellParse } from "../../shell/parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
@@ -340,7 +341,11 @@ export const AdvertisePlugin = {
           Effect.catch(() => Effect.succeed(true)),
         )
         if (custom) return
-        event.system[0] = { ...system, text: system.text.replace(/\bBash\b/g, ToolNames.powershell) }
+        // An output style is appended to this text before this runs and is the person's own words, so it stays as written.
+        const at = system.text.indexOf(STYLE_HEADING)
+        const base = at < 0 ? system.text : system.text.slice(0, at)
+        const style = at < 0 ? "" : system.text.slice(at)
+        event.system[0] = { ...system, text: base.replace(/\bBash\b/g, ToolNames.powershell) + style }
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

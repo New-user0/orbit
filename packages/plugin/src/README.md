@@ -123,6 +123,24 @@ await ctx.session.hook("retry", (event) => {
 })
 ```
 
+Tool and permission hooks are told the tool names the plugin was written for. A plugin that does not say otherwise is
+told `shell`, `edit` and `write` in `tool` (`execute.before`, `execute.after`) and `action` (`permission.evaluate`),
+so a guard written before the reference names keeps matching. Declare `toolNames: "reference"` beside the `id` to be
+told `Bash`, `Edit` and `Write`, and compare with those. A plugin that compares with `Bash` and does not declare it is
+never told that name, so its guard never fires.
+
+```ts
+export default Plugin.define({
+  id: "guard",
+  toolNames: "reference",
+  setup: async (ctx) => {
+    await ctx.tool.hook("execute.before", (event) => {
+      if (event.tool === "Bash") throw new Error("The shell is off in this project.")
+    })
+  },
+})
+```
+
 Promise tools use complete executable tool values with async executors:
 
 ```ts

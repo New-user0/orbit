@@ -311,7 +311,7 @@ const layer = Layer.effect(
       }),
       editor: (editor) => ({
         list: () => Array.from(editor.tools.values()),
-        get: (id) => editor.tools.get(id),
+        get: (id) => editor.tools.get(held(editor.tools, id)),
         namespace: (namespace) => {
           const error = namespaceError(namespace.name)
           if (error) {
@@ -334,7 +334,8 @@ const layer = Layer.effect(
             traits: tool.traits && { ...tool.traits },
           })
         },
-        update: (id, update) => {
+        update: (given, update) => {
+          const id = held(editor.tools, given)
           const current = editor.tools.get(id)
           if (!current) return
           const tool = {
@@ -355,7 +356,7 @@ const layer = Layer.effect(
           editor.tools.set(id, tool)
         },
         remove: (id) => {
-          editor.tools.delete(id)
+          editor.tools.delete(held(editor.tools, id))
         },
         web: (settings) => {
           if (settings.allowLocal !== undefined) editor.web.allowLocal = settings.allowLocal
@@ -525,6 +526,12 @@ const formatSchemaIssue = SchemaIssue.makeFormatterDefault()
 function schemaMakeError(error: unknown) {
   if (error instanceof Error && SchemaIssue.isIssue(error.cause)) return formatSchemaIssue(error.cause)
   return error instanceof Error ? error.message : String(error)
+}
+
+// A plugin written against the old names edits the registry by `shell` or `write`: an id with no exact entry is looked
+// up under its current name, and an exact entry wins, as in `ToolNames.aliased`.
+function held(tools: Map<string, unknown>, id: string) {
+  return tools.has(id) ? id : ToolNames.canonical(id)
 }
 
 function registrationError(tool: Tool.Info) {

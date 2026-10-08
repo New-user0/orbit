@@ -50,6 +50,9 @@ export const fields = {
 
 const current = new Set<string>(Object.values(tools))
 
+/** For each view `view` handed out, the current field to the old name whose accessor it defined. */
+const views = new WeakMap<object, Map<string, string>>()
+
 /**
  * What the shell tool is advertised as when the session shell is PowerShell. It is another spelling of the same action,
  * so a `Bash` or `shell` rule governs it and a `PowerShell` rule governs `Bash`, but it is not an old name: `canonical`
@@ -87,7 +90,16 @@ export function lowerInput(tool: string, input: unknown): unknown {
   const table = fieldTable(tool)
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
   const renames = new Map(Object.entries(table).map(([next, old]) => [old, next]))
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [renames.get(key) ?? key, value]))
+  // A hook that deleted an old name from the view withdrew that field: its accessor is gone, but the current field is
+  // still in the copy, so it goes too.
+  const withdrawn = new Set(
+    Array.from(views.get(input) ?? [], ([next, old]) => (Object.hasOwn(input, old) ? undefined : next)),
+  )
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter(([key]) => !withdrawn.has(key))
+      .map(([key, value]) => [renames.get(key) ?? key, value]),
+  )
 }
 
 /** The input of a current call under the old field names, for a reader written before the rename. */
@@ -132,8 +144,11 @@ export function view(tool: string, input: unknown): unknown {
   const table = fieldTable(tool)
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
   const copy: Record<string, unknown> = { ...input }
+  const defined = new Map<string, string>()
+  views.set(copy, defined)
   Object.entries(table).forEach(([next, old]) => {
     if (Object.hasOwn(copy, old)) return
+    defined.set(next, old)
     Object.defineProperty(copy, old, {
       get: () => copy[next],
       set: (value: unknown) => {
