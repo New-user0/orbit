@@ -11,6 +11,11 @@ providers, models, permissions and `orbit.json` all work exactly as they do in `
 The `orb` executable. If it is not on `PATH`, set **Orbit: Executable** (`orbit.executable`) to its full path, for
 example `D:\Project\harness\packages\cli\dist\cli-windows-x64\bin\orb.exe`.
 
+Only your **user** settings count for that setting: a workspace's `.vscode/settings.json` cannot set it, because it
+chooses the program the extension runs. The extension finds `orb` on `PATH` itself, skipping empty and relative entries,
+and starts it by its full path, so an `orb` in the folder you opened is never the one that runs. On Windows it starts a
+`.exe` or a `.com`.
+
 ## Use
 
 - **Chat:** open the Orbit icon in the activity bar. Pick a model at the top, type, and press Enter. **Stop** interrupts
@@ -26,6 +31,13 @@ example `D:\Project\harness\packages\cli\dist\cli-windows-x64\bin\orb.exe`.
   to see its nodes with status, tokens, cost and time; it updates live while a run works. On a gate waiting for a
   decision, **Approve** or **Reject** (with an optional note), then **Resume** the run. **Watch** opens
   `orb flow watch` in a terminal; **Clean Up** removes finished runs' worktrees and branches.
+- **Trust:** Orbit leaves out what a folder's own config could use to run code or reach the network, such as hooks, MCP
+  servers and plugins, until you trust the folder. In such a folder a banner above the chat lists what is left out and
+  which files hold it, and the status bar shows **Orbit · untrusted**. **Review and trust…** on the banner, the status
+  bar item and **Orbit: Trust This Folder…** open a dialog with **Trust this folder** and **Not now**. The first message
+  asks too, once per folder, before anything is sent; **Not now** sends it without the folder's config. Trust belongs to
+  the project's folder, which the dialog names, and is the same decision that `orb trust` and the terminal UI make. The
+  extension also stays off until you trust the workspace in VS Code, which is a separate decision.
 - **Orbit: New Session** starts a fresh chat. **Orbit: Open orb in Terminal** opens the full terminal UI.
 
 ## Build and install

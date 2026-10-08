@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { launch } from "./program.js"
 
 export interface Endpoint {
   readonly url: string
@@ -9,20 +9,11 @@ export interface Endpoint {
  * Start or reuse the local background service through `orb` itself, so the registration file, release channel and
  * credentials are whatever that `orb` build uses. The first start can take a while on a cold machine.
  */
-export function start(executable: string, timeout = 120_000): Promise<Endpoint> {
-  return new Promise((resolve, reject) =>
-    execFile(
-      executable,
-      ["service", "start", "--json"],
-      { timeout, windowsHide: true, maxBuffer: 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) return reject(new Error(stderr.trim() || error.message))
-        const endpoint = parse(stdout.trim().split(/\r?\n/).at(-1) ?? "")
-        if (!endpoint) return reject(new Error(`orb service start printed no endpoint: ${stdout.trim().slice(0, 200)}`))
-        resolve(endpoint)
-      },
-    ),
-  )
+export async function start(executable: string, timeout = 120_000): Promise<Endpoint> {
+  const stdout = await launch(executable, ["service", "start", "--json"], { timeout, maxBuffer: 1024 * 1024 })
+  const endpoint = parse(stdout.trim().split(/\r?\n/).at(-1) ?? "")
+  if (!endpoint) throw new Error(`orb service start printed no endpoint: ${stdout.trim().slice(0, 200)}`)
+  return endpoint
 }
 
 export function headers(endpoint: Endpoint) {
@@ -45,11 +36,7 @@ function parse(line: string): Endpoint | undefined {
 }
 
 /** The version `orb --version` prints, for the chat's setup checks. */
-export function version(executable: string): Promise<string> {
-  return new Promise((resolve, reject) =>
-    execFile(executable, ["--version"], { timeout: 30_000, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) return reject(new Error(stderr.trim() || error.message))
-      resolve((stdout.trim().split(/\r?\n/).at(-1) ?? "").replace(/^orb\s+/, ""))
-    }),
-  )
+export async function version(executable: string): Promise<string> {
+  const stdout = await launch(executable, ["--version"], { timeout: 30_000 })
+  return (stdout.trim().split(/\r?\n/).at(-1) ?? "").replace(/^orb\s+/, "")
 }

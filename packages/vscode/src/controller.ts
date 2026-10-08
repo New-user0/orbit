@@ -1,5 +1,13 @@
-import type { OrbitClient, OrbitEvent, SessionMessageInfo } from "@orbit/client"
-import type { FileChange, FormRequest, Item, Mode, Model, Todo, WorkflowAgent } from "./protocol.js"
+import {
+  ClientError,
+  type OrbitClient,
+  type OrbitEvent,
+  type SessionMessageInfo,
+  type TrustStatus,
+} from "@orbit/client"
+import { plain } from "@orbit/flow/plain"
+import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
+import { aboveFolders, holdsBack, isStatus, trusted, view, type TrustGrant } from "./trust.js"
 
 export type Update =
   | { readonly type: "item"; readonly item: Item }
@@ -7,10 +15,26 @@ export type Update =
   | { readonly type: "title"; readonly title: string }
   | { readonly type: "plan"; readonly todos: ReadonlyArray<Todo> }
   | { readonly type: "form"; readonly form: FormRequest }
+  /** The folder is untrusted and holds something back (`trust`), or is not. `unchecked`: the server cannot say. */
+  | { readonly type: "trust"; readonly trust: TrustView | undefined; readonly unchecked: boolean }
+  /** One line for the log: a trust read that failed and left the last answer standing. */
+  | { readonly type: "log"; readonly text: string }
+
+/** What the person answered when asked whether to trust the folder: "later" is "Not now", and so is closing the question. */
+export type TrustAnswer = "trust" | "later"
+
+/** How long the extension waits on the server for trust before it carries on without an answer. */
+export const limits = { read: 2_000, grant: 10_000 }
 
 /**
  * One chat in one workspace folder, driven entirely through the Orbit server API. It turns the server's event stream
  * into chat items and knows nothing about VS Code, so it runs the same in tests.
+ *
+ * Whether the folder is trusted is the server's to say. The chat asks the server before it starts any work, shows what
+ * the answer holds back, and asks the person once, through `ask`, whether to trust the folder. The folder is one value
+ * from the first read to the work: the server names the project's root in its answer, that root is what the question
+ * shows and what a grant is made for, and the work happens in the folder VS Code opened, which the server maps to the
+ * same project. `limits` is the time each wait on the server may take.
  */
 export class Controller {
   private session: string | undefined
@@ -20,13 +44,27 @@ export class Controller {
   private readonly items = new Map<string, Item>()
   private readonly owned = new Map<string, Promise<boolean>>()
   private readonly abort = new AbortController()
+  // The last trust answer. A read that fails leaves it as it was, because a dropped connection says nothing about trust.
+  private status: TrustStatus | undefined
+  // The server has no trust routes: it is older than workspace trust.
+  private unchecked = false
+  // The number of the newest read that was applied, so that a slow answer never replaces a newer one.
+  private reads = 0
+  private applied = 0
+  private timer: ReturnType<typeof setTimeout> | undefined
+  // Folders (the server's, by name) that the person answered "not now" for, until this chat is closed.
+  private readonly dismissed = new Set<string>()
+  private deciding: Promise<TrustGrant | undefined> | undefined
 
   constructor(
     private readonly client: OrbitClient,
     private readonly directory: string,
     private readonly emit: (update: Update) => void,
+    private readonly ask: (trust: TrustView) => Promise<TrustAnswer>,
+    private readonly wait = limits,
   ) {
     void this.listen()
+    void this.read()
   }
 
   /** Models available in this folder, for the picker. */
@@ -118,7 +156,12 @@ export class Controller {
     return [...page.data, ...(await this.history(sessionID, page.cursor.next))]
   }
 
+  /**
+   * Sends a prompt. Every command, starter and button that starts work in the chat ends here, so the question about
+   * trusting the folder is asked here, before a session exists and before the model is asked anything.
+   */
   async send(text: string) {
+    await this.gate()
     const sessionID = this.session ?? (await this.create())
     this.update({ type: "user", id: `user:${crypto.randomUUID()}`, text })
     this.emit({ type: "busy", busy: true })
@@ -151,6 +194,14 @@ export class Controller {
     return item?.type === "permission" ? item : undefined
   }
 
+  /**
+   * Asks the person whether to trust the folder, even if they said "not now" before, and does what they answer. Nothing
+   * is asked when the server says the folder is trusted or holds nothing back. Fails when the grant does.
+   */
+  review() {
+    return this.decision(true)
+  }
+
   /** Start over: the next prompt opens a new session. */
   reset() {
     this.session = undefined
@@ -160,7 +211,116 @@ export class Controller {
   }
 
   dispose() {
+    clearTimeout(this.timer)
     this.abort.abort()
+  }
+
+  // Asks about trust before the first work in a folder that holds something back and that the person has not said "not
+  // now" to. The question is asked once however many prompts arrive meanwhile, and a grant that fails is reported in the
+  // chat: the prompt is not lost, it goes on without what the folder holds back, as it does after "not now".
+  private async gate() {
+    const grant = await this.decision(false).catch((error: unknown) => {
+      this.update({
+        type: "note",
+        id: `trust:${crypto.randomUUID()}`,
+        text: `Could not trust the folder: ${message(error)} This chat goes on without what the folder holds back.`,
+        tone: "error",
+      })
+      return undefined
+    })
+    if (grant) this.update({ type: "note", id: `trust:${crypto.randomUUID()}`, text: trusted(grant), tone: "muted" })
+  }
+
+  private decision(forced: boolean) {
+    this.deciding ??= this.decide(forced).finally(() => (this.deciding = undefined))
+    return this.deciding
+  }
+
+  private async decide(forced: boolean) {
+    // Asked of the server now, not of the last answer: someone may have trusted the folder, or ended its trust, with
+    // `orb trust` since.
+    const status = await this.read()
+    if (!status || !holdsBack(status) || (!forced && this.dismissed.has(status.directory))) return undefined
+    if ((await this.ask(view(status, this.directory))) === "later") {
+      this.dismissed.add(status.directory)
+      return undefined
+    }
+    return this.grant(status)
+  }
+
+  // Trusts the folder that was shown, which is the project's root as the server named it. The server grants for the
+  // project of the location it is given, so the location is that root, and the answer has to name the same folder.
+  // Then the folder this chat works in is asked about again: both answers must say trusted, and the stricter one stands.
+  private async grant(shown: TrustStatus): Promise<TrustGrant> {
+    const granted: unknown = await this.client.location.trust.update(
+      { location: { directory: shown.directory }, trust: true, persist: shown.persistent },
+      { signal: AbortSignal.timeout(this.wait.grant) },
+    )
+    // Folder names are the repository's to choose, so they are written out wherever a person reads them.
+    if (!isStatus(granted) || !granted.trusted || granted.directory !== shown.directory)
+      throw new Error(`The server did not trust ${plain(shown.directory)}.`)
+    this.accept(granted, ++this.reads)
+    const working = await this.read()
+    if (!working?.trusted || working.directory !== shown.directory)
+      throw new Error(
+        `The server trusted ${plain(shown.directory)} but does not report ${plain(this.directory)} as trusted.`,
+      )
+    return { directory: plain(granted.directory), persistent: granted.persistent, above: aboveFolders(granted) }
+  }
+
+  // Asks the server whether the folder VS Code opened is trusted, and returns the answer that stands afterwards. The
+  // read is bounded, and a server that fails, answers late or sends something that is not a trust status leaves the last
+  // answer in place and costs one line in the log. A server older than workspace trust has no such route, which is
+  // reported apart, because it applies a folder's config without asking.
+  private async read() {
+    const attempt = ++this.reads
+    const answer = await this.client.location.trust
+      .get({ location: { directory: this.directory } }, { signal: AbortSignal.timeout(this.wait.read) })
+      .then(
+        (status: unknown) => ({ status }),
+        (error: unknown) => ({ error }),
+      )
+    if ("error" in answer) {
+      if (!unsupported(answer.error)) return this.fail(`could not read workspace trust: ${message(answer.error)}`)
+      if (attempt > this.applied) {
+        this.applied = attempt
+        this.unchecked = true
+        this.status = undefined
+        this.publish()
+      }
+      return this.status
+    }
+    if (!isStatus(answer.status)) return this.fail("could not read workspace trust: the answer is not a trust status")
+    this.accept(answer.status, attempt)
+    return this.status
+  }
+
+  private fail(text: string) {
+    this.emit({ type: "log", text })
+    return this.status
+  }
+
+  private accept(status: TrustStatus, attempt: number) {
+    if (attempt < this.applied) return
+    this.applied = attempt
+    this.unchecked = false
+    this.status = status
+    this.publish()
+  }
+
+  private publish() {
+    this.emit({
+      type: "trust",
+      trust: this.status && holdsBack(this.status) ? view(this.status, this.directory) : undefined,
+      unchecked: this.unchecked,
+    })
+  }
+
+  // A grant or a revoke, a reload of the config and a reconnect all change the answer, and they send several events at
+  // once, which should come to one read.
+  private schedule() {
+    clearTimeout(this.timer)
+    this.timer = setTimeout(() => void this.read(), 150)
   }
 
   private async create() {
@@ -203,6 +363,12 @@ export class Controller {
 
   private async consume() {
     for await (const event of this.client.event.subscribe({ signal: this.abort.signal })) {
+      // The answer about trust changes with a grant, here or from `orb trust`, with the files that hold things back, and
+      // when the connection is made again.
+      if (event.type === "trust.updated" || event.type === "config.updated" || event.type === "server.connected") {
+        this.schedule()
+        continue
+      }
       if (!("data" in event) || typeof event.data !== "object" || event.data === null) continue
       const sessionID =
         event.type === "form.created"
@@ -398,4 +564,16 @@ function todos(value: unknown): ReadonlyArray<Todo> | undefined {
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+// A server older than workspace trust has no trust route, and answers 404.
+function unsupported(error: unknown) {
+  return (
+    error instanceof ClientError &&
+    error.reason === "UnexpectedStatus" &&
+    typeof error.cause === "object" &&
+    error.cause !== null &&
+    "status" in error.cause &&
+    error.cause.status === 404
+  )
 }

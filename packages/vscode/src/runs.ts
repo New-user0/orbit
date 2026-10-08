@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process"
+import { launch } from "./program.js"
 
 // The Runs view reads Orbit Flow runs through the `orb flow` commands' JSON, so the extension needs no database
 // driver and always agrees with the CLI. Nothing here imports vscode, so it is tested against the real CLI.
@@ -32,18 +32,8 @@ export interface Item {
 }
 
 export function orb(executable: string, directory: string, args: ReadonlyArray<string>, timeout = 60_000) {
-  return new Promise<string>((resolve, reject) =>
-    execFile(
-      executable,
-      [...args],
-      // orb takes the working directory from PWD, which VS Code's own environment would otherwise supply.
-      { cwd: directory, env: { ...process.env, PWD: directory }, timeout, windowsHide: true },
-      (error, stdout, stderr) => {
-        if (error) return reject(new Error(stderr.trim() || error.message))
-        resolve(stdout)
-      },
-    ),
-  )
+  // orb takes the working directory from PWD, which VS Code's own environment would otherwise supply.
+  return launch(executable, args, { cwd: directory, env: { ...process.env, PWD: directory }, timeout })
 }
 
 export async function runs(executable: string, directory: string): Promise<Run[]> {

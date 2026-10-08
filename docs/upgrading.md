@@ -862,3 +862,48 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
+
+The extension could not trust a folder, and it started whatever `orbit.executable` named, a setting that a repository's
+`.vscode/settings.json` could set, with the workspace folder as its working folder.
+
+- **The question.** The extension asks the server whether the folder its chat works in is trusted (see "A project's
+  config waits for its folder to be trusted" above) when the chat starts, whenever the server reports a grant, a revoke, a
+  change of config or a new connection, and before each message. While the folder is untrusted and holds something of its own back, a banner
+  above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit · untrusted" item in the status
+  bar says so too, and **Orbit: Trust This Folder…** (offered only then) asks. Each of the three opens a dialog with
+  **Trust this folder** and **Not now**, and closing the dialog is "Not now". The first message in such a folder asks
+  before a session exists or the model is asked anything, once per folder until the window is reloaded: "Not now" lets the
+  message go on without what the folder holds back, and the banner stays. Nothing is asked in a folder that is trusted or
+  holds nothing back. A home directory or a filesystem root is offered "Trust until Orbit restarts" instead, as in the
+  terminal UI.
+- **One folder.** Trust belongs to the project's folder, which is not always the one VS Code opened: a folder inside a
+  repository, or a linked worktree, shares its project's decision. The dialog and the banner name the project's folder as
+  the server reports it, and say which folder VS Code opened when it is another. The grant is made for the project's
+  folder, and counts only when the server's answer names that folder and then reports the folder VS Code opened as
+  trusted too. If either does not, the chat does not treat the folder as trusted, goes on as after "Not now", and says so.
+  Config in a folder above the project is named, with no command to trust that folder, because a grant always goes to
+  the project's folder and that is not always the folder that holds the config.
+- **When the server cannot say.** Each read of the answer waits two seconds, and a grant ten. A server that does not
+  answer in time, fails or sends something that is not a trust status leaves the last answer in place with a line in the
+  Orbit output channel, and the chat goes on: the server applies the same rules whether the extension asked or not. A
+  server older than workspace trust has no such route, so the setup list says that trust was not checked and suggests
+  `orb service restart`.
+- **The program.** `orbit.executable` now has machine scope, so only your user settings, or those of the remote machine,
+  can set it; a workspace's or a folder's value is ignored. The extension also declares that it does not support
+  untrusted workspaces, so it stays off in VS Code's Restricted Mode until you trust the workspace in VS Code, which is a
+  decision of its own and does not trust the folder for Orbit. The extension finds `orb` on PATH itself, skipping empty
+  and relative entries, and starts it by its full path: on Windows a program started by a bare name is looked for in the
+  working folder first, so an `orb.exe` committed to a repository ran when the Runs view listed its runs. A name with a
+  directory in it that is not a full path, such as `.\orb.exe`, is refused. On Windows only a `.exe` or `.com` is started,
+  as before.
+- **Terminals.** **Open orb in Terminal** and the Runs view's terminals start that program, by its full path, as the
+  terminal's own process. **Open orb in Terminal** used to type `orb` into your shell, where `cmd.exe` would look in the
+  workspace folder first, and it left that shell open after `orb` quit. Now no shell is involved.
+
+**Affects:** VS Code users, and anyone who set `orbit.executable` in a `.vscode/settings.json` or a workspace file, which is
+now ignored. Everyone who opens a folder that holds project config sees the banner and the first question.
+
+**What to do:** choose "Trust this folder" for each repository you trust, or run `orb trust` in it. Move `orbit.executable`
+into your user settings, and give it the full path of `orb` if `orb` is not on PATH.
+

@@ -1,4 +1,5 @@
 import vscode from "vscode"
+import { find, missing } from "./program.js"
 import { decide, nodeItem, nodes, orb, runItem, runs, type Item } from "./runs.js"
 
 type Entry =
@@ -110,11 +111,14 @@ export class RunsView implements vscode.TreeDataProvider<Entry> {
     if (choice === "Resume") this.terminal(["flow", "resume", entry.run])
   }
 
-  // Long-running commands get a terminal of their own, so their progress stays visible and Ctrl+C works.
+  // Long-running commands get a terminal of their own, so their progress stays visible and Ctrl+C works. The program is
+  // the one found on PATH, by its full path: a name left to the terminal could be found in the workspace folder first.
   private terminal(args: string[]) {
+    const program = find(this.executable())
+    if (!program) return void this.fail("Could not open a terminal", new Error(missing(this.executable())))
     const terminal = vscode.window.createTerminal({
       name: `orb ${args.slice(0, 2).join(" ")}`,
-      shellPath: this.executable(),
+      shellPath: program,
       shellArgs: args,
       cwd: this.directory(),
       env: { PWD: this.directory() },

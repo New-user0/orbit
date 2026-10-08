@@ -2,12 +2,14 @@ import { Orbit } from "@orbit/client"
 import path from "node:path"
 import vscode from "vscode"
 import { ask, explain, fix, review, type Diagnostic, type Selection } from "./context.js"
-import { Controller } from "./controller.js"
+import { Controller, type TrustAnswer, type Update } from "./controller.js"
 import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
 import { proposed } from "./patch.js"
-import type { Check, FromView, Item, Mode, Model, ToView, Workspace } from "./protocol.js"
+import { configured, find, missing } from "./program.js"
+import type { Check, FromView, Item, Mode, Model, ToView, TrustView, Workspace } from "./protocol.js"
 import { RunsView } from "./runs-view.js"
+import { prompt, trusted } from "./trust.js"
 
 const scheme = "orbit-proposed"
 
@@ -59,14 +61,26 @@ export function activate(context: vscode.ExtensionContext) {
       if (!problems) return void vscode.window.showInformationMessage("Orbit: no problems in this file")
       await chat.send(fix(problems.file, problems.diagnostics))
     }),
+    vscode.commands.registerCommand("orbit.trust", async () => {
+      await chat.reveal()
+      await chat.review()
+    }),
+    // orb is the terminal's own program and not text typed into a shell: `cmd.exe` would look in this folder first for
+    // `orb`, and the folder is the workspace. The terminal UI asks about trusting the folder itself.
     vscode.commands.registerCommand("orbit.openTerminal", () => {
-      const terminal = vscode.window.createTerminal({
-        name: "Orbit",
-        cwd: directory(editor),
-        location: vscode.TerminalLocation.Editor,
-      })
-      terminal.show()
-      terminal.sendText(executable())
+      const program = find(executable())
+      if (!program) return void vscode.window.showErrorMessage(`Orbit: ${missing(executable())}`)
+      const folder = directory(editor)
+      vscode.window
+        .createTerminal({
+          name: "Orbit",
+          shellPath: program,
+          cwd: folder,
+          // orb takes the working directory from PWD, which VS Code's own environment would otherwise supply.
+          env: { PWD: folder },
+          location: vscode.TerminalLocation.Editor,
+        })
+        .show()
     }),
   )
   chat.onDiff = async (item) => {
@@ -193,7 +207,12 @@ class Chat implements vscode.WebviewViewProvider {
   private title = ""
   private plan: ToView | undefined
   private checks: ReadonlyArray<Check> = []
+  // The folder is untrusted and holds something back, or undefined. The indicator beside the status item and the banner in
+  // the chat show it, and the commands and the status item open the question.
+  private trust: TrustView | undefined
+  private uncheckedShown = false
   private readonly status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
+  private readonly untrusted = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101)
 
   readonly log = vscode.window.createOutputChannel("Orbit")
 
@@ -203,11 +222,15 @@ class Chat implements vscode.WebviewViewProvider {
   ) {
     this.status.command = "orbit.open"
     this.status.name = "Orbit"
+    this.untrusted.command = "orbit.trust"
+    this.untrusted.name = "Orbit trust"
+    this.untrusted.text = "$(workspace-untrusted) Orbit · untrusted"
     this.paint()
     this.status.show()
     context.subscriptions.push(
       this.log,
       this.status,
+      this.untrusted,
       editor.onDidChange(() => this.post({ type: "workspace", workspace: editor.workspace() })),
     )
   }
@@ -311,6 +334,7 @@ class Chat implements vscode.WebviewViewProvider {
       case "ready": {
         this.post({ type: "reset" })
         this.post({ type: "workspace", workspace: this.editor.workspace() })
+        this.post({ type: "trust", trust: this.trust })
         this.post({ type: "mode", mode: this.mode })
         if (this.title) this.post({ type: "title", title: this.title })
         if (this.plan) this.post(this.plan)
@@ -363,14 +387,61 @@ class Chat implements vscode.WebviewViewProvider {
         await (await this.controller)?.mode(message.mode)
         return
       }
+      case "trust":
+        return this.review()
     }
+  }
+
+  /**
+   * Asks whether to trust the folder, from the banner, the status bar or the command. A click on the banner only opens
+   * the question: trusting a folder is decided in the dialog, which lists what the folder holds back.
+   */
+  async review() {
+    const controller = await this.connect()
+    if (!controller) return
+    const grant = await controller.review().catch((error: unknown) => {
+      void vscode.window.showErrorMessage(
+        `Orbit: could not trust the folder: ${error instanceof Error ? error.message : String(error)}`,
+      )
+      return undefined
+    })
+    if (grant) return void vscode.window.showInformationMessage(`Orbit: ${trusted(grant)}`)
+    if (!this.trust) void vscode.window.showInformationMessage("Orbit: nothing in this folder needs a decision.")
+  }
+
+  // The question before the first message in a folder that holds something back, and every other time the person opens
+  // it. Closing the dialog, with Esc or the button, is "Not now".
+  private async askTrust(trust: TrustView): Promise<TrustAnswer> {
+    const question = prompt(trust)
+    const accept: vscode.MessageItem = { title: question.accept }
+    const later: vscode.MessageItem = { title: "Not now", isCloseAffordance: true }
+    const choice = await vscode.window.showWarningMessage(
+      question.message,
+      { modal: true, detail: question.detail },
+      accept,
+      later,
+    )
+    return choice?.title === accept.title ? "trust" : "later"
+  }
+
+  private trusting(update: Extract<Update, { type: "trust" }>) {
+    this.trust = update.trust
+    this.paintTrust()
+    this.post({ type: "trust", trust: update.trust })
+    if (update.unchecked)
+      this.check({
+        ok: false,
+        text: "Trust not checked: this Orbit service is older than workspace trust, so it applies a folder's project config without asking. Run orb service restart.",
+      })
+    else if (this.uncheckedShown) this.check({ ok: true, text: "Trust checked" })
+    this.uncheckedShown = update.unchecked
   }
 
   // One background service per machine, shared with the terminal UI; started on first use.
   private connect() {
     this.controller ??= (async () => {
       this.post({ type: "status", text: "Starting Orbit…" })
-      this.log.appendLine(`starting: ${executable()} service start --json`)
+      this.log.appendLine(`starting: ${find(executable()) ?? executable()} service start --json`)
       const found = await version(executable()).then(
         (value) => ({ ok: true, text: `orb ${value} found` }),
         (error: unknown) => ({ ok: false, text: `orb not found: ${error instanceof Error ? error.message : error}` }),
@@ -381,7 +452,9 @@ class Chat implements vscode.WebviewViewProvider {
       this.check({ ok: true, text: `Background service · ${new URL(endpoint.url).host}` })
       const client = Orbit.make({ baseUrl: endpoint.url, headers: headers(endpoint) })
       this.post({ type: "status", text: "" })
-      return new Controller(client, directory(this.editor), (update) => {
+      const apply = (update: Update) => {
+        if (update.type === "log") return this.log.appendLine(update.text)
+        if (update.type === "trust") return this.trusting(update)
         if (update.type === "busy") {
           this.busy = update.busy
           this.paint()
@@ -408,7 +481,8 @@ class Chat implements vscode.WebviewViewProvider {
         else this.items[index] = update.item
         this.paint()
         this.post(update)
-      })
+      }
+      return new Controller(client, directory(this.editor), apply, (trust) => this.askTrust(trust))
     })()
     return this.controller.catch((error: unknown) => {
       this.controller = undefined
@@ -444,6 +518,14 @@ class Chat implements vscode.WebviewViewProvider {
         : `$(circle-filled) Orbit${model ? ` · ${model.name}` : ""}`
     this.status.backgroundColor = waiting ? new vscode.ThemeColor("statusBarItem.warningBackground") : undefined
     this.status.tooltip = waiting ? "Orbit is waiting for your review" : "Open Orbit"
+  }
+
+  // The indicator shows while the folder is untrusted and holds something back, and the command is offered then only.
+  private paintTrust() {
+    void vscode.commands.executeCommand("setContext", "orbit.untrusted", this.trust !== undefined)
+    if (!this.trust) return this.untrusted.hide()
+    this.untrusted.tooltip = `Orbit is leaving out ${this.trust.summary} of ${this.trust.directory} until you trust it. Select to review.`
+    this.untrusted.show()
   }
 
   private post(message: ToView) {
@@ -489,8 +571,9 @@ function directory(editor: EditorState) {
   return (folder?.uri.fsPath ?? process.cwd()).replace(/^[a-z]:/, (drive) => drive.toUpperCase())
 }
 
+// The person's own setting. A workspace's value is never read: it would choose the program the extension runs.
 function executable() {
-  return vscode.workspace.getConfiguration("orbit").get<string>("executable") || "orb"
+  return configured(vscode.workspace.getConfiguration("orbit").inspect<string>("executable"))
 }
 
 function placement() {
