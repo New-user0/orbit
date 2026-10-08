@@ -242,6 +242,15 @@ and `steps` of every agent (so also `agents.title.model`, which `small_model` mi
 which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
 Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
 
+A workflow or suite file in an untrusted folder can no longer pick a model either. `orb flow run`, `flow resume` and
+`eval` stop, with the usual untrusted-folder message and exit 1, before any model is asked, when a YAML or JSON file sets
+a `model` on a node, a team member or a `judge`, lists `retry.fallbackModels`, sets `retry.maxAttempts`, `maxIterations`
+or `maxRounds`, or is a suite with `models`, even in a folder that holds nothing back. The message lists each field as
+written under "lets the file choose which of your models run its nodes". Before, such a file ran at once and its `model`
+replaced the `--model` you passed. `--trust` runs it once, `orb trust` trusts the folder for good, and a file that sets
+none of these keeps running without a grant. In a trusted folder nothing changes: the file's model still wins over
+`--model`. The file's own `budget` is not held, because it only lowers what a run may spend.
+
 A folder whose only config is one of these now counts as holding config back. The headless commands (`orb run` and
 the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
 trust prompt, which lists the `providers` kind.
@@ -294,8 +303,12 @@ takes the same flags from one shared definition. The flags that `orb` takes only
 `orb run` takes the others too, and keeps its own `--format` in place of `--output-format`. `orb -p --help` lists every flag a printed run accepts,
 including `--trust` and `--fork`.
 
-Like `orb run`, `orb -p` stops in an untrusted folder whose project config is held back, before anything is sent, and
-reports the refusal as a JSON result object under `--output-format json`; `--trust` runs it once.
+Unlike `orb run`, `orb -p` stops in any untrusted folder, before anything is sent, also one whose project config holds
+nothing back (a fresh clone with only an `AGENTS.md`), because the folder's instructions steer the model and the default
+rules let its tool calls run without asking. It reports the refusal as a JSON result object under `--output-format json`
+and exits 1, `--bare` included; `--trust` runs it once, and `orb trust` trusts the folder for good. Against a server
+older than workspace trust, which cannot say whether the folder is trusted, it stops as well. `orb run` and `orb loop`
+still go ahead in a folder that holds nothing back.
 
 `orb run a -- b` used to send the operands after `--` twice ("a b b"). It now sends them once.
 
@@ -1236,8 +1249,10 @@ any other way (an output limit, a content filter or an unknown reason), or the s
 and the tool does not run. After an output limit the input is recorded as failed with `tool.input-truncated` and the
 response is resumed up to three times in a row (see "A response cut off by the output limit is resumed"); otherwise it
 fails with the response's own error. A call whose arguments arrived complete is not affected, and still runs when a
-later call in the same response was cut off. A call that stopped before its first argument is not caught: it cannot be
-told from a call to a tool that takes no arguments, so it still runs with empty arguments.
+later call in the same response was cut off. A call with no argument text at all is held the same way, because a call
+cut off before its first argument token cannot be told from a call to a tool that takes no arguments: it runs with empty
+arguments once the response finishes with `tool-calls` or `stop`, and is dropped after any other finish. The cost is that
+a call with no arguments starts when the response finishes, not mid-stream. Provider-executed calls are not held.
 
 A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
 `tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
@@ -1278,12 +1293,16 @@ A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the o
 runner now checks them at the start of every model step, before the automatic compaction and the request of that step,
 and again before each retry of a step. When the turn has reached a limit, the busy period ends as failed with the
 session error type `limit.steps`, `limit.cost` or `limit.tokens`, after the tools of the last response have settled and
-with no partial response left behind.
+with no partial response left behind. A cost limit that cannot be checked is refused with `limit.cost-unknown`
+instead, as described below.
 
 Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
-compaction start without the check, and their spend counts at the next one. A subagent is checked only at the parent's
-step boundaries: it runs all its own steps between two checks, so a turn can overshoot by a whole subagent run, and a
-background subagent that is still running when a limit ends the turn keeps running. Its completion notice then wakes
+compaction start without the check, and their spend counts at the next one. A subagent also checks the cost and
+token limits of every turn above it before each of its own steps, counting what that turn has spent so far, siblings
+included, so a subagent stops with `limit.cost` or `limit.tokens` instead of overshooting by a whole run; the parent's
+step limit counts only the parent's own responses and never stops a subagent. A response is still priced after it
+arrives, so the overshoot is at most one response. A background subagent that is still running when a limit ends the turn
+keeps running, because the turn is over and no longer limits it. Its completion notice then wakes
 the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
 a cost or token limit by one response.
 
@@ -1293,15 +1312,15 @@ limited turn is finishing joins that turn, and fails at once if the limit is alr
 count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
 responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
 
-A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It fails with `limit.cost`
-when the model has no tier-less price above zero (a catalog model without a price is listed as zero), and when anything
-in the window, the Session's own or a subagent's, carries tokens with a cost of zero, a finished response carries no
-cost or no tokens, or a response failed mid-stream with no cost. So a free model cannot run under a cost limit; use a
-step or token limit for it.
+A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It is refused with
+`limit.cost-unknown`, a refusal and not a limit that was reached, when the model has no tier-less price above zero (a
+catalog model without a price is listed as zero), and when anything in the window, the Session's own or a subagent's,
+carries tokens with a cost of zero, a finished response carries no cost or no tokens, or a response failed mid-stream
+with no cost. So a free model cannot run under a cost limit; use a step or token limit for it.
 
 **Affects:** SDK and HTTP callers that send `turn` limits and clients that show session errors.
 
-**What to do:** Nothing unless you send limits. Handle the three `limit.*` error types, and give models that you run
+**What to do:** Nothing unless you send limits. Handle the four `limit.*` error types, and give models that you run
 with a cost limit a price.
 
 ### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
@@ -1468,8 +1487,8 @@ When a model response stops because it reached its output limit, Orbit now adds 
 resume where it stopped and sends the request again, up to three times in a row. Before, the turn ended with the cut-off
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
 `tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
-the next cut-off stays as it is. The count comes from the session history and starts over after any response that
-finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the
+the next cut-off stays as it is. The count comes from the session's stored messages and starts over after any response
+that finishes with `stop` or `tool-calls` and after a new message from you. A compaction does not reset it. The limit holds whether the
 cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
 `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
 no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
@@ -1560,10 +1579,36 @@ never repeated, since a repeat would run and bill the call again. The cut-off at
 note with `metadata.notice` set to `output-escalation` (and `metadata.replaces` naming that attempt) stay in the
 session's messages but are left out of every later request, token estimate, compaction summary and regenerated title, including in a fork,
 whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
-`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction empties the history
-the runner reads, so a long stretch can escalate again after one. A `session.context` hook that changes or removes the
+`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction does not end it, and
+a stretch escalates at most once however often it compacts. A `session.context` hook that changes or removes the
 output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
 
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
 
 **What to do:** nothing. Unset `output_token_cap` to avoid the extra request.
+
+### `orb run` takes limits and a fallback model, and its result says why it stopped
+
+`orb run` and `orb -p` take `--max-steps` (alias `--max-turns`), `--max-cost` (US dollars), `--max-tokens` and
+`--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
+them. A run that reaches a limit exits 1 and says which: the result object of `--format result` and `--json-schema`
+gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
+(the steps, cost and tokens of this session's own responses to the prompt, read from the stored messages when the run
+ends, so a subagent's spend is not in it; a response that failed part way adds its spend but is not a step) and
+`truncated` (the last step stopped at the output limit, even when a limit then ended the run, which also prints a
+warning). With `--format json` and `stream-json` every `error` line of a printed run carries the same
+`subtype`. A `--max-cost` that the model's missing price cannot check fails the run with the session error type
+`limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
+turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
+of a printed run. If the server does not echo the limits back, because it is an older version that drops fields it does
+not know, the run asks the server to interrupt its session and fails with a version error. That interruption does
+nothing for a session that is idle or not yet running, so on such a server the prompt can still run without its limits.
+
+Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
+now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and
+`stream-json`. Over ACP, a turn that reached a limit stops with `max_turn_requests` instead of failing, and every
+notice is sent as a `session_info_update` with `orbit/notice` in `_meta`.
+
+**Affects:** scripts that call `orb run` and read its result object or exit code, and ACP clients.
+
+**What to do:** nothing; the new fields are additive. A script that passes a limit should check `subtype`.

@@ -81,10 +81,11 @@ const toolCall = (route: string, tool: PendingTool, inputOverride?: string) => {
       providerMetadata: tool.providerMetadata,
       ...(partialInput ? { partialInput } : {}),
     })
-  // Empty input parses as `{}` and is not marked: a call cut off before its first argument token looks exactly like a
-  // call to a tool that takes no arguments.
+  // Empty input parses as `{}`, and a call cut off before its first argument token looks exactly like a call to a tool
+  // that takes no arguments (some providers stream `""` for those). Marked, so it waits for the finish: `tool-calls` or
+  // `stop` releases it with `{}`, any other finish drops it.
   return parseToolInput(route, tool.name, raw).pipe(
-    Effect.map((input) => call(input)),
+    Effect.map((input) => (raw.trim() === "" && !tool.providerExecuted ? call(input, true) : call(input))),
     Effect.catch((error) =>
       tool.providerExecuted
         ? Effect.fail(error)

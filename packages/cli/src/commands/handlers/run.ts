@@ -28,9 +28,15 @@ type HeadlessInput = {
   readonly file: ReadonlyArray<string>
   readonly title: Option.Option<string>
   readonly thinking: boolean
+  readonly maxSteps: Option.Option<number>
+  readonly maxCost: Option.Option<number>
+  readonly maxTokens: Option.Option<number>
+  readonly fallbackModel: Option.Option<string>
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
+  /** Stop in any untrusted folder, even one that holds nothing back (`orb -p`). */
+  readonly strict?: boolean
 }
 
 /**
@@ -71,7 +77,7 @@ export function headlessInput(input: HeadlessInput) {
     // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
     // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
     // script that asked for JSON gets JSON.
-    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session }).pipe(
+    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session, strict: input.strict }).pipe(
       Effect.catch((error) => Effect.succeed(errorMessage(error))),
     )
     if (stopped !== undefined) return reportRunError({ format }, stopped)
@@ -91,6 +97,10 @@ export function headlessInput(input: HeadlessInput) {
         file: [...input.file],
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,
+        maxSteps: Option.getOrUndefined(input.maxSteps),
+        maxCost: Option.getOrUndefined(input.maxCost),
+        maxTokens: Option.getOrUndefined(input.maxTokens),
+        fallbackModel: Option.getOrUndefined(input.fallbackModel),
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       }),
     )

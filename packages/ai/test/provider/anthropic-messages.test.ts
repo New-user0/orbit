@@ -1978,6 +1978,45 @@ describe("Anthropic Messages route", () => {
     })
   })
 
+  // A call cut off before its first argument token looks like a call with no arguments, so only the finish tells them apart.
+  ;(
+    [
+      ["tool_use", "tool-calls", 1],
+      ["end_turn", "stop", 1],
+      ["max_tokens", "length", 0],
+      ["refusal", "content-filter", 0],
+      ["a_reason_added_later", "unknown", 0],
+      [undefined, "unknown", 0],
+    ] as const
+  ).forEach(([stopReason, normalized, calls]) => {
+    it.effect(`${calls ? "runs" : "drops"} a call with no arguments on ${stopReason ?? "a missing stop reason"}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(writeRequest).pipe(
+          Effect.provide(
+            fixedResponse(
+              sseEvents(
+                { type: "message_start", message: { usage: { input_tokens: 5 } } },
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: { type: "tool_use", id: "call_1", name: "write" },
+                },
+                { type: "content_block_stop", index: 0 },
+                { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 8 } },
+                { type: "message_stop" },
+              ),
+            ),
+          ),
+        )
+
+        expect(response.finishReason.normalized).toBe(normalized)
+        expect(response.toolCalls).toHaveLength(calls)
+        expect(response.toolCalls.every((call) => call.partialInput === true)).toBe(true)
+        expect(response.events.filter((event) => event.type === "tool-input-end")).toHaveLength(1)
+      }),
+    )
+  })
+
   it.effect("still calls a tool that finished before the output limit cut off a later one", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(writeRequest).pipe(

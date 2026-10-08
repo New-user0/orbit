@@ -61,7 +61,8 @@ export async function evaluate(options: EvalOptions): Promise<RunResult & { read
             const started = Date.now()
             // `suiteCommands` and `suiteAgents` in load.ts list, before the run, what a task hands on here that runs a
             // command (its `checks`) or names one of the user's agents (the `agent` of its `judge`), so an option added
-            // here that does either is added there too.
+            // here that does either is added there too. `suiteModels` lists the suite's `models` and what a task hands
+            // on that picks a model or how many iterations run (`judge.model`, `maxIterations`).
             const result = await ctx.verify(`${model}.${task.id}`, {
               model,
               prompt: task.prompt,

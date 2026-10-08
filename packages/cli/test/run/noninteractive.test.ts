@@ -5,6 +5,7 @@ import {
   type JsonValue,
   type SessionMessageAssistantTool,
   type SessionMessageInfo,
+  type SessionTurnOptions,
 } from "@orbit/client/promise"
 import { EOL } from "node:os"
 import path from "node:path"
@@ -94,7 +95,7 @@ function stepFailed(message: string, messageID = "msg_assistant"): V2Event {
   }
 }
 
-function stepEnded(messageID: string, finish: "stop" | "length" | "tool-calls" = "stop"): V2Event {
+function stepEnded(messageID: string, finish: "stop" | "length" | "tool-calls" = "stop", cost = 0): V2Event {
   return {
     id: `evt_step_ended_${messageID}`,
     created: 3,
@@ -104,7 +105,7 @@ function stepEnded(messageID: string, finish: "stop" | "length" | "tool-calls" =
       sessionID: "ses_1",
       assistantMessageID: messageID,
       finish,
-      cost: 0,
+      cost,
       tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
     },
   }
@@ -216,9 +217,10 @@ function permissionAsked(action: string, resources: string[]): V2Event {
 // What the server projects for an assistant message, for a run that reads its history instead of its events.
 function assistant(
   id: string,
-  finish: "stop" | "length" | undefined,
+  finish: "stop" | "length" | "tool-calls" | "error" | undefined,
   text?: string,
   error?: { type: string; message: string },
+  spent?: { cost: number; tokens: number },
 ): SessionMessageInfo {
   return {
     id,
@@ -228,6 +230,9 @@ function assistant(
     content: text === undefined ? [] : [{ type: "text", text }],
     ...(finish ? { finish } : {}),
     ...(error ? { error } : {}),
+    ...(spent
+      ? { cost: spent.cost, tokens: { input: spent.tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+      : {}),
     time: { created: 2, completed: 3 },
   }
 }
@@ -244,7 +249,7 @@ function history(...chronological: SessionMessageInfo[]) {
   ]
 }
 
-function executionFailed(message: string): V2Event {
+function executionFailed(message: string, type = "provider.transport"): V2Event {
   return {
     id: "evt_execution_failed",
     created: 3,
@@ -252,7 +257,7 @@ function executionFailed(message: string): V2Event {
     durable: { aggregateID: "ses_1", seq: 3, version: 1 },
     data: {
       sessionID: "ses_1",
-      error: { type: "provider.transport", message },
+      error: { type, message },
     },
   }
 }
@@ -398,6 +403,9 @@ async function run(input: {
   beforeEvent?: (event: V2Event) => void | Promise<void>
   // The history is not returned until this settles.
   historyGate?: Promise<void>
+  // The limits and fallback model the prompt asks for, and whether the fake server admits them (an old one drops them).
+  options?: SessionTurnOptions
+  admit?: boolean
 }) {
   const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
   const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {} }]
@@ -454,7 +462,15 @@ async function run(input: {
     queued = true
     wake?.()
     wake = undefined
-    return ok({ id: messageID, sessionID: "ses_1", time: { created: 1 } }) as never
+    const payload = { text: "hello", ...(input.admit === false ? {} : { turn: request.turn }) }
+    return ok({
+      id: messageID,
+      sessionID: "ses_1",
+      time: { created: 1 },
+      type: "user",
+      payload,
+      delivery: "steer",
+    }) as never
   })
   await runNonInteractivePrompt({
     client: sdk,
@@ -465,6 +481,7 @@ async function run(input: {
     thinking: input.thinking ?? false,
     format: input.format ?? "default",
     jsonSchema: input.jsonSchema,
+    turn: input.options,
     auto: false,
     attached: input.attached ?? false,
     compatibility: input.compatibility,
@@ -491,11 +508,11 @@ async function record(input: Parameters<typeof run>[0] & { tty?: boolean }) {
     return true
   })
   try {
-    const error = await run(input).then(
-      () => undefined,
-      (thrown) => thrown,
+    const outcome = await run(input).then(
+      (sdk) => ({ sdk, error: undefined }),
+      (thrown) => ({ sdk: undefined, error: thrown }),
     )
-    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode, error }
+    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode, ...outcome }
   } finally {
     process.exitCode = exitCode ?? 0
     Object.defineProperty(process.stdout, "isTTY", { value: isTTY, configurable: true, writable: true })
@@ -526,7 +543,7 @@ describe("runNonInteractivePrompt", () => {
   test("result format prints one JSON object with the final answer", async () => {
     const output = await capture({ format: "result", turn: answered("All tests pass.") })
     expect(output.stdout.trim().split("\n")).toHaveLength(1)
-    expect(JSON.parse(output.stdout)).toEqual({
+    expect(JSON.parse(output.stdout)).toMatchObject({
       type: "result",
       sessionID: "ses_1",
       is_error: false,
@@ -834,7 +851,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
     expect(text.stdout).toBe(`recovered${EOL}`)
 
     const result = await capture({ format: "result", turn })
-    expect(JSON.parse(result.stdout)).toEqual({
+    expect(JSON.parse(result.stdout)).toMatchObject({
       type: "result",
       sessionID: "ses_1",
       is_error: false,
@@ -1055,7 +1072,12 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       format: "result",
       messages: history(assistant("msg_a", undefined, undefined, earlier), assistant("msg_b", "stop", "fixed")),
     })
-    expect(JSON.parse(result.stdout)).toEqual({ type: "result", sessionID: "ses_1", is_error: false, result: "fixed" })
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      type: "result",
+      sessionID: "ses_1",
+      is_error: false,
+      result: "fixed",
+    })
   })
 
   test("a failure that the history shows after the events ended is not dropped", async () => {
@@ -1108,7 +1130,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
 
     test("is joined in the answer and in the value that a JSON Schema parses", async () => {
       const result = await capture({ format: "result", turn: cut("The answer is forty-tw", "o.") })
-      expect(JSON.parse(result.stdout)).toEqual({
+      expect(JSON.parse(result.stdout)).toMatchObject({
         type: "result",
         sessionID: "ses_1",
         is_error: false,
@@ -1120,7 +1142,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
         jsonSchema: { type: "object" },
         turn: cut('{"name": "Ali', 'ce"}'),
       })
-      expect(JSON.parse(parsed.stdout)).toEqual({
+      expect(JSON.parse(parsed.stdout)).toMatchObject({
         type: "result",
         sessionID: "ses_1",
         is_error: false,
@@ -1374,7 +1396,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       "drops the replaced attempt from the answer when it reads %s",
       async (_, source) => {
         const result = await capture({ ...source, format: "result" })
-        expect(JSON.parse(result.stdout)).toEqual({
+        expect(JSON.parse(result.stdout)).toMatchObject({
           type: "result",
           sessionID: "ses_1",
           is_error: false,
@@ -1392,7 +1414,7 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       "drops the replaced attempt from the value that a JSON Schema parses when it reads %s",
       async (_, source) => {
         const result = await capture({ ...source, format: "result", jsonSchema: { type: "object" } })
-        expect(JSON.parse(result.stdout)).toEqual({
+        expect(JSON.parse(result.stdout)).toMatchObject({
           type: "result",
           sessionID: "ses_1",
           is_error: false,
@@ -1588,6 +1610,7 @@ describe("runNonInteractivePrompt output channels", () => {
     ],
     ["the label of a step", (id) => [prompted(id), stepStarted("msg_one", hostile), settled()]],
     ["a request for permission", (id) => [permissionAsked(hostile, [hostile]), prompted(id), settled()]],
+    ["the description of a notice", (id) => [prompted(id), escalation({ notice: "fallback" }, hostile), settled()]],
   ]
 
   test.each(toStderr)("writes out the text of %s on stderr", async (_, turn) => {
@@ -1628,6 +1651,11 @@ describe("runNonInteractivePrompt output channels", () => {
         "the name of a tool",
         (id) => [prompted(id), ...failingTool("msg_one", hostile, { type: "unknown", message: "no" }), settled()],
         (lines) => lines.find((line) => line.type === "tool_use").part.tool,
+      ],
+      [
+        "the description of a notice",
+        (id) => [prompted(id), escalation({ notice: "fallback" }, hostile), settled()],
+        (lines) => lines.find((line) => line.type === "notice").message,
       ],
       [
         "the message that a notice replaces",
@@ -1685,8 +1713,436 @@ reportRunError({ format: "result" }, ${JSON.stringify(hostile)}, "ses_1")`
       type: "result",
       sessionID: "ses_1",
       is_error: true,
+      subtype: "error",
       result: "",
+      usage: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+      truncated: false,
       error: hostile,
+    })
+  })
+})
+
+describe("runNonInteractivePrompt limits and results", () => {
+  const options: SessionTurnOptions = {
+    maxSteps: 2,
+    maxCost: 0.5,
+    fallbackModel: { providerID: "test", id: "backup", variant: "high" },
+  }
+  const twoSteps = (messageID: string) => [
+    prompted(messageID),
+    stepStarted("msg_one"),
+    stepEnded("msg_one", "tool-calls"),
+    stepStarted("msg_two"),
+    textEnded("msg_two", "Done."),
+    stepEnded("msg_two"),
+    settled(),
+  ]
+  const limitFailure =
+    (type: string, message = "The turn reached its limit.") =>
+    (id: string) => [
+      prompted(id),
+      stepStarted("msg_one"),
+      stepEnded("msg_one", "tool-calls", 0.75),
+      executionFailed(message, type),
+    ]
+
+  test("sends the limits and the fallback model with the prompt, and nothing when none was asked for", async () => {
+    const sdk = await run({ turn: twoSteps, options })
+    expect((sdk.session.prompt as Mock<typeof sdk.session.prompt>).mock.calls[0][0]).toMatchObject({ turn: options })
+    const plain = await run({ turn: twoSteps })
+    expect((plain.session.prompt as Mock<typeof plain.session.prompt>).mock.calls[0][0]).not.toHaveProperty("turn")
+  })
+
+  test.each(["default", "json", "result"] as const)(
+    "a server that does not echo the limits fails the run with a version error in %s",
+    async (format) => {
+      const output = await record({ turn: twoSteps, options, admit: false, format })
+      expect(output.error).toBeUndefined()
+      expect(output.exitCode).toBe(1)
+      if (format === "default") expect(output.stderr).toMatch(/older version/)
+      if (format === "json")
+        expect(events(output.stdout)[0]).toMatchObject({ type: "error", error: { type: "version-mismatch" } })
+      if (format === "result")
+        expect(JSON.parse(output.stdout)).toMatchObject({
+          is_error: true,
+          subtype: "error",
+          error: expect.stringMatching(/older version/),
+        })
+    },
+  )
+
+  test("a server that does not echo the limits has its session interrupted", async () => {
+    const output = await record({ turn: twoSteps, options, admit: false })
+    expect(output.sdk?.session.interrupt).toHaveBeenCalledTimes(1)
+    expect(output.exitCode).toBe(1)
+  })
+
+  // The two responses of `twoSteps` as the server projects them, which is where the result takes its usage from.
+  const twoStepHistory = history(
+    assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.25, tokens: 10 }),
+    assistant("msg_two", "stop", "Done.", undefined, { cost: 0.15, tokens: 5 }),
+  )
+  const oneStepHistory = (cost: number) =>
+    history(assistant("msg_one", "tool-calls", undefined, undefined, { cost, tokens: 10 }))
+
+  test.each([
+    ["limit.steps", "error_max_steps"],
+    ["limit.tokens", "error_max_tokens"],
+    ["limit.cost", "error_max_cost"],
+  ])("an execution that failed with %s gives the subtype %s and exits 1", async (type, subtype) => {
+    const output = await capture({
+      format: "result",
+      options: { maxSteps: 1, maxCost: 0.5, maxTokens: 10 },
+      turn: limitFailure(type),
+      messages: oneStepHistory(0.75),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      is_error: true,
+      subtype,
+      error: "The turn reached its limit.",
+      usage: { steps: 1, cost: 0.75 },
+    })
+    expect(output.exitCode).toBe(1)
+  })
+
+  // The server counts subagents and compaction spend too, so the root session's own spend can be below the limit.
+  test("a cost limit is reached whatever the root session's own responses cost", async () => {
+    const output = await capture({
+      format: "result",
+      options: { maxCost: 0.5 },
+      turn: limitFailure("limit.cost", "The turn reached its cost limit of $0.5 after spending $0.6100."),
+      messages: oneStepHistory(0.3),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true, subtype: "error_max_cost", usage: { cost: 0.3 } })
+  })
+
+  test("a cost limit that the server cannot count is a plain error", async () => {
+    const output = await capture({
+      format: "result",
+      options: { maxCost: 0.5 },
+      turn: (id) => [prompted(id), executionFailed("The model has no price.", "limit.cost-unknown")],
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true, subtype: "error" })
+    expect(output.exitCode).toBe(1)
+  })
+
+  test.each([
+    ["limit.steps", "error_max_steps"],
+    ["limit.cost", "error_max_cost"],
+    ["limit.cost-unknown", "error"],
+  ])("a %s failure carries the subtype %s on its error line in json and stream-json", async (type, subtype) => {
+    for (const format of ["json", "stream-json"] as const) {
+      const lines = await capture({ format, turn: limitFailure(type, "Reached it.") })
+      expect(events(lines.stdout).filter((event) => event.type === "error")).toEqual([
+        expect.objectContaining({ subtype, error: { type, message: "Reached it." } }),
+      ])
+    }
+    const text = await capture({ turn: limitFailure(type, "Reached it.") })
+    expect(text.stderr).toContain("Reached it.")
+    expect(text.exitCode).toBe(1)
+  })
+
+  test("a version error carries the subtype error in json", async () => {
+    const output = await capture({ turn: twoSteps, options, admit: false, format: "json" })
+    expect(events(output.stdout)[0]).toMatchObject({ type: "error", subtype: "error" })
+  })
+
+  test("a successful run has the subtype success and counts its steps and tokens", async () => {
+    const output = await capture({ format: "result", options, turn: twoSteps, messages: twoStepHistory })
+    expect(JSON.parse(output.stdout)).toEqual({
+      type: "result",
+      sessionID: "ses_1",
+      is_error: false,
+      subtype: "success",
+      result: "Done.",
+      usage: { steps: 2, cost: 0.4, tokens: { input: 15, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+      truncated: false,
+    })
+    expect(output.exitCode).toBe(0)
+  })
+
+  test("usage counts the responses of the history even when the events fell behind, and not a failed partial step", async () => {
+    const output = await capture({
+      format: "result",
+      turn: (id) => [prompted(id), settled()],
+      messages: history(
+        assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.2, tokens: 10 }),
+        assistant("msg_two", "error", undefined, { type: "provider.stream", message: "cut" }, { cost: 0.1, tokens: 4 }),
+        assistant("msg_three", "stop", "Done.", undefined, { cost: 0.2, tokens: 6 }),
+      ),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      subtype: "success",
+      usage: { steps: 2, cost: 0.5, tokens: { input: 20 } },
+    })
+  })
+
+  test("a final step that stopped at the output limit warns and sets truncated, and the run still succeeds", async () => {
+    const turn = (id: string) => [
+      prompted(id),
+      stepStarted("msg_one"),
+      textEnded("msg_one", "The answer is forty-tw"),
+      stepEnded("msg_one", "length"),
+      settled(),
+    ]
+    const result = await capture({ format: "result", turn })
+    expect(JSON.parse(result.stdout)).toMatchObject({ is_error: false, subtype: "success", truncated: true })
+    expect(result.exitCode).toBe(0)
+
+    const text = await capture({ turn })
+    expect(text.stderr).toContain("The answer was cut off by the output limit.")
+    expect(text.exitCode).toBe(0)
+
+    // A step that carries on from the cut is the final one, so nothing is truncated.
+    const continued = await capture({
+      turn: (id) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        textEnded("msg_one", "The answer is forty-tw"),
+        stepEnded("msg_one", "length"),
+        stepStarted("msg_two"),
+        textEnded("msg_two", "o."),
+        stepEnded("msg_two"),
+        settled(),
+      ],
+    })
+    expect(continued.stderr).not.toContain("cut off")
+  })
+
+  test("a limit that stops the run right after a step cut off by the output limit still sets truncated", async () => {
+    const output = await capture({
+      format: "result",
+      options: { maxSteps: 1 },
+      turn: (id) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        textEnded("msg_one", "The answer is forty-tw"),
+        stepEnded("msg_one", "length"),
+        executionFailed("Reached 1 step.", "limit.steps"),
+      ],
+      messages: history(assistant("msg_one", "length", "The answer is forty-tw", undefined, { cost: 0, tokens: 3 })),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ subtype: "error_max_steps", truncated: true })
+  })
+
+  describe("when the event that ended the run trails the history", () => {
+    // The wait answers at once and the history holds the response, but the limit event arrives later.
+    const late = (type: string) => ({
+      wait: () => Promise.resolve(),
+      terminalDelay: 50,
+      turn: limitFailure(type, "Reached it."),
+      messages: oneStepHistory(0.75),
+    })
+
+    test.each(["result", "json", "stream-json"] as const)(
+      "a limit stop is not written as a success in %s",
+      async (format) => {
+        const output = await capture({ ...late("limit.steps"), format })
+        expect(output.exitCode).toBe(1)
+        if (format === "result")
+          return expect(JSON.parse(output.stdout)).toMatchObject({
+            is_error: true,
+            subtype: "error_max_steps",
+            error: "Reached it.",
+          })
+        expect(events(output.stdout).filter((event) => event.type === "error")).toEqual([
+          expect.objectContaining({ subtype: "error_max_steps" }),
+        ])
+      },
+    )
+
+    // The runner checks the limits before each retry, so a response that failed part way can push the spend over one.
+    const idleFailed = { id: "msg_idle", type: "idle", outcome: "failed", time: { created: 4 } } as const
+    const partialThenLimit = (type: string) => ({
+      wait: () => Promise.resolve(),
+      terminalDelay: 50,
+      turn: (id: string) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        stepEnded("msg_one", "tool-calls", 0.2),
+        stepStarted("msg_two"),
+        stepFailed("stream cut", "msg_two"),
+        executionFailed("Reached it.", type),
+      ],
+      messages: (id: string) => [
+        idleFailed,
+        ...history(
+          assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.2, tokens: 10 }),
+          assistant(
+            "msg_two",
+            "error",
+            undefined,
+            { type: "provider.transport", message: "stream cut" },
+            { cost: 0.4, tokens: 5 },
+          ),
+        )(id),
+      ],
+    })
+
+    test.each([
+      ["limit.cost", "error_max_cost"],
+      ["limit.tokens", "error_max_tokens"],
+    ])("a failed partial step followed by %s is reported as %s, not as the step failure", async (type, subtype) => {
+      const result = await capture({
+        ...partialThenLimit(type),
+        format: "result",
+        options: { maxCost: 0.5, maxTokens: 10 },
+      })
+      expect(JSON.parse(result.stdout)).toMatchObject({ is_error: true, subtype, error: "Reached it." })
+      expect(result.exitCode).toBe(1)
+      for (const format of ["json", "stream-json"] as const) {
+        const lines = await capture({ ...partialThenLimit(type), format })
+        expect(events(lines.stdout).filter((event) => event.type === "error")).toEqual([
+          expect.objectContaining({ subtype, error: { type, message: "Reached it." } }),
+        ])
+      }
+    })
+
+    test("a failed partial step whose terminal event never arrives is reported as the step failure", async () => {
+      const result = await capture({
+        format: "result",
+        wait: () => Promise.resolve(),
+        turn: (id) => [prompted(id), stepStarted("msg_two"), stepFailed("stream cut", "msg_two")],
+        messages: partialThenLimit("limit.cost").messages,
+      })
+      expect(JSON.parse(result.stdout)).toMatchObject({ is_error: true, subtype: "error", error: "stream cut" })
+    }, 15_000)
+
+    test("a limit stop right after a step cut off by the output limit is not a success while the event is behind", async () => {
+      const output = await capture({
+        format: "result",
+        wait: () => Promise.resolve(),
+        terminalDelay: 50,
+        turn: (id) => [
+          prompted(id),
+          stepStarted("msg_one"),
+          textEnded("msg_one", "forty-tw"),
+          stepEnded("msg_one", "length"),
+          executionFailed("Reached 1 step.", "limit.steps"),
+        ],
+        messages: (id) => [
+          idleFailed,
+          ...history(assistant("msg_one", "length", "forty-tw", undefined, { cost: 0, tokens: 3 }))(id),
+        ],
+      })
+      expect(JSON.parse(output.stdout)).toMatchObject({ subtype: "error_max_steps", truncated: true })
+    })
+
+    test("a run whose history ends in a failed idle marker is a failure even when no event says why", async () => {
+      const output = await capture({
+        format: "result",
+        turn: (id) => [prompted(id), stepStarted("msg_one"), stepEnded("msg_one"), settled()],
+        messages: (id) => [
+          { id: "msg_idle", type: "idle", outcome: "failed", time: { created: 4 } },
+          ...oneStepHistory(0.1)(id),
+        ],
+      })
+      expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true, subtype: "error" })
+      expect(output.exitCode).toBe(1)
+    })
+  })
+
+  test("usage does not count a response that finished in an unknown way as a step", async () => {
+    const output = await capture({
+      format: "result",
+      turn: (id) => [prompted(id), settled()],
+      messages: history(
+        {
+          ...assistant("msg_one", undefined, undefined, undefined, { cost: 0.1, tokens: 1 }),
+          finish: "unknown",
+        } as never,
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.1, tokens: 1 }),
+      ),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ usage: { steps: 1, cost: 0.2 } })
+  })
+
+  test("a truncated answer warns on stderr in the result format too", async () => {
+    const output = await capture({
+      format: "result",
+      turn: (id) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        textEnded("msg_one", "forty-tw"),
+        stepEnded("msg_one", "length"),
+        settled(),
+      ],
+    })
+    expect(output.stderr).toContain("The answer was cut off by the output limit.")
+    expect(JSON.parse(output.stdout)).toMatchObject({ truncated: true })
+  })
+
+  test.each(["json", "stream-json"] as const)("every error line of a run carries a subtype in %s", async (format) => {
+    const lines = async (input: Parameters<typeof capture>[0]) =>
+      events((await capture({ ...input, format })).stdout).filter((event) => event.type === "error")
+    // A step failure that nothing recovered, a non-user interruption and a prompt the server never promoted.
+    expect(
+      await lines({ turn: (id) => [prompted(id), stepStarted("msg_one"), stepFailed("cut", "msg_one"), settled()] }),
+    ).toEqual([expect.objectContaining({ subtype: "error" })])
+    expect(await lines({ turn: (id) => [prompted(id), settled("interrupted", "shutdown")] })).toEqual([
+      expect.objectContaining({ subtype: "error" }),
+    ])
+    expect(
+      await lines({
+        turn: (id) => [prompted(id), settled()],
+        messages: () => [],
+      }),
+    ).toEqual([expect.objectContaining({ subtype: "error" })])
+  })
+
+  describe("notices", () => {
+    const notice = (name: string, description?: string): V2Event => escalation({ notice: name }, description)
+
+    test("two notices with the same words both print", async () => {
+      const again = { ...notice("stop-hook", "Same words."), id: "evt_second" }
+      const lines = await capture({
+        format: "json",
+        turn: (id) => [prompted(id), notice("stop-hook", "Same words."), again, settled()],
+      })
+      expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(2)
+    })
+
+    test("a fallback notice prints one warning line in the default format and one notice line in stream-json", async () => {
+      const turn = (id: string) => [prompted(id), notice("fallback", "Switched to test/backup."), settled()]
+      const text = await capture({ turn })
+      expect(text.stderr.match(/Switched to test\/backup/g)).toHaveLength(1)
+      expect(text.stdout).toBe("")
+
+      const lines = await capture({ format: "stream-json", turn })
+      expect(events(lines.stdout)).toEqual([
+        {
+          type: "notice",
+          timestamp: expect.any(Number),
+          sessionID: "ses_1",
+          notice: "fallback",
+          message: "Switched to test/backup.",
+        },
+      ])
+    })
+
+    test.each(["stop-hook", "plan-exit"])("a described %s notice prints one line, whatever its name", async (name) => {
+      const lines = await capture({
+        format: "json",
+        turn: (id) => [prompted(id), notice(name, "Something to know."), settled()],
+      })
+      expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(1)
+    })
+
+    test("a reminder without a description prints nothing", async () => {
+      const turn = (id: string) => [prompted(id), notice("turn-budget"), settled()]
+      const lines = await capture({ format: "stream-json", turn })
+      expect(events(lines.stdout)).toEqual([])
+      const text = await capture({ turn })
+      expect(text.stderr).toBe("")
+    })
+
+    test("a notice that the events and the history both carry prints once", async () => {
+      const lines = await capture({
+        format: "stream-json",
+        turn: (id) => [prompted(id), notice("fallback", "Switched."), settled()],
+        messages: history(synthetic("msg_escalation", { notice: "fallback" }, "Switched.")),
+      })
+      expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(1)
     })
   })
 })

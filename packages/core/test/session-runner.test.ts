@@ -5660,6 +5660,50 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(1)
     })
 
+    // A subagent is admitted with no turn options of its own. While it runs, the parent waits and checks nothing, so the
+    // child must stop at the limit the parent's turn set, counting what the parent already spent.
+    const lengthText = (id: string) => [
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text: "Done" }),
+      LLMEvent.textEnd({ id }),
+    ]
+    for (const row of [
+      { name: "cost", turn: { maxCost: Money.USD.make(3) }, expected: "limit.cost", childRequests: 1 },
+      { name: "tokens", turn: { maxTokens: 5 }, expected: "limit.tokens", childRequests: 1 },
+      // The parent's step limit counts only its own responses, so it never stops a child.
+      { name: "steps", turn: { maxSteps: 2 }, expected: undefined, childRequests: 6 },
+      { name: "no limit", turn: undefined, expected: undefined, childRequests: 6 },
+    ] as const)
+      scenario(`stops a subagent at the parent turn's ${row.name} limit`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: row.turn, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        expect(s.requests).toHaveLength(2)
+
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          .set({ parent_id: sessionID })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(row.childRequests)
+        if (row.expected === undefined) return expect(Exit.isSuccess(exit)).toBe(true)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.expected)
+      })
+
     scenario("stops at the token limit", function* (s) {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 3 }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend), toolStep(spend))
@@ -5673,7 +5717,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(spend))
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
     })
@@ -5683,7 +5727,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("cannot be counted") })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -5706,7 +5750,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(2) }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend))
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
     })
@@ -9054,6 +9098,89 @@ describe("SessionRunnerLLM", () => {
     yield* s.session.resume(forked.id)
     expect(JSON.stringify(s.requests[0]?.messages)).toContain("Whole answer")
     expect(JSON.stringify(s.requests[0]?.messages)).not.toContain("FirstCut")
+  })
+
+  // A compaction between resumes drops the runner's history before it, so the caps must come from the durable rows.
+  // Each cut-off fills the 4k window, which makes the next pass compact before it resumes.
+  const overflowing = {
+    reason: { normalized: "length", raw: "max_tokens" },
+    usage: { nonCachedInputTokens: 3_950, outputTokens: 10 },
+  } as const
+  const text = (id: string, value: string) => [
+    LLMEvent.textStart({ id }),
+    LLMEvent.textDelta({ id, text: value }),
+    LLMEvent.textEnd({ id }),
+  ]
+  const withSummaries = (cuts: ReadonlyArray<ReturnType<typeof TestLLM.complete>>) =>
+    cuts.flatMap((cut, index) => [cut, TestLLM.text("## Objective\n- Keep going", `cmp-summary-${index}`)])
+  for (const row of [
+    { name: "text only", cut: (n: number) => TestLLM.complete(overflowing, ...text(`cmp-${n}`, String(n))) },
+    {
+      name: "a cut-off tool call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          overflowing,
+          LLMEvent.toolInputStart({ id: `cmp-call-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cmp-call-${n}`, name: "echo", text: '{"text":"par' }),
+          LLMEvent.toolCall({ id: `cmp-call-${n}`, name: "echo", input: { text: "par" }, partialInput: true }),
+        ),
+    },
+    {
+      name: "an input that never became a call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          overflowing,
+          LLMEvent.toolInputStart({ id: `cmp-input-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cmp-input-${n}`, name: "echo", text: '{"text":' }),
+        ),
+    },
+    {
+      name: "a tool call that ran",
+      cut: (n: number) =>
+        TestLLM.complete(overflowing, LLMEvent.toolCall({ id: `cmp-ran-${n}`, name: "echo", input: { text: String(n) } })),
+    },
+  ])
+    scenario(`stops resuming after three output-limit stops with a compaction between them: ${row.name}`, function* (s) {
+      s.currentModel = compactModel
+      yield* s.admit("Never finishes")
+      yield* s.llm.push(
+        ...withSummaries(Array.from({ length: 8 }, (_, index) => row.cut(index + 1))),
+        TestLLM.text("Done", "cmp-done"),
+      )
+
+      yield* s.resume
+
+      const all = yield* s.session.messages({ sessionID })
+      expect(all.filter((message) => message.type === "assistant" && message.finish === "length")).toHaveLength(4)
+      expect(notices(all, "output-limit")).toHaveLength(3)
+    })
+
+  scenario("escalates a capped reply once even when a compaction follows the escalation", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+    ])
+    s.currentModel = fittedOutputModel
+    const full = {
+      reason: { normalized: "length", raw: "max_tokens" },
+      usage: { nonCachedInputTokens: 99_000, outputTokens: 10 },
+    } as const
+    yield* s.admit("Never finishes")
+    yield* s.llm.push(
+      // The escalated retry follows its cut-off directly; a compaction runs before each request after that.
+      TestLLM.complete(full, ...text("cmp-esc-0", "x")),
+      TestLLM.complete(full, ...text("cmp-esc-1", "x")),
+      ...Array.from({ length: 6 }, (_, index) => [
+        TestLLM.text("## Objective\n- Keep going", `cmp-esc-summary-${index}`),
+        TestLLM.complete(full, ...text(`cmp-esc-${index + 2}`, "x")),
+      ]).flat(),
+      TestLLM.text("Done", "cmp-esc-done"),
+    )
+
+    yield* s.resume
+
+    const all = yield* s.session.messages({ sessionID })
+    expect(notices(all, "output-escalation")).toHaveLength(1)
+    expect(notices(all, "output-limit")).toHaveLength(3)
   })
 
   scenario("does not escalate when a hook set the output limit", function* (s) {

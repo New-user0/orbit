@@ -121,6 +121,42 @@ describe("acp turn translation", () => {
     expect(ACPTranslate.failure(unrecovered.state)).toMatchObject({ errorName: "provider.stream" })
   })
 
+  test.each(["limit.steps", "limit.cost", "limit.tokens"])("a turn that ended with %s stops at max_turn_requests", (type) => {
+    const result = started(failed(root, { type, message: "The turn reached its limit." }))
+    expect(result.terminal).toBe("failed")
+    expect(ACPTranslate.failure(result.state)).toBeUndefined()
+    expect(ACPTranslate.response(result.state, root, "failed").stopReason).toBe("max_turn_requests")
+    // Any other execution failure is still a failure.
+    const other = started(failed(root, { type: "provider.stream", message: "x" }))
+    expect(ACPTranslate.failure(other.state)).toMatchObject({ errorName: "provider.stream" })
+    // A cost limit that cannot be counted was refused, not reached.
+    const unknown = started(failed(root, { type: "limit.cost-unknown", message: "No price." }))
+    expect(ACPTranslate.failure(unknown.state)).toMatchObject({ errorName: "limit.cost-unknown" })
+    expect(ACPTranslate.response(unknown.state, root, "failed").stopReason).not.toBe("max_turn_requests")
+  })
+
+  test("forwards any synthetic message that names a notice, and none that does not", () => {
+    const synthetic = (metadata?: Record<string, string>, description?: string) =>
+      durableEvent("session.synthetic", { sessionID: root, text: "text", description, metadata })
+    const result = started(
+      synthetic({ notice: "fallback" }, "Switched to a fallback model."),
+      synthetic({ notice: "plan-exit" }, "Left plan mode."),
+      synthetic({ notice: "output-escalation", replaces: "msg_1" }, "The output limit was raised."),
+      synthetic({ reminder: "turn-budget" }, "A reminder."),
+      synthetic(undefined, "No metadata."),
+    )
+    expect(updates(result.outputs)).toEqual([
+      { sessionUpdate: "session_info_update", _meta: { "orbit/notice": { notice: "fallback", description: "Switched to a fallback model." } } },
+      { sessionUpdate: "session_info_update", _meta: { "orbit/notice": { notice: "plan-exit", description: "Left plan mode." } } },
+      {
+        sessionUpdate: "session_info_update",
+        _meta: {
+          "orbit/notice": { notice: "output-escalation", description: "The output limit was raised.", replaces: "msg_1" },
+        },
+      },
+    ])
+  })
+
   test("marks a compaction that fails before starting, and drops an end with no start", () => {
     const result = started(
       durableEvent("session.compaction.failed", {

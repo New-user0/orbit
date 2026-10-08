@@ -28,6 +28,10 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
+  maxSteps?: number
+  maxCost?: number
+  maxTokens?: number
+  fallbackModel?: string
   auto?: boolean
 }
 
@@ -93,6 +97,16 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       fetch(request, { ...init, timeout: false } as BunFetchRequestInit)) as typeof fetch,
   })
   const explicit = parseRunModel(input.model)
+  const fallback = parseSessionTargetModel(input.fallbackModel)
+  const turn =
+    input.maxSteps === undefined && input.maxCost === undefined && input.maxTokens === undefined && !fallback
+      ? undefined
+      : {
+          ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
+          ...(input.maxCost === undefined ? {} : { maxCost: input.maxCost }),
+          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+          ...(fallback ? { fallbackModel: fallback } : {}),
+        }
   const target = await resolveSessionTarget({
     client,
     location: prepared.directory ? { directory: prepared.directory } : undefined,
@@ -151,6 +165,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     thinking: input.thinking ?? false,
     format: input.format,
     jsonSchema: input.jsonSchema,
+    turn,
     auto: input.auto ?? false,
     attached: options.attached ?? true,
     compatibility: options.compatibility,
@@ -258,7 +273,16 @@ export function reportRunError(input: Pick<RunCommandInput, "format">, message: 
   if (input.format === "result") {
     if (wroteResult()) return
     process.stdout.write(
-      jsonLine({ type: "result", sessionID: sessionID ?? "", is_error: true, result: "", error: message }) + "\n",
+      jsonLine({
+        type: "result",
+        sessionID: sessionID ?? "",
+        is_error: true,
+        subtype: "error",
+        result: "",
+        usage: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+        truncated: false,
+        error: message,
+      }) + "\n",
     )
     return
   }
@@ -268,6 +292,7 @@ export function reportRunError(input: Pick<RunCommandInput, "format">, message: 
         type: "error",
         timestamp: Date.now(),
         sessionID: sessionID ?? "",
+        subtype: "error",
         error: { type: "unknown", message },
       }) + "\n",
     )

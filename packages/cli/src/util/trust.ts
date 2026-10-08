@@ -20,6 +20,8 @@ type Defined = {
   readonly commands: ReadonlyArray<{ readonly id: string; readonly command: string }>
   readonly approvals: ReadonlyArray<{ readonly id: string; readonly permissions: string }>
   readonly agents: ReadonlyArray<{ readonly id: string; readonly agent: string }>
+  /** The models and limits on attempts that the file picks, as `field: value`. */
+  readonly models: ReadonlyArray<{ readonly id: string; readonly choice: string }>
 }
 
 type Options = {
@@ -31,6 +33,12 @@ type Options = {
   readonly imports?: string
   /** The workflow or suite file the command is about to read, and what a run of it carries out, which may be nothing. */
   readonly defines?: Defined
+  /**
+   * The command sends the folder to a model and runs the tool calls that come back (`orb -p`): any untrusted folder
+   * stops it, whether or not its config holds something back, because the folder's own instructions and files steer
+   * the model and the default rules let its tool calls run without asking.
+   */
+  readonly strict?: boolean
 }
 
 /**
@@ -66,7 +74,10 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
   // A file that defines nothing a run carries out holds nothing up, as a folder that holds nothing back does not.
   const defined =
     options.defines &&
-    (options.defines.commands.length > 0 || options.defines.approvals.length > 0 || options.defines.agents.length > 0)
+    (options.defines.commands.length > 0 ||
+      options.defines.approvals.length > 0 ||
+      options.defines.agents.length > 0 ||
+      options.defines.models.length > 0)
       ? options.defines
       : undefined
   const current = yield* call((signal) => client.location.trust.get({ location }, { signal })).pipe(
@@ -75,8 +86,8 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
     Effect.mapError(unchecked(location.directory)),
   )
   if (current === undefined) {
-    if (options.imports !== undefined || defined !== undefined)
-      return unanswered(location.directory, options.imports, defined)
+    if (options.imports !== undefined || defined !== undefined || options.strict)
+      return unanswered(location.directory, options.imports, defined, options.strict)
     yield* Effect.sync(() =>
       process.stderr.write(
         `Warning: this server is older than workspace trust, so it applies a folder's project config without asking whether the folder is trusted, and nothing was checked. Restart it to get the check; for the background service that is \`orb service restart\`.${EOL}`,
@@ -85,7 +96,8 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
     return undefined
   }
   const status = options.grant && !current.trusted ? yield* grant(client, location) : current
-  if (blocked(status, options.imports, defined)) return refusal(status, options.imports, defined)
+  if (blocked(status, options.imports, defined, options.strict))
+    return refusal(status, options.imports, defined, options.strict)
   if (status.withheld.length > 0) yield* Effect.sync(() => process.stderr.write(`Warning: ${notice(status)}${EOL}`))
   // The folder that holds the file is the run's own unless the command was given a path elsewhere, and another project
   // can own that folder: the run takes nothing from it but the file, and the file is what its trust is for. Getting here
@@ -127,18 +139,28 @@ export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: Orbi
  * it imports (`imports`), or what it defines (`defines`), which is listed: shell commands, nodes that approve what
  * their agents ask permission for, and nodes that run as an agent the file names.
  */
-export function refusal(status: TrustStatus, imports?: string, defines?: Defined) {
+export function refusal(status: TrustStatus, imports?: string, defines?: Defined, strict?: boolean) {
   const own = status.withheld.filter((item) => item.directory === undefined)
   const above = status.withheld.filter((item) => item.directory !== undefined)
   const loads = imports ?? defines?.file
+  // A strict command stopped by a folder that holds nothing back: there is no list to show, only the folder itself.
+  const quiet = strict === true && status.withheld.length === 0 && loads === undefined
   // What there is to look over before trusting the folder.
-  const review = loads === undefined ? "those files" : own.length === 0 ? "the file" : "the file and those files"
+  const review =
+    loads === undefined
+      ? quiet
+        ? "the folder"
+        : "those files"
+      : own.length === 0
+        ? "the file"
+        : "the file and those files"
   return [
     ...lead(
       `Orbit stopped before doing any work: ${status.directory} is not trusted`,
       status.directory,
       imports,
       defines,
+      quiet,
     ),
     ...(status.withheld.length === 0
       ? []
@@ -151,7 +173,7 @@ export function refusal(status: TrustStatus, imports?: string, defines?: Defined
         ]),
     "",
     // What trusting the project lifts, and the files above it, which only their own folders do.
-    ...(own.length === 0 && loads === undefined
+    ...(own.length === 0 && loads === undefined && !quiet
       ? []
       : [
           status.persistent
@@ -171,13 +193,14 @@ export function refusal(status: TrustStatus, imports?: string, defines?: Defined
  * the folder is trusted, and the command is about to run what the folder brings in this process, so it stops. The text
  * names the file and what it brings as `refusal` does, and the ways to get an answer.
  */
-export function unanswered(directory: string, imports?: string, defines?: Defined) {
+export function unanswered(directory: string, imports?: string, defines?: Defined, strict?: boolean) {
   return [
     ...lead(
       `Orbit stopped before doing any work: the server is older than workspace trust, so it cannot say whether ${directory} is trusted`,
       directory,
       imports,
       defines,
+      strict === true && imports === undefined && defines === undefined,
     ),
     "",
     "Restart the server to get an answer, which for the background service is `orb service restart`. Or run on a current private server instead: --standalone starts one that checks the folder, and --trust starts one that trusts the folder for this run only.",
@@ -280,10 +303,20 @@ function fromFolder(directory: string, file: string) {
 // What the folder's missing trust holds up, first of all: the code the command imports, what the file it reads defines
 // (shell commands, nodes that approve what their agents ask permission for, and nodes that run as an agent the file
 // names), or else the config it finds. `heading` is what comes before: why the folder is not enough as it stands.
-function lead(heading: string, directory: string, imports: string | undefined, defines: Defined | undefined) {
+function lead(
+  heading: string,
+  directory: string,
+  imports: string | undefined,
+  defines: Defined | undefined,
+  quiet = false,
+) {
   if (imports !== undefined)
     return [
       `${heading}, and this command runs code from the folder: it imports ${plain(fromFolder(directory, imports))}, and importing a TypeScript or JavaScript file runs the code in it.`,
+    ]
+  if (quiet)
+    return [
+      `${heading}. This command sends the folder's instructions to a model and runs the tool calls that come back, which the default rules allow without asking, so the folder has to be trusted first.`,
     ]
   if (defines === undefined)
     return [`${heading}, so the project config it finds holds back what could run code or reach the network:`]
@@ -312,6 +345,14 @@ function lead(heading: string, directory: string, imports: string | undefined, d
           {
             says: `lets the file choose which of your agents run its nodes: ${file} names an \`agent\` for each entry below, and an agent's own rules are added after your global rules, where the last match wins, so the file can pick an agent whose rules allow actions that yours ask about, which a run then does without asking:`,
             rows: defines.agents.map((item) => [item.id, `agent: ${item.agent}`] as const),
+          },
+        ]),
+    ...(defines.models.length === 0
+      ? []
+      : [
+          {
+            says: `lets the file choose which of your models run its nodes, and how many attempts they get: ${file} sets a \`model\`, fallback models or a limit on attempts for each entry below, where your own \`--model\` would otherwise decide, so the file can spend on a model you did not pick:`,
+            rows: defines.models.map((item) => [item.id, item.choice] as const),
           },
         ]),
   ]
@@ -346,5 +387,10 @@ const grant = Effect.fnUntraced(function* (client: OrbitClient, location: { read
  * (shell commands, approvals of what agents ask permission for, and the choice of which agents run), which a folder that
  * holds nothing back does not excuse.
  */
-const blocked = (status: TrustStatus, imports: string | undefined, defines: Defined | undefined) =>
-  !status.trusted && (imports !== undefined || defines !== undefined || status.withheld.length > 0)
+const blocked = (
+  status: TrustStatus,
+  imports: string | undefined,
+  defines: Defined | undefined,
+  strict: boolean | undefined,
+) =>
+  !status.trusted && (strict === true || imports !== undefined || defines !== undefined || status.withheld.length > 0)
