@@ -167,7 +167,7 @@ function prepareOptions(model: RuntimeInfo, pkg: string) {
         : send(input, { ...opts, timeout: false })
     ).finally(() => clearTimeout(headerTimer))
     if (timeouts.chunkTimeout === false) return res
-    return wrapSSE(res, timeouts.chunkTimeout, chunks)
+    return wrapSSE(res, timeouts.chunkTimeout ?? Provider.DEFAULT_TIMEOUT_MS, chunks)
   }
 
   return options

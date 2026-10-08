@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { LLM, LanguageModel, Message } from "@orbit/ai"
+import { LLM, LanguageModel, Message, mergeHttpOptions } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { compileRequest } from "@orbit/ai/route/client"
 import { ConfigProvider, Effect, Layer } from "effect"
@@ -661,6 +661,49 @@ describe("ModelResolver", () => {
       })
     }),
   )
+
+  describe("stream idle limit", () => {
+    const chunkTimeout = (packageName: string, settings: Info["settings"]) =>
+      ModelResolver.fromCatalogModel(model(Provider.aisdk(packageName), { settings })).pipe(
+        // The client merges route defaults, then model defaults, then the request.
+        Effect.map((resolved) => mergeHttpOptions(resolved.route.defaults.http, resolved.defaults?.http)?.chunkTimeout),
+      )
+    const cases: ReadonlyArray<{
+      readonly name: string
+      readonly packageName: string
+      readonly settings: Info["settings"]
+      readonly expected: number | false
+    }> = [
+      { name: "the default endpoint", packageName: "@ai-sdk/anthropic", settings: {}, expected: 90_000 },
+      {
+        name: "a proxy baseURL",
+        packageName: "@ai-sdk/anthropic",
+        settings: { baseURL: "https://proxy.example/v1" },
+        expected: 300_000,
+      },
+      {
+        name: "a configured chunkTimeout",
+        packageName: "@ai-sdk/anthropic",
+        settings: { chunkTimeout: 600_000 },
+        expected: 600_000,
+      },
+      { name: "chunkTimeout false", packageName: "@ai-sdk/anthropic", settings: { chunkTimeout: false }, expected: false },
+      {
+        name: "another provider package",
+        packageName: "@ai-sdk/openai-compatible",
+        settings: { baseURL: "https://compatible.example/v1" },
+        expected: 300_000,
+      },
+    ]
+    for (const item of cases)
+      it.effect(`resolves ${item.expected} for ${item.name}`, () =>
+        Effect.gen(function* () {
+          const resolved = yield* chunkTimeout(item.packageName, item.settings)
+          // Routes without a default leave the limit unset, and the transport applies its own 300 s.
+          expect(resolved ?? 300_000).toBe(item.expected)
+        }),
+      )
+  })
 
   it.effect("uses resolved credentials for bearer auth", () =>
     Effect.gen(function* () {

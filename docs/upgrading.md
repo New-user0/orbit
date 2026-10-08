@@ -862,3 +862,17 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+
+### A stalled stream on the default endpoint fails after 90 seconds of silence
+
+A streamed response that sends no bytes for 300 seconds used to be treated as stalled for every provider. On the
+provider's own default endpoint the limit is now 90 seconds, because that stream sends periodic keepalive pings. The
+run then retries the request, or continues after output, as it does for any dropped stream. A custom `baseURL`, such as
+a gateway or proxy that may buffer or drop pings, and every other provider keep 300 seconds. An unset `chunkTimeout`
+no longer pins 300 seconds in front of a provider default, so a provider can supply a shorter one.
+
+**Affects:** people whose model stays silent for more than 90 seconds on the default endpoint, for example during very
+long thinking without pings.
+
+**What to do:** nothing in most setups. To allow longer silence, set `chunkTimeout` in the provider settings, or
+`false` to turn the limit off.

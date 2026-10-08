@@ -23,7 +23,7 @@ import {
 } from "@orbit/ai"
 import { LLMClient, RequestExecutor } from "@orbit/ai/route"
 import { compileRequest } from "@orbit/ai/route/client"
-import { expect } from "bun:test"
+import { expect, jest } from "bun:test"
 import { Effect, Layer } from "effect"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "./lib/effect"
@@ -679,6 +679,59 @@ it.effect("does not treat SSE comment heartbeats as model progress", () =>
     )
 
     expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { message: expect.stringContaining("SSE read timed out") },
+    })
+  }),
+)
+
+it.effect("applies the 300 second SSE chunk limit when chunkTimeout is unset", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    const encoder = new TextEncoder()
+    const customFetch = Object.assign(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  'data: {"id":"response-1","object":"chat.completion.chunk","created":0,"model":"api-model","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n',
+                ),
+              )
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { preconnect: fetch.preconnect },
+    )
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = createOpenAICompatible({
+        ...event.options,
+        name: String(event.options.name),
+        baseURL: String(event.options.baseURL),
+      })
+    })
+    const resolved = yield* aisdk.model(
+      model("@ai-sdk/openai-compatible", { apiKey: "test", baseURL: "https://example.test/v1", fetch: customFetch }),
+    )
+    jest.useFakeTimers()
+    const outcome = yield* Effect.promise(async () => {
+      const result = Effect.runPromise(
+        LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+          Effect.provide(client),
+          Effect.result,
+        ),
+      )
+      await new Promise((resolve) => setImmediate(resolve))
+      jest.advanceTimersByTime(Provider.DEFAULT_TIMEOUT_MS - 1)
+      const early = await Promise.race([result, Promise.resolve("pending" as const)])
+      jest.advanceTimersByTime(1)
+      return { early, final: await result }
+    }).pipe(Effect.ensuring(Effect.sync(() => jest.useRealTimers())))
+
+    expect(outcome.early).toBe("pending")
+    expect(outcome.final).toMatchObject({
       _tag: "Failure",
       failure: { message: expect.stringContaining("SSE read timed out") },
     })

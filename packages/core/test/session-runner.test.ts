@@ -635,6 +635,17 @@ const streamDisconnected = () =>
     }),
   })
 
+// The idle watchdog's failure: no bytes arrived within the stream idle limit.
+const streamIdle = () =>
+  new AIError({
+    reason: new TransportError({
+      message: "Stream idle timeout",
+      transport: "http",
+      operation: "read",
+      code: "Timeout",
+    }),
+  })
+
 const continuationRejected = (recovery: "retry-full" | "rotate-and-retry-full") =>
   new AIError({
     reason: new TransportError({
@@ -5388,7 +5399,7 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
-  for (const failure of [providerUnavailable, websocketDisconnected]) {
+  for (const failure of [providerUnavailable, streamIdle, websocketDisconnected]) {
     scenario(`bounds jittered exponential backoff before output for ${failure.name}`, function* (s) {
       yield* s.admit("Retry transport")
       yield* s.llm.push(TestLLM.failAfter(failure(), LLMEvent.stepStart({ index: 0 })))
@@ -5726,7 +5737,7 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
-  for (const failure of [streamDisconnected, websocketDisconnected]) {
+  for (const failure of [streamDisconnected, streamIdle, websocketDisconnected]) {
     scenario(`continues after ${failure.name} with durable reasoning state`, function* (s) {
       yield* s.admit("Recover disconnected reasoning")
       yield* s.llm.push(
