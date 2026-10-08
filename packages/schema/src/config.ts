@@ -41,7 +41,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   output_token_cap: PositiveInt.pipe(optional).annotate({
     description:
-      "Most tokens a model may write in one reply. Lowers the model's own maximum and never raises it; unset leaves the maximum in place",
+      "Most tokens a model may write in one model call. Lowers the model's own maximum and never raises it; unset leaves the maximum in place",
   }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",

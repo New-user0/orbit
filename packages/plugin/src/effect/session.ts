@@ -32,6 +32,8 @@ export interface SessionRequest {
 
 export interface SessionContext extends SessionRequest {
   readonly agent: Agent.ID
+  /** The configured `output_token_cap`, set only on a primary request and only when the user configured one. */
+  readonly outputTokenCap?: number
   tools: Record<string, { description: string; input: JsonSchema.JsonSchema }>
 }
 

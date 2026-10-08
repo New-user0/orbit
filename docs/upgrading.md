@@ -1319,11 +1319,13 @@ model. Orbit uses your own setting until you trust the folder.
 ### New `output_token_cap` setting
 
 The root `output_token_cap` setting is a positive whole number of tokens that caps how much a model may write in one
-reply. Every agent request, including a subagent's, asks for the smaller of the cap and the model's own
-maximum, and the cap is applied before `session.context` hooks run, so a hook can still change it. It never raises
-a limit. Left unset, requests are unchanged. Zero, a negative number or a fraction is reported and ignored. With a
-cap of 1,024 or less, every request from a model with a fixed reasoning budget is refused;
-below about 2,000, most of the cap goes to reasoning.
+model call. A reply that runs several calls can write more than the cap in total. Every agent request, including a
+subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied before `session.context`
+hooks run, so a hook can still change it. It reaches every provider, including one whose adapter otherwise omits the
+default limit, and `session.context` hooks see it as `outputTokenCap`. The one exception is a model that rejects an
+output limit at its highest reasoning effort, where Orbit sends none. The cap never raises a limit. Left unset, requests
+are unchanged. Zero, a negative number or a fraction is reported and ignored. With a cap of 1,024 or less, every request
+from a model with a fixed reasoning budget is refused; below about 2,000, most of the cap goes to reasoning.
 
 In a folder that is not trusted yet, `output_token_cap` is left out whole, like the other settings that choose a model
 or a budget. Orbit uses your own setting until you trust the folder.

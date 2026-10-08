@@ -429,11 +429,12 @@ export const layer = Layer.effect(
     })
 
     const agentHook =
-      (name: "context" | "compaction" | "generate", agent: Agent.ID) => (draft: SessionRequest, tools: Definitions) =>
-        hooks.trigger("session", name, { ...draft, agent, tools })
+      (name: "context" | "compaction" | "generate", agent: Agent.ID, outputTokenCap?: number) =>
+      (draft: SessionRequest, tools: Definitions) =>
+        hooks.trigger("session", name, { ...draft, agent, tools, outputTokenCap })
 
     return Service.of({
-      primary: (input) => prepare("primary", input, agentHook("context", input.agent)),
+      primary: (input) => prepare("primary", input, agentHook("context", input.agent, input.outputTokenCap)),
       compaction: (input) => prepare("compaction", input, agentHook("compaction", input.agent)),
       generate: (input) => prepare("generate", input, agentHook("generate", input.agent)),
       title: (input) => prepare("title", input, (draft) => hooks.trigger("session", "title", draft)),

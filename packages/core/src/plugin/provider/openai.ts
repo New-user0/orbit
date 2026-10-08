@@ -1,5 +1,5 @@
 import { define } from "@orbit/plugin/effect/plugin"
-import type { SessionRequest } from "@orbit/plugin/effect/session"
+import type { SessionContext } from "@orbit/plugin/effect/session"
 import { Effect } from "effect"
 import { Provider } from "../../provider.js"
 import type { PluginInternal } from "../internal.js"
@@ -16,10 +16,11 @@ export const OpenAIPlugin = define({
         })
       })
     })
-    // OpenAI counts a requested output limit against rate limits.
-    const omitOutputLimit = (evt: SessionRequest) =>
+    // OpenAI counts a requested output limit against rate limits, so the default limit is omitted. A configured
+    // `output_token_cap` is the user's own request and stays.
+    const omitOutputLimit = (evt: SessionContext) =>
       Effect.sync(() => {
-        delete evt.options.maxTokens
+        if (evt.outputTokenCap === undefined) delete evt.options.maxTokens
       })
     for (const name of ["context", "compaction"] as const)
       yield* ctx.session.hook(name, omitOutputLimit, { providerID: Provider.ID.openai })
