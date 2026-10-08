@@ -431,7 +431,8 @@ class Chat implements vscode.WebviewViewProvider {
     else if (this.uncheckedShown) {
       this.check({ ok: true, text: "Trust checked" })
       // No models were asked for while the server could not say; now they are, without a reload of the chat.
-      if (this.models.length === 0 && this.controller) void this.controller.then((controller) => controller && this.loadModels(controller))
+      if (this.models.length === 0 && this.controller)
+        void this.controller.then((controller) => controller && this.loadModels(controller))
     }
     this.uncheckedShown = update.unchecked
   }

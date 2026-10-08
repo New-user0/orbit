@@ -72,7 +72,14 @@ test("lists runs and their nodes, and approves a waiting gate", async () => {
 test("writes out control characters that a run store holds, in labels and tooltips", () => {
   const hostile = "a\u202Eb\u001b[2Jc"
   const run = runItem({ id: hostile, workflow: hostile, status: "failed", updated: 0 })
-  const node = nodeItem({ id: hostile, status: "failed", attempts: 1, message: hostile, error: { message: hostile }, started: 0 })
+  const node = nodeItem({
+    id: hostile,
+    status: "failed",
+    attempts: 1,
+    message: hostile,
+    error: { message: hostile },
+    started: 0,
+  })
   const lying = runItem({ id: "a", workflow: "w", status: hostile as "failed", updated: 0 })
   const words = decisionText(true, hostile, hostile)
   for (const text of [
@@ -104,7 +111,13 @@ test("decodes a run store's JSON once: strings and finite numbers are kept, anyt
         ended: 1,
         result: { usage: { input: hostile, output: 2, cost: hostile } },
       },
-      { id: "loud", status: "succeeded", attempts: 1, started: 0, result: { usage: { input: 1, output: 2, cost: { a: 1 } } } },
+      {
+        id: "loud",
+        status: "succeeded",
+        attempts: 1,
+        started: 0,
+        result: { usage: { input: 1, output: 2, cost: { a: 1 } } },
+      },
       { id: 7, status: "failed" },
       null,
       { id: "plain", status: hostile, attempts: hostile, started: hostile, error: { message: 7 }, message: 3 },

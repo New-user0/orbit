@@ -178,8 +178,8 @@ every other extension):
   nothing, choosing a model or a mode on a session changes only the local choice, `outputStyle` is not written (it
   names no folder, so the server would boot its own working folder), and `send` posts an error and creates no
   session; while nothing has answered each of them reads again first. When the server answered 404, `send` names `orb
-  service restart`. In both states the only requests the server sees are the trust read, the event stream and the
-  reads of a session opened from history, which name no folder. After a grant, the folder
+  service restart`. In both states the only requests the server sees are the trust read, the event stream, the
+  session list of the history picker and the reads of a session opened from history, which name no folder. After a grant, the folder
   VS Code opened is read again and must itself answer trusted: a re-read that fails or is late confirms nothing, the
   banner stays and the chat says it could not trust the folder. `orb run` stops on the same failures because it cannot
   ask. A withheld entry in the answer that does not fit is dropped alone (`readStatus`), so the banner and the question

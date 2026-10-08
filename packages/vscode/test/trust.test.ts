@@ -352,8 +352,7 @@ function stub(routes: {
       // A session opened from history: reading it and its messages names no folder, so no location is booted.
       if (url.pathname === "/api/session/ses_old" && request.method === "GET")
         return Response.json({ data: { id: "ses_old", title: "Earlier", agent: "build" } })
-      if (url.pathname === "/api/session/ses_old/message")
-        return Response.json({ data: [], cursor: {} })
+      if (url.pathname === "/api/session/ses_old/message") return Response.json({ data: [], cursor: {} })
       // The event stream stays open and says nothing.
       if (url.pathname === "/api/event")
         return new Response(new ReadableStream({ start() {} }), { headers: { "content-type": "text/event-stream" } })
@@ -418,9 +417,30 @@ test("asks a server whose 404 comes too late for nothing but trust and events", 
 
     // Reading the opened session names no folder. Nothing else may go out until some read has been answered.
     expect(new Set(server.seen)).toEqual(
-      new Set(["GET /api/location/trust", "GET /api/event", "GET /api/session/ses_old", "GET /api/session/ses_old/message"]),
+      new Set([
+        "GET /api/location/trust",
+        "GET /api/event",
+        "GET /api/session/ses_old",
+        "GET /api/session/ses_old/message",
+      ]),
     )
     expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining("trust could not be reached")])
+  } finally {
+    await server.stop()
+  }
+}, 30_000)
+
+test("reads again before a location call while no read has answered, and then sends it", async () => {
+  // A cold start: the first read is never answered, the next one is.
+  const server = stub({
+    get: (count) => (count === 1 ? new Promise<Response>(() => {}) : answer({ trusted: true, withheld: [] })),
+  })
+  try {
+    const { controller } = chat(server.client, project, "trust", quick)
+
+    await controller.models().catch(() => undefined)
+
+    expect(server.seen).toContain("GET /api/model")
   } finally {
     await server.stop()
   }
@@ -462,7 +482,12 @@ test("asks an old server for nothing but trust and events: no model list, no cho
 
     // A request that names the folder boots its location, and on such a server that imports the folder's plugins.
     expect(new Set(server.seen)).toEqual(
-      new Set(["GET /api/location/trust", "GET /api/event", "GET /api/session/ses_old", "GET /api/session/ses_old/message"]),
+      new Set([
+        "GET /api/location/trust",
+        "GET /api/event",
+        "GET /api/session/ses_old",
+        "GET /api/session/ses_old/message",
+      ]),
     )
     expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining('"hello"')])
   } finally {

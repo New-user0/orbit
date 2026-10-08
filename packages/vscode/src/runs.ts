@@ -74,7 +74,9 @@ export function decodeNodes(parsed: unknown): Node[] {
         attempts: number(entry.attempts) ?? 1,
         ...(text(entry.message) === undefined ? {} : { message: text(entry.message) }),
         ...(usage
-          ? { result: { usage: { input: number(usage.input), output: number(usage.output), cost: number(usage.cost) } } }
+          ? {
+              result: { usage: { input: number(usage.input), output: number(usage.output), cost: number(usage.cost) } },
+            }
           : {}),
         ...(message === undefined ? {} : { error: { message } }),
         started: number(entry.started) ?? 0,

@@ -1033,8 +1033,8 @@ The extension could not trust a folder, and it started whatever `orbit.executabl
 - **The question.** The extension asks the server whether the folder its chat works in is trusted (see "A project's
   config waits for its folder to be trusted" above) when the chat starts, whenever the server reports a grant, a revoke,
   a change of config or a new connection, and before each message. While the folder is untrusted and holds something
-  of its own back, a banner above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit · untrusted" item in the status
-  bar says so too, and **Orbit: Trust This Folder…** (offered only then) asks. Each of the three opens a dialog with
+  of its own back, a banner above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit ·
+  untrusted" item in the status bar says so too, and **Orbit: Trust This Folder…** (offered only then) asks. Each of the three opens a dialog with
   **Trust this folder** and **Not now**, and closing the dialog is "Not now". The first message in such a folder asks
   before a session exists or the model is asked anything, once per folder until the window is reloaded: "Not now" lets the
   message go on without what the folder holds back, and the banner stays. Nothing is asked in a folder that is trusted or

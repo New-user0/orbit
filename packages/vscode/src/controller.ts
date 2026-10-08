@@ -316,8 +316,9 @@ export class Controller {
         (error: unknown) => ({ error }),
       )
     if ("error" in answer) {
-      if (unsupported(answer.error)) this.answered = true
-      if (!unsupported(answer.error)) return this.fail(`could not read workspace trust: ${message(answer.error)}`, confirm)
+      if (!unsupported(answer.error))
+        return this.fail(`could not read workspace trust: ${message(answer.error)}`, confirm)
+      this.answered = true
       if (attempt > this.applied) {
         this.applied = attempt
         this.unchecked = true
