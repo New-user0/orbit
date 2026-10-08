@@ -432,6 +432,46 @@ export function turnTokensPerSecond(
   return output / (duration / 1_000)
 }
 
+/**
+ * True for an assistant step whose error or output-limit finish was followed by another assistant step before the
+ * next user message or idle marker, so the run carried on and the failure is history rather than the outcome.
+ */
+export function recoveredStep(messages: SessionMessageInfo[], index: number) {
+  const message = messages[index]
+  if (message?.type !== "assistant" || !(message.error || message.finish === "length")) return false
+  for (const next of messages.slice(index + 1)) {
+    if (next.type === "user" || next.type === "idle") return false
+    if (next.type === "assistant") return true
+  }
+  return false
+}
+
+/** True when a later output-escalation notice names this step as the attempt it replaced. */
+export function retriedStep(messages: SessionMessageInfo[], index: number) {
+  const message = messages[index]
+  if (message?.type !== "assistant") return false
+  return messages
+    .slice(index + 1)
+    .some(
+      (next) =>
+        next.type === "synthetic" &&
+        next.metadata?.notice === "output-escalation" &&
+        next.metadata.replaces === message.id,
+    )
+}
+
+/**
+ * The muted label that follows an assistant footer. A replaced attempt is "retried", ahead of "continued" for a
+ * failure the run recovered from; a final output-limit finish with nothing after it is "truncated".
+ */
+export function footerOutcome(messages: SessionMessageInfo[], index: number) {
+  const message = messages[index]
+  if (message?.type !== "assistant") return
+  if (retriedStep(messages, index)) return "retried"
+  if (recoveredStep(messages, index)) return "continued"
+  if (message.finish === "length") return "truncated"
+}
+
 export function legacyTurns(messages: SessionMessageInfo[]) {
   return !messages.some((message) => message.type === "idle")
 }
