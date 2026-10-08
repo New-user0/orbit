@@ -38,7 +38,7 @@ test("the extension stays off in a workspace that VS Code does not trust", () =>
 
 test("every command the extension contributes says what stands between it and work in an untrusted folder", () => {
   const gates: Record<string, string> = {
-    "orbit.open": "starts nothing: opens the chat",
+    "orbit.open": "opens the chat; its model list and choices wait for the first trust read and are not asked of a server that cannot say",
     "orbit.newSession": "starts nothing: clears the chat",
     "orbit.history": "starts nothing: lists this folder's sessions and replays one",
     "orbit.outputStyle": "starts nothing: writes the output style of the user's own config",

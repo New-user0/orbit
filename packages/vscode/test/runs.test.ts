@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { decide, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
+import { decide, decisionText, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
 
 // `orb` from source behind a wrapper script. orb reads the working directory from PWD, which the wrapper's own `cd`
 // would change, so it hands on the directory it was called from.
@@ -73,7 +73,20 @@ test("writes out control characters that a run store holds, in labels and toolti
   const hostile = "a\u202Eb\u001b[2Jc"
   const run = runItem({ id: hostile, workflow: hostile, status: "failed", updated: 0 })
   const node = nodeItem({ id: hostile, status: "failed", attempts: 1, message: hostile, error: { message: hostile }, started: 0 })
-  for (const text of [run.label, run.tooltip, node.label, node.tooltip]) {
+  const lying = runItem({ id: "a", workflow: "w", status: hostile as "failed", updated: 0 })
+  const words = decisionText(true, hostile, hostile)
+  for (const text of [
+    run.label,
+    run.tooltip,
+    node.label,
+    node.tooltip,
+    lying.description,
+    lying.tooltip,
+    words.title,
+    words.failure,
+    words.done,
+    decisionText(false, hostile, hostile).title,
+  ]) {
     expect(text).not.toContain("\u202E")
     expect(text).not.toContain("\u001b")
   }

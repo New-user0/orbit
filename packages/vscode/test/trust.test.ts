@@ -414,6 +414,53 @@ test("sends nothing, and says so, when the server is older than workspace trust"
   }
 })
 
+test("asks an old server for nothing but trust and events: no model list, no choice, no message", async () => {
+  const server = stub({})
+  try {
+    const { controller, updates } = chat(server.client, project, "trust", quick)
+    expect((await shown(updates))?.unchecked).toBe(true)
+
+    expect(await controller.models()).toEqual([])
+    await controller.select({ providerID: "test", id: "test-model", name: "Test Model" })
+    await controller.mode("plan")
+    await controller.send("hello").catch(() => undefined)
+
+    // A request that names the folder boots its location, and on such a server that imports the folder's plugins.
+    expect(new Set(server.seen)).toEqual(new Set(["GET /api/location/trust", "GET /api/event"]))
+    expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining('"hello"')])
+  } finally {
+    await server.stop()
+  }
+})
+
+test("does not take a failed re-read of the opened folder for a confirmation, and keeps the banner", async () => {
+  const sub = path.join(project, "sub")
+  const fails: Array<[string, () => Response | Promise<Response>]> = [
+    ["a server error", () => new Response("boom", { status: 500 })],
+    ["no answer in time", () => new Promise<Response>(() => {})],
+  ]
+  for (const [name, reread] of fails) {
+    const server = stub({
+      get: (count) => (count === 1 ? answer() : reread()),
+      post: () => answer({ trusted: true, withheld: [] }),
+    })
+    try {
+      const { controller, updates } = chat(server.client, sub, "trust", quick)
+      expect((await shown(updates))?.trust).toBeDefined()
+
+      const result = await controller.review().then(
+        (grant) => ({ grant }),
+        (error: Error) => ({ error: error.message }),
+      )
+
+      expect({ name, granted: "grant" in result }).toEqual({ name, granted: false })
+      expect(trusts(updates).at(-1)?.trust).toBeDefined()
+    } finally {
+      await server.stop()
+    }
+  }
+})
+
 test("keeps going, with one line in the log, when the server fails or sends something that is not a trust status", async () => {
   const bad: Array<[string, () => Response]> = [
     ["a server error", () => new Response("boom", { status: 500 })],

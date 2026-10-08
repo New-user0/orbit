@@ -869,8 +869,9 @@ The extension could not trust a folder, and it started whatever `orbit.executabl
 `.vscode/settings.json` could set, with the workspace folder as its working folder.
 
 - **The question.** The extension asks the server whether the folder its chat works in is trusted (see "A project's
-  config waits for its folder to be trusted" above) when the chat starts, whenever the server reports a grant, a revoke, a
-  change of config or a new connection, and before each message. While the folder is untrusted and holds something of its own back, a banner
+  config waits for its folder to be trusted" above) when the chat starts, whenever the server reports a grant, a revoke,
+  a change of config or a new connection, and before each message. While the folder is untrusted and holds something
+  of its own back, a banner
   above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit · untrusted" item in the status
   bar says so too, and **Orbit: Trust This Folder…** (offered only then) asks. Each of the three opens a dialog with
   **Trust this folder** and **Not now**, and closing the dialog is "Not now". The first message in such a folder asks
@@ -882,15 +883,17 @@ The extension could not trust a folder, and it started whatever `orbit.executabl
   repository, or a linked worktree, shares its project's decision. The dialog and the banner name the project's folder as
   the server reports it, and say which folder VS Code opened when it is another. The grant is made for the project's
   folder, and counts only when the server's answer names that folder and then reports the folder VS Code opened as
-  trusted too. If either does not, the chat does not treat the folder as trusted, goes on as after "Not now", and says so.
+  trusted too. If either does not, or the second read fails or is late, the chat does not treat the folder as trusted,
+  goes on as after "Not now", and says so.
   Config in a folder above the project is named, with no command to trust that folder, because a grant always goes to
   the project's folder and that is not always the folder that holds the config.
 - **When the server cannot say.** Each read of the answer waits two seconds, and a grant ten. A server that does not
   answer in time, fails or sends something that is not a trust status leaves the last answer in place with a line in the
   Orbit output channel, and the chat goes on: the server applies the same rules whether the extension asked or not. A
   server older than workspace trust has no such route and would apply the folder's hooks and servers unasked, so the
-  setup list says that trust was not checked, and a message is not sent: the chat says to run `orb service restart` and
-  sends nothing to the model until then.
+  setup list says that trust was not checked, and nothing else is sent for the folder until then: a message is not
+  sent (the chat says to run `orb service restart`), the model list stays empty, and choosing a model or a mode changes
+  only the extension's own choice.
 - **The program.** `orbit.executable` now has machine scope, so only your user settings, or those of the remote machine,
   can set it; a workspace's or a folder's value is ignored. The extension also declares that it does not support
   untrusted workspaces, so it stays off in VS Code's Restricted Mode until you trust the workspace in VS Code, which is a

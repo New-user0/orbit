@@ -65,10 +65,21 @@ const icons = { running: "sync~spin", waiting: "question", succeeded: "pass", fa
 export function runItem(run: Run): Item {
   return {
     label: plain(run.workflow),
-    description: `${run.status} · ${new Date(run.updated).toLocaleString()}`,
-    tooltip: `${plain(run.id)}\n${plain(run.workflow)}: ${run.status}`,
+    description: `${plain(run.status)} · ${new Date(run.updated).toLocaleString()}`,
+    tooltip: `${plain(run.id)}\n${plain(run.workflow)}: ${plain(run.status)}`,
     icon: icons[run.status],
     context: `run-${run.status}`,
+  }
+}
+
+/** The words shown around a gate's name in the decision prompts. The name is the run store's, so it is written out. */
+export function decisionText(approve: boolean, node: string, run: string) {
+  const verb = approve ? "Approve" : "Reject"
+  const name = plain(node)
+  return {
+    title: `${verb} ${name}`,
+    failure: `Could not decide ${name}`,
+    done: `${approve ? "Approved" : "Rejected"} ${name}. Resume ${plain(run)} now?`,
   }
 }
 

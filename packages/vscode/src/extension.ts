@@ -346,6 +346,9 @@ class Chat implements vscode.WebviewViewProvider {
         if (!controller || this.models.length > 0) return
         this.models = await settledModels(controller)
         this.post({ type: "models", models: this.models, selected: this.selected })
+        // On a server that cannot say whether the folder is trusted, no models are asked for, and the setup line
+        // about trust already says why.
+        if (this.uncheckedShown) return
         this.check({
           ok: this.models.length > 0,
           text:

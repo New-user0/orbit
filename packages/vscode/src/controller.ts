@@ -55,6 +55,9 @@ export class Controller {
   // Folders (the server's, by name) that the person answered "not now" for, until this chat is closed.
   private readonly dismissed = new Set<string>()
   private deciding: Promise<TrustGrant | undefined> | undefined
+  // The first trust read. A call that boots the folder's location waits for it: on a server older than workspace trust
+  // that boot imports the folder's plugins, so it must not go out before the server is known to be new enough.
+  private readonly first: Promise<unknown>
 
   constructor(
     private readonly client: OrbitClient,
@@ -64,11 +67,13 @@ export class Controller {
     private readonly wait = limits,
   ) {
     void this.listen()
-    void this.read()
+    this.first = this.read()
   }
 
   /** Models available in this folder, for the picker. */
   async models(): Promise<ReadonlyArray<Model>> {
+    await this.first
+    if (this.unchecked) return []
     const list = await this.client.model.list({ location: { directory: this.directory } })
     return list.data.map((item) => ({ providerID: item.providerID, id: item.id, name: item.name }))
   }
@@ -76,7 +81,8 @@ export class Controller {
   /** The model for the next prompt; applied to the current session too. */
   async select(model: Model) {
     this.model = model
-    if (this.session)
+    await this.first
+    if (this.session && !this.unchecked)
       await this.client.session.switchModel({
         sessionID: this.session,
         model: { providerID: model.providerID, id: model.id },
@@ -86,7 +92,8 @@ export class Controller {
   /** Build edits and runs; Plan only reads. Applied to the current session too. */
   async mode(agent: Mode) {
     this.agent = agent
-    if (this.session) await this.client.session.switchAgent({ sessionID: this.session, agent })
+    await this.first
+    if (this.session && !this.unchecked) await this.client.session.switchAgent({ sessionID: this.session, agent })
   }
 
   /** Sets the global output style; null returns to the default. */
@@ -167,7 +174,7 @@ export class Controller {
       return this.update({
         type: "note",
         id: `trust:${crypto.randomUUID()}`,
-        text: "This server is older than workspace trust and cannot say whether the folder is trusted, so the message was not sent. Run `orb service restart`, then send it again.",
+        text: "This server is older than workspace trust and cannot say whether the folder is trusted, so the message was not sent. Run `orb service restart`, then send it again: " + JSON.stringify(text),
         tone: "error",
       })
     const sessionID = this.session ?? (await this.create())
@@ -267,8 +274,8 @@ export class Controller {
     // Folder names are the repository's to choose, so they are written out wherever a person reads them.
     if (!isStatus(granted) || !granted.trusted || granted.directory !== shown.directory)
       throw new Error(`The server did not trust ${plain(shown.directory)}.`)
-    this.accept(granted, ++this.reads)
-    const working = await this.read()
+    // Not accepted yet: the banner stays until the opened folder itself is confirmed.
+    const working = await this.read(true)
     if (!working?.trusted || working.directory !== shown.directory)
       throw new Error(
         `The server trusted ${plain(shown.directory)} but does not report ${plain(this.directory)} as trusted.`,
@@ -280,7 +287,7 @@ export class Controller {
   // read is bounded, and a server that fails, answers late or sends something that is not a trust status leaves the last
   // answer in place and costs one line in the log. A server older than workspace trust has no such route, which is
   // reported apart, because it applies a folder's config without asking.
-  private async read() {
+  private async read(confirm = false) {
     const attempt = ++this.reads
     const answer = await this.client.location.trust
       .get({ location: { directory: this.directory } }, { signal: AbortSignal.timeout(this.wait.read) })
@@ -289,7 +296,7 @@ export class Controller {
         (error: unknown) => ({ error }),
       )
     if ("error" in answer) {
-      if (!unsupported(answer.error)) return this.fail(`could not read workspace trust: ${message(answer.error)}`)
+      if (!unsupported(answer.error)) return this.fail(`could not read workspace trust: ${message(answer.error)}`, confirm)
       if (attempt > this.applied) {
         this.applied = attempt
         this.unchecked = true
@@ -298,14 +305,15 @@ export class Controller {
       }
       return this.status
     }
-    if (!isStatus(answer.status)) return this.fail("could not read workspace trust: the answer is not a trust status")
+    if (!isStatus(answer.status)) return this.fail("could not read workspace trust: the answer is not a trust status", confirm)
     this.accept(answer.status, attempt)
     return this.status
   }
 
-  private fail(text: string) {
+  // A confirming read that fails confirms nothing, so it answers nothing instead of the last answer.
+  private fail(text: string, confirm: boolean) {
     this.emit({ type: "log", text })
-    return this.status
+    return confirm ? undefined : this.status
   }
 
   private accept(status: TrustStatus, attempt: number) {
