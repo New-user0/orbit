@@ -341,6 +341,8 @@ const layer = Layer.effect(
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
+            // A finished response is not an overload, so it restarts the count of overloads in a row.
+            overloads = 0
             // Fail with the limit now, also at the cap; a note left behind would reach the next prompt's request.
             const limit = yield* turnLimit(loaded, current.options)
             if (limit) return yield* new StepFailedError({ error: limit })

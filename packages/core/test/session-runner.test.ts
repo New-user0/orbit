@@ -6753,6 +6753,16 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
+  scenario("restarts the overload count after a response cut off by the output limit", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded around a cut-off", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), lengthStop("cut-between", "Part"))
+    yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Done", "after-cut"))
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
   // The cap of three resumes reads durable history, so the switch to a fallback model mid-turn must not reset it.
   scenario("holds the output-limit cap on the fallback model after overloads", function* (s) {
     yield* s.session.prompt({ sessionID, text: "Overloaded then long", turn: { fallbackModel }, resume: false })

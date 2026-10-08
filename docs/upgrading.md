@@ -104,11 +104,16 @@ rest:
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours, so it would otherwise replace the one in your own config.
+  because an agent's
+ own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the
+ model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as
+ the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key
+ that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours,
+ so it would otherwise replace the one in your own config.
 
 - **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
   `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
@@ -1171,11 +1176,10 @@ rebuilt the arguments from the half-written text and ran the tool with them, so 
 from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
 any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped
 and the tool does not run. After an output limit the input is recorded as failed with `tool.input-truncated` and the
-response is resumed (see "A response cut off by the output limit is resumed"); otherwise it fails with the response's
-own error. A call whose arguments
-arrived complete is not affected, and still runs when a later call in the same response was cut off. A call that
-stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
-still runs with empty arguments.
+response is resumed up to three times in a row (see "A response cut off by the output limit is resumed"); otherwise it
+fails with the response's own error. A call whose arguments arrived complete is not affected, and still runs when a
+later call in the same response was cut off. A call that stopped before its first argument is not caught: it cannot be
+told from a call to a tool that takes no arguments, so it still runs with empty arguments.
 
 A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
 `tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
@@ -1391,21 +1395,24 @@ resume where it stopped and sends the request again, up to three times in a row.
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
 `tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
 the next cut-off stays as it is. The count comes from the session history and starts over after any response that
-finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit
-(`maxSteps`, `maxCost`, `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with
-that `limit.*` error and no note is written.
+finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the
+cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
+`maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
+no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
+an incomplete stream's continuation does; the allowance is bounded.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
 
-**What to do:** Nothing. Raise the model's output limit if you would rather avoid the extra requests.
+**What to do:** nothing. Raise the model's output limit if you would rather avoid the extra requests.
 
 ### A run switches to the fallback model after three overloads in a row
 
 When the provider reports that the model is overloaded three times in a row within one step, Orbit now switches to the
 fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
 session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
-other failure between two overloads, such as a rate limit, restarts the count. If the overloaded response had already
+other failure between two overloads, such as a rate limit, or a response cut off by the output limit, restarts the
+count. If the overloaded response had already
 produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
 `synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
 also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first

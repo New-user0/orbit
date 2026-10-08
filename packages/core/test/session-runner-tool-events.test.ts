@@ -725,11 +725,14 @@ test("failing uncalled tool inputs leaves called and settled tools alone", async
         LLMEvent.toolInputStart({ id: "cut", name: "read" }),
         LLMEvent.toolInputDelta({ id: "cut", name: "read", text: '{"path":' }),
         LLMEvent.toolCall({ id: "whole", name: "read", input: { path: "file.txt" } }),
+        LLMEvent.toolCall({ id: "done", name: "read", input: { path: "done.txt" } }),
       ],
       publisher.publish,
       { discard: true },
     ),
   )
+  await Effect.runPromise(publisher.failTool("done", { type: "tool.execution", message: "settled" }))
+  const settledBefore = published.filter((event) => event.type === "session.tool.failed.2").length
 
   expect(
     await Effect.runPromise(
@@ -738,6 +741,7 @@ test("failing uncalled tool inputs leaves called and settled tools alone", async
   ).toBe(true)
 
   const failed = published.filter((event) => event.type === "session.tool.failed.2")
-  expect(failed).toHaveLength(1)
-  expect(failed[0]?.data).toMatchObject({ id: "cut", error: { type: "tool.input-truncated" } })
+  expect(settledBefore).toBe(1)
+  expect(failed).toHaveLength(2)
+  expect(failed[1]?.data).toMatchObject({ id: "cut", error: { type: "tool.input-truncated" } })
 })
