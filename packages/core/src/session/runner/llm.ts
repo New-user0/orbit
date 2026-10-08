@@ -221,7 +221,8 @@ const layer = Layer.effect(
           const limit = SessionTurn.exceeded(
             turn,
             yield* SessionTurn.usage(db, sessionID, turn),
-            loaded.model.cost.some((cost) => cost.tier === undefined),
+            // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
+            loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0)),
           )
           if (limit) return yield* new StepFailedError({ error: limit })
         }

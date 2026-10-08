@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { json, plain, progress } from "../src/plain"
+import { json, jsonLine, plain, progress } from "../src/plain"
 
 // A set-title sequence, one that erases the line, a right-to-left override and a line break: what a file that is not
 // trusted yet can put into a name or a message.
@@ -71,4 +71,32 @@ test("json leaves JSON that has nothing to write out as JSON.stringify makes it"
 
 test("json prints a value that has no JSON form as undefined, as the template it replaces did", () => {
   expect(json(() => 1)).toBe("undefined")
+})
+
+test("jsonLine writes out the characters that json does, and the two line separators that a reader splits lines at", () => {
+  expect(jsonLine({ id: `a${raw}b` })).toBe(`{"id":"a${written}b"}`)
+  expect(jsonLine(`${raw}`)).toBe(`"${written}"`)
+  expect(jsonLine("a\u{2028}b\u{2029}c")).toBe('"a\\u2028b\\u2029c"')
+})
+
+test("jsonLine is one line that parses back to the value it was given", () => {
+  const value = {
+    [`key${raw}`]: [`text${raw}`, { id: `id${raw}`, count: 1.5, ok: true, none: null }],
+    // Line breaks and an escape, which JSON.stringify writes out, and the C1 line break, which it leaves raw.
+    quote: 'say "hi"\\\n\t\r\u001b\u0085',
+    lone: "\ud800",
+    kept: "ü — 日本 😀",
+  }
+
+  const text = jsonLine(value)
+
+  expect(JSON.parse(text)).toEqual(value)
+  expect(text).not.toMatch(/\p{C}|\p{Zl}|\p{Zp}/u)
+  expect(text).toContain('"kept":"ü — 日本 😀"')
+})
+
+test("jsonLine leaves JSON that has nothing to write out as JSON.stringify makes it", () => {
+  const value = { a: [1, "x", { b: null }], c: "ü", d: {}, e: [] }
+  expect(jsonLine(value)).toBe(JSON.stringify(value))
+  expect(jsonLine(null)).toBe("null")
 })

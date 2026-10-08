@@ -75,4 +75,37 @@ describe("Provider", () => {
       reasoningEffort: "high",
     })
   })
+
+  describe("timeouts", () => {
+    test("leaves timeout and chunkTimeout unset so a route default can apply, and defaults headerTimeout", () => {
+      const resolved = Provider.timeouts({})
+
+      expect(resolved.timeout).toBeUndefined()
+      expect(resolved.chunkTimeout).toBeUndefined()
+      expect(resolved.headerTimeout).toBe(300_000)
+    })
+
+    test("returns configured values, including false to disable a limit", () => {
+      expect(Provider.timeouts({ timeout: 1_000, headerTimeout: 2_000, chunkTimeout: 3_000 })).toEqual({
+        timeout: 1_000,
+        headerTimeout: 2_000,
+        chunkTimeout: 3_000,
+      })
+      expect(Provider.timeouts({ timeout: false, headerTimeout: false, chunkTimeout: false })).toEqual({
+        timeout: false,
+        headerTimeout: false,
+        chunkTimeout: false,
+      })
+    })
+
+    test("drops invalid values instead of replacing them with a default chunk limit", () => {
+      for (const invalid of [0, -5, "soon", null, {}, Number.NaN]) {
+        const resolved = Provider.timeouts({ timeout: invalid, headerTimeout: invalid, chunkTimeout: invalid })
+
+        expect(resolved.timeout).toBeUndefined()
+        expect(resolved.chunkTimeout).toBeUndefined()
+        expect(resolved.headerTimeout).toBe(300_000)
+      }
+    })
+  })
 })

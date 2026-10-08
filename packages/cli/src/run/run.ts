@@ -1,5 +1,6 @@
 import { Service, type Endpoint } from "@orbit/client/effect/service"
 import { Orbit, type OrbitClient, type SessionMessageAssistantTool } from "@orbit/client/promise"
+import { jsonLine } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
 import { open } from "node:fs/promises"
 import path from "node:path"
@@ -254,13 +255,13 @@ export function reportRunError(input: Pick<RunCommandInput, "format">, message: 
   if (input.format === "result") {
     if (wroteResult()) return
     process.stdout.write(
-      JSON.stringify({ type: "result", sessionID: sessionID ?? "", is_error: true, result: "", error: message }) + "\n",
+      jsonLine({ type: "result", sessionID: sessionID ?? "", is_error: true, result: "", error: message }) + "\n",
     )
     return
   }
   if (input.format === "json" || input.format === "stream-json") {
     process.stdout.write(
-      JSON.stringify({
+      jsonLine({
         type: "error",
         timestamp: Date.now(),
         sessionID: sessionID ?? "",

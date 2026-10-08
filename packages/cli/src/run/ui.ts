@@ -1,3 +1,4 @@
+import { progress } from "@orbit/flow/plain"
 import { EOL } from "node:os"
 
 export const Style = {
@@ -21,7 +22,9 @@ export function empty() {
 
 export function error(message: string) {
   if (message.startsWith("Error: ")) message = message.slice("Error: ".length)
-  println(Style.TEXT_DANGER_BOLD + "Error: " + Style.TEXT_NORMAL + message)
+  // A failure's text comes from a provider, a tool or a stored message, which a repository can shape, so each line is
+  // written out as `progress` does before it reaches the terminal.
+  println(Style.TEXT_DANGER_BOLD + "Error: " + Style.TEXT_NORMAL + message.split(/\r?\n/).map(progress).join(EOL))
 }
 
 export * as UI from "./ui"

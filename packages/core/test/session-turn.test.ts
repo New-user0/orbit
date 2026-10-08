@@ -573,6 +573,24 @@ describe("SessionTurn.usage", () => {
         tokens: spend.tokens ?? { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
       })
     })
+  // A response that failed mid-stream: started, then failed with no usage, so the row carries no cost.
+  const respondFailed = (id: Session.ID, at: number) =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID: id,
+        assistantMessageID,
+        agent: Agent.ID.make("build"),
+        model: primary,
+        started: at,
+      })
+      yield* bus.publish(SessionEvent.Step.Failed, {
+        sessionID: id,
+        assistantMessageID,
+        error: { type: "provider.transport", message: "Disconnected" },
+      })
+    })
   const record = (id: Session.ID, source: "title" | "compaction", cost: number) =>
     Effect.gen(function* () {
       const bus = yield* Bus.Service
@@ -688,6 +706,30 @@ describe("SessionTurn.usage", () => {
       expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(2)
     }),
   )
+
+  const unknownSpend: ReadonlyArray<
+    [string, (id: Session.ID) => Effect.Effect<void, unknown, Bus.Service>]
+  > = [
+    ["a response with tokens and a cost of zero", (id) => respond(id, 1_100, { cost: 0 })],
+    ["a failed response with no recorded cost", (id) => respondFailed(id, 1_100)],
+    ["a usage record with tokens and a cost of zero", (id) => record(id, "title", 0)],
+  ]
+  for (const [name, spend] of unknownSpend)
+    for (const where of ["the session", "a subagent"] as const)
+      it.effect(`counts ${name} in ${where} as unknown`, () =>
+        Effect.gen(function* () {
+          const s = yield* harness
+          yield* children
+          yield* s.admit("Now", { turn: { maxCost: Money.USD.make(5) } })
+          yield* s.promote("input")
+          const turn = yield* s.current
+          yield* respond(sessionID, 1_000)
+          expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(0)
+
+          yield* spend(where === "the session" ? sessionID : childID)
+          expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(1)
+        }),
+      )
 
   it.effect("is the same after the session's events are replayed", () =>
     Effect.gen(function* () {

@@ -494,7 +494,8 @@ bun run package
 code --install-extension (Get-ChildItem dist\orbit-code-*.vsix).FullName --force
 ```
 
-In VS Code settings, set `orbit.executable` to the full path of the new `orb.exe`, then reload the window.
+In your VS Code **user** settings, set `orbit.executable` to the full path of the new `orb.exe`, then reload the window.
+A workspace's settings cannot set it.
 
 Click the Orbit icon in the activity bar, or run **Orbit: Open Orbit** from the Command Palette. The chat opens as an
 editor tab with the Explorer beside it; files and proposed diffs open next to the chat, and runs are listed under
@@ -509,6 +510,8 @@ reload the window.
   it side by side. The status bar shows `Orbit · working`, or `Orbit · needs review` while a card waits.
 - The prompt from step 5 shows the same **Workflow** card, and `● 2 agents` in the composer opens the agent map.
 - The tab's history button (◷) continues an earlier session from this folder.
+- In a folder that holds project config you have not trusted, a banner above the chat lists what Orbit leaves out, and
+  the status bar shows `Orbit · untrusted`. **Review and trust…** opens the same question as the first message does.
 
 Open `D:\Project\flow-demo` in VS Code. **Orbit Runs** in the Explorer lists its runs; expand one to see its nodes.
 To try gates there, run `orb flow run .orbit\workflows\gated.ts --model $MODEL` (section 6d) in the terminal. When

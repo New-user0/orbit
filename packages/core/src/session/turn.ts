@@ -184,8 +184,10 @@ export interface Usage {
   /** Input, cache write, output and reasoning tokens. */
   readonly tokens: number
   /**
-   * Finished responses with no recorded cost or no tokens at all, and usage records that do not decode. They add
-   * nothing to `cost` and `tokens`, so a cost limit must not read them as free.
+   * Responses and usage records, the Session's own or a subagent's, whose price is unknown: a finished response with
+   * no recorded cost or no tokens at all, any response or record with tokens and a cost of zero, a response that failed
+   * with no recorded cost, and usage records that do not decode. They add nothing (or nothing real) to `cost`, so a
+   * cost limit must not read them as free.
    */
   readonly unknown: number
 }
@@ -209,6 +211,12 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
   )`
   const ended = sql`json_extract(data, '$.finish') IN ('stop', 'length', 'tool-calls', 'content-filter')`
   const tokens = sql`coalesce(json_extract(data, '$.tokens.input'), 0) + coalesce(json_extract(data, '$.tokens.cache.write'), 0) + coalesce(json_extract(data, '$.tokens.output'), 0) + coalesce(json_extract(data, '$.tokens.reasoning'), 0)`
+  const read = sql`${tokens} + coalesce(json_extract(data, '$.tokens.cache.read'), 0)`
+  // Spend whose price is unknown: a finished response with no cost or no tokens, any response with tokens and a zero
+  // cost (a model with no price, or a free one), and a failed one that recorded no cost.
+  const unpriced = sql`(${ended} AND (json_extract(data, '$.cost') IS NULL OR ${read} = 0))
+    OR (${read} > 0 AND coalesce(json_extract(data, '$.cost'), 0) = 0)
+    OR (json_extract(data, '$.finish') = 'error' AND json_extract(data, '$.cost') IS NULL)`
   const messages = yield* db
     .get<{ steps: number | null; cost: number | null; tokens: number | null; unknown: number | null }>(
       sql`${descendants}
@@ -216,7 +224,7 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
           sum(CASE WHEN session_id = ${sessionID} AND ${ended} THEN 1 ELSE 0 END) AS steps,
           sum(coalesce(json_extract(data, '$.cost'), 0)) AS cost,
           sum(${tokens}) AS tokens,
-          sum(CASE WHEN ${ended} AND (json_extract(data, '$.cost') IS NULL OR ${tokens} + coalesce(json_extract(data, '$.tokens.cache.read'), 0) = 0) THEN 1 ELSE 0 END) AS unknown
+          sum(CASE WHEN ${unpriced} THEN 1 ELSE 0 END) AS unknown
         FROM session_message
         WHERE type = 'assistant'
           AND ((session_id = ${sessionID} AND seq > ${since.seq})
@@ -245,7 +253,15 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
           total + item.tokens.input + item.tokens.cache.write + item.tokens.output + item.tokens.reasoning,
         0,
       ),
-    unknown: (messages?.unknown ?? 0) + decoded.length - recorded.length,
+    unknown:
+      (messages?.unknown ?? 0) +
+      decoded.length -
+      recorded.length +
+      recorded.filter(
+        (item) =>
+          item.cost === 0 &&
+          item.tokens.input + item.tokens.cache.read + item.tokens.cache.write + item.tokens.output + item.tokens.reasoning > 0,
+      ).length,
   } satisfies Usage
 })
 
