@@ -283,6 +283,18 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
   registry.transform((editor) =>
     Object.entries(tools).forEach(([name, tool]) => editor.add({ ...tool, name, options: options ?? tool.options })),
   )
+const config = Config.testLayer([
+  new Document({
+    type: "document",
+    info: new Info({
+      compaction: new ConfigCompaction.Info({
+        buffer: 3_000,
+        keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
+      }),
+    }),
+  }),
+])
+
 const layer = Layer.unwrap(
   Effect.map(RunnerState, (state) => {
     const modelTransport = Layer.succeed(
@@ -404,17 +416,6 @@ const layer = Layer.unwrap(
       load: () => Effect.succeed(Instructions.empty),
     })
     const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
-    const config = Config.testLayer([
-      new Document({
-        type: "document",
-        info: new Info({
-          compaction: new ConfigCompaction.Info({
-            buffer: 3_000,
-            keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
-          }),
-        }),
-      }),
-    ])
     const promptModels = Layer.mock(Model.Service, {
       get: () => Effect.undefined,
       all: () => Effect.succeed([]),
@@ -507,7 +508,11 @@ const layer = Layer.unwrap(
       ],
     )
   }),
-).pipe(Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)), Layer.provideMerge(testLLM))
+).pipe(
+  Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
+  Layer.provideMerge(testLLM),
+  Layer.provideMerge(config),
+)
 const it = testEffect(layer)
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
@@ -3488,6 +3493,22 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.generation?.maxTokens).toBe(256_000)
   })
 
+  scenario("lowers the output limit to the configured cap and never raises it", function* (s) {
+    const config = yield* Config.Test
+    const setCap = (cap: number) =>
+      config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: cap }) })])
+    s.currentModel = fittedOutputModel
+    yield* setCap(8_000)
+    yield* s.llm.push(TestLLM.text("Capped", "text-cap-low"))
+    yield* s.runPrompt("Question")
+    yield* setCap(500_000)
+    yield* s.llm.push(TestLLM.text("Above the maximum", "text-cap-high"))
+    yield* s.runPrompt("Again")
+
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
+    expect(s.requests[1]?.generation?.maxTokens).toBe(64_000)
+  })
+
   scenario("gives the summary its full output limit when the conversation overshot the threshold", function* (s) {
     // The conversation overshot the threshold, so the prepared summary request exceeds the budget and `deliver`
     // shrinks it before sending. The output limit must follow the budget, not the oversized prepared request.
@@ -4563,7 +4584,10 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
+      expect(yield* limited(s)).toMatchObject({
+        type: "limit.cost",
+        message: expect.stringContaining("cannot be counted"),
+      })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -4572,7 +4596,10 @@ describe("SessionRunnerLLM", () => {
       s.currentModel = compactModel
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 1_000 }, resume: false })
       // The first response alone fills the small window and passes the token limit.
-      yield* s.llm.push(toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }), TestLLM.text("## Objective\n- Summary", "limit-summary"))
+      yield* s.llm.push(
+        toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }),
+        TestLLM.text("## Objective\n- Summary", "limit-summary"),
+      )
 
       expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
@@ -4630,37 +4657,40 @@ describe("SessionRunnerLLM", () => {
   })
 
   for (const delivery of ["steer", "queue"] as const)
-    scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
-      s.currentModel = recoveryModel
-      yield* s.llm.push(
-        TestLLM.text("Active complete", "text-active"),
-        [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
-        TestLLM.text("Reply to the new request", "text-new"),
-      )
-      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
-      const first = yield* s.llm.gate
-      const run = yield* s.resume.pipe(Effect.forkChild)
-      yield* first.started
-      // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
-      yield* s.session.compact({ sessionID, delivery })
-      const summary = yield* s.llm.gate
-      yield* first.release
-      yield* summary.started
-      // The drain has not settled between the response and the compaction, so no idle mark separates them.
-      expect(run.pollUnsafe()).toBeUndefined()
-      yield* s.session.prompt({ sessionID, text: "New request during compaction" })
-      const third = yield* s.llm.gate
-      yield* summary.release
-      yield* third.started
+    scenario(
+      `joins a steer that arrives during a ${delivery} compaction after the last response to that turn`,
+      function* (s) {
+        s.currentModel = recoveryModel
+        yield* s.llm.push(
+          TestLLM.text("Active complete", "text-active"),
+          [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
+          TestLLM.text("Reply to the new request", "text-new"),
+        )
+        yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
+        const first = yield* s.llm.gate
+        const run = yield* s.resume.pipe(Effect.forkChild)
+        yield* first.started
+        // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
+        yield* s.session.compact({ sessionID, delivery })
+        const summary = yield* s.llm.gate
+        yield* first.release
+        yield* summary.started
+        // The drain has not settled between the response and the compaction, so no idle mark separates them.
+        expect(run.pollUnsafe()).toBeUndefined()
+        yield* s.session.prompt({ sessionID, text: "New request during compaction" })
+        const third = yield* s.llm.gate
+        yield* summary.release
+        yield* third.started
 
-      // The steer joined the finished turn and inherits its options.
-      expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
-        boundary: undefined,
-        options: { maxSteps: 2 },
-      })
-      yield* third.release
-      yield* Fiber.join(run)
-    })
+        // The steer joined the finished turn and inherits its options.
+        expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+          boundary: undefined,
+          options: { maxSteps: 2 },
+        })
+        yield* third.release
+        yield* Fiber.join(run)
+      },
+    )
 
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
     const execution = yield* SessionExecution.Service

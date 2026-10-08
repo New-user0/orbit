@@ -41,6 +41,8 @@ export interface Loaded {
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly tools: Tool.Snapshot
+  /** The configured `output_token_cap`, when set. */
+  readonly outputTokenCap?: number
 }
 
 /**
@@ -210,6 +212,7 @@ const layer = Layer.effect(
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         tools: selection.tools,
+        outputTokenCap: Config.latest(yield* config.entries(), "output_token_cap"),
       }
     })
 

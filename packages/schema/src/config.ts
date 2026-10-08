@@ -3,7 +3,7 @@ export * as Config from "./config.js"
 import { Schema } from "effect"
 import { ephemeral, inventory } from "./event.js"
 import { Permission } from "./permission.js"
-import { AbsolutePath, optional } from "./schema.js"
+import { AbsolutePath, optional, PositiveInt } from "./schema.js"
 import { ConfigAgent } from "./config/agent.js"
 import { ConfigMedia } from "./config/media.js"
 import { ConfigCompaction } from "./config/compaction.js"
@@ -38,6 +38,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   fallback_model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Model used for the rest of a turn after the selected model is repeatedly overloaded",
+  }),
+  output_token_cap: PositiveInt.pipe(optional).annotate({
+    description:
+      "Most tokens a model may write in one reply. Lowers the model's own maximum and never raises it; unset leaves the maximum in place",
   }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",

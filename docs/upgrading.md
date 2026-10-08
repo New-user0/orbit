@@ -102,13 +102,18 @@ folder is trusted. Until then Orbit keeps what cannot run code, spend money or r
 rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
-  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
+  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours, so it would otherwise replace the one in your own config.
+  because an agent's
+ own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the
+ model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as
+ the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key
+ that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours,
+ so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -1241,3 +1246,17 @@ model. Orbit uses your own setting until you trust the folder.
 **Affects:** people who want a backup model, and anyone reading `config.get`, which now lists the key.
 
 **What to do:** nothing. Set `fallback_model` in your own config to use it.
+
+### New `output_token_cap` setting
+
+The root `output_token_cap` setting is a positive whole number of tokens that caps how much a model may write in one
+reply. A main request asks for the smaller of the cap and the model's own maximum, and the cap is applied before
+`session.context` hooks run, so a hook can still change it. It never raises a limit. Left unset, requests are
+unchanged. Zero, a negative number or a fraction is reported and ignored.
+
+In a folder that is not trusted yet, `output_token_cap` is left out whole, like the other settings that choose a model
+or a budget. Orbit uses your own setting until you trust the folder.
+
+**Affects:** people who want shorter replies, and anyone reading `config.get`, which now lists the key.
+
+**What to do:** nothing. Set `output_token_cap` in your own config to use it.

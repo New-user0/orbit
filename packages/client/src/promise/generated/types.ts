@@ -2193,6 +2193,7 @@ export type ConfigEntry =
         shell?: string
         model?: string | { providerID: string; model: string; variant?: string }
         fallback_model?: string | { providerID: string; model: string; variant?: string }
+        output_token_cap?: number
         default_agent?: string
         output_style?: string
         update?: "disable" | "notify" | "auto"

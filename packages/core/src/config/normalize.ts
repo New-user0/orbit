@@ -204,6 +204,7 @@ export function normalize(input: unknown): Result {
     shell: Info.fields.shell,
     model: Info.fields.model,
     fallback_model: Info.fields.fallback_model,
+    output_token_cap: Info.fields.output_token_cap,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
     sandbox: Info.fields.sandbox,

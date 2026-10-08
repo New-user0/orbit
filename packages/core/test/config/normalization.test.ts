@@ -120,6 +120,14 @@ describe("ConfigNormalize", () => {
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
+  test("keeps output_token_cap and reports a cap of zero", () => {
+    expect(normalized({ output_token_cap: 8000 }).encoded.output_token_cap).toBe(8000)
+    const invalid = normalized({ output_token_cap: 0, share: "auto" })
+    expect(invalid.encoded.output_token_cap).toBeUndefined()
+    expect(invalid.encoded.share).toBe("auto")
+    expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+  })
+
   test("keeps the compatibility switch as one native value", () => {
     expect(normalized({ compatibility: { enabled: false } }).encoded.compatibility).toEqual({ enabled: false })
     expect(decoded({ compatibility: { enabled: true } }).compatibility?.enabled).toBe(true)

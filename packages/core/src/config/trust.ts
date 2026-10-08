@@ -183,6 +183,8 @@ export const classification = {
     model: inert,
     // Picks a model the folder would spend on, so it waits for trust (owner decision on model, provider and budget fields).
     fallback_model: withhold("network"),
+    // Only lowers the cap, but it is a budget field, so it waits for trust like the other model and budget fields.
+    output_token_cap: withhold("network"),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
