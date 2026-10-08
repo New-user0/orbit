@@ -880,12 +880,11 @@ opens it, as `--session` does; an empty value, or anything else, opens the sessi
 search. In `orb run` and `orb -p` it needs a session that exists: the ID, or the newest session of the working folder
 that matches the words, and a miss fails with "Session not found" (as one failed result under `--output-format json`)
 instead of creating a session, as `--session` does. The session's own folder is the one checked for trust, wherever the
-command starts. `--resume` cannot be combined with `--continue` or `--session`. Titles in the session list, on the home screen,
-in the banner and in the open and agent-map dialogs are written out, as `\x1b` or `\u{202e}`, where they hold control or
+command starts. `--resume` cannot be combined with `--continue` or `--session`. Titles in the session list, in the open dialog and on a session opened with `--session` are written out, as `\x1b` or `\u{202e}`, where they hold control or
 format characters.
 
 `--prompt` cannot be combined with a `-r` that opens the session list, because the prompt would go to a new session and
-not to the one you pick. `--model provider/model#variant` applies the variant.
+not to the one you pick. `--model provider/model#variant` applies the variant to that model.
 
 `-r` takes the next word as its value, so `orb -p -r fix it` resumes the session matching "fix" and sends "it". Quote the
 message, or put it after `--`, as in `orb -p -r ses_abc -- fix it`. A `-r` that ends the line, or is followed by another

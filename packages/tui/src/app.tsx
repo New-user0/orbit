@@ -654,9 +654,8 @@ function App() {
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
       if (args.model) {
-        // The help advertises provider/model#variant; the variant is not part of the model ID.
-        const [reference, variant] = args.model.split("#", 2)
-        const { providerID, modelID } = Model.parse(reference)
+        // The help advertises provider/model#variant; local.tsx applies the variant once the catalog loads.
+        const { providerID, modelID } = Model.parse(args.model.split("#", 2)[0])
         if (!providerID || !modelID)
           toast.show({
             variant: "warning",
@@ -665,7 +664,6 @@ function App() {
           })
         else {
           local.model.set({ providerID, modelID }, { recent: true })
-          if (variant) local.model.variant.set(variant)
         }
       }
       if (args.sessionID && !args.fork) {
