@@ -136,6 +136,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/flow/test/git.test.ts`, `packages/cli/test/flow.test.ts`.
 - Text printed to a terminal or stored in a title or a commit: `plain`, `progress` and `json` from `@orbit/flow/plain`.
   Proof: `packages/flow/test/plain.test.ts`, `packages/cli/test/flow.test.ts`.
+- What `orb run` prints (`packages/cli/src/run`): every line of JSON, which is each event of `json` and `stream-json`,
+  the `result` object and the error that `reportRunError` prints, goes through `jsonLine` from `@orbit/flow/plain`.
+  Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
+  step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
+  thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
+  are message content, which waits for the renderer sanitizer (see Known gaps). Proof:
+  `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
 
@@ -155,6 +162,47 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the path it found, in the folder of the file. Proof: `test/config-v2.test.tsx` (the file is read from beside cli.json
   only, with a control), `test/keybindings-file.test.ts` (the hostile names and keys), `test/editor.test.ts` (the Windows
   decoy test, with a control).
+
+**VS Code extension** (`packages/vscode`, which runs in VS Code's extension host: not an Orbit process, and shared with
+every other extension):
+
+- Whether the folder is trusted, and the question before work starts: `Controller` asks the server for the folder's
+  trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
+  command, starter and button that sends a prompt ends in. `send` asks the person, once per folder, before a session
+  exists. The server decides and enforces; what the extension adds is the question, and it never trusts a folder on its
+  own account. So once some read has been answered, a later read that fails or is late leaves the chat going and costs
+  a log line, as it does in the terminal UI. A server older than workspace trust has no such route and applies a
+  folder's config unasked, and so does the first request that names the folder, because it boots the folder's location
+  and imports its plugins. A 404 that comes after the limit looks like no answer, so until some read has been answered,
+  with a status or with a 404, nothing that names a location goes out (`usable` in `Controller`): `models` returns
+  nothing, choosing a model or a mode on a session changes only the local choice, `outputStyle` is not written (it
+  names no folder, so the server would boot its own working folder), and `send` posts an error and creates no
+  session; while nothing has answered each of them reads again first. When the server answered 404, `send` names `orb
+  service restart`. In both states the only requests the server sees are the trust read, the event stream, the
+  session list of the history picker and the reads of a session opened from history, which name no folder. After a grant, the folder
+  VS Code opened is read again and must itself answer trusted: a re-read that fails or is late confirms nothing, the
+  banner stays and the chat says it could not trust the folder. `orb run` stops on the same failures because it cannot
+  ask. A withheld entry in the answer that does not fit is dropped alone (`readStatus`), so the banner and the question
+  stay. Proof: `test/trust.test.ts` ("too late", "older than workspace trust", "only fails", "costs only itself"), and
+  the table of commands and the scan of the doors in `test/manifest.test.ts`.
+- The Runs view: what `orb flow ls` and `orb flow show` print from the clone's run store is decoded once in `runs` and
+  `nodes` (`decodeRuns`, `decodeNodes`), keeping strings and finite numbers, and every string is written out with `plain`
+  before the tree shows it. Proof: `test/runs.test.ts` (the usage with control characters and a cost that is not a
+  number).
+- The folder: the question shows the project's folder that the server names, the grant is made for that folder, and it
+  counts only when the answer names it and the folder VS Code opened reads as trusted too. Proof: `test/trust.test.ts`
+  ("trusts the folder the server named", "takes the stricter answer", "does not call a folder trusted").
+- Folder names, file names and kinds that the server sends: `view` and `Controller.grant` write them out with `plain`
+  before the banner, the dialog, the status bar tooltip or a chat note shows them. Proof: `test/trust-text.test.ts`,
+  `test/trust.test.ts` ("writes out the control characters of a folder's name").
+- The program the extension starts: `find` and `launch` in `src/program.ts` look on PATH only, skip empty and relative
+  entries and a relative path, and start the program by its full path. `orbit.executable` is read from the user's own
+  setting only (`configured`), has machine scope, and the extension is declared off in a workspace that VS Code does not
+  trust. The terminals start the program that `find` returned as their own process, and type nothing into a shell. Proof:
+  `test/program.test.ts` (planted `orb.exe` decoys, with the variable deleted, under Bun and under a real Node process)
+  and `test/manifest.test.ts`.
+- Config above the project: named, with no command, because a grant goes to the project's folder and not always to the
+  one that holds it. Proof: `test/trust-text.test.ts`, `test/trust.test.ts` ("names config above the project").
 
 **Build** (`packages/cli/script`):
 
@@ -739,11 +787,14 @@ repository text.
 - `plain(text)`, `progress(line)` and `json(value)` come from `@orbit/flow/plain` (`packages/flow/src/plain.ts`, which
   loads no other module). `plain` trims, writes control and format characters out and puts a line break on one line.
   `progress` keeps indentation and takes any value. `json` writes every character of Unicode category C as `\uXXXX`, so
-  `JSON.parse` returns the original value. Never `JSON.stringify` a string from a file for a terminal.
+  `JSON.parse` returns the original value. Never `JSON.stringify` a string from a file for a terminal. `jsonLine` is
+  `json` on one line, and it writes U+2028 and U+2029 out as well, for output that a program reads line by line, as it
+  reads `orb run --format stream-json`.
 
   ```ts
   process.stderr.write(`${progress(line)}\n`)
   process.stdout.write(`${json(result.output)}\n`)
+  process.stdout.write(`${jsonLine(event)}\n`)
   renderer.setTerminalTitle(terminalTitle(title))
   ```
 
@@ -766,9 +817,10 @@ repository text.
   category C remains on any line apart from real line breaks, that the written-out text is present, and that
   `JSON.parse` of printed JSON equals the original value. In terminal UI tests poll `renderOnce` and `captureCharFrame`.
 - Tests: `packages/flow/test/plain.test.ts`, `packages/flow/test/agents.test.ts` (titles and commit subjects),
-  `packages/cli/test/flow.test.ts`, `packages/tui/test/component/dialog-flow-runs.test.tsx`,
-  `packages/tui/test/util/renderer.test.ts`, `packages/tui/test/util/presentation.test.ts` and
-  `packages/tui/test/mini/splash.test.ts`. Mutation: revert each sink one at a time.
+  `packages/cli/test/flow.test.ts`, `packages/cli/test/run/noninteractive.test.ts` (`orb run`),
+  `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts`,
+  `packages/tui/test/util/presentation.test.ts` and `packages/tui/test/mini/splash.test.ts`. Mutation: revert each sink
+  one at a time.
 
 **Review questions:**
 
@@ -880,10 +932,12 @@ kind in turn.
   runner), `ServerProcess.start` (`packages/server/src/process.ts`), `EmbeddedHost.create`
   (`packages/sdk/src/internal/host.ts`) and the npm launcher `packages/cli/bin/orb.cjs`, which has the line inline
   because the file ships alone. A new entry (a binary, a worker host, an embedding) adds its own call. A process that is
-  not one of these does not have the variable. The VS Code extension host is the open case (Known gaps). An application
-  that embeds `@orbit/client` and starts its default service command, a bare `orb`, has to set it itself, as the SDK
-  host does. And the `.cmd` shim that npm writes for a global install starts `node` by name in a `cmd.exe` before
-  `orb.cjs` runs: it is npm's file, and no Orbit code reaches it.
+  not one of these does not have the variable. The VS Code extension host is one, and the extension does not call it
+  there, because the host is shared with every other extension: it finds `orb` on PATH itself and starts it by its full
+  path, so there is no bare name to look up (`find` and `launch` in `packages/vscode/src/program.ts`). An application
+  that embeds `@orbit/client` and starts its default service command, a bare `orb`, has to do one of the two, as the SDK
+  host and the extension do. And the `.cmd` shim that npm writes for a global install starts `node` by name in a
+  `cmd.exe` before `orb.cjs` runs: it is npm's file, and no Orbit code reaches it.
 - Start a program through `CrossSpawnSpawner` (`packages/util/src/cross-spawn-spawner.ts`). It calls
   `ProgramLookup.install()` before every launch, so nothing that goes through it depends on an entry having run, and on
   Windows it gives every child `NoDefaultCurrentDirectoryInExePath` in its environment (`ProgramLookup.environment()`):
@@ -904,10 +958,9 @@ kind in turn.
   on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
-- Three members of the class are still open: a relative `PATH` entry, the terminal UI's status line and the VS Code
-  extension's `orbit.executable`. Three more rest on `ProgramLookup.install()` alone, with no test of their own: the
-  language server client, the bare `git` fallback and the terminal UI's external editor. Known gaps lists each with its
-  task. A change must not widen one.
+- Two members of the class are still open: a relative `PATH` entry and the terminal UI's status line. Three more rest
+  on `ProgramLookup.install()` alone, with no test of their own: the language server client, the bare `git` fallback and
+  the terminal UI's external editor. Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -1283,7 +1336,9 @@ fixes it or asks.
 - **The formatter gate keys on the Location's project**, not on the folder of an externally edited file (N3).
 - **Advice that cannot be followed.** `Trust.Withheld.directory` can name a folder, such as the middle one of outer,
   middle and inner repositories, that `orb trust` cannot lift, because a grant always goes to `project.canonical`. There
-  is no revoke-by-directory route for a deleted folder.
+  is no revoke-by-directory route for a deleted folder. The VS Code extension names such a folder and gives no command
+  for it (`packages/vscode/test/trust-text.test.ts`), which leaves the terminal UI, `orb run` and `orb trust` with the
+  advice.
 - **`model` and `steps` are inert.** `ConfigTrust.classification` keeps `model` (in the config, in every agent and in
   every command) and an agent's `steps` as written while a folder is untrusted. A folder can therefore switch a session
   to the most expensive model of a provider that you configured, or send your prompts to another provider that you
@@ -1296,7 +1351,9 @@ fixes it or asks.
   `test/config/trust.test.ts`). The other `model` fields wait for the wider decision.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
   reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
-  bodies need a sanitizer in the renderer (#22 round 7).
+  bodies need a sanitizer in the renderer (#22 round 7). In `orb run` that is the answer, the thinking lines and the
+  tool blocks of the default format, which are written as the model and the tools made them; its JSON formats write the
+  same text out with `jsonLine`.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
@@ -1343,15 +1400,16 @@ fixes it or asks.
   does not share this: it finds the editor with `which`, starts it by the path it found through cross-spawn, and a
   Windows test plants a decoy of the same name in the working folder (`test/editor.test.ts`). `openEditor` can take the
   same route.
-- **The VS Code extension's `orbit.executable`.** The setting has window scope, so the settings of a workspace can set
-  it, the extension declares no `untrustedWorkspaces` capability, and `packages/vscode/src/runs.ts` starts the bare
-  default `orb` with the workspace folder as its working directory, where Windows looks first. The extension host is not
-  an Orbit process, so `ProgramLookup.install()` does not reach it. VS Code's Restricted Mode keeps the extension off,
-  but only while workspace trust is on and the person has not trusted the workspace in VS Code, which is a decision of
-  its own and not Orbit's. Once they have, or with workspace trust off, the clone's `.vscode/settings.json` chooses the
-  program that the extension version-checks and starts as the service (`packages/vscode/src/endpoint.ts`) and the text
-  that `orbit.openTerminal` types into a terminal (`packages/vscode/src/extension.ts`), and the bare default is looked
-  up in the workspace folder, all before Orbit's own trust is asked (task `clients-ux-45`).
+- **VS Code, more than one folder.** The chat works in one folder, the one in view when it first connected, and its
+  trust question and banner are about that folder. The Runs view and the terminals follow the editor in view, so in a
+  workspace of several folders they can act in another one. What they start gates itself in its own process (`orb flow
+  resume` refuses an untrusted folder, `packages/cli/test/trust.test.ts`), but the extension does not ask about that
+  folder. No task yet.
+- **VS Code, the part that loads `vscode`.** `extension.ts`, `runs-view.ts` and the webview import `vscode` or the DOM,
+  so no test loads them. What they do with trust (the banner, the status bar item, the dialog, the command and the
+  terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`,
+  `trust.ts` and `program.ts`, which are tested. That includes the refetch of the model list when the trust check starts
+  to answer after a restart of an old service. No task yet.
 - **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`

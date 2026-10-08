@@ -23,6 +23,12 @@
   "activationEvents": [
     "onWebviewPanel:orbit.chat"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Orbit runs an agent that reads and edits the files of the workspace and runs commands in it, so it stays off until you trust the workspace in VS Code. Orbit then asks separately whether to trust the folder itself."
+    }
+  },
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -108,6 +114,12 @@
         "title": "Open orb in Terminal",
         "category": "Orbit",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "orbit.trust",
+        "title": "Trust This Folder…",
+        "category": "Orbit",
+        "icon": "$(workspace-untrusted)"
       },
       {
         "command": "orbit.runs.refresh",
@@ -214,6 +226,10 @@
       ],
       "commandPalette": [
         {
+          "command": "orbit.trust",
+          "when": "orbit.untrusted"
+        },
+        {
           "command": "orbit.runs.approve",
           "when": "false"
         },
@@ -261,7 +277,8 @@
         "orbit.executable": {
           "type": "string",
           "default": "orb",
-          "description": "Path to the orb executable. The extension starts or reuses its background service."
+          "scope": "machine",
+          "markdownDescription": "Path to the orb executable, or the name of a program on `PATH`. The extension starts or reuses its background service. Only your user settings count: a workspace cannot set this, because it chooses the program the extension runs."
         },
         "orbit.placement": {
           "type": "string",
@@ -297,6 +314,7 @@
   },
   "dependencies": {
     "@orbit/client": "workspace:*",
+    "@orbit/flow": "workspace:*",
     "diff": "catalog:"
   },
   "devDependencies": {

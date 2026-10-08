@@ -645,6 +645,51 @@ skip the working folder too.
 **What to do:** nothing for programs on PATH. For one that you keep in the folder, write `.\server.bat` or its full
 path.
 
+### `orb run` holds a failed step back until the run is over, and joins text that the output limit cut
+
+A run can get past a step that fails: it continues after a stream that ended early, or switches to a fallback model, and
+starts another step. `orb run` used to print the error of a failed step, and set exit status 1, as soon as it saw the
+step fail, so a run that went on to answer still ended in an error. It now holds the failure back, and the next step to
+start drops it. When the execution fails, its error is printed in its place, once. A failure that is still held when the
+execution succeeds or is interrupted by someone else, or when the event stream ends, is printed then, with exit status 1.
+When `orb run` reads the stored messages at the end of a run, only the error of the last assistant message counts, so a
+failure that a later step followed is not reported. `--format json` and `stream-json` print no `error` line for a
+failure that was recovered.
+
+A step can stop at the output limit, which its `step_finish` line reports as reason `length`, and the next step can carry
+on in the middle of a word. In the default format, and with `--format result` (and so with `--json-schema`), the text of
+the next step is now joined as it is to the text that was cut, before it is written or parsed, so a word or a JSON
+string that the limit cut in two is whole again and the text is one line. It is joined only when nothing else was
+written between the two: no tool call, and no thinking line, which `--thinking` shows. A step that failed after some of
+its text is not joined to the step that continues it. `--format json` and `stream-json` still print one `text` line for
+each part: a program joins the parts of a message whose `step_finish` has reason `length` to the parts of the message
+that follows it.
+
+A session can hold an `output-escalation` notice: a hidden `session.synthetic` message whose metadata has
+`notice: "output-escalation"` and `replaces`, the ID of the assistant message that the notice replaces. `orb run` leaves
+the replaced message out of the answer, of what `--json-schema` parses and of the notes it prints. With `--format json`
+and `stream-json` it prints one line for the notice, `{"type":"notice","timestamp":…,"sessionID":"…","notice":
+"output-escalation","replaces":"msg_…"}`, and a program drops the parts whose `messageID` is the `replaces` value. A
+notice that does not name a message replaces nothing.
+
+A tool call that the model began and the output limit cut off (error type `tool.input-truncated`) prints one dim line on
+stderr, `Tool call cut off by the output limit: <tool>`, in place of the error lines. `--format json` and `stream-json`
+still print the `tool_use` line with the error.
+
+Every line of JSON that `orb run` prints (the events of `json` and `stream-json`, the `result` object, and the error
+object that it prints for a failure that is not one of the session's events) now writes DEL, the C1 controls, format
+characters such as a right-to-left override, and U+2028 and U+2029 as `\uXXXX`, and `JSON.parse` returns the same text.
+The error lines on stderr, the label of a step, the request for permission and the note about a cut-off tool call write
+control characters out as text, such as `\x1b`, as `orb flow` does. The answer and the thinking lines in the default
+format, and the tool blocks that `orb run` draws, are still written as the model and the tools made them.
+
+**Affects:** scripts and CI that read the exit status or the `error` lines of `orb run`: a run that recovered now exits 0
+and prints no error. Programs that read `--format json` or `stream-json`: there is a new `notice` line, and control
+characters in text arrive as escapes, which parse back to the same text. People who read a long answer in the terminal:
+text that the output limit cut is one line.
+
+**What to do:** nothing for most setups. A program that reads `json` or `stream-json` joins the parts of steps whose
+`step_finish` has reason `length`, and drops the parts of the message that a `notice` line replaces.
 ### A failed tool call has an error type that names what went wrong
 
 A tool call that failed used to be reported with the error type `tool.execution` whatever the reason, so a client could
@@ -721,8 +766,8 @@ comments and trailing commas and has three settings: `leader`, `bindings` and `c
 
 - `bindings` gives a command other keys wherever it is bound, and `null` takes its keys away. `contexts` does the same in
   one place only: `global`, `prompt`, `session`, `permission`, `composer`, `dialog`, `session-list`, `diff`, `which-key`
-  (which has no commands yet) or `mini`. So `session.rename` can have one key in the session list and another in a
-  session. A command's keys come from its context first, then `bindings`, then `keybinds` in `cli.json`, then the
+  (which has no commands yet) or `mini`. So `dialog.session.rename` can have one key in the session list while `session.rename`
+  has another in a session. A command's keys come from its context first, then `bindings`, then `keybinds` in `cli.json`, then the
   defaults. `keybinds` in `cli.json` works as before.
 - A key can be a chord, two or more strokes separated by a space, such as `ctrl+k ctrl+s`. `<leader>` sequences, lists
   separated by commas and `enter` or `esc` work beside it, and Escape cancels a chord that is waiting for its next stroke.
@@ -747,6 +792,33 @@ to `leader` or to an `input.*` key in `cli.json` now also applies while the term
 `keybindings.open`, the command behind `/keybindings`, which has no key by default.
 
 **What to do:** nothing. Run `/keybindings` to start from the template.
+
+### Ctrl+R in the prompt searches earlier prompts, and prompt history keeps 500 entries
+
+`ctrl+r` in the prompt of the terminal UI now opens a search over the prompts you sent before. The list narrows as you
+type, shows prompts sent from the current directory first, then the closest match, then the newest, and Enter loads the choice into the
+prompt with its mode and mentions. With `prompt.vim` on, `ctrl+r` in normal mode is still redo. The command is
+`prompt.history.search`.
+
+Renaming a session no longer has a key of its own in a session: `session.rename` now has no default key, and the
+session list's rename action is the new `dialog.session.rename`, still `ctrl+r`, in the `session-list` place. `/rename`
+and the command palette still rename a session. A `session.rename` key that you set in `keybinds` or `bindings` still
+works for a session, but no longer reaches the session list. An entry for it in the `session-list` place of
+`keybindings.json` now does nothing: move it to `dialog.session.rename`.
+
+Prompt history is also kept differently. It holds up to `prompt.history_limit` entries (500 by default, 50 before), and
+the file in Orbit's state folder is trimmed from its oldest end to stay under 1 MiB. Each entry now records the
+directory and time it was sent from. A pasted image, which was saved in the file as base64, and a pasted body over
+4 KiB are no longer saved: after a restart the image is gone from a recalled prompt (its `[Image 1]` mark stays as
+text) and a large paste keeps its `[Pasted ~N lines]` label but is sent as the words "Pasted text was too large to keep
+in prompt history"; selecting such an entry in the history search shows a warning. Both stay in the history of the
+running session. Lines written by earlier builds are read as before.
+
+**Affects:** anyone who used `ctrl+r` to rename a session from inside a session, who set `session.rename` in
+`keybindings.json`, or who recalled a pasted image from history after restarting.
+
+**What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
+`prompt.history_limit` to keep more or fewer prompts.
 
 ## Permissions
 
@@ -1008,3 +1080,85 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+
+### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
+
+The extension could not trust a folder, and it started whatever `orbit.executable` named, a setting that a repository's
+`.vscode/settings.json` could set, with the workspace folder as its working folder.
+
+- **The question.** The extension asks the server whether the folder its chat works in is trusted (see "A project's
+  config waits for its folder to be trusted" above) when the chat starts, whenever the server reports a grant, a revoke,
+  a change of config or a new connection, and before each message. While the folder is untrusted and holds something
+  of its own back, a banner above the chat says what Orbit leaves out and lists the files that hold it, an "Orbit ·
+  untrusted" item in the status bar says so too, and **Orbit: Trust This Folder…** (offered only then) asks. Each of the three opens a dialog with
+  **Trust this folder** and **Not now**, and closing the dialog is "Not now". The first message in such a folder asks
+  before a session exists or the model is asked anything, once per folder until the window is reloaded: "Not now" lets the
+  message go on without what the folder holds back, and the banner stays. Nothing is asked in a folder that is trusted or
+  holds nothing back. A home directory or a filesystem root is offered "Trust until Orbit restarts" instead, as in the
+  terminal UI.
+- **One folder.** Trust belongs to the project's folder, which is not always the one VS Code opened: a folder inside a
+  repository, or a linked worktree, shares its project's decision. The dialog and the banner name the project's folder as
+  the server reports it, and say which folder VS Code opened when it is another. The grant is made for the project's
+  folder, and counts only when the server's answer names that folder and then reports the folder VS Code opened as
+  trusted too. If either does not, or the second read fails or is late, the chat does not treat the folder as trusted,
+  goes on as after "Not now", and says so.
+  Config in a folder above the project is named, with no command to trust that folder, because a grant always goes to
+  the project's folder and that is not always the folder that holds the config.
+- **When the server cannot say.** Each read of the answer waits two seconds, and a grant ten. Once the server has
+  answered, a read that does not come in time, fails or sends something that is not a trust status leaves the last
+  answer in place with a line in the Orbit output channel, and the chat goes on: the server applies the same rules
+  whether the extension asked or not. A withheld entry that does not fit is left out alone. A server older than
+  workspace trust has no such route and would apply the folder's hooks and servers unasked, and one that has not
+  answered at all may be such a server, so nothing that names the folder is sent until some read has been answered.
+  A message is not sent and no session is created (the chat says the server's trust could not be reached, or, when the
+  server answered that it has no such route, to run `orb service restart`), the model list stays empty, the output
+  style is not written, and choosing a model or a mode changes only the extension's own choice. After the service is
+  restarted the model list is fetched again without reloading the chat. The Runs view writes out the text of a run
+  store that a clone ships, and ignores usage figures that are not numbers.
+- **The program.** `orbit.executable` now has machine scope, so only your user settings, or those of the remote machine,
+  can set it; a workspace's or a folder's value is ignored. The extension also declares that it does not support
+  untrusted workspaces, so it stays off in VS Code's Restricted Mode until you trust the workspace in VS Code, which is a
+  decision of its own and does not trust the folder for Orbit. The extension finds `orb` on PATH itself, skipping empty
+  and relative entries, and starts it by its full path: on Windows a program started by a bare name is looked for in the
+  working folder first, so an `orb.exe` committed to a repository ran when the Runs view listed its runs. A name with a
+  directory in it that is not a full path, such as `.\orb.exe`, is refused. On Windows only a `.exe` or `.com` is started,
+  as before.
+- **Terminals.** **Open orb in Terminal** and the Runs view's terminals start that program, by its full path, as the
+  terminal's own process. **Open orb in Terminal** used to type `orb` into your shell, where `cmd.exe` would look in the
+  workspace folder first, and it left that shell open after `orb` quit. Now no shell is involved.
+
+**Affects:** VS Code users, and anyone who set `orbit.executable` in a `.vscode/settings.json` or a workspace file, which is
+now ignored. Everyone who opens a folder that holds project config sees the banner and the first question.
+
+**What to do:** choose "Trust this folder" for each repository you trust, or run `orb trust` in it. Move `orbit.executable`
+into your user settings, and give it the full path of `orb` if `orb` is not on PATH.
+
+### A stalled stream on the default endpoint fails after 90 seconds of silence
+
+A streamed response that sends no bytes for 300 seconds used to be treated as stalled for every provider. For one
+provider's first-party default endpoint, whose stream sends periodic keepalive pings, the limit is now 90 seconds. The
+run then retries the request, or continues after output, as it does for any dropped stream. A custom `baseURL`, such as
+a gateway or proxy that may buffer or drop pings, keeps 300 seconds, and so does every other provider. A plugin that
+moves a request to another `baseURL` in `model.request` also gets 300 seconds; one that only rewrites the URL in
+`http.request` does not change the limit, which was chosen from the configured `baseURL`. An unset `chunkTimeout` no
+longer pins 300 seconds in front of a provider default, so a provider can supply a shorter one.
+
+**Affects:** people whose first-party stream goes silent for more than 90 seconds, including pings, for example behind
+a network device that drops keepalives.
+
+**What to do:** nothing in most setups. To allow longer silence, set `chunkTimeout` in the provider settings, or
+`false` to turn the limit off.
+### Failed model requests retry sooner, more often and for longer
+
+A session step or compaction that fails with a transient error, an overload included, now waits 0.5, 1, 2, 4, 8 and
+16 seconds, then 32 seconds for the remaining four of its ten retries, with 20% jitter. It used to wait 2, 4 and 8
+seconds, then 10 seconds. A provider that stays down now holds a step for about 160 seconds before it fails, where it
+held it for about 84. A provider's `Retry-After` still sets the minimum wait, capped at 15 minutes.
+
+Timeouts still stop after 3 retries, and more of them count: WebSocket idle timeouts, and the response-header and
+stream-idle timeouts of providers that use the AI SDK path. Session titles and `generate` calls never retry an overload;
+they send one request.
+
+**Affects:** people on an overloaded or unavailable provider, and plugins whose `retry` hook reads the proposed delay.
+
+**What to do:** nothing. A `retry` hook can still shorten or stop the wait.
