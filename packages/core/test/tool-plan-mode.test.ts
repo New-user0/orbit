@@ -27,7 +27,7 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
 import { globalProjectNode } from "./lib/project"
-import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
+import { executeTool, expectRegistryAsks, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const sessionID = Session.ID.make("ses_plan_mode_test")
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
@@ -105,6 +105,7 @@ describe("plan mode tools", () => {
       const paths = yield* disk()
       yield* Effect.gen(function* () {
         const registry = yield* Tool.Service
+        yield* expectRegistryAsks(registry, ["enter_plan_mode", "exit_plan_mode"])
         for (const name of ["enter_plan_mode", "exit_plan_mode"])
           expect(yield* toolTraits(registry, name)).toMatchObject({ readOnly: false, requiresUserInteraction: true })
       }).pipe(Effect.provide(server({ ...paths, decisions: [] }).layer))

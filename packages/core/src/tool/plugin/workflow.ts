@@ -97,7 +97,7 @@ export const Plugin = {
         editor.add({
           name,
           // Visible wherever subagents are: an agent that may not spawn subagents may not run workflows.
-          options: { codemode: false, permission: SubagentTool.name },
+          options: { authorizes: true, codemode: false, permission: SubagentTool.name },
           traits: { concurrencySafe: false, interruptBehavior: "block" },
           description,
           input: Input,

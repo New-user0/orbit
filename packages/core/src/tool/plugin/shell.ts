@@ -189,7 +189,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { codemode: false },
+          options: { authorizes: true, codemode: false },
           traits: { cancelSiblingsOnFailure: true },
           description: description(),
           input: Input,

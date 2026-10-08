@@ -217,7 +217,7 @@ for (const implicit of [false, true]) {
             await fs.writeFile(
               file,
               JSON.stringify({
-                model: "acme/fast",
+                username: "dev",
                 hooks: { SessionStart: [{ hooks: [{ type: "command", command: "echo ready" }] }] },
               }),
             )
@@ -232,7 +232,7 @@ for (const implicit of [false, true]) {
           const entries = yield* orbit.config.get({ location: { directory: project } })
           const document = entries.find((entry) => entry.type === "document" && entry.path === file)
           if (document?.type !== "document") throw new Error("Expected the project's config document")
-          expect(document.info.model).toBeDefined()
+          expect(document.info.username).toBeDefined()
           // The host decides: a host that sets nothing trusts nothing on its own.
           expect(document.trusted).toBe(implicit ? undefined : false)
           expect(document.withheld).toEqual(implicit ? undefined : ["hooks"])

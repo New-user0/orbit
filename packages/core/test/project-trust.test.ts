@@ -174,7 +174,7 @@ describe("ProjectTrust.status", () => {
         // allows everything, and none of it is listed, and neither are the repository's plain command and its skill.
         expect<unknown>(held(folders.repo, status)).toEqual([
           [CompatNames.mcp, ["mcp"]],
-          ["orbit.json", ["hooks", "mcp"]],
+          ["orbit.json", ["hooks", "mcp", "providers"]],
           [".orbit", ["plugins", "commands", "permissions", "providers"]],
         ])
       }).pipe(Effect.provide(loader(folders)))
@@ -259,7 +259,7 @@ describe("ProjectTrust.status", () => {
         const revoked = yield* project.revoke()
         expect<unknown>(held(folders.repo, revoked)).toEqual([
           [CompatNames.mcp, ["mcp"]],
-          ["orbit.json", ["hooks", "mcp"]],
+          ["orbit.json", ["hooks", "mcp", "providers"]],
           [".orbit", ["plugins", "commands", "permissions", "providers"]],
         ])
         yield* Fiber.join(reloaded)
