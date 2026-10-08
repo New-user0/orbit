@@ -37,6 +37,7 @@ import type {
   ModelInfo,
 } from "@orbit/client"
 import { useLocal } from "../../context/local"
+import { AssistantFooter } from "./assistant-footer"
 import { Locale } from "../../util/locale"
 import { bodyText, outputText } from "../../util/renderer"
 import { FilePath } from "../../ui/file-path"
@@ -98,6 +99,7 @@ import { usePlugin } from "../../plugin/context"
 import {
   cacheReuseDrop,
   completeGroupBoundary,
+  footerOutcome,
   createSessionRows,
   legacyTurns,
   messageBoundaryIDs,
@@ -1590,7 +1592,7 @@ function SessionEntryView(props: { row: SessionEntry; message: SessionRowViewPro
           <Show when={props.message(row().messageID)}>
             {(message) => (
               <Show when={message().type === "assistant"}>
-                <AssistantFooter message={message() as SessionMessageAssistant} />
+                <SessionAssistantFooter message={message() as SessionMessageAssistant} />
               </Show>
             )}
           </Show>
@@ -1869,12 +1871,11 @@ function SessionPartView(props: {
   )
 }
 
-function AssistantFooter(props: { message: SessionMessageAssistant }) {
+function SessionAssistantFooter(props: { message: SessionMessageAssistant }) {
   const ctx = use()
   const config = useConfig()
   const data = useData()
   const local = useLocal()
-  const theme = useTheme()
   const model = createMemo(
     () =>
       ctx
@@ -1889,35 +1890,21 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
   const tokensPerSecond = createMemo(() =>
     turnTokensPerSecond(props.message, messages(), ctx.messageIndex(props.message.id), ctx.legacyTurns()),
   )
-  const interrupted = createMemo(() => props.message.error?.message === "Step interrupted")
+  const queued = createMemo(() => new Set(data.session.pending.list(ctx.sessionID).map((item) => item.id)))
+  const outcome = createMemo(() => footerOutcome(messages(), ctx.messageIndex(props.message.id) ?? -1, queued()))
   return (
-    <>
-      <Show when={props.message.error && !interrupted() && !props.message.retry}>
-        <box paddingLeft={3}>
-          <text fg={theme.text.feedback.error.base}>Error: {bodyText(errorMessage(props.message.error))}</text>
-        </box>
-      </Show>
-      <AssistantRetry retry={props.message.retry} />
-      <box paddingLeft={3} marginTop={props.message.retry || (props.message.error && !interrupted()) ? 1 : 0}>
-        <text>
-          <span style={{ fg: props.message.error ? theme.text.muted : local.agent.color(props.message.agent) }}>
-            {bodyText(Locale.titlecase(props.message.agent))}
-          </span>
-          <Show when={ctx.terminal.width >= 28}>
-            <span style={{ fg: theme.text.muted }}> · {model()}</span>
-          </Show>
-          <Show when={duration() && (ctx.terminal.width < 28 || ctx.terminal.width >= 36)}>
-            <span style={{ fg: theme.text.muted }}> · {Locale.duration(duration())}</span>
-          </Show>
-          <Show when={config.data.session.tps && tokensPerSecond()}>
-            {(value) => <span style={{ fg: theme.text.muted }}> · {value().toFixed(1)} tok/s</span>}
-          </Show>
-          <Show when={interrupted()}>
-            <span style={{ fg: theme.text.muted }}> · interrupted</span>
-          </Show>
-        </text>
-      </box>
-    </>
+    <AssistantFooter
+      agent={props.message.agent}
+      color={local.agent.color(props.message.agent)}
+      model={model()}
+      duration={duration()}
+      tokensPerSecond={config.data.session.tps ? tokensPerSecond() : undefined}
+      error={props.message.error ? errorMessage(props.message.error) : undefined}
+      retry={props.message.retry}
+      interrupted={props.message.error?.message === "Step interrupted"}
+      outcome={outcome()}
+      width={ctx.terminal.width}
+    />
   )
 }
 
@@ -2365,33 +2352,6 @@ function QueuedPromptDock(props: { prompts: { id: string; text: string }[]; onOp
         </text>
       </box>
     </box>
-  )
-}
-
-function AssistantRetry(props: { retry: SessionMessageAssistant["retry"] }) {
-  const theme = useTheme()
-  const [seconds, setSeconds] = createSignal(0)
-  createEffect(() => {
-    const at = props.retry?.at
-    if (at === undefined) return
-    const update = () => setSeconds(Math.max(0, Math.ceil((at - Date.now()) / 1_000)))
-    if (update() === 0) return
-    const timer = setInterval(() => {
-      if (update() === 0) clearInterval(timer)
-    }, 1_000)
-    onCleanup(() => clearInterval(timer))
-  })
-  return (
-    <Show when={props.retry}>
-      {(retry) => (
-        <box paddingLeft={3}>
-          <text fg={theme.text.feedback.warning.base}>
-            ⚠ {seconds() > 0 ? `Retrying in ${seconds()}s` : "Retry due"} · attempt {retry().attempt} ·{" "}
-            {bodyText(retry().error.message)}
-          </text>
-        </box>
-      )}
-    </Show>
   )
 }
 
