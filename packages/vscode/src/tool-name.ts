@@ -27,8 +27,11 @@ const current = {
   LSP: "lsp",
   EnterPlanMode: "enter_plan_mode",
   ExitPlanMode: "exit_plan_mode",
+  EnterWorktree: "enter_worktree",
+  ExitWorktree: "exit_worktree",
   Workflow: "workflow",
   Memory: "memory",
+  Execute: "execute",
 } as const satisfies Record<string, string>
 
 export function legacyToolName(name: string): string {

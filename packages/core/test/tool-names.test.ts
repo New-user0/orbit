@@ -61,6 +61,7 @@ const renamed: ReadonlyArray<readonly [string, string]> = [
   ["exit_worktree", "ExitWorktree"],
   ["workflow", "Workflow"],
   ["memory", "Memory"],
+  ["execute", "Execute"],
 ]
 
 // The permission action a tool asks about: the editing tools share one.
@@ -78,6 +79,10 @@ describe("tool names", () => {
 
   test("a name read from a file is looked up as data, never as a property of the table", () => {
     for (const hostile of ["__proto__", "constructor", "toString", "hasOwnProperty", ""]) {
+      // A field key is data too: it keeps its own name and never becomes a function or a prototype.
+      const input = JSON.parse(`{"${hostile}":"x"}`)
+      expect(Object.keys(ToolNames.raiseInput("Edit", input))).toEqual([hostile])
+      expect(Object.keys(ToolNames.lowerInput("Edit", input))).toEqual([hostile])
       expect(ToolNames.canonical(hostile)).toBe(hostile)
       expect(ToolNames.legacy(hostile)).toBe(hostile)
       expect(ToolNames.spellings(hostile)).toEqual([hostile])
@@ -108,9 +113,9 @@ describe("tool names", () => {
     expect(edit.replace_all).toBe(true)
     expect(() => Schema.decodeUnknownSync(EditTool.Input)({ path: "a.ts", oldString: "a", newString: "b" })).toThrow()
     expect(Schema.decodeUnknownSync(ReadTool.Input)({ file_path: "a.ts", offset: 2, limit: 3 }).file_path).toBe("a.ts")
-    expect(Schema.decodeUnknownSync(ShellTool.Input)({ command: "ls", run_in_background: true }).run_in_background).toBe(
-      true,
-    )
+    expect(
+      Schema.decodeUnknownSync(ShellTool.Input)({ command: "ls", run_in_background: true }).run_in_background,
+    ).toBe(true)
   })
 
   test("old fields lower to the current ones and raise back", () => {
@@ -131,6 +136,19 @@ describe("tool names", () => {
     expect(ToolNames.lowerInput("shell", "raw text")).toBe("raw text")
   })
 
+  test("a record keyed by tool name answers to the old names too", () => {
+    const tools = ToolNames.aliased({ Write: 1, Bash: 2, plugin_tool: 3 } as Record<string, number>)
+    expect(tools.write).toBe(1)
+    expect("shell" in tools).toBe(true)
+    delete tools.write
+    tools.shell = 4
+    expect(Object.entries(tools)).toEqual([
+      ["Bash", 4],
+      ["plugin_tool", 3],
+    ])
+    expect(tools.toString).toBe(Object.prototype.toString)
+  })
+
   test("the spellings of two tools never overlap", () => {
     const groups = renamed.map(([old]) => new Set(ToolNames.spellings(old)))
     groups.forEach((group, index) =>
@@ -141,15 +159,18 @@ describe("tool names", () => {
 
 describe("permission rules written with old names", () => {
   // Every rule an earlier version could have written: one per tool, under each effect.
-  test.each(renamed.map(([old, name]) => [old, name]))("a deny rule for %s still denies %s, and an ask rule asks", (old, name) => {
-    // The editing tools ask about `edit`, which is the only old spelling of that action.
-    const action = actionOf(name)
-    const rule = (effect: "deny" | "ask" | "allow") => [{ action: ToolNames.legacy(action), resource: "*", effect }]
-    expect(Permission.evaluate(action, "*", rule("deny")).effect).toBe("deny")
-    expect(Permission.evaluate(action, "src/a.ts", rule("ask")).effect).toBe("ask")
-    expect(Permission.evaluate(action, "src/a.ts", rule("allow")).effect).toBe("allow")
-    expect(old).toBe(ToolNames.legacy(name))
-  })
+  test.each(renamed.map(([old, name]) => [old, name]))(
+    "a deny rule for %s still denies %s, and an ask rule asks",
+    (old, name) => {
+      // The editing tools ask about `edit`, which is the only old spelling of that action.
+      const action = actionOf(name)
+      const rule = (effect: "deny" | "ask" | "allow") => [{ action: ToolNames.legacy(action), resource: "*", effect }]
+      expect(Permission.evaluate(action, "*", rule("deny")).effect).toBe("deny")
+      expect(Permission.evaluate(action, "src/a.ts", rule("ask")).effect).toBe("ask")
+      expect(Permission.evaluate(action, "src/a.ts", rule("allow")).effect).toBe("allow")
+      expect(old).toBe(ToolNames.legacy(name))
+    },
+  )
 
   test("a rule keeps its place in the order: the last matching rule decides, in either spelling", () => {
     const rules: Permission.Ruleset = [
@@ -288,7 +309,10 @@ describe("hooks written with old names", () => {
           ].join("\n"),
         ),
       )
-      const block = (mode: string) => ({ type: "command", command: `bun "${guard}" ${mode} "${seen}"; exit $LASTEXITCODE` })
+      const block = (mode: string) => ({
+        type: "command",
+        command: `bun "${guard}" ${mode} "${seen}"; exit $LASTEXITCODE`,
+      })
       yield* config.setEntries([
         hooks({
           PreToolUse: [
@@ -325,6 +349,38 @@ describe("hooks written with old names", () => {
     }),
   )
 
+  // A guard of the user's own that checks `tool_name == "read"` or `tool_input.path` must see them whatever its matcher
+  // is, or a matcher that is absent, `*` or `.*` makes the guard fail open.
+  it.live("a native hook sees the old name and old fields whichever matcher reaches it", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const directory = (yield* tmpdirScoped()).path
+      const record = path.join(directory, "record.ts")
+      yield* Effect.promise(() =>
+        fs.writeFile(record, "await Bun.write(Bun.argv[2], JSON.stringify(JSON.parse(await Bun.stdin.text())))\n"),
+      )
+      const matchers = [undefined, "*", ".*", "read", "Read|read", "Read"] as const
+      const file = (index: number) => path.join(directory, `seen-${index}.json`)
+      yield* config.setEntries([
+        hooks({
+          PreToolUse: matchers.map((matcher, index) => ({
+            ...(matcher === undefined ? {} : { matcher }),
+            hooks: [{ type: "command", command: `bun "${record}" "${file(index)}"` }],
+          })),
+        }),
+      ])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      yield* registry.trigger("tool", "execute.before", { ...base, tool: "Read", input: { file_path: ".env" } })
+      const seen = yield* Effect.promise(() =>
+        Promise.all(matchers.map(async (_, index) => JSON.parse(await fs.readFile(file(index), "utf8")))),
+      )
+      // A matcher that names only the current spelling is told that spelling, as the person wrote it.
+      expect(seen.map((event) => event.tool_name)).toEqual(["read", "read", "read", "read", "read", "Read"])
+      expect(seen.map((event) => event.tool_input)).toEqual(matchers.map(() => ({ path: ".env", file_path: ".env" })))
+    }),
+  )
+
   it.live("a matcher never reaches a tool it does not name", () =>
     Effect.gen(function* () {
       const registry = yield* PluginHooks.Service
@@ -341,9 +397,7 @@ describe("hooks written with old names", () => {
         .pipe(Effect.exit)
       expect(Exit.isFailure(control)).toBe(true)
       for (const tool of ["Read", "Edit", "Write", "TaskStop", "plugin_tool"]) {
-        const result = yield* registry
-          .trigger("tool", "execute.before", { ...base, tool, input: {} })
-          .pipe(Effect.exit)
+        const result = yield* registry.trigger("tool", "execute.before", { ...base, tool, input: {} }).pipe(Effect.exit)
         expect(Exit.isSuccess(result)).toBe(true)
       }
     }),

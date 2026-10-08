@@ -79,7 +79,7 @@ export const create = (
   resolve: Resolve,
 ) => {
   return {
-    name: "execute",
+    name: "Execute",
     description,
     input: CodeMode.Input,
     output: ExecuteOutput,

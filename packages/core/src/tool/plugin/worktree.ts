@@ -54,7 +54,7 @@ export const Plugin = {
             yield* sessions.move({ sessionID: context.sessionID, directory: created.directory })
             entered.set(context.sessionID, { origin: location.directory, worktree: created.directory })
             return {
-              content: `Created a worktree at ${created.directory}. From the next step this session works there; use exit_worktree to return.`,
+              content: `Created a worktree at ${created.directory}. From the next step this session works there; use ExitWorktree to return.`,
             }
           }).pipe(Effect.mapError(failure("enter a worktree"))),
       })
@@ -62,7 +62,7 @@ export const Plugin = {
         name: "ExitWorktree",
         options: { codemode: false },
         traits: { interruptBehavior: "block" },
-        description: "Move this session back from the worktree it entered with enter_worktree, optionally removing it.",
+        description: "Move this session back from the worktree it entered with EnterWorktree, optionally removing it.",
         input: ExitInput,
         execute: (input, context) =>
           Effect.gen(function* () {

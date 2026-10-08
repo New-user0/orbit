@@ -256,6 +256,29 @@ test("permission layers leave the focused peer's Enter and navigation alone unti
   }
 })
 
+// The request carries the action under the name the tool has now; the diff must show whichever spelling it uses.
+test.each(["Edit", "edit"])("a %s permission request shows the diff it asks to approve", async (action) => {
+  await using tmp = await tmpdir()
+  const diff = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-before the change\n+after the change\n"
+  const panes = await mountPanes(tmp.path, () => (
+    <PermissionPrompt
+      request={{
+        id: "per_edit",
+        sessionID: "ses_scoped",
+        action,
+        resources: ["notes.txt"],
+        metadata: { diff },
+      }}
+    />
+  ))
+  try {
+    await panes.app.renderOnce()
+    expect(panes.app.captureCharFrame()).toContain("after the change")
+  } finally {
+    panes.app.renderer.destroy()
+  }
+})
+
 test.each([
   ["permission", true],
   ["dialog", false],

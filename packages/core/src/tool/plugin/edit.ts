@@ -130,7 +130,7 @@ const refusal = (input: typeof Input.Type) => {
     })
   if (input.old_string === "")
     return new ToolFailure({
-      message: "old_string must not be empty. Use write to create or overwrite a file.",
+      message: "old_string must not be empty. Use Write to create or overwrite a file.",
       code: Tool.ErrorCode.EditEmptyOldString,
     })
 }

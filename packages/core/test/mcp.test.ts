@@ -1492,7 +1492,7 @@ it.live("discovers and reads MCP resources through Code Mode", () =>
         snapshot.execute({
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call_resource", name: "execute", input: { code } },
+          call: { type: "tool-call", id: "call_resource", name: "Execute", input: { code } },
         })
 
       // The SDK walks every page, so one call returns the full catalog.
@@ -2314,7 +2314,7 @@ testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin tr
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual([
         "demo_search",
         "other_lookup",
-        "execute",
+        "Execute",
       ])
       const override = yield* registry.transform((editor) => {
         editor.add({
@@ -2340,7 +2340,7 @@ testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin tr
         "demo_added",
         "demo_search",
         "other_lookup",
-        "execute",
+        "Execute",
       ])
       expect((yield* toolDefinitions(registry)).find((tool) => tool.name === "demo_search")?.description).toBe(
         "Override search",
@@ -2378,7 +2378,7 @@ testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin tr
         "demo_search",
         "demo_status",
         "other_lookup",
-        "execute",
+        "Execute",
       ])
       expect((yield* toolDefinitions(registry)).find((tool) => tool.name === "demo_search")?.description).toBe(
         "Override search",
@@ -2403,7 +2403,7 @@ testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin tr
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual([
         "demo_refreshed",
         "demo_search",
-        "execute",
+        "Execute",
       ])
       expect((yield* toolDefinitions(registry)).find((tool) => tool.name === "demo_search")?.description).toBe(
         "Latest search",
@@ -2448,7 +2448,7 @@ testEffect(Layer.empty).effect("coalesces queued MCP tool notifications after in
     const bus = yield* Bus.Service
     yield* registration.flush
     expect(reads).toBe(1)
-    expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["demo_read_1", "execute"])
+    expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["demo_read_1", "Execute"])
 
     yield* bus.publish(McpEvent.ToolsChanged, { server: "demo" })
     yield* advance(() => reads >= 2)
@@ -2457,7 +2457,7 @@ testEffect(Layer.empty).effect("coalesces queued MCP tool notifications after in
     yield* advance(() => reads >= 3)
     yield* drain
     expect(reads).toBe(3)
-    expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["demo_read_3", "execute"])
+    expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["demo_read_3", "Execute"])
   }).pipe(
     Effect.provide(
       AppNodeBuilder.build(LayerNode.group([Tool.node, McpTool.node, Bus.node]), [
@@ -2487,14 +2487,14 @@ it.effect("advertises MCP output schemas to Code Mode", () =>
     const registration = yield* McpTool.Service
     yield* registration.flush
     const toolSet = yield* registry.snapshot()
-    const execute = toolSet.definitions.find((tool) => tool.name === "execute")
+    const execute = toolSet.definitions.find((tool) => tool.name === "Execute")
 
     expect(toolSet.definitions.map((tool) => tool.name)).toEqual([
       "direct_fail",
       "direct_issues",
       "direct_lookup",
       "direct_media",
-      "execute",
+      "Execute",
     ])
     expect(codeModeListings(toolSet.codeModeCatalog!).find((tool) => tool.path === "demo.search")?.line).toContain(
       "ok: boolean",
@@ -2540,7 +2540,7 @@ it.effect("forwards the invoking session through direct and Code Mode MCP tools"
       call: {
         type: "tool-call",
         id: "call_mcp_codemode",
-        name: "execute",
+        name: "Execute",
         input: { code: "return await tools.demo.search({})" },
       },
     })
@@ -2595,7 +2595,7 @@ it.effect("returns content-only MCP results through Code Mode", () =>
       call: {
         type: "tool-call",
         id: "call_mcp_content_only",
-        name: "execute",
+        name: "Execute",
         input: { code: "return await tools.demo.status({})" },
       },
     })
@@ -2621,7 +2621,7 @@ it.effect("parses JSON text results from MCP tools without an output schema", ()
         .execute({
           sessionID: Session.ID.make("ses_mcp_json_text"),
           ...toolIdentity,
-          call: { type: "tool-call", id: `call_${code.length}`, name: "execute", input: { code } },
+          call: { type: "tool-call", id: `call_${code.length}`, name: "Execute", input: { code } },
         })
         .pipe(Effect.map((execution) => execution.output.output))
 
@@ -2646,7 +2646,7 @@ it.effect("advertises MCP tools directly when Code Mode is disabled for the serv
     const registration = yield* McpTool.Service
     yield* registration.flush
     const definitions = yield* toolDefinitions(registry)
-    const execute = definitions.find((tool) => tool.name === "execute")
+    const execute = definitions.find((tool) => tool.name === "Execute")
 
     expect(definitions.some((tool) => tool.name === "direct_lookup")).toBe(true)
     expect(execute?.description).not.toContain("tools.direct.lookup")
@@ -2715,7 +2715,7 @@ it.effect("waits for permission before calling an MCP tool", () =>
         call: {
           type: "tool-call",
           id: "call_mcp_permission",
-          name: "execute",
+          name: "Execute",
           input: { code: "return await tools.demo.search({})" },
         },
       })
@@ -2758,7 +2758,7 @@ it.effect("does not call MCP when permission is blocked", () =>
       call: {
         type: "tool-call",
         id: "call_mcp_blocked",
-        name: "execute",
+        name: "Execute",
         input: { code: "return await tools.demo.search({})" },
       },
     })

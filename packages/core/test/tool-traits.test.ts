@@ -300,7 +300,7 @@ describe("ToolTraits", () => {
             ],
           ])
           const snapshot = yield* service.snapshot()
-          expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["healthy", "execute"])
+          expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["healthy", "Execute"])
           expect(snapshot.describe("broken")).toBeUndefined()
           expect(snapshot.describe("healthy")).toBeDefined()
         }).pipe(Effect.provide(Logger.layer([logger])))
@@ -361,7 +361,7 @@ describe("ToolTraits", () => {
           "empty",
           "plain",
           "small",
-          "execute",
+          "Execute",
         ])
       }),
     )
@@ -474,7 +474,7 @@ describe("ToolTraits", () => {
           yield* resolve("missing", { count: "5" }),
           yield* resolve("echo", { count: "5" }, new Map([["other", definition]])),
           yield* resolve("other", { count: "5" }, new Map([["echo", definition]])),
-          yield* resolve("execute", {}, new Map([["echo", definition]])),
+          yield* resolve("Execute", {}, new Map([["echo", definition]])),
         ])
           expect(exit).toEqual(Exit.succeed(ToolTraits.conservative))
         // Input that the schema rejects: the call will fail validation, and nothing about it is read-only. The tool
@@ -678,8 +678,8 @@ describe("ToolTraits", () => {
         expect(snapshot.describe("inner")).toBeUndefined()
         expect(yield* snapshot.traits({ call: toolCall("inner") })).toEqual(ToolTraits.conservative)
         // The Code Mode tool is described like any other: it declares that a program can reach the network.
-        expect(snapshot.describe("execute")).toStrictEqual({ ...ToolTraits.describe(make()), openWorld: true })
-        expect((yield* snapshot.traits({ call: toolCall("execute", { code: "return 1" }) })).readOnly).toBe(false)
+        expect(snapshot.describe("Execute")).toStrictEqual({ ...ToolTraits.describe(make()), openWorld: true })
+        expect((yield* snapshot.traits({ call: toolCall("Execute", { code: "return 1" }) })).readOnly).toBe(false)
       }),
     )
 
@@ -831,7 +831,7 @@ describe("SessionModelRequest", () => {
         messages: [],
       })
 
-      expect(prepared.request.tools.map((tool) => tool.name).toSorted()).toEqual(["execute", "renamed_echo"])
+      expect(prepared.request.tools.map((tool) => tool.name).toSorted()).toEqual(["Execute", "renamed_echo"])
       expect(yield* prepared.toolTraits(toolCall("renamed_echo"))).toEqual(declared)
       expect((yield* prepared.toolTraits(toolCall("renamed_echo", { count: "1" }))).readOnly).toBe(false)
       // The old name and a removed tool are not offered, so they resolve like an unknown tool.

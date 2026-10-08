@@ -26,7 +26,7 @@ export const toolDefinitions = (registry: Tool.Interface, permissions?: Permissi
  * conservative traits and no tool has static traits, which is what a snapshot of tools that declare none answers.
  */
 export const stubSnapshot = (
-  input: Pick<Tool.Snapshot, "definitions" | "execute"> & Partial<Pick<Tool.Snapshot, "codeModeCatalog">>,
+  input: Pick<Tool.Snapshot, "definitions" | "Execute"> & Partial<Pick<Tool.Snapshot, "codeModeCatalog">>,
 ): Tool.Snapshot => ({
   ...input,
   traits: () => Effect.succeed(ToolTraits.conservative),

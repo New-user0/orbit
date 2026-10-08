@@ -109,7 +109,7 @@ describe("WebSearchTool registration", () => {
         openWorld: true,
         interruptBehavior: "cancel",
       })
-      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["WebSearch", "execute"])
+      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["WebSearch", "Execute"])
       expect(
         yield* executeTool(registry, {
           sessionID,

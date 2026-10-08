@@ -118,7 +118,7 @@ describe("QuestionTool", () => {
         (yield* toolDefinitions(registry, [{ action: "AskUserQuestion", resource: "*", effect: "deny" }])).map(
           (tool) => tool.name,
         ),
-      ).toEqual(["execute"])
+      ).toEqual(["Execute"])
       expect(
         yield* executeTool(registry, {
           sessionID,
@@ -162,7 +162,7 @@ describe("QuestionTool", () => {
         },
       ]
 
-      expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toEqual(["AskUserQuestion", "execute"])
+      expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toEqual(["AskUserQuestion", "Execute"])
       expect(
         yield* executeTool(registry, {
           sessionID,

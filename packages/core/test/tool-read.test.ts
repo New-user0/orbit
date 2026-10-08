@@ -173,12 +173,12 @@ describe("ReadTool", () => {
         maxResultChars: Infinity,
       })
 
-      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["Read", "execute"])
+      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["Read", "Execute"])
       expect(
         (yield* toolDefinitions(registry, [{ action: "Read", resource: "*", effect: "deny" }])).map(
           (tool) => tool.name,
         ),
-      ).toEqual(["execute"])
+      ).toEqual(["Execute"])
       const execution = yield* executeTool(registry, {
         sessionID,
         ...toolIdentity,

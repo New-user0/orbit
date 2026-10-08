@@ -488,7 +488,7 @@ export class Controller {
       }
       case "session.tool.success": {
         const current = this.tool(event.data.id)
-        const plan = current.name.startsWith("task_") ? todos(event.data.metadata?.todos) : undefined
+        const plan = legacyToolName(current.name).startsWith("task_") ? todos(event.data.metadata?.todos) : undefined
         if (plan) this.emit({ type: "plan", todos: plan })
         const output = event.data.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
         const exit = event.data.metadata?.exit

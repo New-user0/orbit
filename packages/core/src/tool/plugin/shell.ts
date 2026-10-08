@@ -48,7 +48,8 @@ const description = (shell?: string) =>
 export const Input = Schema.Struct({
   command: Schema.String.annotate({ description: "Shell command string to execute" }),
   description: Schema.optionalKey(Schema.String).annotate({
-    description: "A short sentence saying what the command does, shown to the person in place of the raw command.",
+    description:
+      "A short sentence saying what the command does, used as the title of the job when the command runs in the background.",
   }),
   workdir: Schema.optionalKey(Schema.String).annotate({
     description:
@@ -202,7 +203,8 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              const timeout = input.run_in_background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
+              const timeout =
+                input.run_in_background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
               let finalTimeout = timeout
               const info = yield* shell.create(
                 {

@@ -157,7 +157,7 @@ describe("Tool", () => {
         }),
       )
       yield* Scope.close(source, Exit.void)
-      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["Execute"])
     }),
   )
 
@@ -182,7 +182,7 @@ describe("Tool", () => {
         })
       })
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["acme_tools_echo", "execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["acme_tools_echo", "Execute"])
       expect(snapshot.definitions[0]?.inputSchema.properties).toEqual({ value: { type: "number" } })
       expect(
         (yield* snapshot.execute({
@@ -218,7 +218,7 @@ describe("Tool", () => {
       const service = yield* Tool.Service
       let source: Info[] = []
       yield* service.transform((editor) => source.forEach((tool) => editor.add(tool)))
-      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["Execute"])
 
       const tool = { ...constant("first"), name: "echo", options: { codemode: false } }
       source = [tool]
@@ -234,7 +234,7 @@ describe("Tool", () => {
 
       source = []
       yield* service.reload()
-      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["Execute"])
       expect((yield* advertised.execute(call("echo"))).output).toEqual({ text: "first" })
     }),
   )
@@ -283,7 +283,7 @@ describe("Tool", () => {
             editor.add({ ...constant("overlay"), name: "echo", options: { codemode: false } })
           })
           expect(runs).toEqual([])
-          expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["echo", "execute"])
+          expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["echo", "Execute"])
           expect(runs).toEqual(["base", "overlay"])
         }).pipe(Scope.provide(scope)),
       )
@@ -333,7 +333,7 @@ describe("Tool", () => {
         ],
       ])
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["Execute"])
       expect(snapshot.codeModeCatalog?.tools).toEqual([])
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
@@ -355,7 +355,7 @@ describe("Tool", () => {
         { codemode: false },
       )
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["after", "before", "echo_tool", "execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["after", "before", "echo_tool", "Execute"])
       expect((yield* snapshot.execute(call("before"))).output).toEqual({ text: "before" })
       expect((yield* snapshot.execute(call("after"))).output).toEqual({ text: "after" })
       expect((yield* snapshot.execute(call("echo_tool"))).output).toEqual({ text: "last" })
@@ -372,11 +372,11 @@ describe("Tool", () => {
       const snapshot = yield* service.snapshot()
       expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([`cloudflare.${name}`])
       const result = yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "call-long-mcp-name",
-          name: "execute",
+          name: "Execute",
           input: { code: `return (await tools.cloudflare[${JSON.stringify(name)}]({ text: "hello" })).text` },
         },
       })
@@ -401,7 +401,7 @@ describe("Tool", () => {
         "123__private_-tools_2d_get_scene",
         "2d_get_scene",
         "_lookup",
-        "execute",
+        "Execute",
       ])
       for (const name of ["2d_get_scene", "123", "_lookup", "-lookup", "123__private_-tools_2d_get_scene"]) {
         expect((yield* snapshot.execute(call(name))).output).toEqual({ text: name })
@@ -416,7 +416,7 @@ describe("Tool", () => {
       yield* transform(service, { "2d_get_scene": make() }, { namespace: "123._private.-tools", codemode: true })
 
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["Execute"])
       expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([
         "-lookup",
         "123",
@@ -425,11 +425,11 @@ describe("Tool", () => {
         "_lookup",
       ])
       const result = yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "call-nonletter-names",
-          name: "execute",
+          name: "Execute",
           input: {
             code: `const results = await Promise.all([
               tools["2d_get_scene"]({ text: "digit" }),
@@ -456,7 +456,7 @@ describe("Tool", () => {
       })
 
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["first", "execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["first", "Execute"])
       expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([
         "invalid__namespace.second",
       ])
@@ -476,7 +476,7 @@ describe("Tool", () => {
       })
 
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["registry_direct", "execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["registry_direct", "Execute"])
       expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([
         "legacy.plain",
         "registry.search",
@@ -504,21 +504,21 @@ describe("Tool", () => {
         },
       ])
       const result = yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "namespace-search",
-          name: "execute",
+          name: "Execute",
           input: { code: 'return search({ query: "pricing operations" })' },
         },
       })
       expect(result.output).toMatchObject({ output: expect.stringContaining("tools.registry.search") })
       const callable = yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "callable-namespace",
-          name: "execute",
+          name: "Execute",
           input: {
             code: `return await Promise.all([
               tools.registry.search({ text: "search" }),
@@ -555,11 +555,11 @@ describe("Tool", () => {
 
       const search = (snapshot: Tool.Snapshot, query: string) =>
         snapshot.execute({
-          ...call("execute"),
+          ...call("Execute"),
           call: {
             type: "tool-call",
             id: `namespace-${query}`,
-            name: "execute",
+            name: "Execute",
             input: {
               code: `return search({ query: ${JSON.stringify(query)} }).items.map(item => item.path).join(",")`,
             },
@@ -584,11 +584,11 @@ describe("Tool", () => {
       const snapshot = yield* service.snapshot()
       expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual(["pricing", "pricing.sales"])
       const result = yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "top-level-callable",
-          name: "execute",
+          name: "Execute",
           input: {
             code: `return await Promise.all([
               tools.pricing({ text: "pricing" }),
@@ -630,7 +630,7 @@ describe("Tool", () => {
         ],
       ])
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["healthy", "execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["healthy", "Execute"])
       expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual(["codemode"])
       expect((yield* snapshot.execute(call("phone_type")).pipe(Effect.flip)).message).toBe(
         'No tool named "phone_type" is currently available. Please use a tool from the available tool list.',
@@ -649,11 +649,11 @@ describe("Tool", () => {
             editor.add({ ...make(), name: "temporary", options: { codemode: false } })
           })
           const snapshot = yield* service.snapshot()
-          expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["echo", "temporary", "execute"])
+          expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["echo", "temporary", "Execute"])
           expect((yield* snapshot.execute(call("echo"))).output).toEqual({ text: "original" })
         }),
       )
-      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["echo", "execute"])
+      expect((yield* service.snapshot()).definitions.map((tool) => tool.name)).toEqual(["echo", "Execute"])
     }),
   )
 
@@ -682,7 +682,7 @@ describe("Tool", () => {
       ])
 
       expect(first).toEqual(second)
-      expect(first.map((definition) => definition.name)).toEqual(["alpha", "alpha_beta", "zeta", "execute"])
+      expect(first.map((definition) => definition.name)).toEqual(["alpha", "alpha_beta", "zeta", "Execute"])
     }),
   )
 
@@ -697,7 +697,7 @@ describe("Tool", () => {
       )
 
       const snapshot = yield* service.snapshot()
-      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect(snapshot.definitions.map((tool) => tool.name)).toEqual(["Execute"])
       expect(codeModeListings(snapshot.codeModeCatalog!)[0]?.line).toContain("tools.echo")
     }),
   )
@@ -707,7 +707,7 @@ describe("Tool", () => {
       const service = yield* Tool.Service
 
       const available = yield* service.snapshot()
-      expect(available.definitions.map((tool) => tool.name)).toEqual(["execute"])
+      expect(available.definitions.map((tool) => tool.name)).toEqual(["Execute"])
       expect(available.codeModeCatalog?.tools).toEqual([])
 
       const denied = yield* service.snapshot([{ action: "execute", resource: "*", effect: "deny" }])
@@ -728,7 +728,7 @@ describe("Tool", () => {
         "bash",
         "edit",
         "write",
-        "execute",
+        "Execute",
       ])
       expect(
         yield* names([
@@ -742,7 +742,7 @@ describe("Tool", () => {
           { action: "*", resource: "*", effect: "deny" },
         ]),
       ).toEqual([])
-      expect(yield* names([{ action: "edit", resource: "*", effect: "deny" }])).toEqual(["bash", "question", "execute"])
+      expect(yield* names([{ action: "edit", resource: "*", effect: "deny" }])).toEqual(["bash", "question", "Execute"])
     }),
   )
 
@@ -755,7 +755,7 @@ describe("Tool", () => {
 
       expect(
         (yield* toolDefinitions(service, [{ action: "edit", resource: "*", effect: "deny" }])).map((tool) => tool.name),
-      ).toEqual(["first", "execute"])
+      ).toEqual(["first", "Execute"])
     }),
   )
 
@@ -764,9 +764,9 @@ describe("Tool", () => {
       const service = yield* Tool.Service
       const scope = yield* Scope.make()
       yield* transform(service, { echo: make() }, { codemode: false }).pipe(Scope.provide(scope))
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo", "execute"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo", "Execute"])
       yield* Scope.close(scope, Exit.void)
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["execute"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["Execute"])
     }),
   )
 
@@ -784,9 +784,9 @@ describe("Tool", () => {
       yield* Deferred.await(registered)
       yield* Fiber.interrupt(fiber)
 
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo", "execute"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["echo", "Execute"])
       yield* Scope.close(scope, Exit.void)
-      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["execute"])
+      expect((yield* toolDefinitions(service)).map((tool) => tool.name)).toEqual(["Execute"])
     }),
   )
 
@@ -859,7 +859,7 @@ describe("Tool", () => {
     Effect.gen(function* () {
       const service = yield* Tool.Service
       expect("definitions" in service).toBe(false)
-      expect("execute" in service).toBe(false)
+      expect("Execute" in service).toBe(false)
       expect("settle" in service).toBe(false)
       expect(typeof service.snapshot).toBe("function")
     }),
@@ -975,11 +975,11 @@ describe("Tool", () => {
 
       const snapshot = yield* service.snapshot()
       yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "call-inner-validate",
-          name: "execute",
+          name: "Execute",
           input: { code: `return await tools.checked({ text: "rewritten" })` },
         },
       })
@@ -1104,7 +1104,7 @@ describe("Tool", () => {
           ],
         ])
         const snapshot = yield* service.snapshot()
-        expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["healthy", "execute"])
+        expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["healthy", "Execute"])
       }).pipe(Effect.provide(Logger.layer([logger])))
     })
 
@@ -1188,11 +1188,11 @@ describe("Tool", () => {
 
       const snapshot = yield* service.snapshot()
       yield* snapshot.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "call-inner-traits",
-          name: "execute",
+          name: "Execute",
           input: {
             code: `await tools.lookup({ text: "lookup" }); await tools.plain({ text: "plain" }); return "done"`,
           },
@@ -1502,7 +1502,7 @@ describe("Tool", () => {
         },
       }).pipe(Scope.provide(scope))
       const toolSet = yield* service.snapshot()
-      const execute = toolSet.definitions.find((tool) => tool.name === "execute")
+      const execute = toolSet.definitions.find((tool) => tool.name === "Execute")
       expect(codeModeListings(toolSet.codeModeCatalog!)[0]?.line).toContain("tools.echo")
       expect(execute?.description).toContain("confined Code Mode runtime")
       expect(execute?.description).not.toContain("Echo text")
@@ -1519,11 +1519,11 @@ describe("Tool", () => {
 
       const progress: Tool.Metadata[] = []
       const execution = yield* toolSet.execute({
-        ...call("execute"),
+        ...call("Execute"),
         call: {
           type: "tool-call",
           id: "call-execute",
-          name: "execute",
+          name: "Execute",
           input: { code: 'return await tools.echo({ text: "request" })' },
         },
         progress: (update) => Effect.sync(() => progress.push(update)),
@@ -1572,7 +1572,7 @@ describe("Tool exposure", () => {
         const snapshot = yield* service.snapshot()
         const direct = exposure === "direct"
         expect(snapshot.definitions.map((definition) => definition.name)).toEqual(
-          direct ? ["echo", "execute"] : ["execute"],
+          direct ? ["echo", "Execute"] : ["Execute"],
         )
         expect(snapshot.codeModeCatalog?.tools).toEqual(
           direct ? [] : [expect.objectContaining({ type: "tool", name: "echo", pinned })],
@@ -1593,9 +1593,9 @@ describe("Tool exposure", () => {
   // called through Code Mode, and a namespaced one is named `acme_execute`, so neither clashes with it.
   for (const [name, options, refused, direct, deferred] of [
     ["a direct tool", { codemode: false }, true, [], []],
-    ["a tool that leaves codemode out", undefined, false, [], ["execute"]],
-    ["a tool with codemode: true", { codemode: true }, false, [], ["execute"]],
-    ["a pinned tool", { pinned: true }, false, [], ["execute"]],
+    ["a tool that leaves codemode out", undefined, false, [], ["Execute"]],
+    ["a tool with codemode: true", { codemode: true }, false, [], ["Execute"]],
+    ["a pinned tool", { pinned: true }, false, [], ["Execute"]],
     ["a direct tool in a namespace", { namespace: "acme", codemode: false }, false, ["acme_execute"], []],
   ] as const) {
     it.effect(`${refused ? "refuses" : "registers"} ${name} named execute`, () => {
@@ -1605,20 +1605,20 @@ describe("Tool exposure", () => {
       })
       return Effect.gen(function* () {
         const service = yield* Tool.Service
-        yield* service.transform((editor) => editor.add({ ...make(), name: "execute", options }))
+        yield* service.transform((editor) => editor.add({ ...make(), name: "Execute", options }))
 
         expect(output).toEqual(
           refused
             ? [
                 [
                   "Skipping invalid tool registration",
-                  { name: "execute", namespace: undefined, error: 'Tool name "execute" is reserved for CodeMode' },
+                  { name: "Execute", namespace: undefined, error: 'Tool name "Execute" is reserved for CodeMode' },
                 ],
               ]
             : [],
         )
         const snapshot = yield* service.snapshot()
-        expect(snapshot.definitions.map((definition) => definition.name)).toEqual([...direct, "execute"])
+        expect(snapshot.definitions.map((definition) => definition.name)).toEqual([...direct, "Execute"])
         expect(codeModeListings(snapshot.codeModeCatalog!).map((tool) => tool.path)).toEqual([...deferred])
         // Whatever registered, the `execute` that the request advertises is the Code Mode tool.
         expect(snapshot.definitions.at(-1)?.description).toContain("confined Code Mode runtime")

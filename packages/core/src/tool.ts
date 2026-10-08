@@ -393,7 +393,7 @@ const layer = Layer.effect(
           const codeModeTools = new Map(exposed.get("deferred"))
           const namespaces = data.namespaces
           const codeModeInventory = { tools: codeModeTools, namespaces }
-          const codeModeEnabled = !whollyDisabled("execute", rules)
+          const codeModeEnabled = !whollyDisabled("Execute", rules)
           const codeModeTool = codeModeEnabled
             ? CodeModeTool.create(
                 codeModeInventory,
@@ -421,7 +421,7 @@ const layer = Layer.effect(
             if (!advertised && definitions && (direct.has(requested) || codeModeTool?.name === requested))
               return { type: "unavailable" as const }
             const name = advertised?.name ?? requested
-            const tool = name === "execute" && codeModeTool ? codeModeTool : direct.get(name)
+            const tool = name === "Execute" && codeModeTool ? codeModeTool : direct.get(name)
             return tool ? { type: "found" as const, name, tool } : { type: "unknown" as const, name }
           }
           return {
@@ -530,8 +530,8 @@ function registrationError(tool: Tool.Info) {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(name))
     return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
-  if (ToolTraits.exposure(tool) === "direct" && id === "execute")
-    return new RegistrationError({ name: id, message: 'Tool name "execute" is reserved for CodeMode' })
+  if (ToolTraits.exposure(tool) === "direct" && id === "Execute")
+    return new RegistrationError({ name: id, message: 'Tool name "Execute" is reserved for CodeMode' })
   const result = Result.try({
     try: () => ToolDefinition.make(definition(tool)),
     catch: (error) =>

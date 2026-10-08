@@ -92,7 +92,7 @@ const call = (name: string, input: unknown = { text: "hi" }): Parameters<Tool.Sn
   ...identity,
   call: { type: "tool-call", id: `call-${name}`, name, input },
 })
-const program = (code: string) => call("execute", { code })
+const program = (code: string) => call("Execute", { code })
 
 type Reply = { readonly reply: "once" | "always" | "reject"; readonly message?: string }
 type Settled = {

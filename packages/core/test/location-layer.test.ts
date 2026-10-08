@@ -482,7 +482,7 @@ describe("LocationServiceMap", () => {
           expect(blockedState.providers.some((provider) => provider.id === blockedID)).toBe(true)
           expect(blockedState.providers.some((provider) => provider.id === allowedID)).toBe(false)
           const blockedTools = blockedState.tools.map((tool) => tool.name)
-          expect(blockedTools.filter((name) => name !== "execute").sort()).toEqual([
+          expect(blockedTools.filter((name) => name !== "Execute").sort()).toEqual([
             "Agent",
             "AskUserQuestion",
             "Bash",
@@ -515,8 +515,8 @@ describe("LocationServiceMap", () => {
           expect(allowedState.providers.some((provider) => provider.id === allowedID)).toBe(true)
           expect(allowedState.providers.some((provider) => provider.id === blockedID)).toBe(false)
           const allowedTools = allowedState.tools.map((tool) => tool.name)
-          expect(blockedTools.includes("execute")).toBe(allowedTools.includes("execute"))
-          expect(allowedTools.filter((name) => name !== "execute").sort()).toEqual([
+          expect(blockedTools.includes("Execute")).toBe(allowedTools.includes("Execute"))
+          expect(allowedTools.filter((name) => name !== "Execute").sort()).toEqual([
             "Agent",
             "AskUserQuestion",
             "Bash",

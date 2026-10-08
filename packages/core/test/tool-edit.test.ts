@@ -178,12 +178,12 @@ describe("EditTool", () => {
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
             Effect.gen(function* () {
-              expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["Edit", "execute"])
+              expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["Edit", "Execute"])
               expect(
                 (yield* toolDefinitions(registry, [{ action: "Edit", resource: "*", effect: "deny" }])).map(
                   (tool) => tool.name,
                 ),
-              ).toEqual(["execute"])
+              ).toEqual(["Execute"])
               const settled = yield* executeTool(
                 registry,
                 call({ file_path: "hello.txt", old_string: "before", new_string: "after" }),
@@ -572,7 +572,7 @@ describe("EditTool", () => {
       name: "an empty old_string",
       input: { file_path: "matches.txt", old_string: "", new_string: "after" },
       type: "edit.empty-old-string",
-      message: "old_string must not be empty. Use write to create or overwrite a file.",
+      message: "old_string must not be empty. Use Write to create or overwrite a file.",
     },
     {
       name: "an old_string that is not in the file",

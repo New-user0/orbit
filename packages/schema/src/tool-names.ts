@@ -36,6 +36,7 @@ export const tools = {
   exit_worktree: "ExitWorktree",
   workflow: "Workflow",
   memory: "Memory",
+  execute: "Execute",
 } as const satisfies Record<string, string>
 
 /** Current tool name to its input fields, from the current field name to the old one. */
@@ -86,7 +87,25 @@ export function raiseInput(tool: string, input: unknown): unknown
 export function raiseInput(tool: string, input: unknown): unknown {
   const table = fieldTable(tool)
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [table[key] ?? key, value]))
+  return Object.fromEntries(
+    Object.entries(input).map(([key, value]) => [Object.hasOwn(table, key) ? table[key] : key, value]),
+  )
+}
+
+/**
+ * A view of a record keyed by tool name in which a key written with an old name reaches the entry of the current one,
+ * so a plugin hook that deletes or reads `tools.write` still acts on `Write`. Keys the table does not list pass through.
+ */
+export function aliased<T extends object>(record: T): T {
+  const key = (property: string | symbol) => (typeof property === "string" ? canonical(property) : property)
+  return new Proxy(record, {
+    get: (target, property) => Reflect.get(target, key(property)),
+    set: (target, property, value) => Reflect.set(target, key(property), value),
+    has: (target, property) => Reflect.has(target, key(property)),
+    deleteProperty: (target, property) => Reflect.deleteProperty(target, key(property)),
+    defineProperty: (target, property, descriptor) => Reflect.defineProperty(target, key(property), descriptor),
+    getOwnPropertyDescriptor: (target, property) => Reflect.getOwnPropertyDescriptor(target, key(property)),
+  })
 }
 
 function fieldTable(tool: string): Readonly<Record<string, string>> | undefined {

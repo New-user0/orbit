@@ -7,6 +7,7 @@ import type { PermissionReply, PermissionRequest } from "@orbit/client"
 import { SplitBorder } from "../../ui/border"
 import { useData } from "../../context/data"
 import { filetype } from "../../util/filetype"
+import { canonicalToolName } from "../../util/tool-display"
 import { permissionAlwaysLines, permissionOptionLabel, permissionPresentation } from "../../util/permission"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useConfig } from "../../config"
@@ -165,10 +166,12 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             },
             pathFormatter.format,
           )
+          // The views are written against the names the tools had before the rename, whichever one the request carries.
+          const view = () => canonicalToolName(props.request.action)
           const presentationBody = () =>
-            props.request.action === "edit" ? (
+            view() === "edit" ? (
               <EditBody file={current.file} diff={current.diff} patch={current.patch} />
-            ) : props.request.action === "external_directory" ? (
+            ) : view() === "external_directory" ? (
               <Show when={current.lines.length > 0}>
                 <box paddingLeft={1} gap={1}>
                   <text fg={theme.text.muted}>Patterns</text>
@@ -183,9 +186,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   {(line) => (
                     <text
                       fg={
-                        props.request.action === "shell" ||
-                        props.request.action === "subagent" ||
-                        props.request.action === "task"
+                        view() === "shell" || view() === "subagent" || view() === "task"
                           ? theme.text.base
                           : theme.text.muted
                       }
@@ -212,7 +213,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             <box flexDirection="row" gap={1} flexShrink={0}>
               <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
               <text fg={theme.text.base} flexShrink={1}>
-                {props.request.action !== "shell" && current.title ? current.title : "Permission required"}
+                {view() !== "shell" && current.title ? current.title : "Permission required"}
               </text>
               <Show when={changes().additions > 0}>
                 <text fg={theme.diff.text.added}>{`+${changes().additions}`}</text>

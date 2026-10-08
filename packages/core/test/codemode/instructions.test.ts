@@ -30,7 +30,7 @@ describe("CodeModeInstructions", () => {
     Effect.gen(function* () {
       const initialized = yield* readInitial(CodeModeInstructions.make({ tools: [] }))
       expect(initialized.text).toBe(
-        "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `execute` unless there is at least one available Code Mode tool.",
+        "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `Execute` unless there is at least one available Code Mode tool.",
       )
 
       const added = yield* readUpdate(CodeModeInstructions.make({ tools: [echo] }), initialized)
@@ -40,7 +40,7 @@ describe("CodeModeInstructions", () => {
       expect(yield* readUpdate(CodeModeInstructions.make({ tools: [] }), { values: added.values })).toMatchObject({
         text:
           "The Code Mode tool catalog has changed. This catalog supersedes the previous Code Mode tool catalog.\n\n" +
-          "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `execute` unless there is at least one available Code Mode tool.",
+          "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `Execute` unless there is at least one available Code Mode tool.",
       })
     }),
   )
@@ -48,7 +48,7 @@ describe("CodeModeInstructions", () => {
   it.effect("renders the initial catalog, semantic deltas, and removal", () =>
     Effect.gen(function* () {
       const initialized = yield* readInitial(CodeModeInstructions.make({ tools: [echo] }))
-      expect(initialized.text).toContain("Use the `execute` tool to call the tools listed below.")
+      expect(initialized.text).toContain("Use the `Execute` tool to call the tools listed below.")
       expect(initialized.text).toContain("The catalog is complete.")
       expect(initialized.text).toContain("## Available tools")
       expect(initialized.text).toContain(`  - ${echo.signature} // Echo text`)

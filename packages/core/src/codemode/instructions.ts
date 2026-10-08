@@ -8,9 +8,9 @@ import { CodeModeCatalog } from "./catalog.js"
 // prettier-ignore
 const prompt = (hasMoreTools: boolean) => `# Code Mode
 
-Use the \`execute\` tool to call the tools listed below. They cannot be called directly${hasMoreTools ? ", and neither can \`search\`. Both" : ". They"} only work inside code you pass to \`execute\`.
+Use the \`Execute\` tool to call the tools listed below. They cannot be called directly${hasMoreTools ? ", and neither can \`search\`. Both" : ". They"} only work inside code you pass to \`Execute\`.
 
-${hasMoreTools ? `The catalog is partial. Inside \`execute\`, use \`search(...)\` to find a tool, then call it by the \`path\` in the result. \`search\` is synchronous. Call it without \`await\`; it does not return a Promise. Do not guess tool names.
+${hasMoreTools ? `The catalog is partial. Inside \`Execute\`, use \`search(...)\` to find a tool, then call it by the \`path\` in the result. \`search\` is synchronous. Call it without \`await\`; it does not return a Promise. Do not guess tool names.
 
 - ${searchSignature}` : "The catalog is complete. Do not guess tool names."}
 
@@ -18,7 +18,7 @@ ${hasMoreTools ? `The catalog is partial. Inside \`execute\`, use \`search(...)\
 
 export function render(catalog: CodeModeCatalog.Summary) {
   if (catalog.total === 0)
-    return "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `execute` unless there is at least one available Code Mode tool."
+    return "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `Execute` unless there is at least one available Code Mode tool."
 
   const tools = catalog.namespaces.flatMap((namespace) => {
     return [CodeModeCatalog.namespaceLine(namespace), ...namespace.entries.map((entry) => entry.line)]

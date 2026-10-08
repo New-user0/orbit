@@ -56,7 +56,7 @@ describe("CodeMode", () => {
       })
 
       const snapshot = yield* tools.snapshot()
-      expect(snapshot.definitions.some((tool) => tool.name === "execute")).toBe(true)
+      expect(snapshot.definitions.some((tool) => tool.name === "Execute")).toBe(true)
       expect(snapshot.codeModeCatalog).toStrictEqual({
         tools: [
           {
@@ -193,7 +193,7 @@ const run = (code: string) =>
     return yield* snapshot.execute({
       sessionID,
       ...identity,
-      call: { type: "tool-call", id: callID, name: "execute", input: { code } },
+      call: { type: "tool-call", id: callID, name: "Execute", input: { code } },
     })
   })
 
@@ -257,7 +257,7 @@ describe("CodeMode search hints", () => {
         call: {
           type: "tool-call",
           id: callID,
-          name: "execute",
+          name: "Execute",
           input: { code: `const found = search({ query: ${JSON.stringify(query)} }); return ${returned}` },
         },
       })

@@ -19,7 +19,7 @@ const entries = (servers: ReadonlyArray<Summary>) =>
     const result = [`  <server name="${server.server}">`]
     if (server.codemode !== false)
       result.push(
-        `    Use tools from this server through \`execute\` under \`tools[${JSON.stringify(McpTool.namespace(server.server))}]\`.`,
+        `    Use tools from this server through \`Execute\` under \`tools[${JSON.stringify(McpTool.namespace(server.server))}]\`.`,
       )
     result.push(...server.instructions.split("\n").map((line) => `    ${line}`), "  </server>")
     return result
@@ -81,7 +81,7 @@ export const layer = Layer.effect(
         const [instructions, tools] = yield* Effect.all([mcp.instructions(), mcp.tools()], {
           concurrency: "unbounded",
         })
-        const canExecute = Permission.evaluate("execute", "*", permissions).effect !== "deny"
+        const canExecute = Permission.evaluate("Execute", "*", permissions).effect !== "deny"
         // Instructions are useful only when this Session can reach at least one server tool.
         const visible = instructions
           .flatMap((item) => {

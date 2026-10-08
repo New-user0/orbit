@@ -900,7 +900,7 @@ describe("ShellTool", () => {
               call: {
                 type: "tool-call",
                 id: "call-parallel-shells",
-                name: "execute",
+                name: "Execute",
                 input: { code: `return await Promise.all([tools.Bash(${inputs[0]}), tools.Bash(${inputs[1]})])` },
               },
             }).pipe(Effect.timeout("3 seconds"))

@@ -131,14 +131,23 @@ export const Plugin = define({
             // A hook from another product's settings file is told that product's name for the tool: the first of the
             // tool's names that the hook's own matcher accepts, so a hook for `Write` that runs for `patch` is told
             // `Write`. One whose matcher accepts none of them, as it names the tool the Orbit way, is told the first.
-            // A hook of the user's own is told the spelling its matcher accepts, so a guard written for `shell` that
-            // checks the name it is told still sees `shell` after the tool became `Bash`.
+            // A hook of the user's own is told the old spelling first when its matcher accepts it, and the current one
+            // otherwise, so a guard written for `shell` that checks the name it is told, whether its matcher names the
+            // tool, matches everything or is absent, still sees `shell` after the tool became `Bash`.
             const tool = document.foreign
               ? (aliases.find((alias) => accepts(group.matcher, [alias])) ?? aliases.at(0))
               : target === undefined
                 ? undefined
-                : ToolNames.spellings(target).find((spelling) => accepts(group.matcher, [spelling]))
-            return group.hooks.map((hook) => ({ hook, rank, directory: document.directory, tool }))
+                : ToolNames.spellings(target)
+                    .toSorted((a, b) => Number(ToolNames.canonical(a) === a) - Number(ToolNames.canonical(b) === b))
+                    .find((spelling) => accepts(group.matcher, [spelling]))
+            return group.hooks.map((hook) => ({
+              hook,
+              rank,
+              directory: document.directory,
+              tool,
+              foreign: document.foreign,
+            }))
           }),
       )
       yield* Effect.forEach(
@@ -174,16 +183,17 @@ export const Plugin = define({
       if (configured.length === 0) return NOTHING
       const shell = yield* shells.resolve({ priority: "compat" })
       const compat = yield* config.compatEnabled()
-      const stdin = (tool: string | undefined) =>
+      const stdin = (tool: string | undefined, foreign: boolean) =>
         JSON.stringify({
           hook_event_name: event,
           cwd: location.directory,
           ...payload,
           // The tool is named the way the hook's own product names it.
           ...(tool === undefined ? {} : { tool_name: tool }),
-          // A hook told an old tool name also reads the old field names, so a guard keyed on `path` or `oldString`
-          // does not see an empty input. The current fields stay beside them.
-          ...(tool === undefined || ToolNames.canonical(tool) === tool || !isRecord(payload.tool_input)
+          // A hook told an old tool name also reads the old field names, and so does every hook of the user's own,
+          // whatever name its matcher let it be told, so a guard keyed on `path` or `oldString` does not see an empty
+          // input. The current fields stay beside them.
+          ...(tool === undefined || (foreign && ToolNames.canonical(tool) === tool) || !isRecord(payload.tool_input)
             ? {}
             : { tool_input: { ...ToolNames.raiseInput(tool, payload.tool_input), ...payload.tool_input } }),
         })
@@ -200,7 +210,10 @@ export const Plugin = define({
                   ...(compat ? CompatAliases.hookEnv(item.directory) : {}),
                 },
               }),
-              { stdin: stdin(item.tool), timeout: Duration.seconds(item.hook.timeout ?? DEFAULT_TIMEOUT_SECONDS) },
+              {
+                stdin: stdin(item.tool, item.foreign),
+                timeout: Duration.seconds(item.hook.timeout ?? DEFAULT_TIMEOUT_SECONDS),
+              },
             )
             .pipe(
               Effect.map((result) => interpret(result.exitCode, result.stdout.toString(), result.stderr.toString())),

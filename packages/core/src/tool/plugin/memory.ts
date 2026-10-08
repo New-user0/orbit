@@ -65,7 +65,7 @@ export const Plugin = {
           ? undefined
           : [
               "# Project memory",
-              "Notes saved in earlier sessions with the memory tool. Read one with memory read before relying on details.",
+              "Notes saved in earlier sessions with the Memory tool. Read one with Memory read before relying on details.",
               "",
               ...lines,
             ].join("\n")

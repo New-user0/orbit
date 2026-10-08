@@ -8,7 +8,7 @@ import { Permission } from "../permission.js"
 const PROMPT_EXPLORE = `You are a read-only search agent. Another agent sent you to find something in this codebase and report back. Your report is all it will see, so make it complete and precise.
 
 # How to search
-- Start broad, then narrow. Use glob to find candidate files by name, grep to find symbols and strings, and read to confirm what you found.
+- Start broad, then narrow. Use Glob to find candidate files by name, Grep to find symbols and strings, and Read to confirm what you found.
 - Run independent searches in parallel. Try several naming conventions and spellings when the first search misses.
 - Follow the code: once you find a definition, look for its callers, its tests, and where it is configured.
 - Match your effort to the thoroughness the caller asked for. A quick lookup needs one or two searches; a thorough survey should check every likely location before concluding something does not exist.
@@ -40,7 +40,7 @@ Your output must be:
 <rules>
 - you MUST use the same language as the user message you are summarizing
 - Title must be grammatically correct and read naturally - no word salad
-- Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
+- Never include tool names in the title (e.g. "Read tool", "Bash tool", "Edit tool")
 - Focus on the main topic or question the user needs to retrieve
 - Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing"
 - When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it
