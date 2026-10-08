@@ -46,6 +46,7 @@ export default Plugin.define({
         // Dialogs render beside PluginProvider, so Answer cannot call usePlugin().
         const plugins = usePlugin()
         context.keymap.layer(() => ({
+          context: "global",
           mode: "global",
           commands: [
             {

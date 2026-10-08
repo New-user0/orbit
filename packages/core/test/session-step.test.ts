@@ -18,6 +18,7 @@ import { SessionStep } from "@orbit/core/session/runner/step"
 import { SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
 import { Snapshot } from "@orbit/core/snapshot"
 import { ToolOutput } from "@orbit/core/tool-output"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import { Money } from "@orbit/schema/money"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { asc, eq } from "drizzle-orm"
@@ -114,6 +115,8 @@ for (const fixture of [
                 executions++
                 return { content: [{ type: "text", text: "Completed tool" }] }
               }),
+            toolTraits: () => Effect.succeed(ToolTraits.defaults),
+            describeTool: () => undefined,
           },
           retry: (_cause, _error, retry) =>
             Effect.succeed(retry ? { retry: true, attempt: 2, delay: 0 } : { retry: false }),

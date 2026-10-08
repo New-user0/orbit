@@ -63,6 +63,7 @@ import { Config } from "@orbit/core/config"
 import { Document, Info } from "@orbit/schema/config"
 import { ConfigCompaction } from "@orbit/schema/config/compaction"
 import { Tool } from "@orbit/core/tool"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info as ToolInfo } from "@orbit/schema/tool"
 import { InstructionStateTable, SessionInboxTable, SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
@@ -1105,6 +1106,7 @@ describe("SessionRunnerLLM", () => {
         messageID: expect.stringMatching(/^msg_/),
         id: Tool.CallID.make("call-location"),
         progress: expect.any(Function),
+        traits: ToolTraits.defaults,
       },
     ])
     expect(Array.from(yield* Fiber.join(progressFiber))[0]?.data.metadata).toEqual({ phase: "reading" })
@@ -4353,9 +4355,8 @@ describe("SessionRunnerLLM", () => {
     const secondStream = yield* s.llm.gate
     yield* firstStream.release
     yield* secondStream.started
-    const execution = yield* SessionExecution.Service
-    // The busy period has not settled between the turns, so no idle marker can separate them.
-    expect(yield* execution.isActive(sessionID)).toBe(true)
+    // The drain has not settled between the turns: its execution is still running, so the runner wrote no idle mark.
+    expect(run.pollUnsafe()).toBeUndefined()
 
     // The queued prompt waited for the first response to end: it began a turn, and nothing it set before it applies.
     expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
@@ -4366,7 +4367,7 @@ describe("SessionRunnerLLM", () => {
     const thirdStream = yield* s.llm.gate
     yield* secondStream.release
     yield* thirdStream.started
-    expect(yield* execution.isActive(sessionID)).toBe(true)
+    expect(run.pollUnsafe()).toBeUndefined()
 
     // The steer joined that turn, and its options replaced the queued prompt's.
     const joined = yield* SessionTurn.current(s.db, sessionID)
@@ -4395,14 +4396,13 @@ describe("SessionRunnerLLM", () => {
       const first = yield* s.llm.gate
       const run = yield* s.resume.pipe(Effect.forkChild)
       yield* first.started
-      // The compaction is admitted while the turn's last response streams, so it runs at the end of the turn.
+      // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
       yield* s.session.compact({ sessionID, delivery })
       const summary = yield* s.llm.gate
       yield* first.release
       yield* summary.started
-      // The busy period has not settled, so no idle marker was written between the response and the compaction.
-      const execution = yield* SessionExecution.Service
-      expect(yield* execution.isActive(sessionID)).toBe(true)
+      // The drain has not settled between the response and the compaction, so no idle mark separates them.
+      expect(run.pollUnsafe()).toBeUndefined()
       yield* s.session.prompt({ sessionID, text: "New request during compaction" })
       const third = yield* s.llm.gate
       yield* summary.release

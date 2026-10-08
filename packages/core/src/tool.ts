@@ -1,11 +1,21 @@
 export * as Tool from "./tool.js"
 export { CallID, Content, Error, FileContent, TextContent } from "@orbit/schema/tool"
-export type { Context, Metadata, Namespace, Options, Result } from "@orbit/schema/tool"
+export type {
+  Context,
+  InterruptBehavior,
+  Metadata,
+  Namespace,
+  Options,
+  Predicate,
+  ResolvedTraits,
+  Result,
+  Traits,
+} from "@orbit/schema/tool"
 
 import { ToolDefinition, type ToolCall } from "@orbit/ai"
 import { Tool } from "@orbit/schema/tool"
 import { AddressGuard } from "@orbit/util/address-guard"
-import { Context, Effect, Layer, Result, Schema, SchemaIssue, Types } from "effect"
+import { Cause, Context, Effect, Layer, Result, Schema, SchemaIssue, Types } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import type { Agent } from "./agent.js"
 import { CodeModeCatalog } from "./codemode/catalog.js"
@@ -17,7 +27,8 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { SessionMessage } from "./session/message.js"
 import { SessionSchema } from "./session/schema.js"
 import { State } from "./state.js"
-import { definition, effectiveName, execute, normalizedName, normalizeContent } from "./tool/runtime.js"
+import { decode, definition, effectiveName, execute, normalizedName, normalizeContent } from "./tool/runtime.js"
+import { ToolTraits } from "./tool/traits.js"
 import { Wildcard } from "./util/wildcard.js"
 
 export class RegistrationError extends Schema.TaggedError<RegistrationError>()("Tool.RegistrationError", {
@@ -53,6 +64,9 @@ export interface Interface extends State.Transformable<Editor> {
   readonly snapshot: (permissions?: Permission.Ruleset) => Effect.Effect<Snapshot>
 }
 
+/** The context of a call before `execute` resolves its tool's traits and adds them. */
+type UnresolvedContext = Omit<Tool.Context, "traits">
+
 /** A local execution result after hooks and content normalization. */
 export interface NormalizedResult extends Tool.Result {
   readonly content: ReadonlyArray<Tool.Content>
@@ -70,6 +84,25 @@ export interface Snapshot {
     /** Surviving request definitions, keyed by the names advertised after session context hooks. */
     readonly definitions?: ReadonlyMap<string, ToolDefinition>
   }) => Effect.Effect<NormalizedResult, Tool.Error>
+  /**
+   * The traits of a call, resolved the way `execute` resolves its tool but before any hook runs, on the input the
+   * model sent. A hook that renames the tool or rewrites the input is not seen here; `Tool.Context.traits` is
+   * resolved after the hooks and is the answer the tool receives. A call that cannot be resolved gets conservative
+   * traits: the conservative record when the tool is unknown or not offered in `definitions`, and, for a tool whose
+   * traits depend on the input, the conservative answers beside what the tool declares about itself when the schema
+   * rejects or throws on the input. A tool whose traits are all fixed never looks at the input.
+   */
+  readonly traits: (input: {
+    readonly call: ToolCall
+    /** Surviving request definitions, keyed by the names advertised after session context hooks. */
+    readonly definitions?: ReadonlyMap<string, ToolDefinition>
+  }) => Effect.Effect<Tool.ResolvedTraits>
+  /** The traits of the tool a name resolves to that do not depend on the call, or `undefined` for an unresolved name. */
+  readonly describe: (
+    name: string,
+    /** Surviving request definitions, keyed by the names advertised after session context hooks. */
+    definitions?: ReadonlyMap<string, ToolDefinition>,
+  ) => ToolTraits.Static | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Tool") {}
@@ -111,7 +144,7 @@ const layer = Layer.effect(
       ]
     })
 
-    const beforeExecute = (name: string, input: unknown, context: Tool.Context) =>
+    const beforeExecute = (name: string, input: unknown, context: UnresolvedContext) =>
       hooks.trigger("tool", "execute.before", {
         tool: name,
         sessionID: context.sessionID,
@@ -125,7 +158,7 @@ const layer = Layer.effect(
       tool: Tool.Info,
       name: string,
       input: unknown,
-      context: Tool.Context,
+      context: UnresolvedContext,
     ) {
       const execution = yield* execute(tool, input, context).pipe(
         Effect.map((value) => ({ value })),
@@ -247,12 +280,21 @@ const layer = Layer.effect(
             return
           }
           const id = effectiveName(tool)
-          editor.tools.set(id, { ...tool, id, options: tool.options && { ...tool.options } })
+          editor.tools.set(id, {
+            ...tool,
+            id,
+            options: tool.options && { ...tool.options },
+            traits: tool.traits && { ...tool.traits },
+          })
         },
         update: (id, update) => {
           const current = editor.tools.get(id)
           if (!current) return
-          const tool = { ...current, options: current.options && { ...current.options } }
+          const tool = {
+            ...current,
+            options: current.options && { ...current.options },
+            traits: current.traits && { ...current.traits },
+          }
           update(tool)
           tool.name = current.name
           tool.id = id
@@ -301,8 +343,9 @@ const layer = Layer.effect(
             if (whollyDisabled(tool.options?.permission ?? name, rules)) continue
             active.set(name, tool)
           }
-          const direct = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode === false))
-          const codeModeTools = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode !== false))
+          const exposed = Map.groupBy(active, ([, tool]) => ToolTraits.exposure(tool))
+          const direct = new Map(exposed.get("direct"))
+          const codeModeTools = new Map(exposed.get("deferred"))
           const namespaces = data.namespaces
           const codeModeInventory = { tools: codeModeTools, namespaces }
           const codeModeEnabled = !whollyDisabled("execute", rules)
@@ -326,6 +369,16 @@ const layer = Layer.effect(
               ? catalog.value
               : CodeModeTool.catalog(codeModeInventory)
           if (codeModeCatalog) catalog = { data, names, value: codeModeCatalog }
+          // The one place a requested name becomes a tool, so `execute`, `traits` and `describe` cannot disagree.
+          const find = (requested: string, definitions: ReadonlyMap<string, ToolDefinition> | undefined) => {
+            const advertised = definitions?.get(requested)
+            // Preserve session context removal and alias resolution, now after the repair hook.
+            if (!advertised && definitions && (direct.has(requested) || codeModeTool?.name === requested))
+              return { type: "unavailable" as const }
+            const name = advertised?.name ?? requested
+            const tool = name === "execute" && codeModeTool ? codeModeTool : direct.get(name)
+            return tool ? { type: "found" as const, name, tool } : { type: "unknown" as const, name }
+          }
           return {
             ...(codeModeCatalog === undefined ? {} : { codeModeCatalog }),
             definitions: [
@@ -335,7 +388,7 @@ const layer = Layer.effect(
               ...(codeModeTool ? [definition(codeModeTool)] : []),
             ],
             execute: Effect.fnUntraced(function* (input: Parameters<Snapshot["execute"]>[0]) {
-              const context: Tool.Context = {
+              const context: UnresolvedContext = {
                 sessionID: input.sessionID,
                 agent: input.agent,
                 messageID: input.messageID,
@@ -343,19 +396,44 @@ const layer = Layer.effect(
                 progress: input.progress ?? (() => Effect.void),
               }
               const event = yield* beforeExecute(input.call.name, input.call.input, context)
-              const requested = input.definitions?.get(event.tool)
-              // Preserve session context removal and alias resolution, now after the repair hook.
-              if (!requested && input.definitions && (direct.has(event.tool) || codeModeTool?.name === event.tool))
+              const found = find(event.tool, input.definitions)
+              if (found.type === "unavailable")
                 return yield* new Tool.Error({ message: `Tool is not available for this request: ${event.tool}` })
-              const name = requested?.name ?? event.tool
-              if (name === "execute" && codeModeTool)
-                return yield* executeTool(codeModeTool, name, event.input, context)
-              const tool = direct.get(name)
-              if (tool) return yield* executeTool(tool, name, event.input, context)
-              return yield* new Tool.Error({
-                message: `No tool named "${name}" is currently available. Please use a tool from the available tool list.`,
-              })
+              if (found.type === "unknown")
+                return yield* new Tool.Error({
+                  message: `No tool named "${found.name}" is currently available. Please use a tool from the available tool list.`,
+                })
+              return yield* executeTool(found.tool, found.name, event.input, context)
             }),
+            traits: Effect.fnUntraced(function* (input: Parameters<Snapshot["traits"]>[0]) {
+              const found = find(input.call.name, input.definitions)
+              if (found.type !== "found") return ToolTraits.conservative
+              // The input is decoded for the predicates, so a tool without any does not pay for it.
+              if (!ToolTraits.dynamic(found.tool)) return yield* ToolTraits.resolve(found.tool, undefined)
+              return yield* decode(found.tool, input.call.input).pipe(
+                Effect.flatMap((decoded) => ToolTraits.resolve(found.tool, decoded)),
+                // No predicate can read input that the schema rejects, which is routine and which `execute` reports, or
+                // input that the schema throws on, which is a defect in the tool and is logged. Neither may fail the
+                // answer, and only an interrupt gets past.
+                Effect.tapCauseIf(
+                  (cause) => Cause.hasDies(cause) && !Cause.hasInterrupts(cause),
+                  (cause) =>
+                    Effect.logError(
+                      "Tool input could not be decoded to resolve its traits; the call takes the conservative traits",
+                      { tool: found.tool.name, cause },
+                    ),
+                ),
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterrupts(cause),
+                  () => Effect.succeed(ToolTraits.conservativeFor(found.tool)),
+                ),
+                Effect.orDie,
+              )
+            }),
+            describe: (name: string, definitions?: ReadonlyMap<string, ToolDefinition>) => {
+              const found = find(name, definitions)
+              return found.type === "found" ? ToolTraits.describe(found.tool) : undefined
+            },
           }
         }),
       ),
@@ -402,14 +480,18 @@ function registrationError(tool: Tool.Info) {
   const name = normalizedName(tool)
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(name)) return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
-  if (tool.options?.codemode === false && id === "execute")
+  if (ToolTraits.exposure(tool) === "direct" && id === "execute")
     return new RegistrationError({ name: id, message: 'Tool name "execute" is reserved for CodeMode' })
   const result = Result.try({
     try: () => ToolDefinition.make(definition(tool)),
     catch: (error) =>
       new RegistrationError({ name: id, message: `Invalid tool definition ${id}: ${schemaMakeError(error)}` }),
   })
-  return Result.isFailure(result) ? result.failure : undefined
+  if (Result.isFailure(result)) return result.failure
+  const problem = ToolTraits.problem(tool.traits)
+  if (problem !== undefined)
+    return new RegistrationError({ name: id, message: `Invalid tool traits ${id}: ${problem}` })
+  return undefined
 }
 
 function namespaceError(name: string) {

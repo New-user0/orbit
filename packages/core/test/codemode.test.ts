@@ -34,6 +34,11 @@ import { imagePassthrough } from "./lib/image"
 import { allowAllPermission } from "./lib/permission"
 import { host } from "./plugin/host"
 
+const registry = AppNodeBuilder.build(Tool.node, [
+  Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
+  Permission.node.replace(allowAllPermission),
+])
+
 describe("CodeMode", () => {
   it.effect("owns registrations, execute, and catalog materialization", () =>
     Effect.gen(function* () {
@@ -69,15 +74,7 @@ describe("CodeMode", () => {
           },
         ],
       })
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        AppNodeBuilder.build(Tool.node, [
-          Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
-          Permission.node.replace(allowAllPermission),
-        ]),
-      ),
-    ),
+    }).pipe(Effect.scoped, Effect.provide(registry)),
   )
 })
 
@@ -239,6 +236,85 @@ const installPolicy = Effect.fn(function* (...statements: ConfigPolicy.Info[]) {
     info: Schema.decodeUnknownSync(Info)({ experimental: { policies: statements } }),
   })
   yield* ConfigPolicyPlugin.Plugin.effect(context).pipe(Effect.provide(Config.testLayer([document])))
+})
+
+// What a tool declares about how to find it reaches the search function that a program calls, through the registry.
+describe("CodeMode search hints", () => {
+  const tool = (name: string, searchHint?: string) => ({
+    name,
+    description: `The ${name} tool`,
+    input: Schema.Struct({}),
+    output: Schema.String,
+    traits: searchHint === undefined ? undefined : { searchHint },
+    execute: () => Effect.succeed({ output: name }),
+  })
+  // What a program that searches a snapshot for a query returns.
+  const search = (snapshot: Tool.Snapshot, query: string, returned: string) =>
+    snapshot
+      .execute({
+        sessionID,
+        ...identity,
+        call: {
+          type: "tool-call",
+          id: callID,
+          name: "execute",
+          input: { code: `const found = search({ query: ${JSON.stringify(query)} }); return ${returned}` },
+        },
+      })
+      .pipe(Effect.map((result) => (result.output as { readonly output: string }).output))
+  // The paths it finds, in rank order.
+  const found = (snapshot: Tool.Snapshot, query: string) =>
+    search(snapshot, query, 'found.items.map((item) => item.path).join(",")')
+
+  it.effect("finds a deferred tool by its searchHint, and by nothing else it says", () =>
+    Effect.gen(function* () {
+      const tools = yield* Tool.Service
+      yield* tools.transform((editor) => {
+        editor.add(tool("charge", "refund receipt"))
+        editor.add({ ...tool("lookup", "refund receipt"), options: { namespace: "orders" } })
+        editor.add(tool("upload"))
+        // A tool that is offered directly is not in what a program can search, whatever its hint says.
+        editor.add({ ...tool("direct", "refund receipt"), options: { codemode: false } })
+      })
+      const snapshot = yield* tools.snapshot()
+
+      expect(yield* found(snapshot, "refund")).toBe("tools.charge,tools.orders.lookup")
+      expect(yield* found(snapshot, "receipts")).toBe("tools.charge,tools.orders.lookup")
+      expect(yield* found(snapshot, "upload")).toBe("tools.upload")
+      expect(yield* found(snapshot, "zebra")).toBe("")
+      // The hint ranks the tool, and is no part of what the catalog or a search says about it.
+      const listed = JSON.stringify(snapshot.codeModeCatalog)
+      expect(listed).toContain("charge")
+      expect(listed).not.toContain("receipt")
+      const shown = yield* search(snapshot, "refund", "found")
+      expect(shown).toContain("tools.charge")
+      expect(shown).not.toContain("receipt")
+    }).pipe(Effect.scoped, Effect.provide(registry)),
+  )
+
+  it.effect("searches the hints that the registry held when the snapshot was taken", () =>
+    Effect.gen(function* () {
+      const tools = yield* Tool.Service
+      yield* tools.transform((editor) => editor.add(tool("charge", "refund")))
+      const before = yield* tools.snapshot()
+      yield* tools.transform((editor) =>
+        editor.update("charge", (charge) => {
+          charge.traits = { searchHint: "invoice" }
+        }),
+      )
+      const after = yield* tools.snapshot()
+      yield* tools.transform((editor) =>
+        editor.update("charge", (charge) => {
+          charge.traits = undefined
+        }),
+      )
+      const without = yield* tools.snapshot()
+
+      expect([yield* found(before, "refund"), yield* found(before, "invoice")]).toEqual(["tools.charge", ""])
+      expect([yield* found(after, "refund"), yield* found(after, "invoice")]).toEqual(["", "tools.charge"])
+      expect([yield* found(without, "refund"), yield* found(without, "invoice")]).toEqual(["", ""])
+    }).pipe(Effect.scoped, Effect.provide(registry)),
+  )
 })
 
 describe("CodeMode fetch permission", () => {

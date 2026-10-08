@@ -403,6 +403,36 @@ describe("TestLLM first-class client", () => {
     }),
   )
 
+  it.effect("holds a scripted recovered tool call until the finish, as the real client does", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLM.Test
+      const recovered = LLMEvent.toolCall({ id: "call_1", name: "write", input: { path: "a.ts" }, partialInput: true })
+      const whole = LLMEvent.toolCall({ id: "call_2", name: "read", input: { path: "b.ts" } })
+      const failure = new AIError({ reason: new RateLimitError({ message: "Try later" }) })
+      yield* llm.push(
+        TestLLM.complete({ reason: { normalized: "length", raw: "max_tokens" } }, recovered, whole),
+        TestLLM.complete({ reason: { normalized: "tool-calls" } }, recovered, whole),
+        TestLLM.failAfter(failure, recovered, whole),
+      )
+
+      const cutOff = Array.from(yield* Stream.runCollect(llm.stream(request)))
+      expect(cutOff.filter(LLMEvent.is.toolCall)).toEqual([whole])
+
+      // Released after the unmarked call that followed it and right before the step finish.
+      const finished = Array.from(yield* Stream.runCollect(llm.stream(request)))
+      expect(finished.filter(LLMEvent.is.toolCall)).toEqual([whole, recovered])
+      expect(finished.at(-3)).toEqual(recovered)
+
+      const observed: LLMEvent[] = []
+      const error = yield* llm.stream(request).pipe(
+        Stream.runForEach((event) => Effect.sync(() => observed.push(event))),
+        Effect.flip,
+      )
+      expect(error).toBe(failure)
+      expect(observed).toEqual([whole])
+    }),
+  )
+
   it.effect("defects on unexpected requests instead of waiting for a late script", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLM.Test

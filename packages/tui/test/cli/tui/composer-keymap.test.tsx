@@ -4,6 +4,7 @@ import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
 import type { TuiKeybind } from "../../../src/config/keybind"
+import { KeybindingsFile } from "../../../src/config/keybindings-file"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider, useData } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
@@ -29,6 +30,7 @@ async function renderComposer(
   defaultTab: "subagents" | "shell",
   keybinds: Partial<TuiKeybind.Keybinds>,
   focusedTextarea = false,
+  keybindings?: KeybindingsFile.Result,
 ) {
   const events = createEventStream()
   const interrupted: string[] = []
@@ -105,7 +107,7 @@ async function renderComposer(
   const app = await testRender(
     () => (
       <TestTuiContexts directory={directory}>
-        <ConfigProvider config={createTuiResolvedConfig({ keybinds }, { terminal: false })}>
+        <ConfigProvider config={createTuiResolvedConfig({ keybinds }, { terminal: false, keybindings })}>
           <Keymap.Provider>
             <ClientProvider api={createApi(calls.fetch)}>
               <DataProvider directory={process.cwd()}>
@@ -217,6 +219,27 @@ test("configured composer bindings work with a focused textarea", async () => {
     composer.app.renderer.destroy()
   }
 })
+
+test.each([
+  ["composer", true],
+  ["dialog", false],
+])(
+  "a key given to a shell command in the %s context kills the shell only if that is the composer's: %s",
+  async (context, kills) => {
+    const keybindings = KeybindingsFile.decode(
+      JSON.stringify({ contexts: { [context]: { "composer.shell.kill": "ctrl+alt+k" } } }),
+    )
+    const composer = await renderComposer("shell", {}, false, keybindings)
+    try {
+      composer.app.mockInput.pressKey("k", { ctrl: true, meta: true })
+      await composer.app.renderOnce()
+      await Bun.sleep(100)
+      expect(composer.removed).toEqual(kills ? ["sh-a"] : [])
+    } finally {
+      composer.app.renderer.destroy()
+    }
+  },
+)
 
 test("ctrl+c closes the active composer", async () => {
   const composer = await renderComposer("shell", {})

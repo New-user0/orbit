@@ -169,6 +169,80 @@ describe("Open Responses completed item reasoning", () => {
     }),
   )
 })
+describe("Open Responses cut-off function calls", () => {
+  const added = {
+    type: "response.output_item.added",
+    item: { type: "function_call", id: "fc_1", call_id: "call_1", name: "write" },
+  } satisfies OpenResponses.Event
+  const cutOff = [
+    added,
+    { type: "response.function_call_arguments.delta", item_id: "fc_1", delta: '{"path":"a.ts","content":"par' },
+  ] satisfies OpenResponses.Event[]
+  // The provider can also close the item itself with the arguments it managed to write.
+  const closedCutOff = [
+    added,
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "write",
+        arguments: '{"path":"a.ts","content":"par',
+      },
+    },
+  ] satisfies OpenResponses.Event[]
+
+  ;(
+    [
+      { reason: "max_output_tokens", normalized: "length" },
+      { reason: "content_filter", normalized: "content-filter" },
+    ] as const
+  ).forEach((fixture) => {
+    it.effect(
+      `emits no tool call for an unfinished function call when the response is incomplete: ${fixture.reason}`,
+      () =>
+        Effect.gen(function* () {
+          const response = yield* generate(...cutOff, {
+            type: "response.incomplete",
+            response: { id: "resp_1", incomplete_details: { reason: fixture.reason } },
+          })
+
+          expect(response.toolCalls).toEqual([])
+          expect(response.events.filter(LLMEvent.is.toolInputEnd)).toEqual([])
+          expect(response.finishReason).toEqual({ normalized: fixture.normalized, raw: fixture.reason })
+        }),
+    )
+
+    it.effect(
+      `emits no tool call for an item closed with cut-off arguments when the response is incomplete: ${fixture.reason}`,
+      () =>
+        Effect.gen(function* () {
+          const response = yield* generate(...closedCutOff, {
+            type: "response.incomplete",
+            response: { id: "resp_1", incomplete_details: { reason: fixture.reason } },
+          })
+
+          expect(response.toolCalls).toEqual([])
+          expect(response.finishReason).toEqual({ normalized: fixture.normalized, raw: fixture.reason })
+        }),
+    )
+  })
+
+  // The same streams are live: a completed response lets the recovered call run.
+  ;[cutOff, closedCutOff].forEach((events, index) => {
+    it.effect(`emits the recovered call when the same stream completes: ${index === 0 ? "unfinished" : "closed"}`, () =>
+      Effect.gen(function* () {
+        const response = yield* generate(...events, completed)
+
+        expect(response.toolCalls).toMatchObject([
+          { id: "call_1", name: "write", input: { path: "a.ts", content: "par" }, partialInput: true },
+        ])
+        expect(response.finishReason.normalized).toBe("tool-calls")
+      }),
+    )
+  })
+})
 ;["response.completed", "response.incomplete"].forEach((type) => {
   it.effect(`keeps streamed text when part finals are followed by ${type} without item completion`, () =>
     Effect.gen(function* () {

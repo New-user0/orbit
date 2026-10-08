@@ -51,9 +51,9 @@ const decodeModel = Schema.decodeUnknownOption(Model.Ref)
  *   neither records an idle marker, and the next start resumes only top-level Sessions and background subagents, so it
  *   clears the claim of any other child (`SessionStore.releaseChildClaims`) without publishing a terminal event.
  * - the first steer after a control item or a move that the runner delivers at the end of a turn, and after a location
- *   reload: a manual compaction (steered or queued) that is admitted while the last response streams, a move, or a
- *   reload, runs after the turn's last response, in the same drain. The busy period does not settle, so no idle marker
- *   is written, and a steer that arrives while it runs is promoted next and joins the finished turn.
+ *   reload: a steered compaction admitted while the last response streams, a queued one admitted at any point in the
+ *   turn, a move, or a reload, runs after the turn's last response, in the same drain. The busy period does not
+ *   settle, so no idle marker is written, and a steer that arrives while it runs is promoted next and joins the finished turn.
  * A queued input starts a new turn in all six. Closing them for steers takes a durable record of where the history was
  * cut or where the turn started, and nothing records either yet. For the fifth, the start could publish the terminal
  * event that it does not publish when it clears the claim.

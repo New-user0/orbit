@@ -337,6 +337,7 @@ function pluginErrorRef(entry: Entry) {
 function Commands(props: { context: Plugin.Context }) {
   const plugins = usePlugin()
   props.context.keymap.layer(() => ({
+    context: "global",
     mode: "global",
     commands: [
       {

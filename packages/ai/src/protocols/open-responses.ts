@@ -860,14 +860,13 @@ export const mapUsage = (usage: OpenResponsesUsage | null | undefined, providerM
 
 const mapFinishReason = (event: Event, hasFunctionCall: boolean): FinishReason => {
   const reason = event.response?.incomplete_details?.reason
-  if (reason === undefined || reason === null) {
-    if (hasFunctionCall) return "tool-calls"
-    if (event.type === "response.incomplete") return "unknown"
-    return "stop"
-  }
   if (reason === "max_output_tokens") return "length"
   if (reason === "content_filter") return "content-filter"
-  return hasFunctionCall ? "tool-calls" : "unknown"
+  // A response that calls itself incomplete has not shown that it finished, whatever it called before it stopped. A call
+  // closed with cut-off arguments would otherwise be the evidence that releases it.
+  if (event.type === "response.incomplete") return "unknown"
+  if (hasFunctionCall) return "tool-calls"
+  return reason === undefined || reason === null ? "stop" : "unknown"
 }
 
 export const metadataKey = (model: LLMRequest["model"]) => model.route.providerMetadataKey ?? "openresponses"

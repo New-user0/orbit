@@ -5,6 +5,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { toSessionError } from "@orbit/core/session/to-session-error"
 import type { SessionError } from "@orbit/schema/session-error"
 import { Tool } from "@orbit/core/tool"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { Effect, type Scope } from "effect"
 import { host } from "../plugin/host"
@@ -16,6 +17,58 @@ export const toolIdentity = {
 
 export const toolDefinitions = (registry: Tool.Interface, permissions?: Permission.Ruleset) =>
   registry.snapshot(permissions).pipe(Effect.map((toolSet) => toolSet.definitions))
+
+/**
+ * A snapshot for fixtures that only need what a request advertises and how a call runs. Its calls resolve to the
+ * conservative traits and no tool has static traits, which is what a snapshot of tools that declare none answers.
+ */
+export const stubSnapshot = (
+  input: Pick<Tool.Snapshot, "definitions" | "execute"> & Partial<Pick<Tool.Snapshot, "codeModeCatalog">>,
+): Tool.Snapshot => ({
+  ...input,
+  traits: () => Effect.succeed(ToolTraits.conservative),
+  describe: () => undefined,
+})
+
+/**
+ * Declared traits that registration must refuse, each with the reason it logs. Plugins are not bound by the types, so
+ * this is what one can hand over: a single wrong field, and a `traits` that is not an object at all, falsy values
+ * included. Every door that registers a tool runs the whole table.
+ */
+export const invalidTraits: ReadonlyArray<readonly [name: string, traits: unknown, problem: string]> = [
+  ["a zero maxResultChars", { maxResultChars: 0 }, "maxResultChars must be a positive number"],
+  ["a negative maxResultChars", { maxResultChars: -1 }, "maxResultChars must be a positive number"],
+  ["a NaN maxResultChars", { maxResultChars: Number.NaN }, "maxResultChars must be a positive number"],
+  ["a textual maxResultChars", { maxResultChars: "5" }, "maxResultChars must be a positive number"],
+  ["an empty displayName", { displayName: "" }, "displayName must be a non-empty string"],
+  ["a blank displayName", { displayName: "  \t" }, "displayName must be a non-empty string"],
+  ["a displayName that is not text", { displayName: 5 }, "displayName must be a non-empty string"],
+  ["an empty searchHint", { searchHint: "" }, "searchHint must be a non-empty string"],
+  ["an unknown interruptBehavior", { interruptBehavior: "queue" }, 'interruptBehavior must be "cancel" or "block"'],
+  ["a textual readOnly", { readOnly: "yes" }, "readOnly must be a boolean or a function"],
+  ["a null concurrencySafe", { concurrencySafe: null }, "concurrencySafe must be a boolean or a function"],
+  ["a numeric openWorld", { openWorld: 1 }, "openWorld must be a boolean"],
+  [
+    "a textual requiresUserInteraction",
+    { requiresUserInteraction: "yes" },
+    "requiresUserInteraction must be a boolean",
+  ],
+  [
+    "a function cancelSiblingsOnFailure",
+    { cancelSiblingsOnFailure: () => true },
+    "cancelSiblingsOnFailure must be a boolean",
+  ],
+  ["traits that are text", "fast", "traits must be an object"],
+  ["traits that are empty text", "", "traits must be an object"],
+  ["traits that are null", null, "traits must be an object"],
+  ["traits that are a number", 5, "traits must be an object"],
+  ["traits that are zero", 0, "traits must be an object"],
+  ["traits that are true", true, "traits must be an object"],
+  ["traits that are false", false, "traits must be an object"],
+  ["traits that are an empty array", [], "traits must be an object"],
+  ["traits that are an array of traits", [{ readOnly: true }], "traits must be an object"],
+  ["traits that are a function", () => ({ readOnly: true }), "traits must be an object"],
+]
 
 export const codeModeListings = (catalog: CodeModeCatalog.Inventory) =>
   CodeModeCatalog.summarize(catalog, { budget: Infinity }).namespaces.flatMap((namespace) => namespace.entries)

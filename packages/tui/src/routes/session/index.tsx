@@ -252,6 +252,7 @@ export function Session(props: {
     kind === "reasoning" ? thinkingMode() === "hide" : kind === "exploration" ? groupExploration() : true
 
   Keymap.createLayer(() => ({
+    context: "session",
     priority: 10,
     enabled: () => props.sidebarVisible && dimensions().width - props.verticalTabsWidth <= 120 && !disabled(),
     commands: [{ bind: "escape,ctrl+c", title: "Close sidebar", group: "Session", run: props.onToggleSidebar }],
@@ -1320,17 +1321,20 @@ export function Session(props: {
   )
 
   Keymap.createLayer(() => ({
+    context: "session",
     mode: "global",
     commands: commands(),
     bindings: globalCommands.map((command) => command.id),
   }))
 
   Keymap.createLayer(() => ({
+    context: "session",
     enabled: () => renderer.currentFocusedEditor === null,
     bindings: baseAndUnfocusedCommands.map((command) => command.id),
   }))
 
   Keymap.createLayer(() => ({
+    context: "session",
     bindings: [...baseAndUnfocusedCommands, ...baseCommands()].map((command) => command.id),
   }))
 

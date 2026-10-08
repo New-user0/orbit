@@ -20,6 +20,7 @@ import { SessionModelRequest } from "@orbit/core/session/model-request"
 import { SessionModelTransport } from "@orbit/core/session/model-transport"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { testEffect } from "../lib/effect"
+import { stubSnapshot } from "../lib/tool"
 import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
@@ -168,7 +169,7 @@ describe("OpenAIPlugin", () => {
             }),
             agent: agentID,
             model,
-            tools: { definitions: [], execute: () => Effect.die("unused tool execution") },
+            tools: stubSnapshot({ definitions: [], execute: () => Effect.die("unused tool execution") }),
             system: [],
             messages: [],
             webSocket: "session",
