@@ -244,7 +244,8 @@ export const layer = Layer.effect(
       const scope = { sessionID: session.id, agent: input.agent, model: model.ref, kind }
       const tools: Tool.Snapshot = input.tools ?? {
         definitions: [],
-        execute: () => new Tool.Error({ message: "Tools are not available for this request" }),
+        execute: () =>
+          new Tool.Error({ message: "Tools are not available for this request", code: Tool.ErrorCode.Unavailable }),
         traits: () => Effect.succeed(ToolTraits.conservative),
         describe: () => undefined,
       }

@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import path from "path"
 import { pathToFileURL } from "url"
-import { eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { Database } from "@orbit/core/database/database"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -22,7 +22,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionInbox } from "@orbit/core/session/inbox"
-import { SessionInboxTable, SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
+import { InstructionStateTable, SessionInboxTable, SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import type { LocationServices } from "@orbit/core/location-services"
@@ -150,6 +150,36 @@ const eventCount = (type: string) =>
   )
 
 const encodeMessage = Schema.encodeSync(SessionMessage.Info)
+
+// Rebuilds the Session's projection from its recorded events, the way a replay would.
+const replaySessionProjection = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  const bus = yield* Bus.Service
+  const recorded = yield* db
+    .select()
+    .from(EventTable)
+    .where(eq(EventTable.aggregate_id, sessionID))
+    .orderBy(asc(EventTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  yield* bus.remove(sessionID)
+  yield* db.delete(InstructionStateTable).where(eq(InstructionStateTable.session_id, sessionID)).run()
+  yield* db.delete(SessionInboxTable).where(eq(SessionInboxTable.session_id, sessionID)).run()
+  yield* db.delete(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).run()
+  yield* Effect.forEach(
+    recorded.map((event) => ({
+      id: event.id,
+      created: event.created,
+      aggregateID: event.aggregate_id,
+      seq: event.seq,
+      type: event.type,
+      data: event.data,
+    })),
+    (event) => bus.replay(event),
+    { discard: true },
+  )
+})
+
 const assistantRow = (id: SessionMessage.ID, seq: number) => {
   const {
     id: _,
@@ -1076,6 +1106,167 @@ describe("Session.prompt", () => {
           message.type === "user" || message.type === "synthetic" ? message.text : message.type,
         ),
       ).toEqual(["First prompt", "Background completion", "Second prompt"])
+    }),
+  )
+
+  it.effect("records turn options with the prompt and projects them, with the delivery, onto the user message", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const turn = {
+        maxSteps: 3,
+        fallbackModel: { id: Model.ID.make("backup"), providerID: Provider.ID.make("provider") },
+      }
+
+      const first = yield* session.prompt({ sessionID, text: "Limited work", turn, resume: false })
+
+      expect(first.payload.turn).toEqual(turn)
+      expect(yield* admitted(first.id)).toMatchObject({ payload: { text: "Limited work", turn } })
+      expect(yield* session.messages({ sessionID })).toEqual([])
+
+      yield* SessionInbox.promote(db, bus, sessionID, "steer")
+      const projected = (yield* session.messages({ sessionID })).map((message) => encodeMessage(message))
+      expect(projected).toMatchObject([{ id: first.id, type: "user", text: "Limited work", turn, delivery: "steer" }])
+
+      yield* replaySessionProjection
+      expect((yield* session.messages({ sessionID })).map((message) => encodeMessage(message))).toEqual(projected)
+    }),
+  )
+
+  it.effect("leaves turn off the message when the prompt carried none", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+
+      const first = yield* session.prompt({ sessionID, text: "Plain work", resume: false })
+      expect(first.payload.turn).toBeUndefined()
+      yield* SessionInbox.promote(db, bus, sessionID, "steer")
+
+      const stored = (yield* session.messages({ sessionID })).map((message) => encodeMessage(message))
+      expect(stored).toMatchObject([{ id: first.id, type: "user", delivery: "steer" }])
+      expect(stored[0]).not.toHaveProperty("turn")
+      yield* replaySessionProjection
+      expect((yield* session.messages({ sessionID })).map((message) => encodeMessage(message))).toEqual(stored)
+    }),
+  )
+
+  it.effect("projects the delivery that a prompt or synthetic left the inbox with, and none for a runner notice", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+
+      const steered = yield* session.prompt({ sessionID, text: "Steered", resume: false })
+      const steeredSynthetic = yield* session.synthetic({ sessionID, text: "Steered completion", resume: false })
+      const queuedPrompt = yield* session.prompt({ sessionID, text: "Queued", delivery: "queue", resume: false })
+      const queuedSynthetic = yield* session.synthetic({
+        sessionID,
+        text: "Queued completion",
+        delivery: "queue",
+        resume: false,
+      })
+      yield* SessionInbox.promote(db, bus, sessionID, "input")
+      yield* SessionInbox.promote(db, bus, sessionID, "input")
+      yield* SessionInbox.promote(db, bus, sessionID, "input")
+      yield* bus.publish(SessionEvent.Synthetic, {
+        sessionID,
+        text: "Runner notice",
+        metadata: { notice: "stop-hook" },
+      })
+
+      const stored = (yield* session.messages({ sessionID, order: "asc" })).map((message) => encodeMessage(message))
+      expect(stored).toMatchObject([
+        { id: steered.id, type: "user", delivery: "steer" },
+        { id: steeredSynthetic.id, type: "synthetic", delivery: "steer" },
+        { id: queuedPrompt.id, type: "user", delivery: "queue" },
+        { id: queuedSynthetic.id, type: "synthetic", delivery: "queue" },
+        { type: "synthetic", text: "Runner notice" },
+      ])
+      expect(stored[4]).not.toHaveProperty("delivery")
+      yield* replaySessionProjection
+      expect((yield* session.messages({ sessionID, order: "asc" })).map((message) => encodeMessage(message))).toEqual(
+        stored,
+      )
+    }),
+  )
+
+  it.effect("keeps the first admission's turn options when one ID is reused, before and after promotion", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const input = { sessionID, id: messageID, text: "Limited work", resume: false }
+
+      yield* session.prompt({ ...input, turn: { maxSteps: 3 } })
+      const pending = yield* session.prompt({ ...input, turn: { maxSteps: 9 } })
+      expect(pending.payload.turn).toEqual({ maxSteps: 3 })
+      expect(yield* admittedCount).toBe(1)
+
+      yield* SessionInbox.promote(db, bus, sessionID, "steer")
+      const promoted = yield* session.prompt({ ...input, turn: { maxTokens: 5 } })
+      expect(promoted.payload.turn).toEqual({ maxSteps: 3 })
+      expect(yield* admitted(messageID)).toBeUndefined()
+    }),
+  )
+
+  // The message records the delivery the input left the inbox with, and a retry reports that one, not its own.
+  for (const [first, retry] of [
+    ["steer", "queue"],
+    ["queue", "steer"],
+  ] as const)
+    it.effect(`reports the ${first} delivery of a promoted prompt or synthetic whose ID is retried as ${retry}`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* Session.Service
+        const bus = yield* Bus.Service
+        const { db } = yield* Database.Service
+        const syntheticID = SessionMessage.ID.create()
+
+        yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: first, resume: false })
+        yield* session.synthetic({ sessionID, id: syntheticID, text: "Done", delivery: first, resume: false })
+        // Pending, the inbox row answers.
+        expect((yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: retry })).delivery).toBe(
+          first,
+        )
+        expect((yield* session.synthetic({ sessionID, id: syntheticID, text: "Done", delivery: retry })).delivery).toBe(
+          first,
+        )
+
+        yield* SessionInbox.promote(db, bus, sessionID, "input")
+        yield* SessionInbox.promote(db, bus, sessionID, "input")
+        expect(yield* admittedCount).toBe(0)
+        // Promoted, the message answers, and it has not forgotten how it arrived.
+        expect((yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: retry })).delivery).toBe(
+          first,
+        )
+        expect((yield* session.synthetic({ sessionID, id: syntheticID, text: "Done", delivery: retry })).delivery).toBe(
+          first,
+        )
+        expect(yield* admittedCount).toBe(0)
+      }),
+    )
+
+  it.effect("reports the delivery of the retry for a promoted message that predates recorded deliveries", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+
+      yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: "steer", resume: false })
+      yield* SessionInbox.promote(db, bus, sessionID, "input")
+      // Rows projected before the delivery was recorded carry none.
+      yield* db.run(sql`update session_message set data = json_remove(data, '$.delivery') where id = ${messageID}`)
+
+      expect((yield* session.prompt({ sessionID, id: messageID, text: "Work", delivery: "queue" })).delivery).toBe(
+        "queue",
+      )
     }),
   )
 })

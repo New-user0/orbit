@@ -78,9 +78,11 @@ const makeWriteFixture = () => {
 const withTool = <A, E, R>(
   directory: string,
   fixture: ReturnType<typeof makeWriteFixture>,
-  body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
+  body: (registry: Tool.Interface) => Effect.Effect<A, E, R | FileLedger.Service>,
   // The core tests trust every folder, unless the project is untrusted.
   untrusted = false,
+  // The permissive ledger allows every change. The real one asks that the session has read the file.
+  ledger: "permissive" | "real" = "permissive",
 ) => {
   const activeLocation = Layer.succeed(
     Location.Service,
@@ -91,19 +93,22 @@ const withTool = <A, E, R>(
     return yield* body(registry)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, writeToolNode]), [
-        FileLedger.node.replace(FileLedger.permissiveLayer),
-        Environment.node.replace(
-          transformEnvironmentFiles((files) => ({
-            write: (target, content) =>
-              Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
-          })),
-        ),
-        Location.node.replace(activeLocation),
-        Formatter.node.replace(fixture.formatter),
-        Permission.node.replace(fixture.permission),
-        ...(untrusted ? untrustedProjectNodes : []),
-      ]),
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, FileLedger.node, writeToolNode]),
+        [
+          ...(ledger === "real" ? [] : [FileLedger.node.replace(FileLedger.permissiveLayer)]),
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              write: (target, content) =>
+                Effect.sync(() => fixture.writes.push(target)).pipe(Effect.andThen(files.write(target, content))),
+            })),
+          ),
+          Location.node.replace(activeLocation),
+          Formatter.node.replace(fixture.formatter),
+          Permission.node.replace(fixture.permission),
+          ...(untrusted ? untrustedProjectNodes : []),
+        ],
+      ),
     ),
   )
 }
@@ -480,5 +485,46 @@ describe("WriteTool", () => {
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
     ),
+  )
+
+  it.live("names a file the session has not read, and one that changed since, with the ledger's codes", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "ledger.txt")
+      return Effect.promise(() => fs.writeFile(target, "before")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            fixture,
+            (registry) =>
+              Effect.gen(function* () {
+                expect(yield* executeTool(registry, call({ path: "ledger.txt", content: "after" }))).toEqual({
+                  status: "error",
+                  error: {
+                    type: "file.unread",
+                    message: "ledger.txt has not been read in this session. Read it before changing it.",
+                  },
+                })
+
+                yield* (yield* FileLedger.Service).record(sessionID, target)
+                const later = new Date(Date.now() + 60_000)
+                yield* Effect.promise(() => fs.utimes(target, later, later))
+                expect(yield* executeTool(registry, call({ path: "ledger.txt", content: "after" }))).toEqual({
+                  status: "error",
+                  error: {
+                    type: "file.stale",
+                    message: "ledger.txt changed since it was last read. Read it again before changing it.",
+                  },
+                })
+                expect(fixture.assertions).toEqual([])
+                expect(fixture.writes).toEqual([])
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+              }),
+            false,
+            "real",
+          ),
+        ),
+      )
+    }),
   )
 })

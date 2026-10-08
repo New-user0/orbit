@@ -5,6 +5,7 @@ import { OpenAIChat } from "@orbit/ai/protocols"
 import { Agent } from "@orbit/schema/agent"
 import { Money } from "@orbit/schema/money"
 import { Session } from "@orbit/schema/session"
+import { SessionMessage } from "@orbit/schema/session-message"
 import type { SessionRequestKind } from "@orbit/plugin/effect/session"
 import { Location } from "@orbit/core/location"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
@@ -13,6 +14,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { SessionModelRequest } from "@orbit/core/session/model-request"
 import { SessionModelTransport } from "@orbit/core/session/model-transport"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
+import { toSessionError } from "@orbit/core/session/to-session-error"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { testEffect } from "./lib/effect"
@@ -234,5 +236,33 @@ describe("SessionModelRequest HTTP hooks", () => {
         "receive:primary:created",
       ])
     }),
+  )
+})
+
+describe("SessionModelRequest without tools", () => {
+  it.effect("turns away a tool call in a request that offered no tools as tool.unavailable", () =>
+    Effect.gen(function* () {
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      const prepared = yield* requests.title({
+        session,
+        agent: Agent.ID.make("build"),
+        model,
+        system: [],
+        messages: [],
+      })
+
+      const error = yield* prepared
+        .executeTool({
+          sessionID: session.id,
+          agent: Agent.ID.make("build"),
+          messageID: SessionMessage.ID.make("msg_no_tools"),
+          call: { type: "tool-call", id: "call_no_tools", name: "edit", input: {} },
+        })
+        .pipe(Effect.flip)
+      expect(toSessionError(error)).toEqual({
+        type: "tool.unavailable",
+        message: "Tools are not available for this request",
+      })
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
   )
 })

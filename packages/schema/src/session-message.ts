@@ -17,6 +17,8 @@ import { SessionError } from "./session-error.js"
 import { Agent } from "./agent.js"
 import { Skill as SkillSchema } from "./skill.js"
 import { Money } from "./money.js"
+import { SessionDelivery } from "./session-delivery.js"
+import { SessionTurn } from "./session-turn.js"
 import { Snapshot } from "./snapshot.js"
 import { TokenUsage } from "./token-usage.js"
 
@@ -77,6 +79,13 @@ export const User = Schema.Struct({
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
   skills: Prompt.fields.skills,
+  /** The turn options the prompt was admitted with. */
+  turn: SessionTurn.Options.pipe(optional),
+  /**
+   * The delivery the input left the inbox with. Absent on messages projected before it was recorded, which count as
+   * steers.
+   */
+  delivery: SessionDelivery.Delivery.pipe(optional),
   type: Schema.tag("user"),
 }).annotate({ identifier: "Session.Message.User" })
 
@@ -85,6 +94,11 @@ export const Synthetic = Schema.Struct({
   ...Base,
   text: Schema.String,
   description: Schema.String.pipe(optional),
+  /**
+   * The delivery the input left the inbox with. Absent on the notices that the runner records directly, which never
+   * start a turn, and on messages projected before it was recorded.
+   */
+  delivery: SessionDelivery.Delivery.pipe(optional),
   type: Schema.tag("synthetic"),
 }).annotate({ identifier: "Session.Message.Synthetic" })
 
@@ -281,9 +295,12 @@ export const Compaction = Schema.Union([CompactionRunning, CompactionCompleted, 
 export type Compaction = CompactionRunning | CompactionCompleted | CompactionFailed
 
 /**
- * Marks the Session going idle: every step since the previous marker belongs to
- * one turn, including prompts steered in while it was busy. A shutdown does not
- * record one, since the resumed execution continues the same turn.
+ * Marks the Session going idle. The steps since the previous marker belong to
+ * one turn, with the prompts steered in while it was busy, unless a queued
+ * prompt started a new one inside the busy period: it is promoted once the
+ * previous work ended, with no marker before it, and its message records the
+ * `queue` delivery that tells it from a steer. A shutdown does not record a
+ * marker, since the resumed execution continues the same turn.
  */
 export interface Idle extends Schema.Schema.Type<typeof Idle> {}
 export const Idle = Schema.Struct({

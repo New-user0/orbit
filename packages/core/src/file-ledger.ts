@@ -3,6 +3,7 @@ export * as FileLedger from "./file-ledger.js"
 import { ToolFailure } from "@orbit/ai"
 import type { Session } from "@orbit/schema/session"
 import { SessionEvent } from "@orbit/schema/session-event"
+import { Tool } from "@orbit/schema/tool"
 import { Context, Effect, Layer, Stream } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "./bus.js"
@@ -54,10 +55,12 @@ const layer = Layer.effect(
         if (seen === undefined)
           return yield* new ToolFailure({
             message: `${display} has not been read in this session. Read it before changing it.`,
+            code: Tool.ErrorCode.FileUnread,
           })
         if (time > seen)
           return yield* new ToolFailure({
             message: `${display} changed since it was last read. Read it again before changing it.`,
+            code: Tool.ErrorCode.FileStale,
           })
       }),
     })

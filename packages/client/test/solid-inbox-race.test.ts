@@ -76,6 +76,71 @@ test.each(["delivered", "cancelled"] as const)(
   },
 )
 
+// The projection records on the message the delivery that its input left the inbox with. A row that a client builds
+// from the inbox item must say the same once it is delivered, so a live transcript matches a reloaded one.
+test.each([
+  {
+    name: "a steered prompt",
+    admitted: { type: "user", delivery: "steer", payload: { text: "Check the preview", turn: { maxSteps: 2 } } },
+    changed: undefined,
+    recorded: "steer",
+  },
+  {
+    name: "a queued synthetic",
+    admitted: { type: "synthetic", delivery: "queue", payload: { text: "The build finished" } },
+    changed: undefined,
+    recorded: "queue",
+  },
+  {
+    name: "a prompt that was steered and then queued",
+    admitted: { type: "user", delivery: "steer", payload: { text: "Check the preview" } },
+    changed: "queue",
+    recorded: "queue",
+  },
+  {
+    name: "a prompt that was queued and then steered",
+    admitted: { type: "user", delivery: "queue", payload: { text: "Check the preview" } },
+    changed: "steer",
+    recorded: "steer",
+  },
+] as const)("the row of $name records the delivery it left the inbox with", ({ admitted, changed, recorded }) => {
+  const setup = fixture(() => Promise.resolve(Response.json({ data: [] })))
+  try {
+    setup.emit({
+      ...enqueued,
+      data: { sessionID: item.sessionID, inboxID: item.id, item: admitted },
+    })
+    if (changed)
+      setup.emit({
+        id: "evt_changed",
+        type: "session.inbox.delivery.changed",
+        created: 2,
+        durable: { aggregateID: item.sessionID, seq: 2, version: 1 },
+        data: { sessionID: item.sessionID, inboxID: item.id, delivery: changed },
+      })
+    // Waiting in the inbox it has not left yet, so the row has no delivery to record.
+    expect(setup.data.session.message.get(item.sessionID, item.id)).not.toHaveProperty("delivery")
+
+    setup.emit({
+      id: "evt_delivered",
+      type: "session.inbox.delivered",
+      created: 3,
+      durable: { aggregateID: item.sessionID, seq: 3, version: 1 },
+      data: { sessionID: item.sessionID, inboxID: item.id },
+    })
+
+    expect(setup.data.session.message.get(item.sessionID, item.id)).toMatchObject({
+      id: item.id,
+      type: admitted.type,
+      delivery: recorded,
+      time: { created: 3 },
+      ...("turn" in admitted.payload ? { turn: admitted.payload.turn } : {}),
+    })
+  } finally {
+    setup.dispose()
+  }
+})
+
 test.each(["enqueue", "delivery"] as const)("inbox hydration retains a concurrent %s event", async (action) => {
   const response = Promise.withResolvers<Response>()
   const setup = fixture(() => response.promise)

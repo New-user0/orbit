@@ -5,6 +5,7 @@ import { PromptInput } from "@orbit/schema/prompt-input"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import type { Session } from "@orbit/schema/session"
 import type { SessionMessage } from "@orbit/schema/session-message"
+import type { SessionTurn } from "@orbit/schema/session-turn"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect } from "effect"
 import path from "path"
@@ -23,6 +24,8 @@ export type Input = {
   agents?: PromptInput.Prompt["agents"]
   skills?: PromptInput.Prompt["skills"]
   metadata?: Record<string, unknown>
+  /** Limits and a fallback for the turn this prompt belongs to. */
+  turn?: SessionTurn.Options
   delivery?: SessionInbox.Delivery
 }
 
@@ -84,6 +87,7 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
           skills: selected?.length ? selected : undefined,
         }),
         metadata: event.metadata,
+        turn: request.input.turn,
       }),
       delivery: SessionInbox.Delivery.make(event.delivery),
     } satisfies SessionInbox.Item

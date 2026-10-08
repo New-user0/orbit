@@ -70,6 +70,25 @@ export const invalidTraits: ReadonlyArray<readonly [name: string, traits: unknow
   ["traits that are a function", () => ({ readOnly: true }), "traits must be an object"],
 ]
 
+/**
+ * Declared `validate` values that registration must refuse, each with the reason it logs. Plugins are not bound by the
+ * types, and a check that is not a function would otherwise make every call of its tool die. Every door that registers
+ * a tool runs the whole table.
+ */
+export const invalidValidates: ReadonlyArray<readonly [name: string, validate: unknown]> = [
+  ["validate that is text", "yes"],
+  ["validate that is empty text", ""],
+  ["validate that is null", null],
+  ["validate that is a number", 5],
+  ["validate that is zero", 0],
+  ["validate that is true", true],
+  ["validate that is false", false],
+  ["validate that is an object", { check: () => undefined }],
+  ["validate that is an array of functions", [() => undefined]],
+]
+
+export const invalidValidateProblem = "validate must be a function"
+
 export const codeModeListings = (catalog: CodeModeCatalog.Inventory) =>
   CodeModeCatalog.summarize(catalog, { budget: Infinity }).namespaces.flatMap((namespace) => namespace.entries)
 

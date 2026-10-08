@@ -27,27 +27,20 @@ export const definition = (tool: Tool.Info<any, any>): ToolDefinition => ({
 })
 
 /**
- * Runs a tool on raw input. The traits of the call are resolved on the decoded input and handed to the tool in its
- * context, so every path that executes a tool, Code Mode inner calls included, passes its own tool's traits.
+ * Runs a tool on raw input: decode it, resolve the traits of the call, let the tool refuse the call in `validate`, then
+ * run it. The traits are resolved on the decoded input and handed to the tool in its context, so every path that
+ * executes a tool, Code Mode inner calls included, passes its own tool's traits. The `execute.before` hooks have run
+ * before this, and a tool asks for its own permissions in `execute`, so a call that `validate` refuses asks nobody.
  */
 export const execute = (tool: Tool.Info<any, any>, input: unknown, context: Omit<Tool.Context, "traits">) =>
   Effect.gen(function* () {
     const decoded = yield* decode(tool, input)
-    const traits = yield* ToolTraits.resolve(tool, decoded)
-    // Tool implementations declare `Tool.Error` but plugins can fail with anything at
-    // runtime. A foreign typed failure would slip past every `catchTag("Tool.Error")`
-    // downstream and leave its call permanently unsettled, so the declared contract is
-    // enforced here at the untrusted boundary. Declines tunnel through as defects and
-    // interrupts are not errors; neither is touched.
-    const result = yield* tool.execute(decoded, { ...context, traits }).pipe(
-      Effect.mapError((error: unknown) =>
-        error instanceof Tool.Error
-          ? error
-          : new Tool.Error({
-              message: error instanceof globalThis.Error ? error.message : String(error),
-            }),
-      ),
-    )
+    const resolved = { ...context, traits: yield* ToolTraits.resolve(tool, decoded) }
+    if (tool.validate !== undefined)
+      yield* tool
+        .validate(decoded, resolved)
+        .pipe(Effect.mapError((error: unknown) => toolError(error, Tool.ErrorCode.Validation)))
+    const result = yield* tool.execute(decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
     if (tool.output === undefined) {
       if ("output" in result) return yield* Effect.die("Tool result declared output without an output schema")
       return {
@@ -70,9 +63,26 @@ export const decode = (tool: Tool.Info<any, any>, value: unknown) =>
   Effect.gen(function* () {
     const result = yield* validateInput(tool.input, value)
     if (result.issues)
-      return yield* new Tool.Error({ message: formatInputIssues(effectiveName(tool), result.issues, value) })
+      return yield* new Tool.Error({
+        message: formatInputIssues(effectiveName(tool), result.issues, value),
+        code: Tool.ErrorCode.InputInvalid,
+      })
     return result.value
   })
+
+// Tool implementations declare `Tool.Error` but plugins can fail with anything at runtime. A foreign typed failure would
+// slip past every `catchTag("Tool.Error")` downstream and leave its call permanently unsettled, so the declared contract
+// is enforced here at the untrusted boundary. Declines tunnel through as defects and interrupts are not errors; neither
+// is touched. A failure that names no code takes `fallback`, if there is one.
+const toolError = (error: unknown, fallback?: Tool.ErrorCode) => {
+  if (!(error instanceof Tool.Error))
+    return new Tool.Error({
+      message: error instanceof globalThis.Error ? error.message : String(error),
+      ...(fallback === undefined ? {} : { code: fallback }),
+    })
+  if (error.code !== undefined || fallback === undefined) return error
+  return new Tool.Error({ message: error.message, code: fallback, error: error.error, metadata: error.metadata })
+}
 
 const validateInput = (
   schema: Tool.ValueSchema<any>,

@@ -79,7 +79,7 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
       const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
         const remaining = Math.max(0, expires - Date.now())
         const id = setTimeout(() => {
-          const err = new Error("SSE read timed out")
+          const err = new Error(SSE_TIMEOUT_MESSAGE)
           ctl.abort(err)
           void reader.cancel(err)
           reject(err)
@@ -223,6 +223,7 @@ function throughMiddleware(
   )
 }
 
+const SSE_TIMEOUT_MESSAGE = "SSE read timed out"
 const HEADER_TIMEOUT_MESSAGE = "Response headers timed out"
 
 export class InitError extends Schema.TaggedError<InitError>()("AISDK.InitError", {
@@ -969,9 +970,11 @@ const errorValue = (error: unknown) => (ProviderShared.isRecord(error) ? error.v
 
 // Runtime-generated network failure shapes. The codes mirror the AI SDK's own
 // Bun network error list in handleFetchError; the messages are undici's fetch
-// TypeError and stream termination strings plus our header and chunk timeout errors.
+// TypeError and stream termination strings, and our header and chunk timeout errors,
+// which carry the code "Timeout" that the native routes use for their own timeouts so
+// that the session retry policy counts them toward the same cap.
 // Unrecognized shapes still retry via the UnknownProvider default; this match
-// only adds transport semantics (continuation eligibility, display).
+// only adds transport semantics (continuation eligibility, display, the timeout cap).
 const NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -981,14 +984,10 @@ const NETWORK_ERROR_CODES = new Set([
   "ConnectionClosed",
   "FailedToOpenSocket",
 ])
-const NETWORK_ERROR_MESSAGES = new Set([
-  "fetch failed",
-  "failed to fetch",
-  "terminated",
-  "other side closed",
-  "sse read timed out",
-  HEADER_TIMEOUT_MESSAGE.toLowerCase(),
-])
+const NETWORK_ERROR_MESSAGES = new Set(["fetch failed", "failed to fetch", "terminated", "other side closed"])
+const TIMEOUT_ERROR_MESSAGES = new Set(
+  [SSE_TIMEOUT_MESSAGE, HEADER_TIMEOUT_MESSAGE].map((message) => message.toLowerCase()),
+)
 
 const NativeErrorShape = Schema.Struct({
   message: Schema.String,
@@ -1007,8 +1006,9 @@ function networkFailure(error: unknown, depth = 0): { message: string; code?: st
   if (cause) return cause
   if (shape.code !== undefined && (NETWORK_ERROR_CODES.has(shape.code) || shape.code.startsWith("UND_ERR")))
     return { message: shape.message, code: shape.code }
-  if (NETWORK_ERROR_MESSAGES.has(shape.message.trim().toLowerCase()))
-    return { message: shape.message, code: shape.code }
+  const message = shape.message.trim().toLowerCase()
+  if (TIMEOUT_ERROR_MESSAGES.has(message)) return { message: shape.message, code: "Timeout" }
+  if (NETWORK_ERROR_MESSAGES.has(message)) return { message: shape.message, code: shape.code }
   return undefined
 }
 
