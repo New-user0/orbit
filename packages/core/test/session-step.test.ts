@@ -4,6 +4,7 @@ import { OpenAIChat } from "@orbit/ai/protocols/openai-chat"
 import { TestLLM } from "@orbit/ai/testing"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
+import { Config } from "@orbit/core/config"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { EventTable } from "@orbit/core/event/sql"
@@ -27,9 +28,10 @@ import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   Layer.merge(
-    AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SessionProjector.node, ToolOutput.node]), [
-      Bus.node.replace(Bus.configured({ persist: true })),
-    ]),
+    AppNodeBuilder.build(
+      LayerNode.group([Database.node, Bus.node, Config.node, SessionProjector.node, ToolOutput.node]),
+      [Config.node.replace(Config.testLayer()), Bus.node.replace(Bus.configured({ persist: true }))],
+    ),
     TestLLM.testLayer(),
   ),
 )

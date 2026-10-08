@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test"
 import { InputRenderable } from "@opentui/core"
 import { Store } from "@orbit/flow"
-import fs from "node:fs/promises"
-import os from "node:os"
-import path from "node:path"
 import { DialogFlowGate, DialogFlowRuns } from "../../src/component/dialog-flow-runs"
 import { useToast } from "../../src/ui/toast"
+import { tmpdir } from "../fixture/fixture"
 import { renderLocal } from "../fixture/local"
 import { json } from "../fixture/tui-client"
 
@@ -62,7 +60,9 @@ const located = (directory: string) => async (url: URL) =>
     : undefined
 
 test("lists runs, opens a run's nodes, and approves a waiting gate", async () => {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-tui-flow-"))
+  // Declared before the renderer, so the folder goes after the renderer and the stores are closed.
+  await using dir = await tmpdir()
+  const directory = dir.path
   // The store lists only IDs in the shape that the runner makes.
   const run = "run_20260101000007_0a1b2c"
   const store = Store.at(directory)
@@ -101,7 +101,6 @@ test("lists runs, opens a run's nodes, and approves a waiting gate", async () =>
   const after = Store.at(directory)
   expect(after.nodes(run).get("ship")).toMatchObject({ status: "succeeded", result: { approved: true } })
   after.close()
-  await fs.rm(directory, { recursive: true, force: true })
 })
 
 // What a clone's run store can hold in any text it says: an operating system command that sets the title of the window
@@ -112,8 +111,7 @@ const sequenceShown = "\\x1b]0;x\\x07\\x9b\\u{202e}"
 const evil = "\u001b[2K\u009b"
 const shown = "\\x1b[2K\\x9b"
 
-async function hostileStore() {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-tui-flow-hostile-"))
+function hostileStore(directory: string) {
   // The store lists only IDs in the shape that the runner makes, so a clone's run has one.
   const run = "run_20260101000008_0a1b2c"
   const store = Store.at(directory)
@@ -126,11 +124,13 @@ async function hostileStore() {
   store.append(run, `gate${evil}`, "gate.pending", { message: `ship${evil}?` })
   store.status(run, "waiting")
   store.close()
-  return { directory, run }
+  return run
 }
 
 test("writes out the control characters that a run store holds in the runs and the nodes it lists", async () => {
-  const { directory, run } = await hostileStore()
+  await using dir = await tmpdir()
+  const directory = dir.path
+  const run = hostileStore(directory)
   await using setup = await renderLocal({ directory, fetch: located(directory) })
 
   setup.dialog.replace(() => <DialogFlowRuns />)
@@ -151,11 +151,12 @@ test("writes out the control characters that a run store holds in the runs and t
   expect(nodes).toContain(`✓ build${shown}`)
   expect(nodes).toContain("NaN tokens")
   expectNoControl(nodes)
-  await fs.rm(directory, { recursive: true, force: true })
 })
 
 test("writes out the control characters of a gate in its dialog, its note prompt and its toasts", async () => {
-  const { directory, run } = await hostileStore()
+  await using dir = await tmpdir()
+  const directory = dir.path
+  const run = hostileStore(directory)
   let toast!: ReturnType<typeof useToast>
   const Gate = () => {
     toast = useToast()
@@ -206,5 +207,4 @@ test("writes out the control characters of a gate in its dialog, its note prompt
     message: `gate${shown} is not waiting for a decision`,
     variant: "error",
   })
-  await fs.rm(directory, { recursive: true, force: true })
 })

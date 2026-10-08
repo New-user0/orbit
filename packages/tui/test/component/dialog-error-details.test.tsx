@@ -108,3 +108,58 @@ for (const width of [40, 100]) {
     }
   })
 }
+
+// The error text of a plugin, an MCP server or a provider is written by someone else, so it reaches the screen written out.
+test.each([
+  ["hostile", "failed\u001b]0;pwn\u0007 ‮to load", "failed\\x1b]0;pwn\\x07 \\u{202e}to load"],
+  ["ordinary", "failed to load", "failed to load"],
+])("error details draw a %s error written out", async (_name, error, shown) => {
+  await using temporary = await tmpdir()
+  const api = createApi(createFetch(() => undefined, createEventStream()).fetch)
+
+  function OpenDialog() {
+    const dialog = useDialog()
+    onMount(() =>
+      dialog.replace(
+        <DialogErrorDetails title="Server plugin error" error={error} context="Plugin: broken" onBack={() => dialog.clear()} />,
+      ),
+    )
+    return null
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts directory={temporary.path} paths={{ state: temporary.path }}>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <RouteProvider initialRoute={{ type: "home" }}>
+            <ClientProvider api={api}>
+              <DataProvider directory={temporary.path}>
+                <LocationProvider>
+                  <ThemeProvider mode="dark" source={emptyThemeSource}>
+                    <Keymap.Provider>
+                      <ToastProvider>
+                        <DialogProvider>
+                          <OpenDialog />
+                        </DialogProvider>
+                      </ToastProvider>
+                    </Keymap.Provider>
+                  </ThemeProvider>
+                </LocationProvider>
+              </DataProvider>
+            </ClientProvider>
+          </RouteProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 24, kittyKeyboard: true },
+  )
+  try {
+    await app.waitForFrame((frame) => frame.includes("Server plugin error"))
+    const frame = app.captureCharFrame()
+    expect(frame).toContain(shown)
+    expect(frame).not.toContain("\u001b")
+    expect(frame).not.toContain("‮")
+  } finally {
+    app.renderer.destroy()
+  }
+})

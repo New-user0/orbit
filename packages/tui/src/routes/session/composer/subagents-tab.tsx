@@ -7,6 +7,7 @@ import { useData } from "../../../context/data"
 import { useClient } from "../../../context/client"
 import { useTheme } from "../../../context/theme"
 import { Locale } from "../../../util/locale"
+import { bodyText } from "../../../util/renderer"
 import { Keymap } from "../../../context/keymap"
 import { useComposerTab } from "./context"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
@@ -235,7 +236,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                       wrapMode="none"
                     >
                       {entry.prefix}
-                      {entry.agent}: {entry.title}
+                      {bodyText(`${entry.agent}: ${entry.title}`)}
                     </text>
                   </box>
                   <Show when={status()}>

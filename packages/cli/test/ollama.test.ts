@@ -108,5 +108,5 @@ test("orb models waits for Ollama models that a fresh server has not discovered 
   discovery.delay = 0
 
   expect(code).toBe(0)
-  expect(stdout.split("\n")).toContain("ollama/qwen3.8:27b")
+  expect(stdout.split(/\r?\n/)).toContain("ollama/qwen3.8:27b")
 }, 60_000)

@@ -216,6 +216,42 @@ describe("TUI inline tool wrapping", () => {
     expect(genericToolSummary("demo_refresh", {})).toBe("demo_refresh")
   })
 
+  test("writes the control characters of an MCP tool title out", () => {
+    // A server names its tools and chooses their arguments; ESC ] 0 BEL would set the title of the window.
+    expect(genericToolSummary("mcp_x\u001b]0;pwned\u0007", { q: "a\u202eb" })).toBe(
+      "mcp_x\\x1b]0;pwned\\x07 [q=a\\u{202e}b]",
+    )
+  })
+
+  test("draws an MCP tool title and an expanded tool error written out", async () => {
+    const frame = await renderFrame(
+      () => (
+        <InlineToolRow
+          icon="⚙"
+          complete={true}
+          pending=""
+          failed={true}
+          error={"bad\u001b]0;x\u0007"}
+          errorExpanded={true}
+        >
+          {genericToolSummary("mcp_x\u001b]0;pwned\u0007", {})}
+        </InlineToolRow>
+      ),
+      { width: 72, height: 4 },
+    )
+    expect(frame).toContain("mcp_x\\x1b]0;pwned\\x07")
+    expect(frame).toContain("bad\\x1b]0;x\\x07")
+    expect(frame).not.toContain("\u001b")
+  })
+
+  test("finds the diagnostics of a path that holds a control character", () => {
+    // The path is a lookup key: the parser keeps it as it came and the diagnostic is drawn written out later.
+    const path = "dir/a\u001bb.ts"
+    expect(
+      parseDiagnostics({ [path]: [{ severity: 1, message: "m", range: { start: { line: 0, character: 0 } } }] }, path),
+    ).toEqual([{ message: "m", range: { start: { line: 0, character: 0 } } }])
+  })
+
   test("ignores diagnostics with malformed nested ranges", () => {
     expect(
       parseDiagnostics(

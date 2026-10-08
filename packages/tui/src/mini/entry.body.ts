@@ -1,5 +1,6 @@
 import { toolEntryBody } from "./tool"
 import { monoPrefix, monoToolText } from "./mono"
+import { bodyText } from "../util/renderer"
 import type { RunEntryBody, ScrollbackOptions, StreamCommit } from "./types"
 
 export type EntryFlags = {
@@ -186,7 +187,50 @@ export function entryCanStream(commit: StreamCommit, body: RunEntryBody): boolea
   return commit.kind === "assistant" || commit.kind === "reasoning"
 }
 
+// Every body that Mini draws passes here, so the text of a model, a tool or a question is written out once, whatever
+// kind of body it became.
 export function entryBody(commit: StreamCommit, options?: ScrollbackOptions): RunEntryBody {
+  const next = rawEntryBody(commit, options)
+  if (next.type === "none") return next
+  if (next.type !== "structured") return { ...next, content: bodyText(next.content) }
+  const snapshot = next.snapshot
+  if (snapshot.kind === "code") {
+    return {
+      type: "structured",
+      snapshot: { ...snapshot, title: bodyText(snapshot.title), content: bodyText(snapshot.content) },
+    }
+  }
+  if (snapshot.kind === "diff") {
+    return {
+      type: "structured",
+      snapshot: {
+        ...snapshot,
+        items: snapshot.items.map((item) => ({ ...item, title: bodyText(item.title), diff: bodyText(item.diff) })),
+      },
+    }
+  }
+  if (snapshot.kind === "task") {
+    return {
+      type: "structured",
+      snapshot: {
+        ...snapshot,
+        title: bodyText(snapshot.title),
+        rows: snapshot.rows.map(bodyText),
+        tail: bodyText(snapshot.tail),
+      },
+    }
+  }
+  return {
+    type: "structured",
+    snapshot: {
+      ...snapshot,
+      items: snapshot.items.map((item) => ({ question: bodyText(item.question), answer: bodyText(item.answer) })),
+      tail: bodyText(snapshot.tail),
+    },
+  }
+}
+
+function rawEntryBody(commit: StreamCommit, options?: ScrollbackOptions): RunEntryBody {
   if (commit.summary) {
     return RUN_ENTRY_NONE
   }

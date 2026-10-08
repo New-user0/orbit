@@ -1,10 +1,12 @@
 export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@orbit/ai"
+import { Model } from "@orbit/schema/model"
 import { and, desc, eq, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
 import { Bus } from "../../bus.js"
+import { Config } from "../../config.js"
 import { LocationLifecycle } from "../../location-lifecycle.js"
 import { InstructionState } from "../instruction-state.js"
 import { SessionCompaction } from "../compaction.js"
@@ -55,6 +57,9 @@ const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>) =>
       ) + 1,
     )
     .filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit").length
+
+/** Consecutive overloads on one model before the step moves to the turn's fallback model. */
+const FALLBACK_AFTER_OVERLOADS = 3
 
 const layer = Layer.effect(
   Service,
@@ -197,7 +202,10 @@ const layer = Layer.effect(
                       onlyIfMissing: true,
                     })
                   if (promoted > 0) step = 1
-                  return { _tag: "Ready" as const, context: yield* context.load(selected) }
+                  return {
+                    _tag: "Ready" as const,
+                    context: yield* loadSelected(selected, (yield* SessionTurn.current(db, sessionID)).fallback),
+                  }
                 }),
               )
               if (ready) return ready
@@ -223,8 +231,7 @@ const layer = Layer.effect(
       return selected
     })
 
-    const turnLimit = Effect.fnUntraced(function* (loaded: SessionContext.Loaded) {
-      const turn = (yield* SessionTurn.current(db, loaded.session.id)).options
+    const turnLimit = Effect.fnUntraced(function* (loaded: SessionContext.Loaded, turn: SessionTurn.Current["options"]) {
       if (!turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)) return
       return SessionTurn.exceeded(
         turn,
@@ -234,20 +241,49 @@ const layer = Layer.effect(
       )
     })
 
+    // The turn's fallback model, once a notice has named one, replaces the Session's model for every load.
+    const loadSelected = (selected: SessionContext.Selection, fallback: Model.Ref | undefined) =>
+      context.load(fallback ? { ...selected, session: { ...selected.session, model: fallback } } : selected)
+
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
     const runStep = Effect.fn("SessionRunner.runStep")(function* (first: SessionContext.Loaded, step: number) {
       const sessionID = first.session.id
       let assistantMessageID = SessionMessage.ID.create()
-      const retry = yield* SessionRunnerRetry.make(bus, sessionID)
+      let retry = yield* SessionRunnerRetry.make(bus, sessionID)
+      let overloads = 0
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      // The notice is the durable record that the turn moved, so a drain that reloads or restarts keeps the fallback.
+      const switchToFallback = Effect.fnUntraced(function* (
+        outcome: { readonly overloaded: boolean },
+        loaded: SessionContext.Loaded,
+        current: SessionTurn.Current,
+      ) {
+        overloads = outcome.overloaded ? overloads + 1 : 0
+        if (overloads < FALLBACK_AFTER_OVERLOADS || current.fallback) return false
+        const fallback = yield* context.resolveFallback(loaded.session, current.options?.fallbackModel)
+        if (!fallback) return false
+        yield* bus.publish(SessionEvent.Synthetic, {
+          sessionID,
+          text: "The previous model was overloaded, so this turn continues on a different model.",
+          description: `Switched from ${modelName(loaded.model.ref)} to ${modelName(fallback.ref)} after repeated overloads`,
+          metadata: { notice: "fallback", model: fallback.ref, previous: loaded.model.ref },
+        })
+        yield* modelTransport.close(sessionID)
+        retry = yield* SessionRunnerRetry.make(bus, sessionID)
+        overloads = 0
+        return true
+      })
       while (true) {
+        const current = yield* SessionTurn.current(db, sessionID)
         // Reuse boundary preparation once; retries refresh context without delivering more input.
-        const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
+        const loaded =
+          initial ??
+          (yield* prepareContext(sessionID).pipe(Effect.flatMap((selected) => loadSelected(selected, current.fallback))))
         initial = undefined
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
-        const limit = yield* turnLimit(loaded)
+        const limit = yield* turnLimit(loaded, current.options)
         if (limit) return yield* new StepFailedError({ error: limit })
         const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
@@ -306,7 +342,7 @@ const layer = Layer.effect(
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
             // Fail with the limit now, also at the cap; a note left behind would reach the next prompt's request.
-            const limit = yield* turnLimit(loaded)
+            const limit = yield* turnLimit(loaded, current.options)
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
             if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return false
@@ -318,18 +354,17 @@ const layer = Layer.effect(
             if (outcome.needsContinuation) return true
             assistantMessageID = SessionMessage.ID.create()
           }),
-          Retry: (outcome) =>
-            retry.wait({
-              decision: outcome.decision,
-              error: outcome.error,
-              assistantMessageID,
-            }),
+          Retry: Effect.fnUntraced(function* (outcome) {
+            if (yield* switchToFallback(outcome, loaded, current)) {
+              // The draft from the failed attempt sits before the notice; a new one keeps the notice ahead of the fallback's answer.
+              assistantMessageID = SessionMessage.ID.create()
+              return undefined
+            }
+            yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
+          }),
           Continue: Effect.fnUntraced(function* (outcome) {
-            yield* retry.wait({
-              decision: outcome.decision,
-              error: outcome.error,
-              assistantMessageID,
-            })
+            if (!(yield* switchToFallback(outcome, loaded, current)))
+              yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
             yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_INCOMPLETE_STREAM })
             assistantMessageID = SessionMessage.ID.create()
           }),
@@ -404,11 +439,14 @@ const layer = Layer.effect(
   }),
 )
 
+const modelName = (ref: Model.Ref) => `${ref.providerID}/${ref.id}`
+
 export const node = makeLocationNode({
   service: Service,
   layer,
   deps: [
     Bus.node,
+    Config.node,
     LocationLifecycle.node,
     llmClient,
     SessionContext.node,
