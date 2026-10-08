@@ -110,6 +110,7 @@ for (const fixture of [
           model,
           prepared: {
             retry: () => Effect.void,
+            escalation: false,
             request: LLM.request({ model: model.model, prompt: "Run one tool", toolChoice: fixture.toolChoice }),
             options: {},
             executeTool: () =>
@@ -221,6 +222,7 @@ const runCutOff = (finish: "length" | "unknown", calls: "input" | "partial-call"
       model,
       prepared: {
         retry: () => Effect.void,
+        escalation: false,
         request: LLM.request({ model: model.model, prompt: "Run one tool" }),
         options: {},
         executeTool: () =>
@@ -248,7 +250,7 @@ it.effect("fails inputs that never became calls when the response stops at the o
   Effect.gen(function* () {
     const run = yield* runCutOff("length", "input")
     // Nothing ran, so the cut-off input alone must not start another step.
-    expect(run.result).toEqual(Exit.succeed(SessionStep.Outcome.OutputLimited({ needsContinuation: false })))
+    expect(run.result).toEqual(Exit.succeed(SessionStep.Outcome.OutputLimited({ needsContinuation: false, toolCalled: false })))
     expect(run.executions).toBe(0)
     expect(run.types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
     expect(run.types.indexOf("session.tool.failed.2")).toBeLessThan(run.types.indexOf("session.step.ended.1"))
