@@ -20,6 +20,19 @@ export const plain = (text: string) => escaped(text.trim())
 export const progress = (line: unknown) => escaped(String(line))
 
 /**
+ * A message body, which is text a person reads in full, from a model, a tool, a stored prompt or a recap: line breaks
+ * and tabs stay, so the body keeps its shape, and a carriage return alone is written out, as it would overwrite the
+ * line before it. The characters that act on a terminal are written out the way `plain` does it, so an approver can
+ * see that they were there: C0 controls, DEL, C1 controls (U+009B and U+009D start escape sequences on a terminal that
+ * takes 8-bit controls) and the bidi controls that reorder text, such as U+202E. Other format characters stay, since
+ * a zero-width joiner holds an emoji sequence together.
+ */
+export const body = (text: string) =>
+  text
+    .replace(/\r\n/g, "\n")
+    .replace(/[\0-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, escapedCharacter)
+
+/**
  * `value` as the JSON that a command prints for programs, indented by two spaces. `JSON.stringify` escapes only U+0000 to
  * U+001F, so a string that a file or a run store holds could still carry DEL, a C1 control (U+009B and U+009D start the
  * escape sequences that ESC [ and ESC ] do, on a terminal that takes 8-bit controls) or a format character such as a
@@ -50,9 +63,10 @@ function units(text: string) {
 }
 
 function escaped(text: string) {
-  return text.replace(/\r?\n|\p{C}/gu, (match) => {
-    if (match.endsWith("\n")) return "\\n"
-    const code = match.codePointAt(0) ?? 0
-    return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
-  })
+  return text.replace(/\r?\n|\p{C}/gu, (match) => (match.endsWith("\n") ? "\\n" : escapedCharacter(match)))
+}
+
+function escapedCharacter(match: string) {
+  const code = match.codePointAt(0) ?? 0
+  return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
 }

@@ -1,3 +1,4 @@
+import { bodyText } from "./renderer"
 import type { FormField, FormValue } from "@orbit/client"
 
 export type FormAnswerField = Exclude<FormField, { type: "external" }>
@@ -13,7 +14,7 @@ export function isFormAnswerField(field: FormField): field is FormAnswerField {
 }
 
 export function formLabel(field: FormField) {
-  return field.title ?? (field.type === "external" ? field.url : field.key)
+  return bodyText(field.title ?? (field.type === "external" ? field.url : field.key))
 }
 
 export function formInitialValues(fields: ReadonlyArray<FormField>) {

@@ -11,6 +11,7 @@ import { useTheme, useThemes } from "../../context/theme"
 import { dialogWidth, useDialog } from "../../ui/dialog"
 import { useToast } from "../../ui/toast"
 import { Locale } from "../../util/locale"
+import { bodyText } from "../../util/renderer"
 import { getScrollAcceleration } from "../../util/scroll"
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
@@ -123,7 +124,7 @@ export function DialogExecute(props: { part: SessionMessageAssistantTool }) {
               Code
             </text>
             <Show when={code()} fallback={<text fg={theme.text.muted}>Waiting for code…</text>}>
-              {(value) => <GutteredCode content={value()} filetype="typescript" digits={digits()} blocks={blocks} />}
+              {(value) => <GutteredCode content={bodyText(value())} filetype="typescript" digits={digits()} blocks={blocks} />}
             </Show>
           </box>
           <box>
@@ -137,18 +138,18 @@ export function DialogExecute(props: { part: SessionMessageAssistantTool }) {
                   fg={text() ? (failed() ? theme.text.feedback.error.base : theme.text.base) : theme.text.muted}
                   wrapMode="word"
                 >
-                  {text() ?? (props.part.state.status === "completed" ? "No output" : "Waiting for output…")}
+                  {bodyText(text() ?? (props.part.state.status === "completed" ? "No output" : "Waiting for output…"))}
                 </text>
               }
             >
               {(body) => (
                 <>
-                  <GutteredCode content={body().json} filetype="json" digits={digits()} blocks={blocks} />
+                  <GutteredCode content={bodyText(body().json)} filetype="json" digits={digits()} blocks={blocks} />
                   <Show when={body().rest}>
                     {(rest) => (
                       <box paddingLeft={digits() + 1}>
                         <text fg={failed() ? theme.text.feedback.error.base : theme.text.base} wrapMode="word">
-                          {rest()}
+                          {bodyText(rest())}
                         </text>
                       </box>
                     )}
