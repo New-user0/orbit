@@ -87,7 +87,10 @@ function isRejected(value: unknown) {
 // `permissions` of `agent` and `verify` and of each member of a `team`, so an option added here that does the same is
 // added there too. `workflowAgents` lists the options that choose which of the user's agents a node runs as, which are
 // the `agent` of `agent` and `verify`, the `agent` of the `judge` of a `verify`, and the `agent` of each member of a
-// `team`, so an option added here that does the same is added there too.
+// `team`, so an option added here that does the same is added there too. `workflowModels` lists the options that choose a
+// model or how much a node spends: the `model`, `retry.fallbackModels` and `retry.maxAttempts` of `agent` and `verify`,
+// the `maxIterations` of `verify` and the `model` of its `judge`, and the `model` of each `team` member and the
+// `maxRounds` of the team, so an option added here that does the same is added there too.
 function execute(ctx: Context, node: NodeSpec, needed: Readonly<Record<string, unknown>>) {
   const options = fill(
     Object.fromEntries(Object.entries(node).filter(([key]) => !["id", "type", "needs"].includes(key))),

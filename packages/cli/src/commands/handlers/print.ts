@@ -14,6 +14,9 @@ export default Runtime.handler(Print, (input) => {
     ...input,
     format: output === "json" ? "result" : output === "stream-json" ? "stream-json" : "default",
     envelope: true,
+    // A clone's instructions steer the model and its tool calls run unasked, so a folder that holds nothing back is
+    // still not safe to ask in until it is trusted.
+    strict: true,
     partial: input.includePartialMessages,
     // Showing the model's thinking is part of --verbose.
     thinking: input.thinking || input.verbose,

@@ -269,9 +269,10 @@ describe("ToolStream partial input marker", () => {
     finishAll: (input: string, providerExecuted?: boolean) =>
       ToolStream.finishAll(ADAPTER, started(input, providerExecuted)),
   }
-  const inputs = [
+  const inputs: ReadonlyArray<{ name: string; input: string; marked: boolean; hostedFails?: boolean }> = [
     { name: "complete JSON", input: '{"path":"a.ts"}', marked: false },
-    { name: "no arguments", input: "", marked: false },
+    // Marked for a local call so it waits for the finish. A provider-executed one already ran: nothing is left to hold.
+    { name: "no arguments", input: "", marked: true, hostedFails: false },
     { name: "JSON cut off in a string", input: '{"path":"a.ts","content":"par', marked: true },
     { name: "JSON cut off after a key", input: '{"path":', marked: true },
     { name: "a malformed escape", input: '{"path":"A\\H"}', marked: true },
@@ -290,12 +291,12 @@ describe("ToolStream partial input marker", () => {
       )
 
       it.effect(
-        `${finalizer} keeps provider-executed ${fixture.name} ${fixture.marked ? "terminal" : "unmarked"}`,
+        `${finalizer} keeps provider-executed ${fixture.name} ${(fixture.hostedFails ?? fixture.marked) ? "terminal" : "unmarked"}`,
         () =>
           Effect.gen(function* () {
             const exit = yield* Effect.exit(finalize(fixture.input, true))
 
-            if (fixture.marked) return expect(Exit.isFailure(exit)).toBe(true)
+            if (fixture.hostedFails ?? fixture.marked) return expect(Exit.isFailure(exit)).toBe(true)
             const calls = Exit.isSuccess(exit) ? (exit.value.events ?? []).filter(LLMEvent.is.toolCall) : []
             expect(calls).toHaveLength(1)
             expect(calls[0].partialInput).toBeUndefined()

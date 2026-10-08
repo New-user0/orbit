@@ -38,6 +38,8 @@ type HeadlessInput = {
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
+  /** Stop in any untrusted folder, even one that holds nothing back (`orb -p`). */
+  readonly strict?: boolean
 }
 
 /**
@@ -82,7 +84,7 @@ export function headlessInput(input: HeadlessInput) {
     // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
     // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
     // script that asked for JSON gets JSON.
-    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session }).pipe(
+    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session, strict: input.strict }).pipe(
       Effect.catch((error) => Effect.succeed(errorMessage(error))),
     )
     if (stopped !== undefined) return reportRunError({ format, envelope: input.envelope }, stopped)

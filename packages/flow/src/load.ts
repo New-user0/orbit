@@ -124,6 +124,73 @@ export async function suiteAgents(file: string) {
   return (await loadSuite(file)).tasks.flatMap((task) => judging(task?.id, task?.judge))
 }
 
+/**
+ * What the YAML workflow in `file` chooses for the models its nodes run on, or for how much they spend: the `model` of an
+ * agent or verify node and of each team member, the `retry.fallbackModels` and `retry.maxAttempts` of an agent or verify
+ * node, the `model` of a verify node's `judge` (named `node/judge`), and the `maxIterations` of a verify node and
+ * `maxRounds` of a team, each with the value as written. A node's `model` replaces the `--model` the person passed (see
+ * `attempt` in `runner.ts`, `requested.model ?? defaultModel`), and the rest add models and attempts to a run, so a file
+ * from an untrusted folder that sets any of them picks what the person's money is spent on. A template counts as well,
+ * because it is filled in when the node starts. A value that is empty, or a list with nothing in it, chooses nothing. Asked
+ * before `loadWorkflow` like `workflowCommands`, which it reads and validates as that does, and for the same reason only a
+ * YAML file is read: what a module passes on is known only once it runs.
+ */
+export async function workflowModels(file: string) {
+  if (!isYaml(file)) return []
+  const nodes = validate((await read(file, "Workflow file")) as Spec, file)
+  return [...nodes.values()].flatMap((node) => {
+    const type = node.type ?? "agent"
+    if (type === "agent") return choosing(node.id, node, AGENT_CHOICES)
+    if (type === "verify")
+      return [
+        ...choosing(node.id, node, [...AGENT_CHOICES, "maxIterations"]),
+        ...choosing(`${node.id}/judge`, node.judge, ["model"]),
+      ]
+    if (type === "team")
+      return [
+        ...choosing(node.id, node, ["maxRounds"]),
+        ...members(node).flatMap(([name, member]) => choosing(`${node.id}/${name}`, member, ["model"])),
+      ]
+    return []
+  })
+}
+
+/**
+ * What the suite in `file` chooses the same way: its `models`, which an eval runs every task on when `--models` is not
+ * given, and the `model` of each task's `judge` (named `task/judge`) and its `maxIterations`. A suite runs each task as a
+ * verify node (see `evaluate` in `eval.ts`) and hands it no `retry` of its own, so a task's `retry` chooses nothing.
+ * Asked before `loadSuite` like `workflowModels`, and as there, a module has none to list.
+ */
+export async function suiteModels(file: string) {
+  if (importsModule(file)) return []
+  const suite = await loadSuite(file)
+  return [
+    ...choosing("suite", suite, ["models"]),
+    ...suite.tasks.flatMap((task) => [
+      ...choosing(task?.id, task, ["maxIterations"]),
+      ...choosing(`${String(task?.id)}/judge`, task?.judge, ["model"]),
+    ]),
+  ]
+}
+
+const AGENT_CHOICES = ["model", "retry.fallbackModels", "retry.maxAttempts"] as const
+
+// The fields of `source`, named by path, that hold a value. A source that is not an object holds none, as the runner reads
+// nothing off it.
+function choosing(id: unknown, source: unknown, fields: ReadonlyArray<string>) {
+  return fields.flatMap((field) => {
+    const value = field
+      .split(".")
+      .reduce<unknown>(
+        (current, key) =>
+          current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined,
+        source,
+      )
+    if (value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0)) return []
+    return [{ id: String(id), choice: `${field}: ${typeof value === "string" ? value : JSON.stringify(value)}` }]
+  })
+}
+
 // `auto`, or a string with a template in it, which `fill` may turn into `auto` once the run reaches the node. Any other
 // value is a rejection to the runner.
 function approving(id: string, permissions: unknown) {

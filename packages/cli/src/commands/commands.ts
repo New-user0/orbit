@@ -96,7 +96,7 @@ const PrintParams = {
   ...HeadlessParams,
   outputFormat: Flag.choice("output-format", ["text", "json", "stream-json"]).pipe(
     Flag.withDescription(
-      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run refused before a session exists prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents',
+      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run that fails before its prompt is sent prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents',
     ),
     Flag.optional,
   ),

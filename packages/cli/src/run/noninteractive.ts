@@ -170,8 +170,6 @@ export async function runNonInteractivePrompt(input: Input) {
   const streaming = input.format === "json" || input.format === "stream-json"
   const answer: string[] = []
   const emit = (type: string, timestamp: number, data: Record<string, unknown>) => {
-    if (type === "error" && typeof data.error === "object" && data.error && "message" in data.error)
-      failure = String(data.error.message)
     if (!streaming) return false
     process.stdout.write(jsonLine({ type, timestamp, sessionID: input.sessionID, ...data }) + EOL)
     return true
