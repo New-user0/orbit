@@ -159,6 +159,30 @@ describe("tool names", () => {
     }
   })
 
+  test("a view is returned unchanged, and a current field written after a delete is a write", () => {
+    const rows: ReadonlyArray<readonly [tool: string, input: Record<string, unknown>, current: string, old: string, next: unknown]> = [
+      ["Bash", { command: "ls", run_in_background: true }, "run_in_background", "background", false],
+      ["Edit", { file_path: "/a", old_string: "b" }, "file_path", "path", "/safe/file"],
+      ["Write", { file_path: "/a", content: "c" }, "file_path", "path", "/safe/file"],
+      ["Read", { file_path: "/a" }, "file_path", "path", "/safe/file"],
+      ["NotebookEdit", { notebook_path: "/a" }, "notebook_path", "path", "/safe/book"],
+    ]
+    for (const [tool, input, current, old, next] of rows) {
+      const given = ToolNames.view(tool, input) as Record<string, unknown>
+      expect(ToolNames.view(tool, given)).toBe(given)
+      // A withdrawal recorded by one hook survives the view the next hook is given.
+      delete given[old]
+      const second = ToolNames.view(tool, given) as Record<string, unknown>
+      expect(second).toBe(given)
+      expect(ToolNames.lowerInput(tool, second)).not.toHaveProperty(current)
+      // delete then set the current field: the write stands.
+      const written = ToolNames.view(tool, input) as Record<string, unknown>
+      delete written[old]
+      written[current] = next
+      expect(ToolNames.lowerInput(tool, written)).toMatchObject({ [current]: next })
+    }
+  })
+
   test("a record keyed by tool name answers to the old names too", () => {
     const tools = ToolNames.aliased({ Write: 1, Bash: 2, plugin_tool: 3 } as Record<string, number>)
     expect(tools.write).toBe(1)
@@ -375,7 +399,8 @@ describe("hooks written with old names", () => {
           ],
         }),
       ])
-      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const plugins = yield* Plugin.Service
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(plugins))
 
       const shell = yield* registry
         .trigger("tool", "execute.before", { ...base, tool: "Bash", input: { command: "ls", run_in_background: true } })
@@ -423,7 +448,8 @@ describe("hooks written with old names", () => {
           })),
         }),
       ])
-      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const plugins = yield* Plugin.Service
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(plugins))
       yield* registry.trigger("tool", "execute.before", { ...base, tool: "Read", input: { file_path: ".env" } })
       const seen = yield* Effect.promise(() =>
         Promise.all(matchers.map(async (_, index) => JSON.parse(await fs.readFile(file(index), "utf8")))),
@@ -443,7 +469,8 @@ describe("hooks written with old names", () => {
           PreToolUse: [{ matcher: "shell", hooks: [{ type: "command", command: "exit 2" }] }],
         }),
       ])
-      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const plugins = yield* Plugin.Service
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(plugins))
       // The control: the hook does run, for the tool it names.
       const control = yield* registry
         .trigger("tool", "execute.before", { ...base, tool: "Bash", input: {} })

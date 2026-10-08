@@ -124,10 +124,10 @@ await ctx.session.hook("retry", (event) => {
 ```
 
 Tool and permission hooks are told the tool names the plugin was written for. A plugin that does not say otherwise is
-told `shell`, `edit` and `write` in `tool` (`execute.before`, `execute.after`) and `action` (`permission.evaluate`),
+told the old names (`shell`, `read`, `edit`, `write` and the rest) in `tool` (`execute.before`, `execute.after`) and `action` (`permission.evaluate`),
 so a guard written before the reference names keeps matching. Declare `toolNames: "reference"` beside the `id` to be
-told `Bash`, `Edit` and `Write`, and compare with those. A plugin that compares with `Bash` and does not declare it is
-never told that name, so its guard never fires.
+told `Bash`, `Read`, `Edit`, `Write` and the rest, and compare with those. A plugin that compares with `Bash` and does not declare it is
+never told that name, so its guard never fires. Reading is not translated: `editor.list()` in `tool.transform` and the tool names in a `tools` record that you iterate are the current names, so pick a built-in by `Bash`, not `shell`; `get`, `update`, `remove` and keyed reads accept either.
 
 ```ts
 export default Plugin.define({

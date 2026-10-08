@@ -50,8 +50,11 @@ export const fields = {
 
 const current = new Set<string>(Object.values(tools))
 
-/** For each view `view` handed out, the current field to the old name whose accessor it defined. */
-const views = new WeakMap<object, Map<string, string>>()
+/**
+ * For each view `view` handed out, the current field to the old name whose accessor it defined and the value the current
+ * field had then, so a withdrawal is told apart from a later write of the current field.
+ */
+const views = new WeakMap<object, Map<string, { readonly old: string; readonly value: unknown }>>()
 
 /**
  * What the shell tool is advertised as when the session shell is PowerShell. It is another spelling of the same action,
@@ -91,9 +94,12 @@ export function lowerInput(tool: string, input: unknown): unknown {
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
   const renames = new Map(Object.entries(table).map(([next, old]) => [old, next]))
   // A hook that deleted an old name from the view withdrew that field: its accessor is gone, but the current field is
-  // still in the copy, so it goes too.
+  // still in the copy, so it goes too. A current field the hook wrote after the delete is a write and stays.
+  const record = input as Record<string, unknown>
   const withdrawn = new Set(
-    Array.from(views.get(input) ?? [], ([next, old]) => (Object.hasOwn(input, old) ? undefined : next)),
+    Array.from(views.get(input) ?? [], ([next, seen]) =>
+      Object.hasOwn(input, seen.old) || !Object.is(record[next], seen.value) ? undefined : next,
+    ),
   )
   return Object.fromEntries(
     Object.entries(input)
@@ -137,18 +143,20 @@ export function aliased<T>(record: Record<string, T>): Record<string, T> {
  * The input of a current call as a plugin hook sees it: a plain copy with the current fields and the old field names as
  * non-enumerable accessors, so a guard keyed on `input.path` still reads and writes the path. The copy clones, spreads and
  * serializes like any object and carries the current names only. What a hook leaves in `event.input`, the copy or an object
- * of its own that uses an old field name, is read back with `lowerInput`. Inputs that are not plain objects, and tools whose
- * fields did not change, are returned as they are.
+ * of its own that uses an old field name, is read back with `lowerInput`. Inputs that are not plain objects, tools whose
+ * fields did not change, and inputs that are already a view are returned as they are, so a withdrawal an earlier hook
+ * recorded survives the next view.
  */
 export function view(tool: string, input: unknown): unknown {
   const table = fieldTable(tool)
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
+  if (views.has(input)) return input
   const copy: Record<string, unknown> = { ...input }
-  const defined = new Map<string, string>()
+  const defined = new Map<string, { readonly old: string; readonly value: unknown }>()
   views.set(copy, defined)
   Object.entries(table).forEach(([next, old]) => {
     if (Object.hasOwn(copy, old)) return
-    defined.set(next, old)
+    defined.set(next, { old, value: copy[next] })
     Object.defineProperty(copy, old, {
       get: () => copy[next],
       set: (value: unknown) => {

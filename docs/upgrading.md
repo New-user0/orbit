@@ -1116,7 +1116,7 @@ One table, `ToolNames` (`packages/schema/src/tool-names.ts`, re-exported from `p
 
 **Affects:** plugin authors whose hooks or tools match on a built-in tool's name or input field, SDK callers that read tool names from events of new sessions, and tests or scripts that call the tools by name. Permission rules, hook matchers and old sessions keep working.
 
-**What to do:** nothing for rules, hook matchers and existing code plugins. When you update a plugin to the new names, declare `toolNames: "reference"` and compare with `Bash`, `Edit` and `Write` in the same change, and prefer the new names in rules you write.
+**What to do:** nothing for rules, hook matchers and existing code plugins that match on a name or field they are given. A plugin that lists tools and picks one by its old name (`editor.list().filter((t) => t.id === "shell")`, or iterating `event.tools`) now finds `Bash`: `list()` and iteration report the current names, while `get`, `update`, `remove` and keyed reads accept either spelling. Every legacy hook is given the old field names as the input stands when it runs, including after the input repair or an earlier plugin replaced `event.input`, and a current field written after a `delete input.path` is a write, not a withdrawal. When you update a plugin to the new names, declare `toolNames: "reference"` and compare with `Bash`, `Edit` and `Write` in the same change, and prefer the new names in rules you write.
 
 ## Plugins and SDK
 

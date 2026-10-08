@@ -107,7 +107,8 @@ const nativeDocument = (file: string, hooks: unknown, scope: Scope = "project") 
   new Document({ type: "document", path: AbsolutePath.make(file), scope, info: decode({ hooks }) })
 
 const start = Effect.gen(function* () {
-  yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+  const plugins = yield* Plugin.Service
+  yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(plugins))
 })
 
 // The plugin in a session that runs in `directory`, which must exist: the hooks run in it.

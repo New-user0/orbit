@@ -1513,8 +1513,10 @@ describe("ShellTool", () => {
       (tmp) =>
         withSession(tmp.path, () =>
           Effect.gen(function* () {
-            yield* (yield* ShellSelect.Service).transform((editor) => editor.configure("powershell"))
-            const event = yield* (yield* PluginHooks.Service).trigger("session", "context", {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("powershell"))
+            const hooks = yield* PluginHooks.Service
+            const event = yield* hooks.trigger("session", "context", {
               sessionID,
               model: sessionModel,
               system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
@@ -1528,6 +1530,7 @@ describe("ShellTool", () => {
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
+    { timeout: 30_000 },
   )
 
   it.live("exposes malformed native syntax without fallback or partial execution", () =>

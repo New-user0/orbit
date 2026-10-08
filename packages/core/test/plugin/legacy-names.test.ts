@@ -7,6 +7,7 @@ import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginModule } from "@orbit/core/plugin/module"
 import { PluginPromise } from "@orbit/core/plugin/promise"
 import { Tool } from "@orbit/core/tool"
+import { ToolNames } from "@orbit/core/tool/names"
 import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import type { Context } from "@orbit/plugin/effect/plugin"
@@ -108,7 +109,8 @@ for (const [kind, reference] of kinds)
       const log = path.join(directory, "log.jsonl")
       if (kind === "module export") {
         yield* Effect.promise(() => Bun.write(path.join(directory, "index.ts"), moduleSource(log, reference)))
-        const loaded = yield* (yield* PluginModule.make()).load({ type: "add", target: directory, options: {} })
+        const modules = yield* PluginModule.make()
+        const loaded = yield* modules.load({ type: "add", target: directory, options: {} })
         if ("pending" in loaded) return yield* Effect.die(new Error("module did not load"))
         expect(loaded.toolNames).toBe(reference ? "reference" : undefined)
         yield* plugins.activate([loaded])
@@ -149,3 +151,99 @@ for (const [kind, reference] of kinds)
       expect(evaluated.action).toBe("Edit")
     }),
   )
+
+// A legacy guard reads the old field name. Whatever ran before it, and however that replaced `event.input`, it must read
+// the value, or it fails open: legacy plugin kind x field x what ran before.
+const fields = [
+  ["Edit", "file_path", "path", "/protected/file"],
+  ["Write", "file_path", "path", "/protected/file"],
+  ["Read", "file_path", "path", "/protected/file"],
+  ["NotebookEdit", "notebook_path", "path", "/protected/book.ipynb"],
+  ["Bash", "run_in_background", "background", true],
+] as const
+
+// Each replaces `event.input` the way the input repair or another plugin does: with an object that has no old-name view.
+const earlier = {
+  "nothing (control)": (input: Record<string, unknown>) => input,
+  "a spread copy": (input: Record<string, unknown>) => ({ ...input }),
+  "a repaired copy": (input: Record<string, unknown>) => JSON.parse(JSON.stringify(input)) as Record<string, unknown>,
+} as const
+
+const guardSource = (log: string, field: string) => `
+import fs from "node:fs"
+export default {
+  id: "legacy-names-guard",
+  async setup(ctx) {
+    await ctx.tool.hook("execute.before", (event) => {
+      fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify({ seen: event.input[${JSON.stringify(field)}] ?? null }))
+    })
+  },
+}
+`
+
+for (const kind of ["effect", "promise", "module export"] as const)
+  for (const [tool, current, old, value] of fields)
+    for (const [ran, replace] of Object.entries(earlier))
+      it.live(`a ${kind} guard on ${tool} ${old} still reads it after ${ran}`, () =>
+        Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          const hooks = yield* PluginHooks.Service
+          const seen: { value?: unknown } = {}
+          const directory = (yield* tmpdirScoped()).path
+          const log = path.join(directory, "log.json")
+          yield* plugins.activate([
+            {
+              id: "legacy-names-earlier",
+              revision: "1",
+              toolNames: "reference",
+              effect: (ctx) =>
+                ctx.tool.hook("execute.before", (event) =>
+                  Effect.sync(() => {
+                    event.input = replace(event.input as Record<string, unknown>)
+                  }),
+                ),
+            },
+          ])
+          if (kind === "effect")
+            yield* plugins.activate([
+              {
+                id: "legacy-names-effect",
+                revision: "1",
+                effect: (ctx) =>
+                  ctx.tool.hook("execute.before", (event) =>
+                    Effect.sync(() => void (seen.value = (event.input as Record<string, unknown>)[old])),
+                  ),
+              },
+            ])
+          if (kind === "promise")
+            yield* plugins.activate([
+              {
+                ...PluginPromise.fromPromise({
+                  id: "legacy-names-promise",
+                  async setup(ctx) {
+                    await ctx.tool.hook("execute.before", (event) => {
+                      seen.value = (event.input as Record<string, unknown>)[old]
+                    })
+                  },
+                }),
+                revision: "1",
+              },
+            ])
+          if (kind === "module export") {
+            yield* Effect.promise(() => Bun.write(path.join(directory, "index.ts"), guardSource(log, old)))
+            const modules = yield* PluginModule.make()
+        const loaded = yield* modules.load({ type: "add", target: directory, options: {} })
+            if ("pending" in loaded) return yield* Effect.die(new Error("module did not load"))
+            yield* plugins.activate([loaded])
+          }
+          const input = { [current]: value, ...(tool === "Bash" ? { command: "ls" } : {}) }
+          const event = yield* hooks.trigger("tool", "execute.before", { ...base, tool, input })
+          const read =
+            kind === "module export"
+              ? (JSON.parse(fs.readFileSync(log, "utf8")) as { seen: unknown }).seen
+              : (seen.value ?? null)
+          expect(read).toEqual(value)
+          // Nothing the guard did not touch changes on the way back to the registry.
+          expect(ToolNames.lowerInput(tool, event.input)).toEqual(input)
+        }),
+    )
