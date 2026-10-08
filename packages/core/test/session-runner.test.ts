@@ -4720,6 +4720,22 @@ describe("SessionRunnerLLM", () => {
       expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
     })
 
+    scenario("fails with the limit when it is spent at the output-limit cap", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 4 }, resume: false })
+      yield* s.llm.push(
+        lengthStop("cap-1", "A"),
+        lengthStop("cap-2", "B"),
+        lengthStop("cap-3", "C"),
+        lengthStop("cap-4", "D"),
+        TestLLM.stop(),
+      )
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+      expect(s.requests).toHaveLength(4)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+    })
+
     scenario("runs a queued prompt without options unlimited in the same busy period", function* (s) {
       yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
       yield* s.session.prompt({ sessionID, text: "B", delivery: "queue", resume: false })

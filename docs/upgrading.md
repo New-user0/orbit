@@ -1332,7 +1332,9 @@ resume where it stopped and sends the request again, up to three times in a row.
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
 `tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
 the next cut-off stays as it is. The count comes from the session history and starts over after any response that
-finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`, `maxTokens`) is already spent at a cut-off, the turn fails with that `limit.*` error and no note is written.
+finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit
+(`maxSteps`, `maxCost`, `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with
+that `limit.*` error and no note is written.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
