@@ -69,6 +69,18 @@ describe("SessionTurnEnd", () => {
     expect(result !== undefined).toBe(asked)
   })
 
+  test("a check that dies counts as undefined and the checks after it still run", async () => {
+    const result = await run(
+      [
+        { name: "bad", run: () => Effect.die(new Error("boom")) },
+        { name: "good", run: () => Effect.succeed({ check: "good", text: "go" }) },
+      ],
+      turn(),
+    )
+
+    expect(result).toEqual({ check: "good", text: "go" })
+  })
+
   test("the default list is empty, so no turn continues until a later task adds a check", async () => {
     expect(await ask(SessionTurnEnd.layer, turn())).toBeUndefined()
   })

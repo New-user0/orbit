@@ -232,6 +232,8 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    // Busy periods the coordinator started and settled; one continuation must stay inside one of them.
+    drains: { started: 0, settled: 0 },
     turnEnd: ((_input: SessionTurnEnd.Input) => Effect.succeed(undefined)) as SessionTurnEnd.Check["run"],
     holds: new Map<string, { readonly started: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }>(),
     hold(text: string) {
@@ -572,7 +574,11 @@ const layer = Layer.unwrap(
             )
         }
         const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
-          drain: (sessionID, force) => drain(sessionID, force),
+          drain: (sessionID, force) =>
+            Effect.sync(() => void state.drains.started++).pipe(
+              Effect.andThen(drain(sessionID, force)),
+              Effect.ensuring(Effect.sync(() => void state.drains.settled++)),
+            ),
         })
         return SessionExecution.Service.of({
           active: coordinator.active,
@@ -8453,7 +8459,7 @@ describe("SessionRunnerLLM", () => {
         ),
       )
 
-    scenario("continues once in the same drain and settles one terminal", function* (s) {
+    scenario("continues once in the same busy period and settles it once", function* (s) {
       // The check continues the first time it is asked and lets the second end stand.
       let asked = 0
       s.turnEnd = () =>
@@ -8465,17 +8471,15 @@ describe("SessionRunnerLLM", () => {
       yield* s.llm.push(TestLLM.text("First", "text-1"), TestLLM.text("Second", "text-2"))
 
       yield* s.resume
-      yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
 
       expect(s.requests).toHaveLength(2)
       expect(asked).toBe(2)
+      expect(s.drains).toEqual({ started: 1, settled: 1 })
       expect(yield* notices(s)).toMatchObject([{ text: "Keep going.", metadata: { notice: "turn-end", check: "first" } }])
-      const messages = yield* s.messages
-      expect(messages.filter((message) => message.type === "idle")).toHaveLength(1)
-      expect(messages.filter((message) => message.type === "assistant")).toHaveLength(2)
+      expect((yield* s.messages).filter((message) => message.type === "assistant")).toHaveLength(2)
     })
 
-    scenario("asks nothing while input waits in the inbox", function* (s) {
+    scenario("asks at the end of each turn when a prompt is queued", function* (s) {
       let asked = 0
       s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
       yield* s.admit("One")
@@ -8484,8 +8488,104 @@ describe("SessionRunnerLLM", () => {
 
       yield* s.resume
 
-      // The queued prompt is the next turn, so only the end of the second one asks.
+      // The queued prompt starts the next turn, which does not make the first one skip its checks.
+      expect(asked).toBe(2)
+    })
+
+    scenario("asks nothing while steered input waits, then asks once", function* (s) {
+      let asked = 0
+      s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
+      yield* s.admit("One")
+      yield* s.llm.push(TestLLM.text("A", "text-a"), TestLLM.text("B", "text-b"))
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      yield* s.admit("STEER")
+      yield* first.release
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
       expect(asked).toBe(1)
+    })
+
+    // A limit stop is not a natural end, so no check is asked and no notice is left for the next prompt's request.
+    for (const row of [
+      {
+        name: "the agent's last allowed step",
+        setup: function* (s: Scenario) {
+          const agents = yield* Agent.Service
+          yield* agents.transform((editor) =>
+            editor.update(Agent.ID.make("build"), (agent) => {
+              agent.steps = 1
+            }),
+          )
+          yield* s.admit("Work")
+          yield* s.llm.push(...Array.from({ length: 10 }, (_, index) => TestLLM.text(`A${index}`, `limit-${index}`)))
+        },
+        requests: 1,
+      },
+      {
+        name: "the output-limit cap",
+        setup: function* (s: Scenario) {
+          yield* s.admit("Never finishes")
+          yield* s.llm.push(
+            ...Array.from({ length: 12 }, (_, index) => lengthStop(`te-cap-${index}`, String(index))),
+            TestLLM.text("Done", "te-cap-done"),
+          )
+        },
+        requests: 4,
+      },
+      {
+        name: "the turn's own step limit",
+        setup: function* (s: Scenario) {
+          yield* s.session.prompt({ sessionID, text: "Work", turn: { maxSteps: 1 }, resume: false })
+          yield* s.llm.push(...Array.from({ length: 10 }, (_, index) => TestLLM.text(`A${index}`, `turn-${index}`)))
+        },
+        requests: 1,
+      },
+    ])
+      scenario(`asks no check and leaves no notice at ${row.name}`, function* (s) {
+        let asked = 0
+        s.turnEnd = () =>
+          Effect.sync(() => void asked++).pipe(Effect.as({ check: "always", text: "The check wants more work." }))
+        yield* row.setup(s)
+
+        const exit = yield* s.resume.pipe(Effect.exit)
+
+        expect(Exit.isSuccess(exit)).toBe(true)
+        expect(s.requests).toHaveLength(row.requests)
+        expect(asked).toBe(0)
+        expect(yield* notices(s)).toEqual([])
+      })
+
+    scenario("escapes the description of a continuation when it is stored", function* (s) {
+      let asked = 0
+      s.turnEnd = () =>
+        Effect.sync(() => {
+          asked++
+          return asked === 1 ? { check: "hostile", text: "More.", description: "ok\u001b]0;pwned\u0007\nnext" } : undefined
+        })
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("First", "text-1"), TestLLM.text("Second", "text-2"))
+
+      yield* s.resume
+
+      const [notice] = yield* notices(s)
+      expect(notice?.description).toBeDefined()
+      expect(notice?.description).not.toMatch(/[\u0000-\u001f\u007f]/)
+      expect(notice?.description).toContain("ok")
+    })
+
+    scenario("lets the turn end when a check dies", function* (s) {
+      s.turnEnd = () => Effect.die(new Error("check exploded"))
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("Done", "text-done"))
+
+      const exit = yield* s.resume.pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(s.requests).toHaveLength(1)
+      expect(yield* notices(s)).toEqual([])
     })
 
     scenario("stops continuing after eight in one turn", function* (s) {

@@ -1,6 +1,6 @@
 export * as SessionTurnEnd from "./turn-end.js"
 
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Layer } from "effect"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { SessionSchema } from "./schema.js"
 import type { SessionTurn } from "./turn.js"
@@ -22,10 +22,15 @@ export interface Continuation {
   readonly check: string
   /** The model-visible notice. */
   readonly text: string
+  /** Short text for clients; the seam escapes it when it is stored, so a check passes it as it has it. */
   readonly description?: string
 }
 
-/** One check at the end of a turn: a continuation keeps the turn going, and undefined lets it end. */
+/**
+ * One check at the end of a turn: a continuation keeps the turn going, and undefined lets it end. A check that dies
+ * counts as undefined, and the seam logs one line naming it, so one bad check costs only itself. A check owns its own
+ * time limit, and counts its own continuations from the transcript, since every check writes the same notice kind.
+ */
 export interface Check {
   readonly name: string
   readonly run: (input: Input) => Effect.Effect<Continuation | undefined>
@@ -55,7 +60,16 @@ export const layerWith = (list: ReadonlyArray<Check>) =>
       run: Effect.fnUntraced(function* (input) {
         if ((input.turn.notices[NOTICE] ?? 0) >= MAX_CONTINUATIONS) return undefined
         for (const check of list) {
-          const continuation = yield* check.run(input)
+          const continuation = yield* check.run(input).pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) =>
+                Effect.logWarning("A turn-end check failed, so the turn ends as if it had not continued").pipe(
+                  Effect.annotateLogs({ check: check.name, sessionID: input.sessionID, cause: Cause.pretty(cause) }),
+                  Effect.as(undefined),
+                ),
+            ),
+          )
           if (continuation) return continuation
         }
         return undefined
