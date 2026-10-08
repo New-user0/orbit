@@ -4,6 +4,8 @@ import { Effect } from "effect"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Job } from "@orbit/core/job"
+import { KV } from "@orbit/core/kv"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { Model } from "@orbit/core/model"
@@ -13,11 +15,12 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
+import { SessionRestart } from "@orbit/core/session/execution/restart"
 import { SessionInbox } from "@orbit/core/session/inbox"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionProjector } from "@orbit/core/session/projector"
-import { SessionMessageTable } from "@orbit/core/session/sql"
+import { SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { SessionTransfer } from "@orbit/core/session/transfer"
 import { SessionTurn } from "@orbit/core/session/turn"
@@ -36,6 +39,9 @@ const it = testEffect(
       Session.node,
       SessionTransfer.node,
       InstructionEntry.node,
+      Job.node,
+      KV.node,
+      SessionRestart.node,
     ]),
     [
       Bus.node.replace(Bus.configured({ persist: true })),
@@ -49,13 +55,14 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const backup = { id: Model.ID.make("backup"), providerID: Provider.ID.make("provider") }
 
 // A Session that ran a limited turn: prompt A with options, then a fallback note and a stop-hook note. With `queued`,
-// a prompt Q then started a turn of its own in the same busy period, and the Session went idle.
-const limitedTurn = (input: { queued: boolean }) =>
+// a prompt Q then started a turn of its own in the same busy period, and the Session went idle. With `parentID`, the
+// Session is a child of that one, as a subagent's Session is.
+const limitedTurn = (input: { queued: boolean; parentID?: Session.ID }) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
     const bus = yield* Bus.Service
     const { db } = yield* Database.Service
-    const created = yield* session.create({ location })
+    const created = yield* session.create(input.parentID ? { parentID: input.parentID } : { location })
     yield* session.prompt({ sessionID: created.id, text: "A", turn: { maxSteps: 1 }, resume: false })
     yield* SessionInbox.promote(db, bus, created.id, "input")
     yield* bus.publish(SessionEvent.Synthetic, {
@@ -82,7 +89,7 @@ const limitedTurn = (input: { queued: boolean }) =>
   })
 
 // Each way to reach the end of a history that holds prompt A's turn, with its options and notices, and no idle marker:
-// three cuts, and the busy period that has not recorded its idle marker yet.
+// four cuts, and the busy period that has not recorded its idle marker yet.
 const cuts = [
   {
     name: "the last response of a busy period that has not gone idle",
@@ -125,11 +132,50 @@ const cuts = [
       })).id
     }),
   },
+  {
+    name: "a shutdown in a child Session that the next start does not resume",
+    make: Effect.gen(function* () {
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const store = yield* SessionStore.Service
+      const restart = yield* SessionRestart.Service
+      const { db } = yield* Database.Service
+      const parent = yield* session.create({ location })
+      const child = yield* limitedTurn({ queued: false, parentID: parent.id })
+      const claimed = db
+        .select({ claimed: SessionTable.time_suspended })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, child.sessionID))
+        .get()
+        .pipe(
+          Effect.orDie,
+          Effect.map((row) => row !== undefined && row.claimed !== null),
+        )
+
+      // As SessionExecution records a subagent's drain that a shutdown interrupts: the started event commits the claim,
+      // and an interrupt without a reason keeps it and records no idle marker. A crash leaves the same claim, with no
+      // event after the started one.
+      yield* bus.publish(
+        SessionEvent.Execution.Started,
+        { sessionID: child.sessionID },
+        { commit: () => store.claim(child.sessionID) },
+      )
+      yield* bus.publish(SessionEvent.Execution.Interrupted, { sessionID: child.sessionID, reason: "shutdown" })
+      expect(yield* claimed).toBe(true)
+
+      // The next start resumes the claimed top-level Sessions and the children that a background job names. No job
+      // names this one, so the start clears its claim with a plain update and records no terminal event.
+      yield* restart.resumeSuspendedSessions
+      expect(yield* claimed).toBe(false)
+      return child.sessionID
+    }),
+  },
 ]
 
 // Known limitation, documented in docs/upgrading.md and on SessionTurn.current: only an idle marker or a queued input
 // closes a turn, and nothing records where a history was cut. If a durable record of the cut or of the turn start
-// replaces that, the first test of each pair changes with it.
+// replaces that, the first test of each pair changes with it. So does the one for the child Session, if the start
+// records a terminal event for the claims it clears.
 describe("SessionTurn.current after a history was cut short of an idle marker", () => {
   for (const cut of cuts) {
     it.effect(`lets the first steer after ${cut.name} join the turn before it`, () =>

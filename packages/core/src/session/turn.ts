@@ -46,9 +46,13 @@ const decodeModel = Schema.decodeUnknownOption(Model.Ref)
  *   period promotes (the doorbell in `SessionRunCoordinator`);
  * - the first steer after a fork that stops before an idle marker, such as a fork before a queued prompt;
  * - the first steer after a committed revert, which deletes the idle marker that followed the history it keeps;
- * - the first steer after an import of a session that was exported in the middle of a turn.
- * A queued input starts a new turn in all four. Closing them for steers takes a durable record of where the history was
- * cut or where the turn started, and nothing records either yet.
+ * - the first steer after an import of a session that was exported in the middle of a turn;
+ * - the first steer after a crash cut off a subagent's Session, or after a shutdown interrupted it without a reason:
+ *   neither records an idle marker, and the next start resumes only top-level Sessions and background subagents, so it
+ *   clears the claim of any other child (`SessionStore.releaseChildClaims`) without publishing a terminal event.
+ * A queued input starts a new turn in all five. Closing them for steers takes a durable record of where the history was
+ * cut or where the turn started, and nothing records either yet. For the fifth, the start could publish the terminal
+ * event that it does not publish when it clears the claim.
  */
 export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
   const notice = sql<string>`json_extract(${SessionMessageTable.data}, '$.metadata.notice')`

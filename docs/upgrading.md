@@ -648,11 +648,19 @@ turn and no fallback model is used.
 
 A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
 cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
-notices, whenever the history in front of it does not end in an idle mark. That is so for the first prompt after a fork
-that stops before one (a fork before a queued prompt, say), after a revert, which removes the idle mark that followed
-the history it keeps (a revert to a queued prompt, say), and after an import of a session that was exported in the
-middle of a turn. It is also so for a steer that arrives after the agent loop has finished its last response but before
-the idle mark. A prompt sent with `queue` delivery starts a new turn in each of these cases.
+notices, whenever the history in front of it does not end in an idle mark. That is so for:
+
+- the first prompt after a fork that stops before an idle mark, such as a fork before a queued prompt;
+- the first prompt after a revert, which removes the idle mark that followed the history it keeps, such as a revert to a
+  queued prompt;
+- the first prompt after an import of a session that was exported in the middle of a turn;
+- the first prompt to a subagent's session that a crash cut off, or that a shutdown interrupted without recording an idle
+  mark. The next start resumes only top-level sessions and background subagents, and it forgets that any other session
+  was in the middle of work, again without an idle mark. The prompt can come from a client or from the parent agent
+  continuing the subagent with its `sessionID`;
+- a steer that arrives after the agent loop has finished its last response but before the idle mark.
+
+A prompt sent with `queue` delivery starts a new turn in each of these cases.
 
 **Affects:** programs that read messages through the HTTP API, the client libraries or an exported session, and code
 that checks them against the old shape: `user` messages gain optional `turn` and `delivery`, `synthetic` messages gain
@@ -660,8 +668,8 @@ optional `delivery`, and the `session.inbox.enqueued` event carries `turn` on a 
 types add `SessionTurnOptions` and the new fields.
 
 **What to do:** nothing. Every new field is optional, and a prompt without `turn` behaves as before. A client that sets
-`turn` and wants the first prompt after a fork, a revert or an import to start a new turn sends it with
-`delivery: "queue"`.
+`turn` and wants the first prompt after a fork, a revert, an import or a cut-off subagent session to start a new turn
+sends it with `delivery: "queue"`.
 
 ## Permissions
 
