@@ -280,6 +280,11 @@ export function fromPromise(plugin: Plugin) {
           }
         }
 
+        const promiseOptions = (options: Tool.Info["options"]): Info["options"] => {
+          if (options === undefined || typeof options.authorizes !== "function") return options as Info["options"]
+          return { ...options, authorizes: promisePredicate(options.authorizes) } as Info["options"]
+        }
+
         const promiseValidator =
           (validate: NonNullable<Tool.Info["validate"]>): NonNullable<Info["validate"]> =>
           (input, context) =>
@@ -291,6 +296,7 @@ export function fromPromise(plugin: Plugin) {
         const promiseTool = <T extends Tool.Info>(tool: T) => ({
           ...tool,
           execute: promiseExecutor(tool.execute),
+          options: promiseOptions(tool.options),
           traits: promiseTraits(tool.traits),
           ...(tool.validate === undefined ? {} : { validate: promiseValidator(tool.validate) }),
         })
@@ -515,6 +521,7 @@ export function fromPromise(plugin: Plugin) {
                       editor.add({
                         ...tool,
                         execute: (input, context) => executePromiseTool(tool, input, context),
+                        options: effectOptions(tool.options),
                         traits: effectTraits(tool.traits),
                         validate: effectValidate(tool.validate),
                       }),
@@ -525,7 +532,7 @@ export function fromPromise(plugin: Plugin) {
                         update(value)
                         Object.assign(tool, value, {
                           output: value.output,
-                          options: value.options,
+                          options: effectOptions(value.options),
                           traits: effectTraits(value.traits),
                           // A plugin that left validate as it read it back keeps the Effect function it was given, so a
                           // defect or a decline from it passes through instead of becoming a validation failure.
@@ -656,6 +663,13 @@ type RuntimeSchema = Schema.Codec<unknown, unknown>
 const effectPredicate = (predicate: Predicate<any>): Tool.Predicate<any> => {
   if (typeof predicate !== "function") return predicate
   return (input) => Effect.tryPromise({ try: async () => predicate(input), catch: (cause) => cause })
+}
+
+// `authorizes` may be a Promise predicate. Anything the registry should judge, such as text, goes through as it is.
+const effectOptions = (options: Info["options"]): Tool.Info["options"] => {
+  if (typeof options !== "object" || options === null || typeof options.authorizes !== "function")
+    return options as Tool.Info["options"]
+  return { ...options, authorizes: effectPredicate(options.authorizes) } as Tool.Info["options"]
 }
 
 const effectTraits = (traits: Info["traits"]): Tool.Info["traits"] => {

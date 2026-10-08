@@ -80,7 +80,7 @@ export const layer = Layer.effect(
             for (const tool of discovered) {
               editor.add({
                 name: tool.name,
-                options: { namespace: namespace(tool.server), codemode: tool.codemode !== false },
+                options: { authorizes: true, namespace: namespace(tool.server), codemode: tool.codemode !== false },
                 traits: traits(tool),
                 description: tool.description ?? "",
                 input: (tool.inputSchema ?? { type: "object", properties: {} }) as JsonSchema.JsonSchema,
@@ -151,7 +151,13 @@ export const layer = Layer.effect(
                     Effect.mapError((error) =>
                       error instanceof ToolFailure
                         ? error
-                        : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
+                        : error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError
+                          ? // A refusal keeps its cause, so the session error is `permission.rejected`.
+                            new ToolFailure({
+                              message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                              error,
+                            })
+                          : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
                     ),
                   ),
               })

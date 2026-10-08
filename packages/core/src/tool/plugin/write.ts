@@ -57,7 +57,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { codemode: false, permission: "edit" },
+          options: { authorizes: true, codemode: false, permission: "edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
             "Writes a file to the local filesystem, overwriting if one exists.\n\nMissing parent directories are created automatically.\n\nUse this tool to create new files or overwrite existing files. For partial changes, use the edit tool instead.",

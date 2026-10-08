@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { CodeModeTool } from "@orbit/core/codemode/tool"
 import { Permission } from "@orbit/core/permission"
 import { Tool } from "@orbit/core/tool"
-import { execute } from "@orbit/core/tool/runtime"
+import { runTool } from "./lib/tool"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import { Agent } from "@orbit/schema/agent"
 import { Session } from "@orbit/schema/session"
@@ -24,7 +24,7 @@ const createCodeMode = (
   tools: ReadonlyMap<string, Info>,
   authorize: CodeModeTool.Authorize = () => Effect.void,
   resolve: CodeModeTool.Resolve = () => Effect.succeed([]),
-) => CodeModeTool.create({ tools }, (_, tool, input, context) => execute(tool, input, context), authorize, resolve)
+) => CodeModeTool.create({ tools }, (_, tool, input, context) => runTool(tool, input, context), authorize, resolve)
 
 test("execute is not read-only or safe beside other calls, reaches the network and is left to finish", async () => {
   expect(await Effect.runPromise(ToolTraits.resolve(createCodeMode(new Map()), undefined))).toMatchObject({
@@ -71,16 +71,16 @@ test("canonical execution distinguishes declared, model-only, and raw schema out
     execute: (input) => Effect.succeed({ output: input, content: "raw" }),
   }
 
-  expect(await Effect.runPromise(execute(declared, { value: "encoded" }, context))).toEqual({
+  expect(await Effect.runPromise(runTool(declared, { value: "encoded" }, context))).toEqual({
     output: { value: "encoded" },
     content: [{ type: "text", text: '{"value":"encoded"}' }],
   })
-  expect(await Effect.runPromise(execute(modelOnly, {}, context))).toEqual({
+  expect(await Effect.runPromise(runTool(modelOnly, {}, context))).toEqual({
     output: undefined,
     content: [{ type: "text", text: "visible only" }],
     metadata: { kind: "model" },
   })
-  expect(await Effect.runPromise(execute(raw, { unchecked: true }, context))).toEqual({
+  expect(await Effect.runPromise(runTool(raw, { unchecked: true }, context))).toEqual({
     output: { unchecked: true },
     content: [{ type: "text", text: "raw" }],
   })
@@ -102,10 +102,10 @@ test("declared outputs cannot bypass validation and raw outputs stay JSON-compat
     execute: () => Effect.succeed({ output: 1n, content: "not JSON" }),
   }
 
-  expect((await Effect.runPromiseExit(execute(missing, {}, context))).toString()).toContain(
+  expect((await Effect.runPromiseExit(runTool(missing, {}, context))).toString()).toContain(
     "Tool did not return its declared output",
   )
-  expect((await Effect.runPromiseExit(execute(invalid, {}, context))).toString()).toContain(
+  expect((await Effect.runPromiseExit(runTool(invalid, {}, context))).toString()).toContain(
     "Tool returned a non-JSON value",
   )
 })
@@ -121,7 +121,7 @@ test("foreign typed failures settle as Tool.Error at the untrusted boundary", as
     execute: () => new ForeignFailure({ message: "transport died" }) as never,
   }
 
-  const error = await Effect.runPromise(execute(lying, {}, context).pipe(Effect.flip))
+  const error = await Effect.runPromise(runTool(lying, {}, context).pipe(Effect.flip))
   expect(error).toBeInstanceOf(Tool.Error)
   expect(error.message).toBe("transport died")
 })

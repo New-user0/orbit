@@ -987,6 +987,14 @@ the note on error types describes.
 
 **What to do:** Nothing.
 
+### Tools that do not ask for themselves are now asked about
+
+Ask and deny rules now govern a tool that does not take care of its own permission question, and nothing changes under the default rules (`* * allow`). Tools that plugins and the SDK add used to run unasked unless they asked for themselves; they now ask on their permission action (or their name), on every resource, once per call, and "always" saves `*` for that action. The same goes for Code Mode: a program that calls such a tool is asked for each call. A tool opts out by setting `options.authorizes` to `true`, or to a function of the decoded input that answers `true` (a Promise plugin's function may answer with a Promise); a function that throws, fails, rejects or answers with anything else counts as not opting out. The desktop browser tools pass the same gate on `browser`, and the browser plugin's own rules (`browser * deny` for every agent, `browser * allow` for a session it is attached to) decide, so they never prompt. Orbit's own tools that check each file, command or address (`read`, `edit`, `shell`, `webfetch`, the MCP tools and the like) and MCP tools are unchanged, and annotations from an MCP server never relax anything. Orbit's tools that never asked are now governed by rules on their own name, and ask once per call when a rule says `ask`: `memory`, `enter_worktree`, `exit_worktree`, `orbit_session_rename`, `orbit_session_move`, `orbit_models`, `task_create`, `task_update`, `task_list`, `todo`, `shell_output`, `shell_watch`, `shell_stop`, `enter_plan_mode` and `exit_plan_mode`. Under the default rules (`* * allow`) none of them asks, but an `ask` or `deny` rule, or an agent whose rules deny everything it does not name, now reaches them. The tool's name is also its action, so a tool that names a shared action, such as `edit`, `read` or `shell`, asks for the whole action, and "always" saves `<action> *`; saved rules are evaluated after the configured ones, so that saved rule outranks a configured narrower `ask` such as `read *.env ask`. Answer "once" for these tools if you want the narrower rule to keep applying.
+
+**Affects:** plugin and SDK authors whose tools did not ask, and people whose rules ask or deny for these tools: an `ask` rule now prompts, and a `deny` rule now applies. A refusal reaches clients as a `permission.rejected` error, as it does for the built-in tools.
+
+**What to do:** approve the prompt, or add an allow rule for the tool's action. Authors of a tool that asks in `execute` set `options.authorizes: true` to avoid the second question.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

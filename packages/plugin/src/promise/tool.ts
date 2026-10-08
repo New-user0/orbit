@@ -1,5 +1,5 @@
 export { CallID, Error, ErrorCode } from "@orbit/schema/tool"
-export type { Metadata, Options, ResolvedTraits, Result } from "@orbit/schema/tool"
+export type { Metadata, ResolvedTraits, Result } from "@orbit/schema/tool"
 
 import { Tool } from "@orbit/schema/tool"
 import type { Agent } from "@orbit/schema/agent"
@@ -7,6 +7,17 @@ import type { Session } from "@orbit/schema/session"
 import type { SessionMessage } from "@orbit/schema/session-message"
 import type { Types } from "effect"
 import type { Hooks, Transform } from "./registration.js"
+
+/**
+ * `Tool.Options` for a Promise plugin: `authorizes` may answer with a Promise, as the trait predicates do. The rules are
+ * the same: only an answer of exactly `true` lets the tool carry the decision, and a predicate that rejects, throws or
+ * answers with anything else makes the registry ask.
+ */
+export type Options = Tool.Options extends infer Option
+  ? Option extends unknown
+    ? Omit<Option, "authorizes"> & { readonly authorizes?: Predicate }
+    : never
+  : never
 
 export interface ToolContext extends Omit<Tool.Context, "progress"> {
   readonly signal: AbortSignal
@@ -32,7 +43,8 @@ export interface Traits<Input = unknown>
 export type Info<
   Input extends Tool.ValueSchema<any> = Tool.ValueSchema<any>,
   Output extends Tool.ValueSchema<any> | undefined = Tool.ValueSchema<any> | undefined,
-> = Omit<Tool.Info<Input, Output>, "execute" | "traits" | "validate"> & {
+> = Omit<Tool.Info<Input, Output>, "execute" | "traits" | "validate" | "options"> & {
+  readonly options?: Options
   readonly execute: (
     input: Parameters<Tool.Info<Input, Output>["execute"]>[0],
     context: ToolContext,

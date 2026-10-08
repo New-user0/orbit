@@ -12,7 +12,7 @@ import { ShellControlTools } from "@orbit/core/tool/plugin/shell-control"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
-import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
+import { executeTool, expectRegistryAsks, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const controlNode = makeLocationNode({
   name: "test/shell-control-tool-plugin",
@@ -35,6 +35,13 @@ const text = (result: { content?: readonly { type: string; text?: string }[] }) 
   result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
 
 describe("shell control tools", () => {
+  it.effect("leaves all three tools to the registry gate", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      yield* expectRegistryAsks(registry, ["shell_output", "shell_watch", "shell_stop"])
+    }),
+  )
+
   if (process.platform === "win32") return
   it.live("watch for a line, read new output, and stop a background command", () =>
     Effect.gen(function* () {

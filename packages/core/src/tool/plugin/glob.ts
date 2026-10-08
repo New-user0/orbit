@@ -55,7 +55,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { codemode: false },
+          options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
           description:
             'Search file paths using a glob pattern (examples: "**/*.ts", "src/**/*.tsx"). Results are sorted with the most recently modified files first.',
