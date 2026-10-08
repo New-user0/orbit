@@ -1,4 +1,4 @@
-import { Effect, Option } from "effect"
+import { Effect, Option, Stream } from "effect"
 import { AIError, LLMEvent, type ProviderMetadata, type ToolCall } from "../../schema/index.js"
 import { eventError, parseToolInput, type ToolAccumulator } from "../shared.js"
 import { parse } from "./partial-json.js"
@@ -71,27 +71,31 @@ const inputDelta = (tool: PendingTool, text: string) =>
 
 const toolCall = (route: string, tool: PendingTool, inputOverride?: string) => {
   const raw = inputOverride ?? tool.input
+  const call = (input: unknown, partialInput?: true) =>
+    LLMEvent.toolCall({
+      id: tool.id,
+      name: tool.name,
+      namespace: tool.namespace,
+      input,
+      providerExecuted: tool.providerExecuted ? true : undefined,
+      providerMetadata: tool.providerMetadata,
+      ...(partialInput ? { partialInput } : {}),
+    })
   return parseToolInput(route, tool.name, raw).pipe(
+    Effect.map((input) => call(input)),
     Effect.catch((error) =>
       tool.providerExecuted
         ? Effect.fail(error)
-        : Effect.succeed(
-            Option.getOrElse(
-              Option.map(parsePartialInput(raw), (input) => input ?? {}),
-              () => ({}),
+        : // Marked, because input rebuilt from incomplete JSON must not run unless the response finished cleanly.
+          Effect.succeed(
+            call(
+              Option.getOrElse(
+                Option.map(parsePartialInput(raw), (input) => input ?? {}),
+                () => ({}),
+              ),
+              true,
             ),
           ),
-    ),
-    Effect.map(
-      (input): ToolCall =>
-        LLMEvent.toolCall({
-          id: tool.id,
-          name: tool.name,
-          namespace: tool.namespace,
-          input,
-          providerExecuted: tool.providerExecuted ? true : undefined,
-          providerMetadata: tool.providerMetadata,
-        }),
     ),
   )
 }
@@ -245,5 +249,33 @@ export const finishAll = <K extends StreamKey>(route: string, tools: State<K>) =
       ).pipe(Effect.map((events) => events.flat())),
     }
   })
+
+interface Gate {
+  readonly held: ReadonlyArray<ToolCall>
+  /** The latest finish was `tool-calls` or `stop`, so a marked call that arrives now has nothing left to wait for. */
+  readonly released: boolean
+}
+
+/**
+ * Hold calls rebuilt from incomplete JSON (`partialInput`) until the response says how it ended. A `tool-calls` or
+ * `stop` finish releases them just before it. Any other finish drops them, and so does a stream that ends or fails
+ * without one, so a response cut off by an output limit never runs a half-written call. The `tool-input-*` events of
+ * a dropped call still pass, which leaves an input that was started and never called for the consumer to settle.
+ * Unmarked calls pass in order, and a marked call that arrives after a releasing finish passes straight through.
+ */
+export const gateOnFinish = <E, R>(events: Stream.Stream<LLMEvent, E, R>) =>
+  events.pipe(Stream.mapAccumEffect((): Gate => ({ held: [], released: false }), gate))
+
+const gate = (state: Gate, event: LLMEvent): Effect.Effect<readonly [Gate, ReadonlyArray<LLMEvent>]> => {
+  if (LLMEvent.is.toolCall(event) && event.partialInput)
+    return Effect.succeed(state.released ? [state, [event]] : [{ ...state, held: [...state.held, event] }, []])
+  if (!LLMEvent.is.stepFinish(event) && !LLMEvent.is.finish(event)) return Effect.succeed([state, [event]])
+  const released = event.reason.normalized === "tool-calls" || event.reason.normalized === "stop"
+  const next = [{ held: [], released }, released ? [...state.held, event] : [event]] as const
+  if (released || state.held.length === 0) return Effect.succeed(next)
+  return Effect.logWarning(
+    `Dropped ${state.held.length} tool call(s) rebuilt from incomplete input: the response finished with "${event.reason.normalized}"`,
+  ).pipe(Effect.as(next))
+}
 
 export * as ToolStream from "./tool-stream.js"

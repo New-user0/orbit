@@ -109,6 +109,13 @@ export const isRetryable = (error: AIError) => {
   }
 }
 
+/**
+ * Whether the provider said it is overloaded, as opposed to failing in some other way. An overload stays a
+ * `ProviderInternal` failure, so `isRetryable` does not change; this lets a caller tell repeated overloads apart.
+ */
+export const isOverloaded = (error: AIError) =>
+  error.reason._tag === "ProviderInternal" && error.reason.classification === "overloaded"
+
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 // Some hosted gateways report account caps as typed 429/402 errors that are not throttles.
 const QUOTA_CODES = new Set([
@@ -133,6 +140,12 @@ const SERVER_CODES = new Set([
   "slow_down",
   "serviceunavailableexception",
 ])
+// Overload is claimed only on affirmative evidence, because a caller that switches models after repeated overloads must
+// not do so for any other failure. Status 529 and these two codes say so outright, and "overloaded" or "at capacity"
+// wording says so on a 5xx or a failure with no status. "Unavailable", "busy" and every other server failure stay
+// unclassified.
+const OVERLOAD_CODES = new Set(["overloaded_error", "server_is_overloaded"])
+const OVERLOAD_TEXT = /\b(?:overloaded|at capacity)\b/i
 // `invalid_request` is the Vercel AI Gateway's code for an upstream request rejection.
 const INVALID_REQUEST_CODES = new Set([
   "model_not_found",
@@ -278,6 +291,9 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
     (input.status === 400 && AUTH_TEXT.test(text))
   )
     return new AuthenticationError(details)
+  // An outright overload signal wins over the throttle below, because some gateways report overload as a 429.
+  if (overloadSignal(input.status, codes))
+    return new ProviderInternalError({ ...details, retryAfterMs: input.retryAfterMs, classification: "overloaded" })
   if (
     input.status === 429 ||
     codes.some(
@@ -305,11 +321,25 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
     return new ProviderInternalError({
       ...details,
       retryAfterMs: input.retryAfterMs,
+      classification: overloadWording(input.status, text) ? "overloaded" : undefined,
     })
   if (codes.some((code) => INVALID_REQUEST_CODES.has(code))) return new InvalidRequestError(details)
   // Any remaining 4xx is a deterministic rejection of this request.
   if (input.status !== undefined && input.status >= 400 && input.status < 500) return new InvalidRequestError(details)
   return new UnknownProviderError(details)
+}
+
+// 529 and an overload code decide on their own. A 429 may carry one, since some gateways report overload that way, but
+// any other 4xx is a rejected request whatever code a gateway put on it.
+function overloadSignal(status: number | undefined, codes: ReadonlyArray<string>) {
+  if (status === 529) return true
+  if (status !== undefined && status >= 400 && status < 500 && status !== 429) return false
+  return codes.some((code) => OVERLOAD_CODES.has(code))
+}
+
+// Wording is weaker evidence: it counts only where nothing contradicts it, and never turns a 429 or another 4xx.
+function overloadWording(status: number | undefined, text: string) {
+  return (status === undefined || status < 400 || status >= 500) && OVERLOAD_TEXT.test(text)
 }
 
 function providerCodes(value: unknown) {
