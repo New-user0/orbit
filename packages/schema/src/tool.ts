@@ -113,7 +113,11 @@ export interface Traits<Input = unknown> {
   readonly openWorld?: boolean
   /** The call waits for the person, so it cannot finish when nobody is there. */
   readonly requiresUserInteraction?: boolean
-  /** A failure of this call should cancel the calls that run beside it in the same step. */
+  /**
+   * A failure of this call should cancel the calls that run beside it in the same step. A call fails for this purpose
+   * only when its result or its `Tool.Error` carries `metadata.error: true`; denials, rejections with feedback and
+   * validation failures never count.
+   */
   readonly cancelSiblingsOnFailure?: boolean
   /** Whether a new user message ends the call or waits for it. Defaults to `"block"`. */
   readonly interruptBehavior?: InterruptBehavior

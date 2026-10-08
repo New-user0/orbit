@@ -1442,6 +1442,22 @@ a step. No new event type is added.
 
 **What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.
 
+### A failed shell call cancels the calls that ran with it
+
+When a `shell` call times out, is killed by a signal, cannot be started (on Linux and macOS; on Windows a shell that
+cannot start looks like exit 1 for now) or is removed by a client while it runs, the other calls of the same model response
+that have not finished no longer run on. Calls that have not started never start. A call that is still running is
+interrupted. Each of them ends with the error type `tool.cancelled` and a short note that names the tool, and the step
+carries on: the model sees those results and answers. A permission denial, a rejection with feedback, a call that
+failed validation and a non-zero exit code do not cancel anything. A plugin tool takes part by declaring
+`cancelSiblingsOnFailure` and returning `metadata.error: true`, on its result or on its `Tool.Error`. A subagent that
+is cancelled this way now also shows its child session ID in the failure message. Today a shell call runs alone, so in
+practice the calls cancelled are the ones queued behind it and the ones streamed after it.
+
+**Affects:** people who ask for several tool calls at once, clients that show tool results, and plugin tool authors.
+
+**What to do:** nothing. A client that matches on error types can treat `tool.cancelled` as "did not run to the end".
+
 ### A new message from you cancels tools that can be cancelled
 
 Sending a message while a step is still running (the default delivery, "steer") now cancels the tool calls that are
