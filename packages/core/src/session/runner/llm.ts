@@ -293,13 +293,14 @@ const layer = Layer.effect(
       loaded: SessionContext.Loaded,
       turn: SessionTurn.Current["options"],
     ) {
-      if (!turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)) return
-      return SessionTurn.exceeded(
-        turn,
-        yield* SessionTurn.usage(db, loaded.session.id, turn),
-        // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
-        loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0)),
-      )
+      // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
+      const priced = loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0))
+      const own =
+        !turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)
+          ? undefined
+          : SessionTurn.exceeded(turn, yield* SessionTurn.usage(db, loaded.session.id, turn), priced)
+      // A subagent carries no turn options of its own, so the turn it works for limits it too.
+      return own ?? (yield* SessionTurn.ancestorLimit(db, loaded.session.id, priced))
     })
 
     // The turn's fallback model, once a notice has named one, replaces the Session's model for every load.

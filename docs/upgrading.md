@@ -1274,9 +1274,12 @@ with no partial response left behind. A cost limit that cannot be checked is ref
 instead, as described below.
 
 Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
-compaction start without the check, and their spend counts at the next one. A subagent is checked only at the parent's
-step boundaries: it runs all its own steps between two checks, so a turn can overshoot by a whole subagent run, and a
-background subagent that is still running when a limit ends the turn keeps running. Its completion notice then wakes
+compaction start without the check, and their spend counts at the next one. A subagent also checks the cost and
+token limits of every turn above it before each of its own steps, counting what that turn has spent so far, siblings
+included, so a subagent stops with `limit.cost` or `limit.tokens` instead of overshooting by a whole run; the parent's
+step limit counts only the parent's own responses and never stops a subagent. A response is still priced after it
+arrives, so the overshoot is at most one response. A background subagent that is still running when a limit ends the turn
+keeps running until it reaches one of those limits itself. Its completion notice then wakes
 the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
 a cost or token limit by one response.
 

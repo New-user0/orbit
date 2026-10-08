@@ -5630,6 +5630,50 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(1)
     })
 
+    // A subagent is admitted with no turn options of its own. While it runs, the parent waits and checks nothing, so the
+    // child must stop at the limit the parent's turn set, counting what the parent already spent.
+    const lengthText = (id: string) => [
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text: "Done" }),
+      LLMEvent.textEnd({ id }),
+    ]
+    for (const row of [
+      { name: "cost", turn: { maxCost: Money.USD.make(3) }, expected: "limit.cost", childRequests: 1 },
+      { name: "tokens", turn: { maxTokens: 5 }, expected: "limit.tokens", childRequests: 1 },
+      // The parent's step limit counts only its own responses, so it never stops a child.
+      { name: "steps", turn: { maxSteps: 2 }, expected: undefined, childRequests: 6 },
+      { name: "no limit", turn: undefined, expected: undefined, childRequests: 6 },
+    ] as const)
+      scenario(`stops a subagent at the parent turn's ${row.name} limit`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: row.turn, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        expect(s.requests).toHaveLength(2)
+
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          .set({ parent_id: sessionID })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(row.childRequests)
+        if (row.expected === undefined) return expect(Exit.isSuccess(exit)).toBe(true)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.expected)
+      })
+
     scenario("stops at the token limit", function* (s) {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 3 }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend), toolStep(spend))

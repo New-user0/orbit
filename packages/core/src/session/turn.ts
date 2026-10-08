@@ -299,3 +299,37 @@ export function exceeded(options: Options, spent: Usage, priced: boolean) {
     }
   return undefined
 }
+
+/**
+ * The cost or token limit that an ancestor Session's turn has reached, or undefined when each may go on. A subagent is
+ * admitted without turn options, so it would otherwise spend without bound while its parent waits for it: the parent
+ * checks its own limits only before its next request. The ancestor's step limit is left out because only the
+ * ancestor's own responses count toward it, so a parent on its last step would stop the child it just started. The
+ * ancestor's usage includes every sibling running beside the child, so parallel subagents share the one budget.
+ */
+export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  priced: boolean,
+) {
+  const parentOf = (id: SessionSchema.ID) =>
+    db
+      .select({ parent: SessionTable.parent_id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, id))
+      .get()
+      .pipe(
+        Effect.orDie,
+        Effect.map((row) => row?.parent ?? undefined),
+      )
+  // A session tree is acyclic, but a bad row must not loop here.
+  const seen = new Set<string>([sessionID])
+  for (let id = yield* parentOf(sessionID); id !== undefined && !seen.has(id); id = yield* parentOf(id)) {
+    seen.add(id)
+    const turn = (yield* current(db, id)).options
+    if (turn?.maxCost === undefined && turn?.maxTokens === undefined) continue
+    const limit = exceeded(turn, { ...(yield* usage(db, id, turn)), steps: 0 }, priced)
+    if (limit) return limit
+  }
+  return undefined
+})
