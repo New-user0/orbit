@@ -1241,6 +1241,17 @@ it.effect("does not retry a failed certificate check on a native fetch", () =>
   }),
 )
 
+// Bun throws the TypeError itself with the code on it and no cause.
+it.effect("does not retry a failed certificate check that Bun throws directly", () =>
+  Effect.gen(function* () {
+    const error = yield* streamFailure(
+      Object.assign(new TypeError("unsupported certificate purpose"), { code: "INVALID_PURPOSE" }),
+    )
+    expect(error.reason).toMatchObject({ _tag: "Transport", operation: "request", code: "INVALID_PURPOSE" })
+    expect(SessionRunnerRetry.isRetryable(error)).toBeFalse()
+  }),
+)
+
 it.effect("classifies mid-stream socket drops as read transport errors", () =>
   Effect.gen(function* () {
     const cause = Object.assign(new Error("terminated"), {

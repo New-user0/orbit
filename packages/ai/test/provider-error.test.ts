@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import {
   AIError,
   InvalidProviderOutputError,
@@ -10,7 +11,7 @@ import {
   isOverloaded,
   isRetryable,
 } from "../src/index.js"
-import { classifyProviderFailure, providerErrorMessage, type ProviderFailure } from "../src/provider-error.js"
+import { certificateFailureCode, classifyProviderFailure, providerErrorMessage, type ProviderFailure } from "../src/provider-error.js"
 
 describe("provider error classification", () => {
   test("classifies provider token limit messages as context overflow", () => {
@@ -748,7 +749,15 @@ describe("certificate failures", () => {
     "CERT_NOT_YET_VALID",
     "CERT_UNTRUSTED",
     "ERR_TLS_CERT_ALTNAME_INVALID",
-    "UNKNOWN_CA",
+    "INVALID_PURPOSE",
+    "INVALID_CA",
+    "CERT_SIGNATURE_FAILURE",
+    "PATH_LENGTH_EXCEEDED",
+    "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY",
+    "ERROR_IN_CERT_NOT_BEFORE_FIELD",
+    "ERROR_IN_CERT_NOT_AFTER_FIELD",
+    "CRL_HAS_EXPIRED",
+    "UNABLE_TO_GET_CRL",
     "CERTIFICATE_VERIFY_FAILED",
   ]
 
@@ -757,15 +766,37 @@ describe("certificate failures", () => {
     expect(isRetryable(transport({ cause: Object.assign(new Error("fetch failed"), { cause: { code } }) }))).toBe(false)
   })
 
+  test("a provider message that mentions a certificate stays retryable", () => {
+    expect(isRetryable(transport({ message: "unknown certificate authority", code: "server_error" }))).toBe(true)
+  })
+
+  // The errors are whatever the runtime's fetch actually throws against a real TLS server.
+  const fixture = (name: string) =>
+    Bun.file(path.join(import.meta.dir, "..", "..", "util", "test", "fixture", "tls", name)).text()
+
   test.each([
-    "self signed certificate in certificate chain",
-    "unable to verify the first certificate",
-    "certificate has expired",
-    "Hostname/IP does not match certificate's altnames: Host: example.test",
-    "unknown certificate authority",
-  ])("does not retry a failure worded %p", (message) => {
-    expect(isRetryable(transport({ message }))).toBe(false)
-    expect(isRetryable(transport({ cause: new Error(message) }))).toBe(false)
+    { name: "an unknown CA", cert: "server", ca: undefined, host: "127.0.0.1" },
+    { name: "a host name mismatch", cert: "server", ca: "ca.pem", host: "127.0.0.2" },
+    { name: "the wrong purpose", cert: "client-only", ca: "purpose-ca.pem", host: "127.0.0.1" },
+    { name: "a leaf from an unknown issuer", cert: "client-only", ca: undefined, host: "127.0.0.1" },
+  ])("does not retry what fetch throws for $name", async (input) => {
+    const server = Bun.serve({
+      hostname: "0.0.0.0",
+      port: 0,
+      tls: { cert: await fixture(`${input.cert}.pem`), key: await fixture(`${input.cert}.key`) },
+      fetch: () => new Response("ok"),
+    })
+    const thrown = await fetch(
+      `https://${input.host}:${server.port}`,
+      input.ca ? { tls: { ca: await fixture(input.ca) } } : {},
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await server.stop(true)
+    expect(thrown).toBeInstanceOf(Error)
+    expect(certificateFailureCode(thrown)).toBeDefined()
+    expect(isRetryable(transport({ cause: thrown }))).toBe(false)
   })
 
   test("still retries a reset connection and other transport failures", () => {

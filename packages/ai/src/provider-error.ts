@@ -68,29 +68,66 @@ export const isContextOverflowFailure = (failure: unknown) =>
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
-// Node and Bun report a failed certificate check under these codes (OpenSSL names, plus Node's own hostname check).
+// OpenSSL's certificate verification codes (X509_V_ERR_*), which Node and Bun report as the error code, plus Node's own
+// host-name check and the generic handshake failure.
 const CERTIFICATE_CODES = new Set([
   "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_CRL",
+  "UNABLE_TO_DECRYPT_CERT_SIGNATURE",
+  "UNABLE_TO_DECRYPT_CRL_SIGNATURE",
+  "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY",
+  "CERT_SIGNATURE_FAILURE",
+  "CRL_SIGNATURE_FAILURE",
+  "CERT_NOT_YET_VALID",
+  "CERT_HAS_EXPIRED",
+  "CRL_NOT_YET_VALID",
+  "CRL_HAS_EXPIRED",
+  "ERROR_IN_CERT_NOT_BEFORE_FIELD",
+  "ERROR_IN_CERT_NOT_AFTER_FIELD",
+  "ERROR_IN_CRL_LAST_UPDATE_FIELD",
+  "ERROR_IN_CRL_NEXT_UPDATE_FIELD",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
   "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "UNABLE_TO_DECRYPT_CERT_SIGNATURE",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "CERT_HAS_EXPIRED",
-  "CERT_NOT_YET_VALID",
+  "CERT_CHAIN_TOO_LONG",
+  "CERT_REVOKED",
+  "INVALID_CA",
+  "PATH_LENGTH_EXCEEDED",
+  "INVALID_PURPOSE",
   "CERT_UNTRUSTED",
   "CERT_REJECTED",
-  "CERT_REVOKED",
-  "CERT_CHAIN_TOO_LONG",
+  "SUBJECT_ISSUER_MISMATCH",
+  "AKID_SKID_MISMATCH",
+  "AKID_ISSUER_SERIAL_MISMATCH",
+  "KEYUSAGE_NO_CERTSIGN",
+  "UNABLE_TO_GET_CRL_ISSUER",
+  "UNHANDLED_CRITICAL_EXTENSION",
+  "KEYUSAGE_NO_CRL_SIGN",
+  "UNHANDLED_CRITICAL_CRL_EXTENSION",
+  "INVALID_NON_CA",
+  "PROXY_PATH_LENGTH_EXCEEDED",
+  "KEYUSAGE_NO_DIGITAL_SIGNATURE",
+  "PROXY_CERTIFICATES_NOT_ALLOWED",
+  "INVALID_EXTENSION",
+  "INVALID_POLICY_EXTENSION",
+  "NO_EXPLICIT_POLICY",
+  "DIFFERENT_CRL_SCOPE",
+  "UNSUPPORTED_EXTENSION_FEATURE",
+  "UNNESTED_RESOURCE",
+  "PERMITTED_VIOLATION",
+  "EXCLUDED_VIOLATION",
+  "SUBTREE_MINMAX",
+  "UNSUPPORTED_CONSTRAINT_TYPE",
+  "UNSUPPORTED_CONSTRAINT_SYNTAX",
+  "UNSUPPORTED_NAME_SYNTAX",
+  "CRL_PATH_VALIDATION_ERROR",
   "HOSTNAME_MISMATCH",
+  "EMAIL_MISMATCH",
+  "IP_ADDRESS_MISMATCH",
   "ERR_TLS_CERT_ALTNAME_INVALID",
-  "UNKNOWN_CA",
   "CERTIFICATE_VERIFY_FAILED",
 ])
-
-// Some runtimes drop the code and keep only OpenSSL's wording, so the message is a second signal.
-const CERTIFICATE_TEXT =
-  /self[- ]signed certificate|unable to (?:verify the first certificate|get (?:local )?issuer certificate|verify the leaf signature)|certificate (?:has expired|is not yet valid|verify failed|is not trusted)|unknown certificate authority|(?:hostname|host name)\/ip does not match certificate|certificate verification failed|altnames/i
 
 /**
  * The certificate failure code behind a transport failure, looking through its causes, or undefined when the failure
@@ -100,14 +137,13 @@ export const certificateFailureCode = (error: unknown, depth = 0): string | unde
   if (depth > 5 || !isRecord(error)) return undefined
   const code = typeof error.code === "string" ? error.code : undefined
   if (code !== undefined && CERTIFICATE_CODES.has(code.toUpperCase())) return code
-  if (typeof error.message === "string" && CERTIFICATE_TEXT.test(error.message))
-    return code ?? "CERTIFICATE_VERIFY_FAILED"
   return certificateFailureCode(error.cause, depth + 1)
 }
 
 /**
  * Whether a failed call may succeed when sent again: rate limits, provider-side failures, transport failures that did
- * not deliver an accepted write, and unrecognized failures. Callers decide which calls are safe to repeat.
+ * not deliver an accepted write (except a failed certificate check), and unrecognized failures. Callers decide which
+ * calls are safe to repeat.
  */
 export const isRetryable = (error: AIError) => {
   const override = error.reason.http?.headers["x-should-retry"]
