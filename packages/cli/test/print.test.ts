@@ -127,12 +127,31 @@ test("-p reads a piped message, and with no message at all it fails", async () =
   expect(JSON.parse(noneJson.stdout)).toMatchObject({ type: "result", is_error: true })
 }, 180_000)
 
+// Every flag that only a printed run uses, with a value where it takes one. A new one that is not listed in the root
+// handler runs the interface with no limit and no warning, so this list is the one to extend.
+const printedRunFlags: ReadonlyArray<readonly [string, ...string[]]> = [
+  ["--output-format", "json"],
+  ["--json-schema", "schema.json"],
+  ["--file", "a.txt"],
+  ["--title", "x"],
+  ["--model", "a/b"],
+  ["--agent", "build"],
+  ["--bare"],
+  ["--thinking"],
+  ["--max-steps", "2"],
+  ["--max-turns", "2"],
+  ["--max-cost", "1"],
+  ["--max-tokens", "100"],
+  ["--fallback-model", "a/b"],
+]
+
 test("a flag of a printed run without -p is a usage error", async () => {
   const before = model.requests.length
 
-  const result = await orb(["--output-format", "json"])
-
-  expect(result.code).toBe(1)
-  expect(result.stderr).toContain("--output-format can only be used with -p")
+  for (const [flag, ...value] of printedRunFlags) {
+    const result = await orb([flag, ...value])
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain(`${flag === "--max-turns" ? "--max-steps" : flag} can only be used with -p`)
+  }
   expect(model.requests.length).toBe(before)
-}, 60_000)
+}, 300_000)

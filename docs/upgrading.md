@@ -104,11 +104,16 @@ rest:
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours, so it would otherwise replace the one in your own config.
+  because an agent's
+ own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the
+ model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as
+ the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key
+ that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours,
+ so it would otherwise replace the one in your own config.
 
 - **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
   `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
@@ -1229,7 +1234,7 @@ overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
 A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the options were recorded but ignored. The
 runner now checks them at the start of every model step, before the automatic compaction and the request of that step,
 and again before each retry of a step. When the turn has reached a limit, the busy period ends as failed with the
-session error type `limit.steps`, `limit.cost` or `limit.tokens`, after the tools of the last response have settled and
+session error type `limit.steps`, `limit.cost` or `limit.tokens` (or `limit.cost-unknown` when a cost limit cannot be checked), after the tools of the last response have settled and
 with no partial response left behind.
 
 Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
@@ -1438,10 +1443,16 @@ a step. No new event type is added.
 `--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
 them. A run that reaches a limit exits 1 and says which: the result object of `--format result` and `--json-schema`
 gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
-(steps, cost and tokens of this run) and `truncated` (the last step stopped at the output limit, which also prints a
-warning). A `--max-cost` that the model's missing price cannot check fails the run with subtype `error` instead of
-running without a bound. If the server does not echo the limits back, because it is an older version that drops fields it
-does not know, the run interrupts its session and fails with a version error rather than run unbounded.
+(the steps, cost and tokens of this session's own responses to the prompt, read from the stored messages when the run
+ends, so a subagent's spend is not in it; a response that failed part way adds its spend but is not a step) and
+`truncated` (the last step stopped at the output limit, even when a limit then ended the run, which also prints a
+warning). With `--format json` and `stream-json` the `error` line of a run that stopped at a limit carries the same
+`subtype`. A `--max-cost` that the model's missing price cannot check fails the run with the session error type
+`limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
+turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
+of a printed run. If the server does not echo the limits back, because it is an older version that drops fields it does
+not know, the run asks the server to interrupt its session and fails with a version error. That interruption does
+nothing for a session that is idle or not yet running, so on such a server the prompt can still run without its limits.
 
 Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
 now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and

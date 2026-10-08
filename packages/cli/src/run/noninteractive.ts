@@ -121,7 +121,8 @@ export async function runNonInteractivePrompt(input: Input) {
   const replaced = new Set<string>()
   // Notices that were already shown, so the history does not show again what the events did.
   const shown = new Set<string>()
-  // What this session spent, from its own steps; and how the last step finished, for the truncation warning.
+  // What this session's own responses to this prompt spent (not its subagents'), read from the projected messages when
+  // the run ends; and how the last step finished, for the truncation warning.
   const spent = { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
   let lastFinish: string | undefined
   let limit: SessionStructuredError | undefined
@@ -190,6 +191,8 @@ export async function runNonInteractivePrompt(input: Input) {
     emit("notice", time, { notice: notice.notice, replaces: notice.replaces })
   }
 
+  // The output-escalation notice above prints no line and carries no message even when it has a description: a program
+  // reads it to drop the replaced text, and loop-robustness-16 decides whether to word it for a person.
   // A message that the runner records for the person to read, such as a switch to the fallback model, names its kind in
   // `metadata.notice` and says what happened in its description. A reminder only the model reads has no description,
   // and prints nothing. The text comes from the runner but can quote a file, so it is written out as `progress` does.
@@ -635,15 +638,6 @@ export async function runNonInteractivePrompt(input: Input) {
       }
 
       if (event.type === "session.step.ended") {
-        if (event.data.sessionID === input.sessionID) {
-          spent.steps += 1
-          spent.cost += event.data.cost
-          spent.input += event.data.tokens.input
-          spent.output += event.data.tokens.output
-          spent.reasoning += event.data.tokens.reasoning
-          spent.cacheRead += event.data.tokens.cache.read
-          spent.cacheWrite += event.data.tokens.cache.write
-        }
         flushStep()
         endStep(event.data.assistantMessageID, event.data.finish)
         const part = {
@@ -660,15 +654,6 @@ export async function runNonInteractivePrompt(input: Input) {
         continue
       }
       if (event.type === "session.step.failed") {
-        if (event.data.sessionID === input.sessionID) {
-          spent.steps += 1
-          spent.cost += event.data.cost ?? 0
-          spent.input += event.data.tokens?.input ?? 0
-          spent.output += event.data.tokens?.output ?? 0
-          spent.reasoning += event.data.tokens?.reasoning ?? 0
-          spent.cacheRead += event.data.tokens?.cache.read ?? 0
-          spent.cacheWrite += event.data.tokens?.cache.write ?? 0
-        }
         if (input.compatibility === "v1" && event.data.error.message === "The provider response ended unexpectedly.") {
           pendingStep = undefined
           v1InvalidOutput = true
@@ -697,7 +682,8 @@ export async function runNonInteractivePrompt(input: Input) {
           emittedError = true
           process.exitCode = 1
           failure = event.data.error.message
-          if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
+          if (!emit("error", time, { subtype: subtype({ failed: true, interrupted: false, limit }), error: event.data.error }))
+            UI.error(event.data.error.message)
         }
         return
       }
@@ -746,12 +732,21 @@ export async function runNonInteractivePrompt(input: Input) {
 
   const reconcile = async () => {
     const projected = await projectedMessages()
+    Object.assign(spent, { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
     for (const message of projected.messages) {
       if (message.type === "synthetic") {
         replace(message.metadata, message.description, message.time.created)
         continue
       }
       if (message.type !== "assistant") continue
+      // A response that failed part way is not a step, though what it spent counts, as the server counts them.
+      if (message.finish !== undefined && message.finish !== "error") spent.steps += 1
+      spent.cost += message.cost ?? 0
+      spent.input += message.tokens?.input ?? 0
+      spent.output += message.tokens?.output ?? 0
+      spent.reasoning += message.tokens?.reasoning ?? 0
+      spent.cacheRead += message.tokens?.cache.read ?? 0
+      spent.cacheWrite += message.tokens?.cache.write ?? 0
       const timestamp = message.time.completed ?? message.time.created
       let textOrdinal = 0
       let reasoningOrdinal = 0
@@ -938,7 +933,8 @@ export async function runNonInteractivePrompt(input: Input) {
       await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
       controller.abort()
       await completed?.catch(() => {})
-      if (!emit("error", Date.now(), { error: { type: "version-mismatch", message: failure } })) UI.error(failure)
+      if (!emit("error", Date.now(), { subtype: "error", error: { type: "version-mismatch", message: failure } }))
+        UI.error(failure)
       return
     }
     if (interrupted) await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
@@ -992,7 +988,7 @@ export async function runNonInteractivePrompt(input: Input) {
     release()
     const failed = !reachedEnd || emittedError || interrupted || permissionRejected || formCancelled
     // A run that stopped at the output limit has an answer that ends in the middle; say so rather than pass it off.
-    const truncated = !failed && lastFinish === "length"
+    const truncated = lastFinish === "length"
     if (truncated) {
       const message = "The answer was cut off by the output limit."
       if (!emit("notice", Date.now(), { notice: "truncated", message }) && input.format !== "result")
@@ -1005,7 +1001,7 @@ export async function runNonInteractivePrompt(input: Input) {
         text: answer.join("\n\n"),
         failed,
         schema: input.jsonSchema,
-        subtype: subtype({ failed, interrupted, limit, spent, maxCost: input.turn?.maxCost }),
+        subtype: subtype({ failed, interrupted, limit }),
         usage: spent,
         truncated,
         error: failure,
@@ -1120,19 +1116,18 @@ function writeResult(input: {
   truncated: boolean
   error: string | undefined
 }) {
-  const { sessionID, text, failed, schema } = input
-  const unfenced = text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
-  const parsed = schema === undefined ? undefined : parseJson(unfenced)
-  const invalid = schema !== undefined && parsed === undefined
-  if (failed || invalid) process.exitCode = 1
+  const unfenced = input.text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
+  const parsed = input.schema === undefined ? undefined : parseJson(unfenced)
+  const invalid = input.schema !== undefined && parsed === undefined
+  if (input.failed || invalid) process.exitCode = 1
   resultWritten = true
   process.stdout.write(
     jsonLine({
       type: "result",
-      sessionID,
-      is_error: failed || invalid,
-      subtype: invalid && !failed ? "error" : input.subtype,
-      result: text,
+      sessionID: input.sessionID,
+      is_error: input.failed || invalid,
+      subtype: invalid && !input.failed ? "error" : input.subtype,
+      result: input.text,
       usage: {
         steps: input.usage.steps,
         cost: input.usage.cost,
@@ -1159,20 +1154,14 @@ const decodeEscalation = Schema.decodeUnknownOption(
 
 const decodeNotice = Schema.decodeUnknownOption(Schema.Struct({ notice: Schema.String }))
 
-// The limit that ended the run names its result subtype. A cost limit that stopped a run which had not spent that much
-// is the server saying that the spend cannot be counted (the model has no price), which is not a limit that was reached.
-function subtype(input: {
-  failed: boolean
-  interrupted: boolean
-  limit: SessionStructuredError | undefined
-  spent: { cost: number }
-  maxCost: number | undefined
-}) {
+// The limit that ended the run names its result subtype. `limit.cost-unknown` is the server refusing a cost limit it
+// cannot count, which is a plain error, not a limit that was reached.
+function subtype(input: { failed: boolean; interrupted: boolean; limit: SessionStructuredError | undefined }) {
   if (input.interrupted) return "interrupted"
-  if (input.limit?.type === "limit.steps") return "error_max_steps"
-  if (input.limit?.type === "limit.tokens") return "error_max_tokens"
-  if (input.limit?.type === "limit.cost")
-    return input.maxCost === undefined || input.spent.cost >= input.maxCost ? "error_max_cost" : "error"
+  const type = input.limit?.type
+  if (type === "limit.steps") return "error_max_steps"
+  if (type === "limit.tokens") return "error_max_tokens"
+  if (type === "limit.cost") return "error_max_cost"
   return input.failed ? "error" : "success"
 }
 

@@ -129,6 +129,10 @@ describe("acp turn translation", () => {
     // Any other execution failure is still a failure.
     const other = started(failed(root, { type: "provider.stream", message: "x" }))
     expect(ACPTranslate.failure(other.state)).toMatchObject({ errorName: "provider.stream" })
+    // A cost limit that cannot be counted was refused, not reached.
+    const unknown = started(failed(root, { type: "limit.cost-unknown", message: "No price." }))
+    expect(ACPTranslate.failure(unknown.state)).toMatchObject({ errorName: "limit.cost-unknown" })
+    expect(ACPTranslate.response(unknown.state, root, "failed").stopReason).not.toBe("max_turn_requests")
   })
 
   test("forwards any synthetic message that names a notice, and none that does not", () => {

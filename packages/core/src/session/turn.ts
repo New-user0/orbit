@@ -266,7 +266,8 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
 })
 
 /**
- * The limit the turn has reached, as the error that ends it, or undefined when it may go on. A cost limit that cannot
+ * The limit the turn has reached, as the error that ends it (`limit.cost-unknown` when a cost limit cannot be checked,
+ * which is a refusal rather than a limit that was reached), or undefined when it may go on. A cost limit that cannot
  * be checked against a price fails here instead of reading missing spend as free: `priced` says whether the model about
  * to run has a price, and `spent.unknown` whether anything already spent lacks one.
  */
@@ -278,12 +279,12 @@ export function exceeded(options: Options, spent: Usage, priced: boolean) {
     }
   if (options.maxCost !== undefined && !priced)
     return {
-      type: "limit.cost",
+      type: "limit.cost-unknown",
       message: `The turn has a cost limit of $${options.maxCost}, but the model has no price, so its spend cannot be counted.`,
     }
   if (options.maxCost !== undefined && spent.unknown > 0)
     return {
-      type: "limit.cost",
+      type: "limit.cost-unknown",
       message: `The turn has a cost limit of $${options.maxCost}, but ${spent.unknown} of its responses or usage records carried no usable cost, so its spend cannot be counted.`,
     }
   if (options.maxCost !== undefined && spent.cost >= options.maxCost)

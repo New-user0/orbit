@@ -26,6 +26,10 @@ export default Runtime.handler(Commands, (input) =>
       ["--agent", Option.isSome(input.agent)],
       ["--bare", input.bare],
       ["--thinking", input.thinking],
+      ["--max-steps", Option.isSome(input.maxSteps)],
+      ["--max-cost", Option.isSome(input.maxCost)],
+      ["--max-tokens", Option.isSome(input.maxTokens)],
+      ["--fallback-model", Option.isSome(input.fallbackModel)],
     ].flatMap(([flag, given]) => (given ? [flag] : []))
     if (printOnly.length > 0)
       return yield* Effect.fail(new Error(`${printOnly.join(", ")} can only be used with -p, as in: orb -p <message>`))

@@ -382,7 +382,9 @@ export function failure(state: TurnState) {
 }
 
 function limited(state: TurnState) {
-  return state.executionError?.type.startsWith("limit.") === true
+  // A cost limit that cannot be checked (`limit.cost-unknown`) is a refusal, not a limit that was reached.
+  const type = state.executionError?.type
+  return type === "limit.steps" || type === "limit.cost" || type === "limit.tokens"
 }
 
 export function response(state: TurnState, sessionID: string, terminal: Terminal): PromptResponse {

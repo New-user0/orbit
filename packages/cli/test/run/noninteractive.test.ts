@@ -217,9 +217,10 @@ function permissionAsked(action: string, resources: string[]): V2Event {
 // What the server projects for an assistant message, for a run that reads its history instead of its events.
 function assistant(
   id: string,
-  finish: "stop" | "length" | undefined,
+  finish: "stop" | "length" | "tool-calls" | "error" | undefined,
   text?: string,
   error?: { type: string; message: string },
+  spent?: { cost: number; tokens: number },
 ): SessionMessageInfo {
   return {
     id,
@@ -229,6 +230,9 @@ function assistant(
     content: text === undefined ? [] : [{ type: "text", text }],
     ...(finish ? { finish } : {}),
     ...(error ? { error } : {}),
+    ...(spent
+      ? { cost: spent.cost, tokens: { input: spent.tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+      : {}),
     time: { created: 2, completed: 3 },
   }
 }
@@ -504,11 +508,11 @@ async function record(input: Parameters<typeof run>[0] & { tty?: boolean }) {
     return true
   })
   try {
-    const error = await run(input).then(
-      () => undefined,
-      (thrown) => thrown,
+    const outcome = await run(input).then(
+      (sdk) => ({ sdk, error: undefined }),
+      (thrown) => ({ sdk: undefined, error: thrown }),
     )
-    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode, error }
+    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode, ...outcome }
   } finally {
     process.exitCode = exitCode ?? 0
     Object.defineProperty(process.stdout, "isTTY", { value: isTTY, configurable: true, writable: true })
@@ -1704,7 +1708,10 @@ reportRunError({ format: "result" }, ${JSON.stringify(hostile)}, "ses_1")`
       type: "result",
       sessionID: "ses_1",
       is_error: true,
+      subtype: "error",
       result: "",
+      usage: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+      truncated: false,
       error: hostile,
     })
   })
@@ -1758,12 +1765,18 @@ describe("runNonInteractivePrompt limits and results", () => {
   )
 
   test("a server that does not echo the limits has its session interrupted", async () => {
-    let sdk: Awaited<ReturnType<typeof run>> | undefined
-    await record({ turn: twoSteps, options, admit: false })
-    sdk = await run({ turn: twoSteps, options, admit: false }).catch(() => undefined)
-    process.exitCode = 0
-    expect(sdk?.session.interrupt).toHaveBeenCalledTimes(1)
+    const output = await record({ turn: twoSteps, options, admit: false })
+    expect(output.sdk?.session.interrupt).toHaveBeenCalledTimes(1)
+    expect(output.exitCode).toBe(1)
   })
+
+  // The two responses of `twoSteps` as the server projects them, which is where the result takes its usage from.
+  const twoStepHistory = history(
+    assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.25, tokens: 10 }),
+    assistant("msg_two", "stop", "Done.", undefined, { cost: 0.15, tokens: 5 }),
+  )
+  const oneStepHistory = (cost: number) =>
+    history(assistant("msg_one", "tool-calls", undefined, undefined, { cost, tokens: 10 }))
 
   test.each([
     ["limit.steps", "error_max_steps"],
@@ -1774,48 +1787,87 @@ describe("runNonInteractivePrompt limits and results", () => {
       format: "result",
       options: { maxSteps: 1, maxCost: 0.5, maxTokens: 10 },
       turn: limitFailure(type),
+      messages: oneStepHistory(0.75),
     })
     expect(JSON.parse(output.stdout)).toMatchObject({
       is_error: true,
       subtype,
       error: "The turn reached its limit.",
-      usage: { steps: 1 },
+      usage: { steps: 1, cost: 0.75 },
     })
     expect(output.exitCode).toBe(1)
   })
 
-  test("a cost limit that stopped a run which had not spent that much is a plain error", async () => {
+  // The server counts subagents and compaction spend too, so the root session's own spend can be below the limit.
+  test("a cost limit is reached whatever the root session's own responses cost", async () => {
     const output = await capture({
       format: "result",
       options: { maxCost: 0.5 },
-      turn: (id) => [prompted(id), executionFailed("The model has no price.", "limit.cost")],
+      turn: limitFailure("limit.cost", "The turn reached its cost limit of $0.5 after spending $0.6100."),
+      messages: oneStepHistory(0.3),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true, subtype: "error_max_cost", usage: { cost: 0.3 } })
+  })
+
+  test("a cost limit that the server cannot count is a plain error", async () => {
+    const output = await capture({
+      format: "result",
+      options: { maxCost: 0.5 },
+      turn: (id) => [prompted(id), executionFailed("The model has no price.", "limit.cost-unknown")],
     })
     expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true, subtype: "error" })
     expect(output.exitCode).toBe(1)
   })
 
-  test("a limit failure is an error in the other formats too", async () => {
-    const lines = await capture({ format: "stream-json", turn: limitFailure("limit.steps", "Reached 1 step.") })
-    expect(events(lines.stdout).filter((event) => event.type === "error")).toEqual([
-      expect.objectContaining({ error: { type: "limit.steps", message: "Reached 1 step." } }),
-    ])
-    const text = await capture({ turn: limitFailure("limit.steps", "Reached 1 step.") })
-    expect(text.stderr).toContain("Reached 1 step.")
+  test.each([
+    ["limit.steps", "error_max_steps"],
+    ["limit.cost", "error_max_cost"],
+    ["limit.cost-unknown", "error"],
+  ])("a %s failure carries the subtype %s on its error line in json and stream-json", async (type, subtype) => {
+    for (const format of ["json", "stream-json"] as const) {
+      const lines = await capture({ format, turn: limitFailure(type, "Reached it.") })
+      expect(events(lines.stdout).filter((event) => event.type === "error")).toEqual([
+        expect.objectContaining({ subtype, error: { type, message: "Reached it." } }),
+      ])
+    }
+    const text = await capture({ turn: limitFailure(type, "Reached it.") })
+    expect(text.stderr).toContain("Reached it.")
     expect(text.exitCode).toBe(1)
   })
 
+  test("a version error carries the subtype error in json", async () => {
+    const output = await capture({ turn: twoSteps, options, admit: false, format: "json" })
+    expect(events(output.stdout)[0]).toMatchObject({ type: "error", subtype: "error" })
+  })
+
   test("a successful run has the subtype success and counts its steps and tokens", async () => {
-    const output = await capture({ format: "result", options, turn: twoSteps })
+    const output = await capture({ format: "result", options, turn: twoSteps, messages: twoStepHistory })
     expect(JSON.parse(output.stdout)).toEqual({
       type: "result",
       sessionID: "ses_1",
       is_error: false,
       subtype: "success",
       result: "Done.",
-      usage: { steps: 2, cost: 0, tokens: { input: 2, output: 2, reasoning: 0, cache: { read: 0, write: 0 } } },
+      usage: { steps: 2, cost: 0.4, tokens: { input: 15, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
       truncated: false,
     })
     expect(output.exitCode).toBe(0)
+  })
+
+  test("usage counts the responses of the history even when the events fell behind, and not a failed partial step", async () => {
+    const output = await capture({
+      format: "result",
+      turn: (id) => [prompted(id), settled()],
+      messages: history(
+        assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.2, tokens: 10 }),
+        assistant("msg_two", "error", undefined, { type: "provider.stream", message: "cut" }, { cost: 0.1, tokens: 4 }),
+        assistant("msg_three", "stop", "Done.", undefined, { cost: 0.2, tokens: 6 }),
+      ),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      subtype: "success",
+      usage: { steps: 2, cost: 0.5, tokens: { input: 20 } },
+    })
   })
 
   test("a final step that stopped at the output limit warns and sets truncated, and the run still succeeds", async () => {
@@ -1848,6 +1900,22 @@ describe("runNonInteractivePrompt limits and results", () => {
       ],
     })
     expect(continued.stderr).not.toContain("cut off")
+  })
+
+  test("a limit that stops the run right after a step cut off by the output limit still sets truncated", async () => {
+    const output = await capture({
+      format: "result",
+      options: { maxSteps: 1 },
+      turn: (id) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        textEnded("msg_one", "The answer is forty-tw"),
+        stepEnded("msg_one", "length"),
+        executionFailed("Reached 1 step.", "limit.steps"),
+      ],
+      messages: history(assistant("msg_one", "length", "The answer is forty-tw", undefined, { cost: 0, tokens: 3 })),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ subtype: "error_max_steps", truncated: true })
   })
 
   describe("notices", () => {

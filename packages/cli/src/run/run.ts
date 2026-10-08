@@ -270,7 +270,16 @@ export function reportRunError(input: Pick<RunCommandInput, "format">, message: 
   if (input.format === "result") {
     if (wroteResult()) return
     process.stdout.write(
-      jsonLine({ type: "result", sessionID: sessionID ?? "", is_error: true, result: "", error: message }) + "\n",
+      jsonLine({
+        type: "result",
+        sessionID: sessionID ?? "",
+        is_error: true,
+        subtype: "error",
+        result: "",
+        usage: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+        truncated: false,
+        error: message,
+      }) + "\n",
     )
     return
   }
@@ -280,6 +289,7 @@ export function reportRunError(input: Pick<RunCommandInput, "format">, message: 
         type: "error",
         timestamp: Date.now(),
         sessionID: sessionID ?? "",
+        subtype: "error",
         error: { type: "unknown", message },
       }) + "\n",
     )
