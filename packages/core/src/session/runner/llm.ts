@@ -40,15 +40,20 @@ const RESUME_AFTER_OUTPUT_LIMIT =
   "Your last response stopped because it reached the output limit. Resume exactly where it stopped, without repeating what you already wrote. If you were writing a tool call, issue it again in full."
 const MAX_OUTPUT_RECOVERIES = 3
 
-/** Resume notices since the last response that did not hit the limit; read from history so a new drain keeps the count. */
-const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>) => {
-  let count = 0
-  for (const message of messages.toReversed()) {
-    if (message.type === "user" || message.type === "idle") break
-    if (message.type === "assistant" && message.finish !== "length") break
-    if (message.type === "synthetic" && message.metadata?.notice === "output-limit") count++
-  }
-  return count
+/**
+ * Resume notices since the last response that did not hit the limit; read from history. `current` is the in-flight
+ * assistant (a retry or recovery reuses it, and it has no finish yet), so it must not end the streak.
+ */
+const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>, current: SessionMessage.ID) => {
+  const stop = messages.findLastIndex(
+    (message) =>
+      message.type === "user" ||
+      message.type === "idle" ||
+      (message.type === "assistant" && message.id !== current && message.finish !== "length"),
+  )
+  return messages
+    .slice(stop + 1)
+    .filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit").length
 }
 
 const layer = Layer.effect(
@@ -297,7 +302,8 @@ const layer = Layer.effect(
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
-            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return outcome.needsContinuation
+            if (outputLimitStreak(loaded.messages, assistantMessageID) >= MAX_OUTPUT_RECOVERIES)
+              return outcome.needsContinuation
             yield* bus.publish(SessionEvent.Synthetic, {
               sessionID,
               text: RESUME_AFTER_OUTPUT_LIMIT,

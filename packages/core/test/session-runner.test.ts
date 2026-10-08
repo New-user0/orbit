@@ -7016,6 +7016,7 @@ describe("SessionRunnerLLM", () => {
       content: [{ type: "text", text: "Part 1" }],
     })
     expect(s.requests[1]?.messages.at(-1)).toMatchObject({ role: "user" })
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
     const context = yield* s.context
     expect(context).toMatchObject([
       Expected.user("Write a long answer"),
@@ -7069,6 +7070,7 @@ describe("SessionRunnerLLM", () => {
         { reason: { normalized: "length", raw: "max_tokens" } },
         LLMEvent.toolInputStart({ id: "call-cut", name: "echo" }),
         LLMEvent.toolInputDelta({ id: "call-cut", name: "echo", text: '{"text":"par' }),
+        LLMEvent.toolCall({ id: "call-cut", name: "echo", input: { text: "par" }, partialInput: true }),
       ),
       TestLLM.tool("call-whole", "echo", { text: "whole" }),
       TestLLM.text("Done", "cut-done"),
@@ -7088,6 +7090,57 @@ describe("SessionRunnerLLM", () => {
       content: [{ type: "tool", id: "call-cut", state: { status: "error", error: { type: "tool.input-truncated" } } }],
     })
     expect(context[2]).toMatchObject(OUTPUT_LIMIT_NOTICE)
+  })
+
+  scenario("keeps counting the output-limit streak across a retried request", function* (s) {
+    yield* s.admit("Limits with a failure")
+    yield* s.llm.push(lengthStop("retry-1", "1"), lengthStop("retry-2", "2"), lengthStop("retry-3", "3"))
+    yield* s.llm.push(Stream.fail(providerUnavailable()))
+    yield* s.llm.push(lengthStop("retry-4", "4"), lengthStop("retry-5", "5"), lengthStop("retry-6", "6"))
+
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust(FIRST_RETRY)
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(5)
+    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+  })
+
+  scenario("resumes in the same step when the agent has steps left", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 2
+      }),
+    )
+    yield* s.admit("Two steps")
+    yield* s.llm.push(lengthStop("steps-1", "A"), TestLLM.text("B", "steps-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests.map((request) => request.toolChoice?.type)).not.toContain("none")
+  })
+
+  scenario("starts a fresh output-limit streak after a new prompt", function* (s) {
+    yield* s.admit("First")
+    yield* s.llm.push(
+      lengthStop("new-1", "1"),
+      lengthStop("new-2", "2"),
+      lengthStop("new-3", "3"),
+      lengthStop("new-4", "4"),
+    )
+    yield* s.resume
+    expect(s.requests).toHaveLength(4)
+
+    yield* s.admit("Second")
+    yield* s.llm.push(lengthStop("new-5", "5"), TestLLM.text("Done", "new-done"))
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
   })
 
   scenario("keeps tools disabled while resuming on the agent's final step", function* (s) {

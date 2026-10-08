@@ -1055,7 +1055,8 @@ rebuilt the arguments from the half-written text and ran the tool with them, so 
 `content` wrote a truncated file. Routes that close each call before the finish reason arrives did this. A call rebuilt
 from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
 any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped:
-the tool does not run, and the response ends with an input that was started and never called. A call whose arguments
+the tool does not run, and the input is recorded as failed with `tool.input-truncated` (a cut-off by the output limit is
+then resumed, see "A response cut off by the output limit is resumed"). A call whose arguments
 arrived complete is not affected, and still runs when a later call in the same response was cut off. A call that
 stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
 still runs with empty arguments.
@@ -1075,8 +1076,7 @@ session now retries or continues instead of treating as finished. It also affect
 call back until the response finishes and drop it unless the finish is `tool-calls` or `stop`, and `TestLLM` follows the
 same rule for scripted responses.
 
-**What to do:** nothing. To carry on after a cut-off, send a follow-up message, and if a large write keeps being cut
-off, ask the model to split it.
+**What to do:** nothing. If a large write keeps being cut off, ask the model to split it.
 
 ### Overloaded providers are classified, and an overload sent as a 429 is no longer a rate limit
 
@@ -1233,9 +1233,9 @@ when the names collide both appear in autocomplete.
 When a model response stops because it reached its output limit, Orbit now adds a short hidden note asking the model to
 resume where it stopped and sends the request again, up to three times in a row. Before, the turn ended with the cut-off
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
-`tool.input-truncated`, so the model learns it did not run and can issue it again in full. After the third consecutive
-cut-off the response stays as it is. The count comes from the session history, so it survives a restart, and it starts
-over after any response that finishes normally.
+`tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
+the next cut-off stays as it is. The count comes from the session history and starts over after any response that
+finishes normally and after a new message from you.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
