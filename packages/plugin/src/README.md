@@ -140,10 +140,10 @@ await ctx.tool.transform((tools) => {
 })
 ```
 
-`options.codemode` decides how the model gets the tool. `false`, as above, advertises it in every request. Leaving it
-out, or `true`, defers it: the model finds the tool through Code Mode's catalog and `search` and calls it from a
-program. `pinned: true` on a deferred tool also keeps it listed in the catalog that the model sees first, however much
-the catalog leaves out to fit its budget.
+`options.codemode` decides how the model gets the tool. `false`, as above, advertises it directly in the request.
+Leaving it out, or `true`, defers it: the model finds the tool through Code Mode's catalog and `search` and calls it
+from a program. `pinned: true` on a deferred tool also keeps it listed in the catalog that the model sees first,
+however much the catalog leaves out to fit its budget.
 
 A tool can also declare `traits`: what it tells Orbit about itself beyond its schemas. `readOnly`, `concurrencySafe` and
 `destructive` are a boolean or a function of the decoded input that answers with a boolean or a Promise of one. The rest
