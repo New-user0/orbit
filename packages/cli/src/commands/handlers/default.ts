@@ -1,7 +1,7 @@
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { run } from "@orbit/tui"
-import { Commands } from "../commands"
+import { Commands, PrintParamKeys } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Config } from "../../config"
 import { Context, Effect, FileSystem, Option, Queue } from "effect"
@@ -17,20 +17,12 @@ import { errorMessage } from "../../util/error"
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
     // The flags of a printed run mean nothing to the interface, so say so instead of dropping them.
-    const printOnly = [
-      ["--output-format", Option.isSome(input.outputFormat)],
-      ["--json-schema", Option.isSome(input.jsonSchema)],
-      ["--file", input.file.length > 0],
-      ["--title", Option.isSome(input.title)],
-      ["--model", Option.isSome(input.model)],
-      ["--agent", Option.isSome(input.agent)],
-      ["--bare", input.bare],
-      ["--thinking", input.thinking],
-      ["--max-steps", Option.isSome(input.maxSteps)],
-      ["--max-cost", Option.isSome(input.maxCost)],
-      ["--max-tokens", Option.isSome(input.maxTokens)],
-      ["--fallback-model", Option.isSome(input.fallbackModel)],
-    ].flatMap(([flag, given]) => (given ? [flag] : []))
+    // Derived from the printed run's own flags, so a flag added there cannot slip past this check.
+    const printOnly = PrintParamKeys.filter((key) => {
+      const value: unknown = input[key]
+      if (Option.isOption(value)) return Option.isSome(value)
+      return Array.isArray(value) ? value.length > 0 : value === true
+    }).map((key) => `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`)
     if (printOnly.length > 0)
       return yield* Effect.fail(new Error(`${printOnly.join(", ")} can only be used with -p, as in: orb -p <message>`))
     const requestedDirectory = Option.getOrUndefined(input.directory)

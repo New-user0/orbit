@@ -1918,8 +1918,93 @@ describe("runNonInteractivePrompt limits and results", () => {
     expect(JSON.parse(output.stdout)).toMatchObject({ subtype: "error_max_steps", truncated: true })
   })
 
+  describe("when the event that ended the run trails the history", () => {
+    // The wait answers at once and the history holds the response, but the limit event arrives later.
+    const late = (type: string) => ({
+      wait: () => Promise.resolve(),
+      terminalDelay: 50,
+      turn: limitFailure(type, "Reached it."),
+      messages: oneStepHistory(0.75),
+    })
+
+    test.each(["result", "json", "stream-json"] as const)("a limit stop is not written as a success in %s", async (format) => {
+      const output = await capture({ ...late("limit.steps"), format })
+      expect(output.exitCode).toBe(1)
+      if (format === "result")
+        return expect(JSON.parse(output.stdout)).toMatchObject({
+          is_error: true,
+          subtype: "error_max_steps",
+          error: "Reached it.",
+        })
+      expect(events(output.stdout).filter((event) => event.type === "error")).toEqual([
+        expect.objectContaining({ subtype: "error_max_steps" }),
+      ])
+    })
+
+    test("a run whose history ends in a failed idle marker is a failure even when no event says why", async () => {
+      const output = await capture({
+        format: "result",
+        turn: (id) => [prompted(id), stepStarted("msg_one"), stepEnded("msg_one"), settled()],
+        messages: (id) => [
+          { id: "msg_idle", type: "idle", outcome: "failed", time: { created: 4 } },
+          ...oneStepHistory(0.1)(id),
+        ],
+      })
+      expect(JSON.parse(output.stdout)).toMatchObject({ is_error: true, subtype: "error" })
+      expect(output.exitCode).toBe(1)
+    })
+  })
+
+  test("usage does not count a response that finished in an unknown way as a step", async () => {
+    const output = await capture({
+      format: "result",
+      turn: (id) => [prompted(id), settled()],
+      messages: history(
+        { ...assistant("msg_one", undefined, undefined, undefined, { cost: 0.1, tokens: 1 }), finish: "unknown" } as never,
+        assistant("msg_two", "stop", "Done.", undefined, { cost: 0.1, tokens: 1 }),
+      ),
+    })
+    expect(JSON.parse(output.stdout)).toMatchObject({ usage: { steps: 1, cost: 0.2 } })
+  })
+
+  test("a truncated answer warns on stderr in the result format too", async () => {
+    const output = await capture({
+      format: "result",
+      turn: (id) => [prompted(id), stepStarted("msg_one"), textEnded("msg_one", "forty-tw"), stepEnded("msg_one", "length"), settled()],
+    })
+    expect(output.stderr).toContain("The answer was cut off by the output limit.")
+    expect(JSON.parse(output.stdout)).toMatchObject({ truncated: true })
+  })
+
+  test.each(["json", "stream-json"] as const)("every error line of a run carries a subtype in %s", async (format) => {
+    const lines = async (input: Parameters<typeof capture>[0]) =>
+      events((await capture({ ...input, format })).stdout).filter((event) => event.type === "error")
+    // A step failure that nothing recovered, a non-user interruption and a prompt the server never promoted.
+    expect(await lines({ turn: (id) => [prompted(id), stepStarted("msg_one"), stepFailed("cut", "msg_one"), settled()] })).toEqual([
+      expect.objectContaining({ subtype: "error" }),
+    ])
+    expect(await lines({ turn: (id) => [prompted(id), settled("interrupted", "shutdown")] })).toEqual([
+      expect.objectContaining({ subtype: "error" }),
+    ])
+    expect(
+      await lines({
+        turn: (id) => [prompted(id), settled()],
+        messages: () => [],
+      }),
+    ).toEqual([expect.objectContaining({ subtype: "error" })])
+  })
+
   describe("notices", () => {
     const notice = (name: string, description?: string): V2Event => escalation({ notice: name }, description)
+
+    test("two notices with the same words both print", async () => {
+      const again = { ...notice("stop-hook", "Same words."), id: "evt_second" }
+      const lines = await capture({
+        format: "json",
+        turn: (id) => [prompted(id), notice("stop-hook", "Same words."), again, settled()],
+      })
+      expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(2)
+    })
 
     test("a fallback notice prints one warning line in the default format and one notice line in stream-json", async () => {
       const turn = (id: string) => [prompted(id), notice("fallback", "Switched to test/backup."), settled()]
@@ -1959,7 +2044,7 @@ describe("runNonInteractivePrompt limits and results", () => {
       const lines = await capture({
         format: "stream-json",
         turn: (id) => [prompted(id), notice("fallback", "Switched."), settled()],
-        messages: history(synthetic("msg_notice", { notice: "fallback" }, "Switched.")),
+        messages: history(synthetic("msg_escalation", { notice: "fallback" }, "Switched.")),
       })
       expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(1)
     })

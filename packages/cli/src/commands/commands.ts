@@ -102,6 +102,8 @@ const PrintParams = {
   agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
 }
 
+export const PrintParamKeys = Object.keys(PrintParams) as ReadonlyArray<keyof typeof PrintParams>
+
 const SessionParams = {
   continue: Flag.boolean("continue").pipe(
     Flag.withAlias("c"),

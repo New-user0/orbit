@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
 import { scriptedModel } from "./fixture/scripted-model"
+import { PrintParamKeys } from "../src/commands/commands"
 
 // `orb -p` against a real private server and a scripted model. Every run is a child process of src/index.ts, so the
 // argv classification, the Print spec and the handler are the ones a user reaches.
@@ -155,3 +156,11 @@ test("a flag of a printed run without -p is a usage error", async () => {
   }
   expect(model.requests.length).toBe(before)
 }, 300_000)
+
+test("the list of printed-run flags covers every flag the root command lists for -p", () => {
+  const listed = new Set(printedRunFlags.map(([flag]) => flag))
+  const missing = PrintParamKeys.map((key) => `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`).filter(
+    (flag) => !listed.has(flag),
+  )
+  expect(missing).toEqual([])
+})

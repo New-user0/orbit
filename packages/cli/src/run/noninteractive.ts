@@ -119,7 +119,7 @@ export async function runNonInteractivePrompt(input: Input) {
   // The assistant messages whose step ended at the output limit, and the ones that a notice replaced.
   const lengthMessages = new Set<string>()
   const replaced = new Set<string>()
-  // Notices that were already shown, so the history does not show again what the events did.
+  // Messages of notices that were already shown, so the history does not show again what the events did.
   const shown = new Set<string>()
   // What this session's own responses to this prompt spent (not its subagents'), read from the projected messages when
   // the run ends; and how the last step finished, for the truncation warning.
@@ -182,9 +182,9 @@ export async function runNonInteractivePrompt(input: Input) {
 
   // The runner raised the output limit and is answering again from the start. What the cut-off attempt wrote is
   // dropped from the answer, and a program that reads the JSON lines is told which message to drop.
-  const replace = (metadata: unknown, description: string | undefined, time: number) => {
+  const replace = (id: string, metadata: unknown, description: string | undefined, time: number) => {
     const notice = Option.getOrUndefined(decodeEscalation(metadata))
-    if (!notice) return showNotice(metadata, description, time)
+    if (!notice) return showNotice(id, metadata, description, time)
     discard(notice.replaces)
     if (replaced.has(notice.replaces)) return
     replaced.add(notice.replaces)
@@ -196,12 +196,12 @@ export async function runNonInteractivePrompt(input: Input) {
   // A message that the runner records for the person to read, such as a switch to the fallback model, names its kind in
   // `metadata.notice` and says what happened in its description. A reminder only the model reads has no description,
   // and prints nothing. The text comes from the runner but can quote a file, so it is written out as `progress` does.
-  const showNotice = (metadata: unknown, description: string | undefined, time: number) => {
+  const showNotice = (id: string, metadata: unknown, description: string | undefined, time: number) => {
     const notice = Option.getOrUndefined(decodeNotice(metadata))
     if (!notice || !description) return
-    const key = `${notice.notice}\u0000${description}`
-    if (shown.has(key)) return
-    shown.add(key)
+    // Keyed by the message, which the event and the history share, so two notices with the same words both print.
+    if (shown.has(id)) return
+    shown.add(id)
     if (emit("notice", time, { notice: notice.notice, message: description })) return
     UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL + progress(description))
   }
@@ -225,7 +225,7 @@ export async function runNonInteractivePrompt(input: Input) {
     if (!failure || emittedError || permissionRejected || formCancelled) return
     emittedError = true
     process.exitCode = 1
-    if (!emit("error", failure.time, { error: failure.error })) UI.error(failure.error.message)
+    if (!emit("error", failure.time, { subtype: "error", error: failure.error })) UI.error(failure.error.message)
   }
 
   const writeText = (part: { messageID: string; text: string; [key: string]: unknown }, timestamp: number) => {
@@ -668,7 +668,7 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         emittedError = true
         process.exitCode = 1
-        if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
+        if (!emit("error", time, { subtype: "error", error: event.data.error })) UI.error(event.data.error.message)
         continue
       }
       if (event.type === "session.execution.failed") {
@@ -697,7 +697,7 @@ export async function runNonInteractivePrompt(input: Input) {
           emittedError = true
           process.exitCode = 1
           const error = { type: "aborted" as const, message: `Session interrupted: ${event.data.reason}` }
-          if (!emit("error", time, { error })) UI.error(error.message)
+          if (!emit("error", time, { subtype: "error", error })) UI.error(error.message)
         }
         return
       }
@@ -706,7 +706,7 @@ export async function runNonInteractivePrompt(input: Input) {
         return
       }
       if (event.type === "session.synthetic") {
-        if (input.compatibility !== "v1") replace(event.data.metadata, event.data.description, time)
+        if (input.compatibility !== "v1") replace(event.id.replace(/^evt_/, "msg_"), event.data.metadata, event.data.description, time)
         continue
       }
     }
@@ -735,12 +735,13 @@ export async function runNonInteractivePrompt(input: Input) {
     Object.assign(spent, { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
     for (const message of projected.messages) {
       if (message.type === "synthetic") {
-        replace(message.metadata, message.description, message.time.created)
+        replace(message.id, message.metadata, message.description, message.time.created)
         continue
       }
       if (message.type !== "assistant") continue
-      // A response that failed part way is not a step, though what it spent counts, as the server counts them.
-      if (message.finish !== undefined && message.finish !== "error") spent.steps += 1
+      // Only a response that finished one of these ways is a step, though what any response spent counts, as the
+      // server counts them (a failed or unknown finish is not a step).
+      if (message.finish && countedFinishes.has(message.finish)) spent.steps += 1
       spent.cost += message.cost ?? 0
       spent.input += message.tokens?.input ?? 0
       spent.output += message.tokens?.output ?? 0
@@ -854,8 +855,11 @@ export async function runNonInteractivePrompt(input: Input) {
       pendingStepError = last.error ? { error: last.error, time: last.time.completed ?? last.time.created } : undefined
     }
     surfaceStepError()
+    const failed = projected.messages.findLast((message) => message.type === "idle")?.outcome === "failed"
     return {
       found: projected.found,
+      failed,
+      cutOff: failed || last?.finish === "tool-calls",
       responded: projected.messages.some((message) => message.type === "assistant"),
     }
   }
@@ -870,6 +874,8 @@ export async function runNonInteractivePrompt(input: Input) {
   process.on("SIGINT", interrupt)
 
   let completed: Promise<void> | undefined
+  // Whether the loop has consumed the event that ended the run, which can trail the history and the wait.
+  let ended = false
   try {
     if (input.agent) {
       await input.client.session.switchAgent({ sessionID: input.sessionID, agent: input.agent })
@@ -895,7 +901,9 @@ export async function runNonInteractivePrompt(input: Input) {
     const prepared = await Promise.all(input.files.map(prepareFile))
     if (interrupted) return
     submitted = true
-    completed = consume()
+    completed = consume().finally(() => {
+      ended = true
+    })
     admission = new AbortController()
     const response = await input.client.session
       .prompt(
@@ -966,21 +974,36 @@ export async function runNonInteractivePrompt(input: Input) {
     await Promise.race([waiting, completed.then(() => waiting)])
     finalizing = true
     const projected = await reconcile()
+    const unsettled = !projected.responded
+    // A limit stop leaves no error in the history, only a last response that is not a final one, so such a history is
+    // not written out as a success before the event that says why has been read. The bound keeps a lost event from
+    // hanging the run.
+    const cutOff = projected.cutOff && !ended
     if (
-      !projected.responded &&
+      (unsettled || cutOff) &&
       !interrupted &&
       !permissionRejected &&
       !formCancelled &&
       !emittedError &&
       !prePromotionError
     ) {
-      await completed
+      const timer = cutOff && !unsettled ? Promise.withResolvers<void>() : undefined
+      const timeout = timer && setTimeout(timer.resolve, 5000)
+      await (timer ? Promise.race([completed, timer.promise]) : completed).finally(() => clearTimeout(timeout))
+    }
+    // The history alone marks a failed run as failed, even when no event said why.
+    if (projected.failed && !emittedError && !interrupted && !permissionRejected && !formCancelled) {
+      const error = { type: "unknown", message: "The run ended in failure." }
+      emittedError = true
+      process.exitCode = 1
+      failure = error.message
+      if (!emit("error", Date.now(), { subtype: "error", error })) UI.error(error.message)
     }
     if (!projected.found && !interrupted && !permissionRejected && !formCancelled && !emittedError) {
       const error = prePromotionError ?? { type: "unknown", message: "Prompt was not promoted" }
       emittedError = true
       process.exitCode = 1
-      if (!emit("error", Date.now(), { error })) UI.error(error.message)
+      if (!emit("error", Date.now(), { subtype: "error", error })) UI.error(error.message)
     }
     reachedEnd = true
   } finally {
@@ -991,7 +1014,7 @@ export async function runNonInteractivePrompt(input: Input) {
     const truncated = lastFinish === "length"
     if (truncated) {
       const message = "The answer was cut off by the output limit."
-      if (!emit("notice", Date.now(), { notice: "truncated", message }) && input.format !== "result")
+      if (!emit("notice", Date.now(), { notice: "truncated", message }))
         UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL + message)
     }
     // Every way out of the run prints exactly one result, failed unless the run reached its end cleanly.
@@ -1153,6 +1176,9 @@ const decodeEscalation = Schema.decodeUnknownOption(
 )
 
 const decodeNotice = Schema.decodeUnknownOption(Schema.Struct({ notice: Schema.String }))
+
+// The finishes the server counts as a step when it checks a step limit.
+const countedFinishes = new Set<string>(["stop", "length", "tool-calls", "content-filter"])
 
 // The limit that ended the run names its result subtype. `limit.cost-unknown` is the server refusing a cost limit it
 // cannot count, which is a plain error, not a limit that was reached.
