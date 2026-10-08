@@ -17,6 +17,43 @@ import { Tool } from "../tool.js"
  */
 export { name, namespace }
 
+/**
+ * The traits of an MCP tool, from the annotations its server declares. A server is not trusted, so a hint decides how a
+ * call is scheduled and how it is drawn and nothing else: `readOnly` is never declared, so a call of an MCP tool is
+ * never read-only whatever the hints say, the permission request is the same with or without them, and no hook payload
+ * carries them.
+ *
+ * - `concurrencySafe` is `readOnlyHint === true`, which only matters for a tool that is loaded directly.
+ * - `destructive` and `openWorld` follow the defaults of the MCP specification and are advisory.
+ * - `displayName` is the first of the tool's `title` and its `annotations.title` that is not blank, trimmed, and
+ *   stored with its control and format characters written out, because the server chose it and clients draw it. A
+ *   blank title gives none, as registration refuses an empty one.
+ * - `idempotentHint` and vendor-specific `_meta` keys are not read.
+ */
+export function traits(tool: Mcp.Tool): Tool.Traits {
+  const annotations = tool.annotations
+  const readOnly = annotations?.readOnlyHint === true
+  const title = [tool.title, annotations?.title].map((value) => value?.trim()).find((value) => value)
+  return {
+    concurrencySafe: readOnly,
+    destructive: !readOnly && annotations?.destructiveHint !== false,
+    openWorld: annotations?.openWorldHint !== false,
+    interruptBehavior: "block",
+    ...(title === undefined ? {} : { displayName: escaped(title) }),
+  }
+}
+
+// A control character acts on a terminal and a format character, such as a right-to-left override, reorders the text
+// around it, so each is written out. Same rule as `plain` in @orbit/flow, which core does not depend on;
+// tool-runtime-10 folds both into one shared function.
+function escaped(text: string) {
+  return text.replace(/\r?\n|\p{C}/gu, (match) => {
+    if (match.endsWith("\n")) return "\\n"
+    const code = match.codePointAt(0) ?? 0
+    return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
+  })
+}
+
 export interface Interface {
   /** Wait for the initial MCP tool registration to settle. */
   readonly flush: Effect.Effect<void>
@@ -44,6 +81,7 @@ export const layer = Layer.effect(
               editor.add({
                 name: tool.name,
                 options: { namespace: namespace(tool.server), codemode: tool.codemode !== false },
+                traits: traits(tool),
                 description: tool.description ?? "",
                 input: (tool.inputSchema ?? { type: "object", properties: {} }) as JsonSchema.JsonSchema,
                 output: (tool.outputSchema ?? {}) as JsonSchema.JsonSchema,

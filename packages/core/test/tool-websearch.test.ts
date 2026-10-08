@@ -16,7 +16,7 @@ import { Image } from "@orbit/core/image"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 import { webSearchHost } from "./plugin/host"
 import { TestWebSearch } from "./lib/websearch"
 
@@ -103,6 +103,12 @@ describe("WebSearchTool registration", () => {
       const registry = fixture.registry
       yield* fixture.websearch.select(WebSearch.ID.make("exa"))
 
+      expect(yield* toolTraits(registry, "websearch", { query: "effect" })).toMatchObject({
+        readOnly: true,
+        concurrencySafe: true,
+        openWorld: true,
+        interruptBehavior: "cancel",
+      })
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["websearch", "execute"])
       expect(
         yield* executeTool(registry, {

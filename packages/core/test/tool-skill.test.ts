@@ -17,7 +17,7 @@ import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const skillToolNode = makeLocationNode({
   name: "test/skill-tool-plugin",
@@ -81,6 +81,11 @@ describe("SkillTool", () => {
 
           return yield* Effect.gen(function* () {
             const registry = yield* Tool.Service
+            expect(yield* toolTraits(registry, "skill")).toMatchObject({
+              readOnly: true,
+              concurrencySafe: true,
+              destructive: false,
+            })
             expect((yield* toolDefinitions(registry))[0]).toMatchObject({
               name: "skill",
               description: SkillTool.description,

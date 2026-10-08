@@ -37,6 +37,7 @@ export const Plugin = {
       editor.add({
         name: "enter_worktree",
         options: { codemode: false },
+        traits: { interruptBehavior: "block" },
         description:
           "Create a new git worktree of this project and move this session into it, so changes stay off the user's checkout. Use it when the user asks to work in a worktree or on isolated, experimental changes.",
         input: EnterInput,
@@ -60,6 +61,7 @@ export const Plugin = {
       editor.add({
         name: "exit_worktree",
         options: { codemode: false },
+        traits: { interruptBehavior: "block" },
         description: "Move this session back from the worktree it entered with enter_worktree, optionally removing it.",
         input: ExitInput,
         execute: (input, context) =>

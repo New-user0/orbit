@@ -115,6 +115,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { codemode: false },
+          traits: { readOnly: true, concurrencySafe: true, openWorld: true, interruptBehavior: "cancel" },
           description,
           input: Input,
           output: Output,

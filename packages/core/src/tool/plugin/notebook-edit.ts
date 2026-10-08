@@ -53,6 +53,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { codemode: false, permission: "edit" },
+          traits: { readOnly: false, concurrencySafe: false },
           description:
             "Replace, insert, or delete a cell in a Jupyter notebook (.ipynb). Read the notebook first to see cell ids and positions. Editing a code cell clears its outputs.",
           input: Input,

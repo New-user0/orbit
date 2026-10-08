@@ -63,6 +63,7 @@ import { DialogMcp } from "./component/dialog-mcp"
 import { DialogFlowRuns } from "./component/dialog-flow-runs"
 import { DialogAgentMap } from "./component/dialog-agent-map"
 import { DialogContext } from "./component/dialog-context"
+import { DialogCost } from "./component/dialog-cost"
 import { DialogOutputStyle } from "./component/dialog-output-style"
 import { DialogStatus } from "./component/dialog-status"
 import { DialogConfig } from "./component/dialog-config"
@@ -965,6 +966,18 @@ function App() {
           if (route.data.type !== "session") return
           const sessionID = route.data.sessionID
           dialog.replace(() => <DialogContext sessionID={sessionID} />)
+        },
+      },
+      {
+        name: "session.cost",
+        title: "Cost and usage",
+        category: "Session",
+        slash: { name: "cost", aliases: ["usage"] },
+        enabled: () => route.data.type === "session",
+        run: () => {
+          if (route.data.type !== "session") return
+          const sessionID = route.data.sessionID
+          dialog.replace(() => <DialogCost sessionID={sessionID} />)
         },
       },
       {
