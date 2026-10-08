@@ -137,7 +137,7 @@ function parseLines(output: string) {
   return output
     .trim()
     .split(/\r?\n/)
-    .map((line) => JSON.parse(line) as Record<string, any>)
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
 }
 
 // A line of the envelope must hold no character that acts on a terminal, whatever a tool or a title called itself.
@@ -167,7 +167,7 @@ test("--output-format json prints one result object with the outcome, the steps 
   expect(result.sessionID).toStartWith("ses_")
 }, 120_000)
 
-test("a failed step is counted in the steps, the tokens and the cost", async () => {
+test("a failed step is counted in the steps and the tokens", async () => {
   await scripted([{ chunks: ["blocked"], finish: "content_filter" }], async (own, home) => {
     const run = await print(own, home, ["say ok"])
 
@@ -198,7 +198,7 @@ test("stream-json starts with the init line, ends with the result line, and ever
 
   const lines = parseLines(run.stdout)
   expect(lines[0]).toMatchObject({ type: "init", protocol: 1, model: model.model, version: expect.any(String) })
-  expect(path.normalize(lines[0].cwd).toLowerCase()).toBe(path.normalize(workspace).toLowerCase())
+  expect(path.normalize(String(lines[0].cwd)).toLowerCase()).toBe(path.normalize(workspace).toLowerCase())
   expect(lines.at(-1)).toMatchObject({ type: "result", is_error: false, outcome: "succeeded", result: '{"answer":"ok"}' })
   expect(lines.filter((line) => line.type === "result")).toHaveLength(1)
   expect(lines.filter((line) => line.type === "init")).toHaveLength(1)
@@ -349,3 +349,57 @@ test("a flag of a printed run without -p is a usage error", async () => {
   expect(result.stderr).toContain("--output-format can only be used with -p")
   expect(model.requests.length).toBe(before)
 }, 60_000)
+
+// One hostile string per sink of `renderTool`: the inline title, the description, the block title and the block body.
+// Each tool succeeds, so the line that is drawn is the one for a finished call and not the failed line.
+const evil = "e\u001b]0;pwned\u0007\u009b31m"
+const sinks: Array<{
+  sink: string
+  name: string
+  input: (value: string) => Record<string, unknown>
+  hostile: string
+  escaped: string
+}> = [
+  { sink: "inline title", name: "grep", input: (value) => ({ pattern: value }), hostile: evil, escaped: "e\\x1b]0;pwned\\x07" },
+  {
+    sink: "description",
+    name: "read",
+    input: (value) => ({ path: path.join(workspace, "AGENTS.md"), note: value }),
+    hostile: evil,
+    escaped: "e\\x1b]0;pwned\\x07",
+  },
+  // The command is the title of the block; a comment keeps the shell from running the characters.
+  {
+    sink: "block title",
+    name: "shell",
+    input: (value) => ({ command: `echo marker # ${value}`, description: "marker" }),
+    hostile: evil,
+    escaped: "e\\x1b]0;pwned\\x07",
+  },
+  // The shell writes the escape sequence itself, so the title holds only its spelling and the output holds the bytes.
+  {
+    sink: "block body",
+    name: "shell",
+    input: (value) => ({ command: `printf '${value}\\n'`, description: "marker" }),
+    hostile: "e\\033]0;pwned\\007\\233",
+    escaped: "e\\x1b]0;pwned\\x07",
+  },
+]
+
+test.each(sinks)("a hostile $name input reaches no terminal through the $sink", async (row) => {
+  const run = await scripted([{ tool: { name: row.name, input: row.input(row.hostile) } }, "done"], (own, home) =>
+    print(own, home, ["--yolo", "say ok"], "text"),
+  )
+  const control = await scripted([{ tool: { name: row.name, input: row.input("plain") } }, "done"], (own, home) =>
+    print(own, home, ["--yolo", "say ok"], "text"),
+  )
+
+  const printed = run.stdout + run.stderr
+  expect(printed).toContain(row.escaped)
+  // The interface's own colors are escape sequences too, so only what a tool could inject is looked for.
+  expect(printed).not.toContain("\u001b]")
+  expect(printed).not.toContain("\u0007")
+  expect(printed).not.toContain("\u009b")
+  // The same call with a plain value is printed too, so the absence above is the escaping's doing.
+  expect(control.stdout + control.stderr).toContain("plain")
+}, 240_000)

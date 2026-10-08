@@ -3,7 +3,7 @@ export * as Config from "./config.js"
 import { Schema } from "effect"
 import { ephemeral, inventory } from "./event.js"
 import { Permission } from "./permission.js"
-import { AbsolutePath, optional } from "./schema.js"
+import { AbsolutePath, optional, PositiveInt } from "./schema.js"
 import { ConfigAgent } from "./config/agent.js"
 import { ConfigMedia } from "./config/media.js"
 import { ConfigCompaction } from "./config/compaction.js"
@@ -20,6 +20,7 @@ import { ConfigProvider } from "./config/provider.js"
 import { ConfigReference } from "./config/reference.js"
 import { ConfigSandbox } from "./config/sandbox.js"
 import { ConfigWebSearch } from "./config/websearch.js"
+import { ConfigToolExecution } from "./config/tool-execution.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
 import { ConfigWarming } from "./config/warming.js"
@@ -38,6 +39,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   fallback_model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Model used for the rest of a turn after the selected model is repeatedly overloaded",
+  }),
+  output_token_cap: PositiveInt.pipe(optional).annotate({
+    description:
+      "Most tokens a model may write per model request. A reply cut off at the cap is resumed like any other cut-off. Lowers the model's own maximum and never raises it; compaction summaries and titles keep their own limits; unset leaves the maximum in place",
   }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
@@ -92,6 +97,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
     description: "Tool output truncation thresholds",
+  }),
+  tool_execution: ConfigToolExecution.Info.pipe(optional).annotate({
+    description: "How the tool calls of one step are scheduled",
   }),
   mcp: ConfigMCP.Info.pipe(optional).annotate({
     description: "MCP server configuration",

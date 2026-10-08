@@ -12,9 +12,12 @@ import { SessionSchema } from "../schema.js"
 import { SessionError } from "@orbit/schema/session-error"
 import { Money } from "@orbit/schema/money"
 import { SessionUsage } from "../usage.js"
-import type { Tool } from "../../tool.js"
+import { Tool } from "../../tool.js"
+import { plain } from "@orbit/util/plain"
 
 type Input = {
+  /** The user-facing name a tool declares, if any. It is not asked for a provider-hosted tool. */
+  readonly displayName?: (name: string) => string | undefined
   readonly sessionID: SessionSchema.ID
   readonly agent: Agent.ID
   readonly model: Model.Ref
@@ -291,11 +294,15 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     tools.set(event.id, tool)
     yield* toolInput.start(event.id)
     yield* publishPendingDeltas()
+    // The event is durable and outlives the tool that declared the name, which a server or a plugin chose, so it is
+    // stored with its control and format characters written out.
+    const displayName = tool.providerExecuted ? undefined : input.displayName?.(event.name)
     yield* bus.publish(SessionEvent.Tool.Input.Started, {
       sessionID: input.sessionID,
       assistantMessageID,
       id: event.id,
       name: event.name,
+      ...(displayName === undefined ? {} : { displayName: plain(displayName) }),
     })
     return tool
   })
@@ -348,7 +355,9 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       assistantMessageID,
       id,
       error:
-        tool.name === "subagent" && error.type === "aborted" && typeof tool.progress?.sessionID === "string"
+        tool.name === "subagent" &&
+        (error.type === "aborted" || error.type === Tool.ErrorCode.Cancelled) &&
+        typeof tool.progress?.sessionID === "string"
           ? { ...error, message: `${error.message} (sessionID: ${tool.progress.sessionID})` }
           : error,
       ...failureSnapshot(tool, metadata),
@@ -394,7 +403,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
   })
 
   const failUnsettledTools = Effect.fn("SessionRunner.failUnsettledTools")(
-    (error: SessionError.Error, scope: "hosted" | "all" = "all") => failTools(error, scope),
+    (error: SessionError.Error, scope: "hosted" | "uncalled" | "all" = "all") => failTools(error, scope),
   )
 
   const publish = Effect.fnUntraced(function* (event: LLMEvent) {
@@ -578,6 +587,16 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     })
   })
 
+  /**
+   * Publishes live progress that is not kept as the call's progress snapshot, so that a scheduling hint such as
+   * `{ queued: true }` never reaches the metadata of a failure. A call that is gone is skipped.
+   */
+  const hint = Effect.fnUntraced(function* (id: string, metadata: Tool.Metadata) {
+    const tool = tools.get(id)
+    if (!tool?.called || tool.settled) return
+    yield* bus.publish(SessionEvent.Tool.Progress, { sessionID: input.sessionID, assistantMessageID, id, metadata })
+  })
+
   /** Publishes one canonical terminal event for a locally executed tool call. */
   const toolExecution = Effect.fnUntraced(function* (id: string, name: string, result: Tool.NormalizedResult) {
     const tool = tools.get(id)
@@ -605,6 +624,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       return publishTraced(event)
     },
     progress,
+    hint,
     toolExecution,
     flush,
     failAssistant,

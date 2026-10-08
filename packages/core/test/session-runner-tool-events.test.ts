@@ -30,7 +30,11 @@ const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 
 const capture = (
   providerMetadataKey = "anthropic",
-  options?: { readonly interruptProgress?: boolean; readonly beforeTextDelta?: Effect.Effect<void> },
+  options?: {
+    readonly interruptProgress?: boolean
+    readonly beforeTextDelta?: Effect.Effect<void>
+    readonly displayName?: (name: string) => string | undefined
+  },
 ) => {
   const published: Array<{ readonly type: string; readonly data: unknown }> = []
   const bus: Pick<Bus.Interface, "publish"> = {
@@ -60,6 +64,7 @@ const capture = (
         providerID: Provider.ID.orbit,
       },
       providerMetadataKey,
+      displayName: options?.displayName,
       started: 0,
       assistantMessageID: SessionMessage.ID.create(),
     }),
@@ -243,6 +248,22 @@ test("interrupted subagent failures expose their existing child session to the m
   })
 })
 
+test("cancelled subagent failures expose their existing child session to the model", async () => {
+  const { published, publisher } = capture("anthropic", { interruptProgress: true })
+  const subagent = LLMEvent.toolCall({
+    id: "call-subagent",
+    name: "subagent",
+    input: { agent: "general", description: "Recover child", prompt: "Continue working" },
+  })
+  await Effect.runPromise(publisher.publish(subagent))
+  await Effect.runPromiseExit(publisher.progress(subagent.id, { sessionID: "ses_existing_child", status: "running" }))
+  await Effect.runPromise(publisher.failTool(subagent.id, { type: "tool.cancelled", message: "Cancelled: a call failed" }))
+
+  expect(published.find((event) => event.type === "session.tool.failed.2")?.data).toMatchObject({
+    error: { type: "tool.cancelled", message: "Cancelled: a call failed (sessionID: ses_existing_child)" },
+  })
+})
+
 test("interrupted non-subagent failures do not expose their progress session IDs", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(call))
@@ -266,6 +287,29 @@ test("local failure metadata completes the progress snapshot", async () => {
   expect(published.find((event) => event.type === "session.tool.failed.2")?.data).toMatchObject({
     metadata: { phase: "running", provider: "exa" },
   })
+})
+
+test("a scheduling hint is published live but never reaches a failure's metadata", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(call))
+  await Effect.runPromise(publisher.hint(call.id, { queued: true }))
+  await Effect.runPromise(publisher.failTool(call.id, { type: "tool.cancelled", message: "Not run" }))
+
+  expect(published.find((event) => event.type === SessionEvent.Tool.Progress.type)?.data).toMatchObject({
+    id: call.id,
+    metadata: { queued: true },
+  })
+  const failed = published.find((event) => event.type === "session.tool.failed.2")?.data
+  expect(failed).not.toHaveProperty("metadata")
+})
+
+test("a hint for a call that has settled is dropped", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(call))
+  await Effect.runPromise(publisher.failTool(call.id, { type: "tool.cancelled", message: "Not run" }))
+  await Effect.runPromise(publisher.hint(call.id, {}))
+
+  expect(published.filter((event) => event.type === SessionEvent.Tool.Progress.type)).toEqual([])
 })
 
 test("failure snapshot retains canonical progress above the default byte limit", async () => {
@@ -501,6 +545,42 @@ test("authoritative end values replace accumulated deltas in the durable ended e
   })
 })
 
+const startedData = async (
+  displayName: ((name: string) => string | undefined) | undefined,
+  event = LLMEvent.toolInputStart({ id: "call", name: "read" }),
+) => {
+  const { published, publisher } = capture("anthropic", { displayName })
+  await Effect.runPromise(publisher.publish(event))
+  return published.find((item) => item.type === "session.tool.input.started.1")?.data as object
+}
+
+test("tool input started carries the declared display name, escaped, and only when declared", async () => {
+  // A set-title sequence, one that erases the line, C1 CSI, and a right-to-left override.
+  const hostile = "\u001b]0;x\u0007a\u001b[2Kb\u009bc\u202ed"
+  const escaped = "\\x1b]0;x\\x07a\\x1b[2Kb\\x9bc\\u{202e}d"
+  const cases: ReadonlyArray<readonly [string, ((name: string) => string | undefined) | undefined, unknown]> = [
+    ["plain name", () => "Read file", "Read file"],
+    ["hostile name", () => hostile, escaped],
+    ["line breaks", () => " a\r\nb ", "a\\nb"],
+    ["no lookup", undefined, undefined],
+    ["lookup declares none", () => undefined, undefined],
+  ]
+  for (const [label, lookup, expected] of cases) {
+    const data = await startedData(lookup)
+    expect(data, label).toMatchObject({ name: "read" })
+    if (expected === undefined) expect("displayName" in data, label).toBe(false)
+    else expect((data as { displayName?: string }).displayName, label).toBe(expected as string)
+  }
+})
+
+test("a provider-hosted tool is given no display name", async () => {
+  const data = await startedData(
+    () => "Read file",
+    LLMEvent.toolInputStart({ id: "call", name: "read", providerExecuted: true }),
+  )
+  expect("displayName" in data).toBe(false)
+})
+
 test("tool input deltas are accumulated without being published", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(
@@ -692,4 +772,33 @@ test("content-filter failure explains the refusal when the provider gives a reas
       message: "Provider blocked the response (cyber): This request was declined because it could enable cyber harm.",
     },
   })
+})
+
+test("failing uncalled tool inputs leaves called and settled tools alone", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(
+    Effect.forEach(
+      [
+        LLMEvent.toolInputStart({ id: "cut", name: "read" }),
+        LLMEvent.toolInputDelta({ id: "cut", name: "read", text: '{"path":' }),
+        LLMEvent.toolCall({ id: "whole", name: "read", input: { path: "file.txt" } }),
+        LLMEvent.toolInputStart({ id: "done", name: "read" }),
+      ],
+      publisher.publish,
+      { discard: true },
+    ),
+  )
+  await Effect.runPromise(publisher.failTool("done", { type: "tool.execution", message: "settled" }))
+  const settledBefore = published.filter((event) => event.type === "session.tool.failed.2").length
+
+  expect(
+    await Effect.runPromise(
+      publisher.failUnsettledTools({ type: "tool.input-truncated", message: "cut off" }, "uncalled"),
+    ),
+  ).toBe(true)
+
+  const failed = published.filter((event) => event.type === "session.tool.failed.2")
+  expect(settledBefore).toBe(1)
+  expect(failed).toHaveLength(2)
+  expect(failed[1]?.data).toMatchObject({ id: "cut", error: { type: "tool.input-truncated" } })
 })

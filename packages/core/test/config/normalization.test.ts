@@ -120,6 +120,19 @@ describe("ConfigNormalize", () => {
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
+  test("keeps output_token_cap", () => {
+    expect(normalized({ output_token_cap: 8000 }).encoded.output_token_cap).toBe(8000)
+  })
+
+  for (const cap of [0, -1, 1.5]) {
+    test(`reports an output_token_cap of ${cap} and keeps its siblings`, () => {
+      const invalid = normalized({ output_token_cap: cap, share: "auto" })
+      expect(invalid.encoded.output_token_cap).toBeUndefined()
+      expect(invalid.encoded.share).toBe("auto")
+      expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+    })
+  }
+
   test("keeps the compatibility switch as one native value", () => {
     expect(normalized({ compatibility: { enabled: false } }).encoded.compatibility).toEqual({ enabled: false })
     expect(decoded({ compatibility: { enabled: true } }).compatibility?.enabled).toBe(true)
@@ -132,6 +145,17 @@ describe("ConfigNormalize", () => {
     const invalid = normalized({ compatibility: { enabled: "no" } })
     expect(invalid.encoded.compatibility).toBeUndefined()
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+  })
+
+  test("keeps a positive tool concurrency cap and reports any other value", () => {
+    expect(normalized({ tool_execution: { max_concurrency: 3 } }).encoded.tool_execution).toEqual({
+      max_concurrency: 3,
+    })
+    for (const cap of [0, -2, 1.5, "3"]) {
+      const invalid = normalized({ tool_execution: { max_concurrency: cap } })
+      expect(invalid.encoded.tool_execution).toBeUndefined()
+      expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+    }
   })
 
   test("preserves arbitrary JSON-round-tripped native configuration", () => {

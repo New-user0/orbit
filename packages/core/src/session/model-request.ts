@@ -89,16 +89,22 @@ export interface Input {
   readonly webSocket?: "session"
   /** Prompt size, measured by the provider or estimated. The default output limit leaves room for it. */
   readonly inputTokens?: { readonly measured: number; readonly estimated: number }
+  /** The configured `output_token_cap`. Lowers the primary request's default limit before hooks see it. */
+  readonly outputTokenCap?: number
 }
 
-/** The default output limit: the catalog limit, fitted to the room the prompt leaves in the context window. */
+const modelOutputMax = (limit: Model.Info["limit"]) =>
+  Math.min(limit.output > 0 ? limit.output : OUTPUT_TOKEN_FALLBACK, OUTPUT_TOKEN_MAX)
+
+/** The default output limit: the catalog limit, lowered to the configured cap and fitted to the room the prompt leaves. */
 const outputLimit = (
   limit: Model.Info["limit"],
   kind: "primary" | "compaction",
   inputTokens?: Input["inputTokens"],
+  cap?: number,
 ) => {
-  const model = Math.min(limit.output > 0 ? limit.output : OUTPUT_TOKEN_FALLBACK, OUTPUT_TOKEN_MAX)
-  const requested = kind === "compaction" ? Math.min(model, SUMMARY_OUTPUT_MAX) : model
+  const model = modelOutputMax(limit)
+  const requested = kind === "compaction" ? Math.min(model, SUMMARY_OUTPUT_MAX) : Math.min(model, cap ?? model)
   if (inputTokens === undefined || limit.context <= 0) return requested
   const room = limit.context - inputTokens.measured - Math.ceil(inputTokens.estimated * (1 + ESTIMATE_ERROR))
   return Math.min(requested, Math.max(OUTPUT_TOKEN_MIN, room))
@@ -264,7 +270,7 @@ export const layer = Layer.effect(
           messages: input.messages,
           options:
             kind === "primary" || kind === "compaction"
-              ? { maxTokens: outputLimit(model.limit, kind, input.inputTokens) }
+              ? { maxTokens: outputLimit(model.limit, kind, input.inputTokens, input.outputTokenCap) }
               : {},
         },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
@@ -426,11 +432,24 @@ export const layer = Layer.effect(
     })
 
     const agentHook =
-      (name: "context" | "compaction" | "generate", agent: Agent.ID) => (draft: SessionRequest, tools: Definitions) =>
-        hooks.trigger("session", name, { ...draft, agent, tools })
+      (name: "context" | "compaction" | "generate", agent: Agent.ID, outputTokenCap?: number) =>
+      (draft: SessionRequest, tools: Definitions) =>
+        hooks.trigger("session", name, { ...draft, agent, tools, outputTokenCap })
 
     return Service.of({
-      primary: (input) => prepare("primary", input, agentHook("context", input.agent)),
+      // Hooks see the cap only when it lowered the limit, so a cap above the model's own maximum leaves the default.
+      primary: (input) =>
+        prepare(
+          "primary",
+          input,
+          agentHook(
+            "context",
+            input.agent,
+            input.outputTokenCap !== undefined && input.outputTokenCap < modelOutputMax(input.model.limit)
+              ? input.outputTokenCap
+              : undefined,
+          ),
+        ),
       compaction: (input) => prepare("compaction", input, agentHook("compaction", input.agent)),
       generate: (input) => prepare("generate", input, agentHook("generate", input.agent)),
       title: (input) => prepare("title", input, (draft) => hooks.trigger("session", "title", draft)),

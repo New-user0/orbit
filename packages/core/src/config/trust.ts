@@ -5,6 +5,7 @@ import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import type { ConfigWarming } from "@orbit/schema/config/warming"
 import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
@@ -126,6 +127,14 @@ function warming(selection: boolean | ConfigWarming.Info): Outcome<boolean | Con
   return selection === false ? { value: selection, withheld: [] } : { value: undefined, withheld: ["network"] }
 }
 
+// A lower cap only slows work down, but a higher one lets a repository start more tool calls at once than the user
+// allowed. The user's own value is not visible here, so only a cap at or below the default is kept.
+function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecution.Info> {
+  if (value.max_concurrency === undefined || value.max_concurrency <= ConfigToolExecution.DEFAULT_MAX_CONCURRENCY)
+    return { value, withheld: [] }
+  return { value: undefined, withheld: ["settings"] }
+}
+
 function agents(
   value: Readonly<Record<string, ConfigAgent.Info>>,
   place: Place,
@@ -183,6 +192,7 @@ export const classification = {
     // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
     model: withhold("providers"),
     fallback_model: withhold("providers"),
+    output_token_cap: withhold("providers"),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
@@ -200,6 +210,7 @@ export const classification = {
     media: inert,
     sandbox: withhold("sandbox"),
     tool_output: inert,
+    tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
     compaction: inert,
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.

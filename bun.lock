@@ -248,6 +248,7 @@
       "version": "2.0.22",
       "dependencies": {
         "@orbit/client": "workspace:*",
+        "@orbit/util": "workspace:*",
       },
       "devDependencies": {
         "@tsconfig/bun": "catalog:",

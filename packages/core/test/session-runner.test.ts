@@ -64,6 +64,7 @@ import { Agent } from "@orbit/core/agent"
 import { Config } from "@orbit/core/config"
 import { Document, Info } from "@orbit/schema/config"
 import { ConfigCompaction } from "@orbit/schema/config/compaction"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { Tool } from "@orbit/core/tool"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info as ToolInfo } from "@orbit/schema/tool"
@@ -230,6 +231,18 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    holds: new Map<string, { readonly started: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }>(),
+    hold(text: string) {
+      const existing = this.holds.get(text)
+      if (existing) return existing
+      const created = { started: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() }
+      this.holds.set(text, created)
+      return created
+    },
+    configControl: undefined as Config.TestInterface | undefined,
+    traitGate: Deferred.makeUnsafe<void>(),
+    asking: Deferred.makeUnsafe<void>(),
+    answer: Deferred.makeUnsafe<void>(),
     closedTransports: new Array<Session.ID>(),
     blockTools: (count = 1) =>
       Effect.acquireRelease(
@@ -317,6 +330,7 @@ const layer = Layer.unwrap(
               description: "Echo text",
               input: Schema.Struct({ text: Schema.String }),
               output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: true },
               execute: ({ text }, context) =>
                 Effect.gen(function* () {
                   state.authorizations.push(context)
@@ -325,11 +339,86 @@ const layer = Layer.unwrap(
                   return { output: { text }, content: text }
                 }),
             },
+            // A read-only call that a new user message may cancel.
+            cancelable: {
+              name: "cancelable",
+              description: "Echo text, as a call a new user message cancels",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: true, interruptBehavior: "cancel" },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* state.awaitToolBarrier
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Runs alone: the scheduler starts it only when nothing else runs.
+            mutate: {
+              name: "mutate",
+              description: "Echo text, as a call that changes things",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: false },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* state.awaitToolBarrier
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Finishes when the test lets it, so calls can finish in another order than they started.
+            held: {
+              name: "held",
+              description: "Echo text once the test releases it",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: true },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  const hold = state.hold(text)
+                  state.executions.push(text)
+                  yield* Deferred.succeed(hold.started, undefined)
+                  yield* Deferred.await(hold.release)
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Its concurrencySafe answer waits for the test, to show that a pending answer holds back later calls only.
+            gated: {
+              name: "gated",
+              description: "Echo text, after its traits are known",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: () => Deferred.await(state.traitGate).pipe(Effect.as(true)) },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* state.awaitToolBarrier
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Waits for an answer that is a decline: the calls queued behind it must not start.
+            ask: {
+              name: "ask",
+              description: "Echo text after a permission",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: false },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* Deferred.succeed(state.asking, undefined)
+                  yield* Deferred.await(state.answer)
+                  // The way `Permission.assert` surfaces a decline: as a defect that the model request recovers.
+                  return yield* Effect.die(new Permission.DeclinedError())
+                }),
+            },
             defect: {
               name: "defect",
               description: "Fail unexpectedly",
               input: Schema.Struct({}),
               output: Schema.Struct({}),
+              traits: { concurrencySafe: true },
               execute: () => state.awaitToolBarrier.pipe(Effect.andThen(Effect.die("unexpected tool defect"))),
             },
             storefail: {
@@ -337,6 +426,7 @@ const layer = Layer.unwrap(
               description: "Produce output that cannot be persisted",
               input: Schema.Struct({}),
               output: Schema.Struct({}),
+              traits: { concurrencySafe: true },
               execute: () => Effect.succeed({ output: {} }),
             },
           },
@@ -428,7 +518,13 @@ const layer = Layer.unwrap(
           }),
         }),
       }),
-    ])
+    ]).pipe(
+      Layer.tap((context) =>
+        Effect.sync(() => {
+          state.configControl = Context.get(context, Config.Test)
+        }),
+      ),
+    )
     const promptModels = Layer.mock(Model.Service, {
       get: () => Effect.undefined,
       all: () => Effect.succeed([]),
@@ -521,7 +617,10 @@ const layer = Layer.unwrap(
       ],
     )
   }),
-).pipe(Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)), Layer.provideMerge(testLLM))
+).pipe(
+  Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
+  Layer.provideMerge(testLLM),
+)
 const it = testEffect(layer)
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
@@ -1190,6 +1289,49 @@ describe("SessionRunnerLLM", () => {
     expect(s.executions).toEqual(["renamed"])
   })
 
+  scenario("projects a declared display name, escaped, onto the assistant tool and keeps it on replay", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        named: {
+          name: "named",
+          description: "A tool that declares a display name",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { displayName: "Named\u001b]0;x\u0007\u001b[2K\u009b\u202e" },
+          execute: () => Effect.succeed({ output: {} }),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Use the named tool")
+    yield* s.llm.push(
+      TestLLM.tool("call-named", "named", {}),
+      TestLLM.tool("call-echo", "echo", { text: "plain" }),
+      [],
+    )
+
+    yield* s.resume
+
+    const shown = "Named\\x1b]0;x\\x07\\x1b[2K\\x9b\\u{202e}"
+    const tools = () =>
+      Effect.map(s.context, (context) =>
+        context.flatMap((message) =>
+          message.type === "assistant" ? message.content.flatMap((part) => (part.type === "tool" ? [part] : [])) : [],
+        ),
+      )
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
+    yield* replaySessionProjection(sessionID)
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
+  })
+
   scenario("executes the tool advertised before a registry reload", function* (s) {
     const registry = yield* Tool.Service
     const scope = yield* Scope.make()
@@ -1370,7 +1512,16 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests).toHaveLength(1)
     expect(s.requests[0]?.model).toBe(model)
-    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual([
+      "ask",
+      "cancelable",
+      "defect",
+      "echo",
+      "gated",
+      "held",
+      "mutate",
+      "storefail",
+    ])
     expect(s.requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
       { role: "user", content: [{ type: "text", text: "First" }] },
       { role: "user", content: [{ type: "text", text: "Second" }] },
@@ -3607,6 +3758,41 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.generation?.maxTokens).toBe(256_000)
   })
 
+  scenario("lowers the output limit to the configured cap and never raises it", function* (s) {
+    const config = s.configControl!
+    const setCap = (cap: number) =>
+      config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: cap }) })])
+    s.currentModel = fittedOutputModel
+    yield* setCap(8_000)
+    yield* s.llm.push(TestLLM.text("Capped", "text-cap-low"))
+    yield* s.runPrompt("Question")
+    yield* setCap(500_000)
+    yield* s.llm.push(TestLLM.text("Above the maximum", "text-cap-high"))
+    yield* s.runPrompt("Again")
+
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
+    expect(s.requests[1]?.generation?.maxTokens).toBe(64_000)
+  })
+
+  scenario("applies the configured cap before session context hooks run", function* (s) {
+    const config = s.configControl!
+    const hooks = yield* PluginHooks.Service
+    const seen: (number | undefined)[] = []
+    yield* config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        seen.push(event.options.maxTokens)
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(TestLLM.text("Hooked", "text-cap-hook"))
+    yield* s.runPrompt("Question")
+
+    expect(seen).toEqual([8_000])
+    expect(s.requests[0]?.generation?.maxTokens).toBe(20_000)
+  })
+
   scenario("gives the summary its full output limit when the conversation overshot the threshold", function* (s) {
     // The conversation overshot the threshold, so the prepared summary request exceeds the budget and `deliver`
     // shrinks it before sending. The output limit must follow the budget, not the oversized prepared request.
@@ -3771,7 +3957,16 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
 
     expect(s.requests).toHaveLength(1)
-    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual([
+      "ask",
+      "cancelable",
+      "defect",
+      "echo",
+      "gated",
+      "held",
+      "mutate",
+      "storefail",
+    ])
     expect(yield* s.context).toMatchObject([
       Expected.user("Use tools"),
       {
@@ -4176,6 +4371,773 @@ describe("SessionRunnerLLM", () => {
     expect(s.executions).toHaveLength(5)
     expect(yield* tools.maxActive).toBe(5)
     expect(s.requests).toHaveLength(2)
+  })
+
+  // The provider stream as stages: events that arrive at once, and gates that hold the stream until the test opens them.
+  const staged = (...stages: ReadonlyArray<ReadonlyArray<LLMEvent> | Deferred.Deferred<void>>) =>
+    stages.reduce<Stream.Stream<LLMEvent>>(
+      (stream, stage) =>
+        Stream.concat(
+          stream,
+          Array.isArray(stage)
+            ? Stream.fromIterable(stage)
+            : Stream.fromEffect(Deferred.await(stage as Deferred.Deferred<void>)).pipe(
+                Stream.flatMap(() => Stream.empty),
+              ),
+        ),
+      Stream.empty,
+    )
+  const callOf = (id: string, name: string, text: string) => LLMEvent.toolCall({ id, name, input: { text } })
+  const toolsDone = [
+    LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" } }),
+    LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
+  ]
+  // What the step published about its tool calls, in order, taken one event at a time so no clock is involved.
+  const watchTools = (s: Scenario) =>
+    Effect.gen(function* () {
+      const called = yield* Queue.unbounded<string>()
+      const settled = yield* Queue.unbounded<string>()
+      const hints = yield* Queue.unbounded<{ readonly id: string; readonly metadata: unknown }>()
+      yield* s.bus.subscribe(SessionEvent.Tool.Called).pipe(
+        Stream.runForEach((event) => Queue.offer(called, event.data.id)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* s.bus.subscribe(SessionEvent.Tool.Success).pipe(
+        Stream.runForEach((event) => Queue.offer(settled, event.data.id)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* s.bus.subscribe(SessionEvent.Tool.Progress).pipe(
+        Stream.runForEach((event) => Queue.offer(hints, { id: event.data.id, metadata: event.data.metadata })),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return { called, settled, hints }
+    })
+  const toolResultIDs = (request: LLMRequest | undefined) =>
+    request?.messages
+      .filter((message) => message.role === "tool")
+      .flatMap((message) => message.content.flatMap((part) => (part.type === "tool-result" ? [part.id] : [])))
+
+  scenario("starts every partition while the provider stream is open", function* (s) {
+    yield* s.admit("Echo, mutate, echo")
+    const watch = yield* watchTools(s)
+    const [g1, g2, g3] = yield* Effect.all([Deferred.make<void>(), Deferred.make<void>(), Deferred.make<void>()])
+    yield* s.llm.push(
+      staged(
+        [LLMEvent.stepStart({ index: 0 }), callOf("call-a", "echo", "a")],
+        g1,
+        [callOf("call-b", "mutate", "b")],
+        g2,
+        [callOf("call-c", "echo", "c")],
+        g3,
+        toolsDone,
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const first = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    // `a` runs while the provider is still waiting to send `b`.
+    expect(s.executions).toEqual(["a"])
+
+    const second = yield* s.blockTools(1)
+    yield* Deferred.succeed(g1, undefined)
+    expect(yield* Effect.forEach([0, 1], () => Queue.take(watch.called))).toEqual(["call-a", "call-b"])
+    // `b` is not safe, so it waits for `a`, and says so to live clients.
+    expect(yield* Queue.take(watch.hints)).toEqual({ id: "call-b", metadata: { queued: true } })
+    expect(s.executions).toEqual(["a"])
+
+    yield* first.release
+    yield* second.started
+    expect(s.executions).toEqual(["a", "b"])
+    expect(s.requests).toHaveLength(1)
+
+    const third = yield* s.blockTools(1)
+    yield* Deferred.succeed(g2, undefined)
+    expect(yield* Queue.take(watch.called)).toBe("call-c")
+    yield* second.release
+    yield* third.started
+    expect(s.executions).toEqual(["a", "b", "c"])
+    expect(s.requests).toHaveLength(1)
+
+    yield* Deferred.succeed(g3, undefined)
+    yield* third.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-a", "call-b", "call-c"])
+  })
+
+  scenario("a safe call arriving mid-stream joins the running safe group", function* (s) {
+    yield* s.admit("Echo twice")
+    const [g1, g2] = yield* Effect.all([Deferred.make<void>(), Deferred.make<void>()])
+    yield* s.llm.push(
+      staged(
+        [LLMEvent.stepStart({ index: 0 }), callOf("call-a", "echo", "a")],
+        g1,
+        [callOf("call-a2", "echo", "a2")],
+        g2,
+        toolsDone,
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.succeed(g1, undefined)
+    yield* tools.started
+
+    expect(s.executions).toEqual(["a", "a2"])
+    expect(yield* tools.maxActive).toBe(2)
+    expect(s.requests).toHaveLength(1)
+
+    yield* Deferred.succeed(g2, undefined)
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.requests).toHaveLength(2)
+  })
+
+  scenario("a pending trait predicate does not hold back the stream", function* (s) {
+    yield* s.admit("Gated, then echo")
+    const watch = yield* watchTools(s)
+    yield* s.llm.push(
+      TestLLM.toolCalls(callOf("call-x", "gated", "x"), callOf("call-y", "echo", "y")),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    expect(yield* Effect.forEach([0, 1], () => Queue.take(watch.called))).toEqual(["call-x", "call-y"])
+    // `y` is safe, but it starts after `x`, whose answer is still pending.
+    expect(s.executions).toEqual([])
+
+    yield* Deferred.succeed(s.traitGate, undefined)
+    yield* tools.started
+    expect(s.executions).toEqual(["x", "y"])
+    expect(yield* tools.maxActive).toBe(2)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("runs calls that are not safe one at a time, in call order", function* (s) {
+    yield* s.admit("Mutate three times")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        callOf("call-0", "mutate", "m0"),
+        callOf("call-1", "mutate", "m1"),
+        callOf("call-2", "mutate", "m2"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(s.executions).toEqual(["m0"])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["m0", "m1", "m2"])
+    expect(yield* tools.maxActive).toBe(1)
+  })
+
+  scenario("keeps the start order of a safe, a not safe and a safe call", function* (s) {
+    yield* s.admit("Echo, mutate, echo")
+    yield* s.llm.push(
+      TestLLM.toolCalls(callOf("call-a", "echo", "a"), callOf("call-b", "mutate", "b"), callOf("call-c", "echo", "c")),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(s.executions).toEqual(["a"])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["a", "b", "c"])
+    expect(yield* tools.maxActive).toBe(1)
+  })
+
+  scenario("caps the safe calls that run together at tool_execution.max_concurrency", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({
+        type: "document",
+        info: new Info({ tool_execution: new ConfigToolExecution.Info({ max_concurrency: 2 }) }),
+      }),
+    ])
+    yield* s.admit("Echo five times")
+    yield* s.llm.push(
+      TestLLM.toolCalls(...Array.from({ length: 5 }, (_, index) => callOf(`call-${index}`, "echo", `${index}`))),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(s.executions).toEqual(["0", "1"])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["0", "1", "2", "3", "4"])
+    expect(yield* tools.maxActive).toBe(2)
+  })
+
+  scenario("orders results by call even when a later call finishes first", function* (s) {
+    yield* s.admit("Hold two")
+    const watch = yield* watchTools(s)
+    yield* s.llm.push(
+      TestLLM.toolCalls(callOf("call-h1", "held", "h1"), callOf("call-h2", "held", "h2")),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.hold("h1").started)
+    yield* Deferred.await(s.hold("h2").started)
+    yield* Deferred.succeed(s.hold("h2").release, undefined)
+    expect(yield* Queue.take(watch.settled)).toBe("call-h2")
+    yield* Deferred.succeed(s.hold("h1").release, undefined)
+    yield* Fiber.join(run)
+
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-h1", "call-h2"])
+  })
+
+  scenario("settles a finished call whose outcome waits on the session when it is interrupted", function* (s) {
+    yield* s.admit("Hold two")
+    const gate = yield* Deferred.make<void>()
+    const holding = yield* Deferred.make<void>()
+    const successes = new Array<string>()
+    // The first success holds the session's durable lock, so the second call's outcome has to wait for it.
+    const unsubscribe = yield* s.bus.listen((event) =>
+      event.type === "session.tool.success"
+        ? Effect.suspend(() => {
+            successes.push(event.type)
+            return successes.length === 1
+              ? Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void
+          })
+        : Effect.void,
+    )
+    yield* s.llm.push(TestLLM.toolCalls(callOf("call-h1", "held", "h1"), callOf("call-h2", "held", "h2")))
+
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.hold("h1").started)
+    yield* Deferred.await(s.hold("h2").started)
+    yield* Deferred.succeed(s.hold("h1").release, undefined)
+    yield* Deferred.await(holding)
+    yield* Deferred.succeed(s.hold("h2").release, undefined)
+    // The second call has no signal of its own while it waits for the lock, so give it time to reach the wait.
+    for (let i = 0; i < 50; i++) yield* Effect.yieldNow
+    yield* s.session.interrupt(sessionID)
+    yield* Deferred.succeed(gate, undefined)
+    yield* Fiber.await(run)
+    yield* unsubscribe
+
+    // Both calls finished, so both are recorded as completed, each with one terminal event, and none is left running.
+    expect(successes).toHaveLength(2)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Hold two"),
+      Expected.assistant({}, [
+        Expected.completedTool({ id: "call-h1" }, {}),
+        Expected.completedTool({ id: "call-h2" }, {}),
+      ]),
+    ])
+  })
+
+  scenario("stops the queue on a correction that a tool lets through unwrapped", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        raw: {
+          name: "raw",
+          description: "Fail with the user's feedback, unwrapped",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { concurrencySafe: false },
+          execute: () => Effect.fail(new Permission.CorrectedError({ feedback: "Use another tool" }) as never),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Reject raw, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-raw", name: "raw", input: {} }),
+        callOf("call-next", "mutate", "next"),
+      ),
+      TestLLM.stop(),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Reject raw, then mutate"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-raw" },
+          { error: { type: "permission.rejected", message: "Use another tool" } },
+        ),
+        Expected.failedTool({ id: "call-next" }, { error: { type: "tool.cancelled" } }),
+      ]),
+      { type: "assistant", finish: "stop" },
+    ])
+  })
+
+  scenario("runs a Code Mode execute call alone between two direct safe calls", function* (s) {
+    const registry = yield* Tool.Service
+    // Deferred, so a program reaches it and the model does not see it.
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "probe",
+        description: "Echo from a program",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () =>
+          Effect.gen(function* () {
+            s.executions.push("probe")
+            yield* s.awaitToolBarrier
+            return { output: {}, content: "probe" }
+          }),
+      }),
+    )
+    yield* s.admit("Echo, program, echo")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        callOf("call-a1", "echo", "a1"),
+        LLMEvent.toolCall({ id: "call-program", name: "execute", input: { code: "return await tools.probe({})" } }),
+        callOf("call-a2", "echo", "a2"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const first = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    expect(s.executions).toEqual(["a1"])
+
+    const second = yield* s.blockTools(1)
+    yield* first.release
+    yield* second.started
+    // The program runs only once the first call is done, and the last call waits for the program.
+    expect(s.executions).toEqual(["a1", "probe"])
+
+    const third = yield* s.blockTools(1)
+    yield* second.release
+    yield* third.started
+    expect(s.executions).toEqual(["a1", "probe", "a2"])
+
+    yield* third.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("settles the calls queued behind a declined one as aborted without running them", function* (s) {
+    yield* s.admit("Ask twice")
+    yield* s.llm.push(TestLLM.toolCalls(callOf("call-ask-1", "ask", "first"), callOf("call-ask-2", "ask", "second")))
+
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.asking)
+    // Only the first call has asked; the second is still queued behind it.
+    expect(s.executions).toEqual(["first"])
+    yield* Deferred.succeed(s.answer, undefined)
+    const exit = yield* Fiber.await(run)
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(s.executions).toEqual(["first"])
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Ask twice"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-ask-1" },
+          { error: { type: "aborted", message: "The user declined this tool call" } },
+        ),
+        Expected.failedTool({ id: "call-ask-2" }, { error: { type: "aborted" } }),
+      ]),
+    ])
+  })
+
+  scenario("settles the calls queued behind a rejection with feedback as cancelled", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        rejected: {
+          name: "rejected",
+          description: "Fail with the user's feedback",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { concurrencySafe: false },
+          execute: () =>
+            Effect.fail(
+              new Tool.Error({
+                message: "Use another tool",
+                error: new Permission.CorrectedError({ feedback: "Use another tool" }),
+              }),
+            ),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Reject, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-rejected", name: "rejected", input: {} }),
+        callOf("call-next", "mutate", "next"),
+      ),
+      TestLLM.stop(),
+    )
+
+    yield* s.resume
+
+    // The step goes on: the model is told what happened and answers.
+    expect(s.requests).toHaveLength(2)
+    expect(s.executions).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Reject, then mutate"),
+      Expected.assistant({}, [
+        Expected.failedTool({ id: "call-rejected" }, { error: { type: "permission.rejected" } }),
+        Expected.failedTool({ id: "call-next" }, { error: { type: "tool.cancelled" } }),
+      ]),
+      { type: "assistant", finish: "stop" },
+    ])
+  })
+
+  // Stand-ins for the shell: safe to run together, and asking for their siblings to be cancelled when they fail.
+  const failingTools = (s: Scenario) =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const waitFor = (text: string) =>
+        Effect.gen(function* () {
+          const hold = s.hold(text)
+          s.executions.push(text)
+          yield* Deferred.succeed(hold.started, undefined)
+          yield* Deferred.await(hold.release)
+        })
+      const base = {
+        description: "Fail after the test lets it",
+        input: Schema.Struct({ text: Schema.String }),
+        output: Schema.Struct({ text: Schema.String }),
+      }
+      yield* transformTools(
+        registry,
+        {
+          // Succeeds with `metadata.error`, the way a shell that timed out does.
+          failing_shell: {
+            ...base,
+            name: "failing_shell",
+            traits: { concurrencySafe: true, cancelSiblingsOnFailure: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(Effect.as({ output: { text }, content: text, metadata: { error: true } })),
+          },
+          throwing_shell: {
+            ...base,
+            name: "throwing_shell",
+            traits: { concurrencySafe: true, cancelSiblingsOnFailure: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(
+                Effect.andThen(Effect.fail(new Tool.Error({ message: "spawn failed", metadata: { error: true } }))),
+              ),
+          },
+          // A permission denial carries no `metadata.error`.
+          denied_shell: {
+            ...base,
+            name: "denied_shell",
+            traits: { concurrencySafe: true, cancelSiblingsOnFailure: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new ToolFailure({
+                      message: "Permission denied: shell",
+                      error: new Permission.BlockedError({ rules: [], permission: "shell", resources: ["x"] }),
+                    }),
+                  ),
+                ),
+              ),
+          },
+          corrected_shell: {
+            ...base,
+            name: "corrected_shell",
+            traits: { concurrencySafe: true, cancelSiblingsOnFailure: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new Tool.Error({
+                      message: "Use another tool",
+                      error: new Permission.CorrectedError({ feedback: "Use another tool" }),
+                    }),
+                  ),
+                ),
+              ),
+          },
+          // Flags a failure but does not ask for the siblings to be cancelled.
+          failing_plain: {
+            ...base,
+            name: "failing_plain",
+            traits: { concurrencySafe: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(Effect.as({ output: { text }, content: text, metadata: { error: true } })),
+          },
+          // Fails with `metadata.error` through `Tool.Error` but does not ask for the siblings to be cancelled.
+          throwing_plain: {
+            ...base,
+            name: "throwing_plain",
+            traits: { concurrencySafe: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(
+                Effect.andThen(Effect.fail(new Tool.Error({ message: "plain failure", metadata: { error: true } }))),
+              ),
+          },
+        },
+        { codemode: false },
+      )
+    })
+
+  for (const failing of ["failing_shell", "throwing_shell"] as const) {
+    scenario(`cancels the siblings of a ${failing} call that fails, and the step goes on`, function* (s) {
+      yield* failingTools(s)
+      yield* s.admit("Fail, hold, mutate, echo")
+      const failed = yield* Queue.unbounded<string>()
+      yield* s.bus.subscribe(SessionEvent.Tool.Failed).pipe(
+        Stream.runForEach((event) => Queue.offer(failed, event.data.id)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      const gate = yield* Deferred.make<void>()
+      yield* s.llm.push(
+        staged(
+          [
+            LLMEvent.stepStart({ index: 0 }),
+            callOf("call-f", failing, "f"),
+            callOf("call-h1", "held", "h1"),
+            callOf("call-h2", "held", "h2"),
+            callOf("call-m", "mutate", "m"),
+          ],
+          gate,
+          // Streamed after the failure: cancelled when it registers.
+          [callOf("call-late", "echo", "late")],
+          toolsDone,
+        ),
+        TestLLM.text("Done", "text-final"),
+      )
+
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Deferred.await(s.hold("f").started)
+      yield* Deferred.await(s.hold("h1").started)
+      yield* Deferred.await(s.hold("h2").started)
+      yield* Deferred.succeed(s.hold("f").release, undefined)
+      // The running siblings and the queued call settle before the provider streams anything more.
+      const settled = new Set<string>()
+      while (!settled.has("call-h1") || !settled.has("call-h2") || !settled.has("call-m")) settled.add(yield* Queue.take(failed))
+      yield* Deferred.succeed(gate, undefined)
+      yield* Fiber.join(run)
+
+      // Only the failing call and the running sibling ever started; the others never did.
+      expect(s.executions).toEqual(["f", "h1", "h2"])
+      expect(s.requests).toHaveLength(2)
+      expect(toolResultIDs(s.requests[1])).toEqual(["call-f", "call-h1", "call-h2", "call-m", "call-late"])
+      expect(yield* s.context).toMatchObject([
+        Expected.user("Fail, hold, mutate, echo"),
+        Expected.assistant({}, [
+          failing === "failing_shell"
+            ? Expected.completedTool({ id: "call-f" }, {})
+            : Expected.failedTool({ id: "call-f" }, { error: { type: "tool.execution" } }),
+          Expected.failedTool(
+            { id: "call-h1" },
+            { error: { type: "tool.cancelled", message: expect.stringContaining("Cancelled") } },
+          ),
+          Expected.failedTool(
+            { id: "call-h2" },
+            { error: { type: "tool.cancelled", message: expect.stringContaining("Cancelled") } },
+          ),
+          Expected.failedTool(
+            { id: "call-m" },
+            { error: { type: "tool.cancelled", message: expect.stringContaining("Not run") } },
+          ),
+          Expected.failedTool(
+            { id: "call-late" },
+            { error: { type: "tool.cancelled", message: expect.stringContaining("Not run") } },
+          ),
+        ]),
+        { type: "assistant", finish: "stop" },
+      ])
+    })
+  }
+
+  for (const failing of ["denied_shell", "corrected_shell", "failing_plain", "throwing_plain"] as const) {
+    scenario(`cancels no sibling of a ${failing} call`, function* (s) {
+      yield* failingTools(s)
+      yield* s.admit("Fail, hold")
+      yield* s.llm.push(
+        TestLLM.toolCalls(callOf("call-f", failing, "f"), callOf("call-h1", "held", "h1")),
+        TestLLM.text("Done", "text-final"),
+      )
+
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Deferred.await(s.hold("f").started)
+      yield* Deferred.await(s.hold("h1").started)
+      yield* Deferred.succeed(s.hold("f").release, undefined)
+      for (let i = 0; i < 50; i++) yield* Effect.yieldNow
+      // The sibling is still running: it was neither interrupted nor settled.
+      yield* Deferred.succeed(s.hold("h1").release, undefined)
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      expect(yield* s.context).toMatchObject([
+        Expected.user("Fail, hold"),
+        Expected.assistant({}, [expect.anything(), Expected.completedTool({ id: "call-h1" }, {})]),
+        { type: "assistant", finish: "stop" },
+      ])
+    })
+  }
+  // A step with a cancel-behavior call and a block-behavior call, both running, and the first request already sent.
+  const steerFixture = function* (s: Scenario) {
+    yield* s.admit("Look and echo")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-cancelable", name: "cancelable", input: { text: "look" } }),
+        LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "keep" } }),
+      ),
+      TestLLM.text("Handled", "text-after-steer"),
+    )
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    return { tools, run }
+  }
+  const finishSteered = (fixture: { tools: { release: Effect.Effect<void> }; run: Fiber.Fiber<unknown, unknown> }) =>
+    Effect.gen(function* () {
+      yield* fixture.tools.release
+      yield* Fiber.join(fixture.run)
+    })
+
+  scenario("cancels only the cancel-behavior calls when the user steers", function* (s) {
+    const fixture = yield* steerFixture(s)
+    yield* s.admit("STEER")
+    yield* finishSteered(fixture)
+
+    expect(s.requests).toHaveLength(2)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Look and echo"),
+      Expected.assistant({}, [
+        Expected.failedTool({ id: "call-cancelable" }, { error: { type: "tool.cancelled" } }),
+        { id: "call-echo", state: { status: "completed" } },
+      ]),
+      Expected.user("STEER"),
+      { type: "assistant", finish: "stop" },
+    ])
+    expect(userTexts(s.requests[1])).toEqual(["Look and echo", "STEER"])
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-cancelable", "call-echo"])
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain("Cancelled because the user sent a new message")
+  })
+
+  scenario("cancels when a prompt is sent with the default delivery and resume", function* (s) {
+    const fixture = yield* steerFixture(s)
+    yield* s.session.prompt({ sessionID, text: "STEER" })
+    yield* finishSteered(fixture)
+    expect((yield* s.context)[1]).toMatchObject({
+      content: [{ id: "call-cancelable", state: { error: { type: "tool.cancelled" } } }, { id: "call-echo" }],
+    })
+  })
+
+  for (const [name, admit] of [
+    ["a steer in another session", (s: Scenario) =>
+      Effect.gen(function* () {
+        yield* insertSession(otherSessionID)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "OTHER", delivery: "steer", resume: false })
+      })],
+    ["a queued prompt", (s: Scenario) => s.session.prompt({ sessionID, text: "LATER", delivery: "queue", resume: false })],
+    ["a synthetic notice", (s: Scenario) => s.session.synthetic({ sessionID, text: "Shell job finished" })],
+  ] as const)
+    scenario(`does not cancel anything for ${name}`, function* (s) {
+      const fixture = yield* steerFixture(s)
+      yield* admit(s)
+      yield* Effect.yieldNow
+      yield* finishSteered(fixture)
+      expect(JSON.stringify(yield* s.context)).not.toContain("tool.cancelled")
+    })
+
+  scenario("cancels when a queued user prompt is steered, but not a pending synthetic item", function* (s) {
+    const fixture = yield* steerFixture(s)
+    const synthetic = yield* s.session.synthetic({ sessionID, text: "Shell job finished", delivery: "queue", resume: false })
+    yield* s.session.steerInbox({ sessionID, inboxID: synthetic.id })
+    yield* Effect.yieldNow
+    expect(JSON.stringify(yield* s.context)).not.toContain("tool.cancelled")
+    const queued = yield* s.session.prompt({ sessionID, text: "LATER", delivery: "queue", resume: false })
+    yield* s.session.steerInbox({ sessionID, inboxID: queued.id })
+    yield* finishSteered(fixture)
+    expect((yield* s.context)[1]).toMatchObject({
+      content: [{ id: "call-cancelable", state: { error: { type: "tool.cancelled" } } }, { id: "call-echo" }],
+    })
+  })
+
+  scenario("cancels a cancel-behavior call that streams in after the steer", function* (s) {
+    yield* s.admit("Echo then look")
+    const gate = yield* s.llm.gate
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-echo", name: "echo", input: { text: "keep" } }),
+        LLMEvent.toolCall({ id: "call-late", name: "cancelable", input: { text: "late" } }),
+      ),
+      TestLLM.text("Handled", "text-after-steer"),
+    )
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* gate.started
+    yield* s.admit("STEER")
+    yield* gate.release
+    yield* tools.started
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["keep"])
+    expect((yield* s.context)[1]).toMatchObject({
+      content: [{ id: "call-echo" }, { id: "call-late", state: { error: { type: "tool.cancelled" } } }],
+    })
+  })
+
+  scenario("settles each call once when a shell failure and a steer race in the same batch", function* (s) {
+    yield* failingTools(s)
+    yield* s.admit("Fail, look, hold")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        callOf("call-f", "failing_shell", "f"),
+        callOf("call-look", "cancelable", "look"),
+        callOf("call-h1", "held", "h1"),
+      ),
+      TestLLM.text("Handled", "text-after-race"),
+    )
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.hold("f").started)
+    yield* Deferred.await(s.hold("h1").started)
+    yield* tools.started
+    // The steer settles the cancelable call first; the failure then settles only the sibling the steer left running.
+    yield* s.admit("STEER")
+    for (let i = 0; i < 50; i++) yield* Effect.yieldNow
+    yield* Deferred.succeed(s.hold("f").release, undefined)
+    yield* Fiber.join(run)
+
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Fail, look, hold"),
+      Expected.assistant({}, [
+        Expected.completedTool({ id: "call-f" }, {}),
+        Expected.failedTool(
+          { id: "call-look" },
+          { error: { type: "tool.cancelled", message: "Cancelled because the user sent a new message" } },
+        ),
+        Expected.failedTool(
+          { id: "call-h1" },
+          { error: { type: "tool.cancelled", message: expect.stringContaining("failing_shell call that ran alongside") } },
+        ),
+      ]),
+      Expected.user("STEER"),
+      { type: "assistant", finish: "stop" },
+    ])
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-f", "call-look", "call-h1"])
   })
 
   scenario("settles repeated provider-local tool call IDs against their owning assistant messages", function* (s) {
@@ -4708,6 +5670,32 @@ describe("SessionRunnerLLM", () => {
       expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
+    })
+
+    scenario("leaves no resume note behind when the turn limit is spent at an output-limit stop", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+      yield* s.llm.push(lengthStop("limit-note", "Part"), TestLLM.stop())
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+      expect(s.requests).toHaveLength(1)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+    })
+
+    scenario("fails with the limit when it is spent at the output-limit cap", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 4 }, resume: false })
+      yield* s.llm.push(
+        lengthStop("cap-1", "A"),
+        lengthStop("cap-2", "B"),
+        lengthStop("cap-3", "C"),
+        lengthStop("cap-4", "D"),
+        TestLLM.stop(),
+      )
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+      expect(s.requests).toHaveLength(4)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
     })
 
     scenario("runs a queued prompt without options unlimited in the same busy period", function* (s) {
@@ -6151,6 +7139,255 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests).toHaveLength(2)
   })
 
+  const fallbackModel = { providerID: Provider.ID.make("fake"), id: ID.make("replacement") }
+  const primaryRef = { providerID: Provider.ID.make("fake"), id: ID.make("fake-model") }
+  const retriesBefore = (s: Scenario, retries: number) =>
+    Effect.gen(function* () {
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      for (let index = 0; index < retries; index++) {
+        yield* Queue.take(scheduled)
+        yield* TestClock.adjust("1 minute")
+      }
+      yield* Fiber.join(run)
+    })
+  const retryCount = () =>
+    recordedEventTypes(sessionID).pipe(
+      Effect.map((types) => types.filter((type) => type === "session.retry.scheduled.1").length),
+    )
+  const fallbackNotices = (s: Scenario) =>
+    s.context.pipe(
+      Effect.map((messages) =>
+        messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === "fallback"),
+      ),
+    )
+
+  scenario("switches to the fallback model after three overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "fallback-success"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel])
+    expect(yield* retryCount()).toBe(2)
+    expect(s.closedTransports).toContain(sessionID)
+    const context = yield* s.context
+    // The failed attempt's empty draft is closed without a finish, so the only finished assistant is the fallback's.
+    expect(context.filter((message) => message.type === "assistant" && message.finish !== undefined)).toMatchObject([
+      { model: { id: "replacement" }, finish: "stop" },
+    ])
+    expect(yield* fallbackNotices(s)).toMatchObject([
+      {
+        description: "Switched from fake/fake-model to fake/replacement after repeated overloads",
+        metadata: { notice: "fallback", model: fallbackModel, previous: primaryRef },
+      },
+    ])
+  })
+
+  scenario("restarts the overload count after a response cut off by the output limit", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded around a cut-off", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), lengthStop("cut-between", "Part"))
+    yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Done", "after-cut"))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    // Before the fix the third overload switched models with no retry, so waiting for one would only time out.
+    const third = yield* Effect.raceFirst(
+      Queue.take(scheduled).pipe(Effect.as(true)),
+      Fiber.await(run).pipe(Effect.as(false)),
+    )
+    if (third) yield* TestClock.adjust("1 minute")
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  // The cap of three resumes reads durable history, so the switch to a fallback model mid-turn must not reset it.
+  scenario("holds the output-limit cap on the fallback model after overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded then long", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(...Array.from({ length: 6 }, (_, index) => lengthStop(`fb-limit-${index}`, String(index))))
+    yield* s.llm.push(TestLLM.text("Never reached", "fb-limit-done"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests.map((request) => request.model)).toEqual([
+      model,
+      model,
+      model,
+      ...Array.from({ length: 4 }, () => replacementModel),
+    ])
+    const context = yield* s.context
+    expect(
+      context.flatMap((message) => (message.type === "synthetic" ? [message.metadata?.notice] : [])),
+    ).toEqual(["fallback", "output-limit", "output-limit", "output-limit"])
+    expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
+  })
+
+  scenario("records the notice before the fallback's answer and keeps it out of the tail after a tool call", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.tool("call-fallback", "echo", { text: "fallback" }), TestLLM.text("Done", "after-tool"))
+    yield* retriesBefore(s, 2)
+
+    const types = (yield* s.context).flatMap((message) =>
+      message.type === "synthetic" || (message.type === "assistant" && message.finish !== undefined)
+        ? [message.type]
+        : [],
+    )
+    expect(types).toEqual(["synthetic", "assistant", "assistant"])
+    const tail = s.requests.at(-1)
+    expect(tail?.model).toBe(replacementModel)
+    expect(tail?.messages.at(-1)?.role).not.toBe("user")
+  })
+
+  scenario("tells the fallback model about the switch and gives it a fresh retry allowance", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Recovered", "fresh-allowance"))
+    const attempts: number[] = []
+    yield* s.bus.subscribe(SessionEvent.RetryScheduled).pipe(
+      Stream.filter((event) => event.data.sessionID === sessionID),
+      Stream.runForEach((event) => Effect.sync(() => attempts.push(event.data.attempt))),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, replacementModel])
+    expect(userTexts(s.requests[3]!)).toContain(
+      "The previous model was overloaded, so this turn continues on a different model.",
+    )
+    // Without a fresh allowance the fallback's first retry would continue the primary's count.
+    expect(attempts.at(-1)).toBe(attempts[0])
+  })
+
+  scenario("fails the step on the primary model once the retry allowance is spent", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", resume: false })
+    yield* s.llm.push(...Array.from({ length: 11 }, () => Stream.fail(overloaded())))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
+    for (let index = 0; index < 10; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(s.requests).toHaveLength(11)
+    expect(s.requests.every((request) => request.model === model)).toBe(true)
+  })
+
+  scenario("does not switch when another failure interrupts the overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Mixed", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(rateLimited()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "mixed-success"))
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("restarts the overload count after another failure", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Reset", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      Stream.fail(overloaded()),
+      Stream.fail(overloaded()),
+      Stream.fail(rateLimited()),
+      Stream.fail(overloaded()),
+    )
+    yield* s.llm.push(TestLLM.text("Recovered", "reset-success"))
+    yield* retriesBefore(s, 4)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* retryCount()).toBe(4)
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("fails the partial response and continues on the fallback after mid-stream overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Partial", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      ...[0, 1, 2].map((index) =>
+        TestLLM.failAfter(
+          overloaded(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: `partial-${index}` }),
+          LLMEvent.textDelta({ id: `partial-${index}`, text: `Partial ${index}` }),
+        ),
+      ),
+    )
+    yield* s.llm.push(TestLLM.text("Finished", "partial-fallback-success"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests).toHaveLength(4)
+    expect(s.requests.at(-1)?.model).toBe(replacementModel)
+    const context = yield* s.context
+    const assistants = context.filter((message) => message.type === "assistant")
+    expect(assistants.map((message) => message.finish)).toEqual(["error", "error", "error", "stop"])
+    expect(new Set(assistants.map((message) => message.id)).size).toBe(4)
+    expect(
+      context.flatMap((message) =>
+        message.type === "synthetic" ? [message.metadata?.notice ?? message.text] : [],
+      ),
+    ).toEqual([INCOMPLETE_STREAM_CONTINUATION, INCOMPLETE_STREAM_CONTINUATION, "fallback", INCOMPLETE_STREAM_CONTINUATION])
+  })
+
+  for (const [name, turn] of [
+    ["no fallback is configured", {}],
+    ["the fallback is the primary model", { fallbackModel: primaryRef }],
+  ] as const)
+    scenario(`stays on the primary model when ${name}`, function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Overloaded", turn, resume: false })
+      yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+      yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Recovered", "primary-success"))
+      yield* retriesBefore(s, 4)
+
+      expect(s.requests).toHaveLength(5)
+      expect(s.requests.every((request) => request.model === model)).toBe(true)
+      expect(yield* retryCount()).toBe(4)
+      expect(yield* fallbackNotices(s)).toEqual([])
+    })
+
+  scenario("returns to the primary model on the next turn", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "First", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "turn-one"), TestLLM.text("Next", "turn-two"))
+    yield* retriesBefore(s, 2)
+    // A queued prompt starts the next turn; a steer would join this one and keep its fallback.
+    yield* s.session.prompt({ sessionID, text: "Second", delivery: "queue", resume: false })
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, model])
+  })
+
+  // A restarted or reloaded drain has no memory, so the fallback must come from the durable notice alone.
+  scenario("keeps the fallback for a later drain of the same turn", function* (s) {
+    yield* s.admit("Mid turn")
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Switched",
+      metadata: { notice: "fallback", model: fallbackModel },
+    })
+    yield* s.llm.push(TestLLM.text("Still on fallback", "reloaded"))
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([replacementModel])
+  })
+
+  scenario("clears the fallback when the model is switched explicitly", function* (s) {
+    yield* s.admit("Mid turn")
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Switched",
+      metadata: { notice: "fallback", model: fallbackModel },
+    })
+    yield* s.bus.publish(SessionEvent.ModelSelected, { sessionID, model: primaryRef })
+    yield* s.llm.push(TestLLM.text("Back on primary", "cleared"))
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([model])
+  })
+
   scenario("continues an incomplete stream after observable text", function* (s) {
     const failure = incompleteStream()
     yield* s.admit("Continue partial output")
@@ -7210,5 +8447,304 @@ describe("SessionRunnerLLM", () => {
     expect(defect).toBeInstanceOf(Error)
     if (!(defect instanceof Error)) return
     expect(defect.message).toBe("Tool input delta before start: call-1")
+  })
+
+  const OUTPUT_LIMIT_NOTICE = {
+    type: "synthetic",
+    metadata: { notice: "output-limit" },
+  }
+
+  const lengthStop = (id: string, text: string) =>
+    TestLLM.complete(
+      { reason: { normalized: "length", raw: "max_tokens" } },
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text }),
+      LLMEvent.textEnd({ id }),
+    )
+
+  scenario("resumes a response that stopped at the output limit", function* (s) {
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("limit-1", "Part 1"), TestLLM.text(" Part 2", "limit-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests[1]?.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Part 1" }],
+    })
+    expect(s.requests[1]?.messages.at(-1)).toMatchObject({ role: "user" })
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
+    const context = yield* s.context
+    expect(context).toMatchObject([
+      Expected.user("Write a long answer"),
+      Expected.assistant({ finish: "length" }, [Expected.text("Part 1")]),
+      OUTPUT_LIMIT_NOTICE,
+      Expected.assistant({ finish: "stop" }, [Expected.text(" Part 2")]),
+    ])
+    expect(context.find((message) => message.type === "synthetic")?.description).toBeUndefined()
+    yield* replaySessionProjection(sessionID)
+    expect(yield* s.context).toMatchObject(context)
+  })
+
+  // Every way an output-limited response can start another request; each must stop at the cap of three resumes.
+  for (const row of [
+    { name: "text only", cut: (n: number) => lengthStop(`cap-${n}`, String(n)) },
+    {
+      name: "a cut-off tool call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: `cap-call-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cap-call-${n}`, name: "echo", text: '{"text":"par' }),
+          LLMEvent.toolCall({ id: `cap-call-${n}`, name: "echo", input: { text: "par" }, partialInput: true }),
+        ),
+    },
+    {
+      name: "an input that never became a call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: `cap-input-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cap-input-${n}`, name: "echo", text: '{"text":' }),
+        ),
+    },
+    {
+      name: "a tool call that ran",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolCall({ id: `cap-ran-${n}`, name: "echo", input: { text: String(n) } }),
+        ),
+    },
+  ])
+    scenario(`stops resuming after three consecutive output-limit stops: ${row.name}`, function* (s) {
+      yield* s.admit("Never finishes")
+      yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => row.cut(index + 1)), TestLLM.text("Done", "cap-done"))
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(4)
+      const context = yield* s.context
+      expect(context.filter((message) => message.type === "synthetic")).toHaveLength(3)
+      expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
+    })
+
+  scenario("counts the output-limit streak from the last response that finished normally", function* (s) {
+    yield* s.admit("Mixed limits")
+    yield* s.llm.push(
+      lengthStop("reset-1", "1"),
+      TestLLM.tool("call-reset", "echo", { text: "reset" }),
+      lengthStop("reset-2", "2"),
+      lengthStop("reset-3", "3"),
+      lengthStop("reset-4", "4"),
+      TestLLM.text("Done", "reset-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+  })
+
+  scenario("never runs a tool call that was cut off by the output limit", function* (s) {
+    yield* s.admit("Truncated call")
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolInputStart({ id: "call-cut", name: "echo" }),
+        LLMEvent.toolInputDelta({ id: "call-cut", name: "echo", text: '{"text":"par' }),
+        LLMEvent.toolCall({ id: "call-cut", name: "echo", input: { text: "par" }, partialInput: true }),
+      ),
+      TestLLM.tool("call-whole", "echo", { text: "whole" }),
+      TestLLM.text("Done", "cut-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["whole"])
+    expect(s.requests).toHaveLength(3)
+    const types = yield* recordedEventTypes(sessionID)
+    expect(types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
+    expect(types.indexOf("session.tool.failed.2")).toBeLessThan(types.indexOf("session.step.ended.1"))
+    const context = yield* s.context
+    expect(context[1]).toMatchObject({
+      type: "assistant",
+      finish: "length",
+      content: [{ type: "tool", id: "call-cut", state: { status: "error", error: { type: "tool.input-truncated" } } }],
+    })
+    expect(context[2]).toMatchObject(OUTPUT_LIMIT_NOTICE)
+  })
+
+  scenario("never starts a cut-off call beside a safe call and runs the safe call once", function* (s) {
+    yield* s.admit("Safe call and a cut-off call")
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolCall({ id: "call-safe", name: "echo", input: { text: "safe" } }),
+        LLMEvent.toolInputStart({ id: "call-cut", name: "echo" }),
+        LLMEvent.toolInputDelta({ id: "call-cut", name: "echo", text: '{"text":"par' }),
+        LLMEvent.toolCall({ id: "call-cut", name: "echo", input: { text: "par" }, partialInput: true }),
+      ),
+      TestLLM.text("Done", "safe-cut-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["safe"])
+    expect(s.requests).toHaveLength(2)
+    expect((yield* s.context)[1]).toMatchObject({
+      type: "assistant",
+      finish: "length",
+      content: expect.arrayContaining([
+        expect.objectContaining({ id: "call-safe", state: expect.objectContaining({ status: "completed" }) }),
+        expect.objectContaining({
+          id: "call-cut",
+          state: expect.objectContaining({ status: "error", error: expect.objectContaining({ type: "tool.input-truncated" }) }),
+        }),
+      ]),
+    })
+  })
+
+  for (const row of [
+    { name: "a pre-output provider failure", failure: () => Stream.fail(providerUnavailable()) },
+    {
+      name: "a stream that breaks mid-response",
+      failure: () => TestLLM.failAfter(incompleteStream(), LLMEvent.stepStart({ index: 0 }), LLMEvent.textStart({ id: "mid" })),
+    },
+    {
+      name: "an unknown finish after text",
+      failure: () =>
+        TestLLM.complete(
+          { reason: { normalized: "unknown" } },
+          LLMEvent.textStart({ id: "unk" }),
+          LLMEvent.textDelta({ id: "unk", text: "x" }),
+          LLMEvent.textEnd({ id: "unk" }),
+        ),
+    },
+  ])
+    scenario(`keeps counting the output-limit streak across ${row.name}`, function* (s) {
+      yield* s.admit("Limits with a failure")
+      yield* s.llm.push(lengthStop("retry-1", "1"), lengthStop("retry-2", "2"), lengthStop("retry-3", "3"))
+      yield* s.llm.push(row.failure())
+      yield* s.llm.push(lengthStop("retry-4", "4"), lengthStop("retry-5", "5"), lengthStop("retry-6", "6"))
+
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(FIRST_RETRY)
+      yield* Fiber.join(run).pipe(Effect.exit)
+
+      const notes = (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit")
+      expect(notes).toHaveLength(3)
+    })
+
+  scenario("compacts before resuming a response that stopped at the context window", function* (s) {
+    s.currentModel = compactModel
+    yield* s.admit("Question")
+    yield* s.llm.push(
+      TestLLM.complete(
+        {
+          reason: { normalized: "length", raw: "model_context_window_exceeded" },
+          usage: { nonCachedInputTokens: 3_950, outputTokens: 10 },
+        },
+        LLMEvent.textStart({ id: "window-1" }),
+        LLMEvent.textDelta({ id: "window-1", text: "Part" }),
+        LLMEvent.textEnd({ id: "window-1" }),
+      ),
+      TestLLM.text("## Objective\n- Keep going", "window-summary"),
+      TestLLM.text("Done", "window-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1]).at(-1)).toContain("## Objective")
+    expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Keep going\n</summary>")
+    const context = yield* s.context
+    expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    expect(context.some((message) => message.type === "compaction")).toBe(true)
+  })
+
+  scenario("resumes in the same step when the agent has steps left", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 2
+      }),
+    )
+    yield* s.admit("Two steps")
+    yield* s.llm.push(lengthStop("steps-1", "A"), TestLLM.text("B", "steps-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests.map((request) => request.toolChoice?.type)).not.toContain("none")
+  })
+
+  scenario("delivers a steered message at a text-only output-limit stop instead of resuming", function* (s) {
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(
+      lengthStop("steer-1", "A"),
+      TestLLM.text("Answer", "steer-done"),
+    )
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    yield* s.admit("STEER")
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
+    ).toHaveLength(0)
+  })
+
+  scenario("resumes a reply cut off at the configured cap", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-resume-1", "Part"), TestLLM.text(" rest", "cap-resume-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 8_000])
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
+    ).toHaveLength(1)
+  })
+
+  scenario("starts a fresh output-limit streak after a new prompt", function* (s) {
+    yield* s.admit("First")
+    yield* s.llm.push(
+      lengthStop("new-1", "1"),
+      lengthStop("new-2", "2"),
+      lengthStop("new-3", "3"),
+      lengthStop("new-4", "4"),
+    )
+    yield* s.resume
+    expect(s.requests).toHaveLength(4)
+
+    yield* s.admit("Second")
+    yield* s.llm.push(lengthStop("new-5", "5"), TestLLM.text("Done", "new-done"))
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+  })
+
+  scenario("keeps tools disabled while resuming on the agent's final step", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 1
+      }),
+    )
+    yield* s.admit("Final step")
+    yield* s.llm.push(lengthStop("final-1", "A"), TestLLM.text("B", "final-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests.map((request) => request.toolChoice)).toMatchObject([{ type: "none" }, { type: "none" }])
   })
 })

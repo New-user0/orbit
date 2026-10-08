@@ -6,6 +6,7 @@ import {
   LLMClient,
   LLMEvent,
   isContextOverflowFailure,
+  isOverloaded,
   type ProviderErrorEvent,
   type ToolCall,
 } from "@orbit/ai"
@@ -13,6 +14,9 @@ import type { Agent } from "@orbit/schema/agent"
 import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@orbit/schema/session-error"
 import { Bus } from "../../bus.js"
+import { Config } from "../../config.js"
+import { Database } from "../../database/database.js"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { Permission } from "../../permission.js"
 import { Snapshot } from "../../snapshot.js"
 import { Tool } from "../../tool.js"
@@ -20,6 +24,7 @@ import { ToolOutput } from "../../tool-output.js"
 import { QuestionTool } from "../../tool/plugin/question.js"
 import { StepFailedError } from "../error.js"
 import { SessionEvent } from "../event.js"
+import { SessionInbox } from "../inbox.js"
 import { SessionMessage } from "../message.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionSchema } from "../schema.js"
@@ -28,13 +33,22 @@ import { SessionUsage } from "../usage.js"
 import { SessionRunnerModel } from "./model.js"
 import { createLLMEventPublisher } from "./publish-llm-event.js"
 import { SessionRunnerRetry } from "./retry.js"
+import { ToolScheduler } from "./tool-scheduler.js"
 
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
-  Retry: { readonly error: SessionError.Error; readonly decision: SessionRunnerRetry.Decision }
+  /** The response stopped at the output limit; the runner decides whether to resume it. */
+  OutputLimited: { readonly needsContinuation: boolean }
+  Retry: {
+    readonly error: SessionError.Error
+    readonly decision: SessionRunnerRetry.Decision
+    /** Whether the provider reported it was overloaded, which counts toward the fallback switch. */
+    readonly overloaded: boolean
+  }
   Continue: {
     readonly error: SessionError.Error
     readonly decision: SessionRunnerRetry.Decision
+    readonly overloaded: boolean
   }
   RecoverFull: {}
   Compacted: {}
@@ -60,11 +74,44 @@ interface Input {
 
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
 const STEP_INTERRUPTED = { type: "aborted", message: "Step interrupted" } as const
+const INPUT_TRUNCATED = {
+  type: "tool.input-truncated",
+  message: "The response hit its output limit before this tool call was complete, so the call did not run",
+} as const
+// A call the user's decline keeps from starting settles as aborted, like the declined call; one that a rejection with
+// feedback keeps from starting settles as cancelled, so the model can tell it never ran and carry on.
+const SKIPPED_AFTER_DECLINE = {
+  type: "aborted",
+  message: "Not run: the user declined an earlier tool call",
+} as const
+const SKIPPED_AFTER_REJECTION = {
+  type: Tool.ErrorCode.Cancelled,
+  message: "Not run: the user rejected an earlier tool call and gave feedback",
+} as const
+// A failed call whose tool asks for it keeps its siblings from finishing. Both texts name the tool only: the name is
+// one the request offered, never text from the call's input or output.
+const siblingsStopped = (tool: string) => ({
+  running: {
+    type: Tool.ErrorCode.Cancelled,
+    message: `Cancelled: the ${tool} call that ran alongside this one failed`,
+  },
+  queued: {
+    type: Tool.ErrorCode.Cancelled,
+    message: `Not run: an earlier ${tool} call failed before this one could start`,
+  },
+})
+// A new user message settles the calls that can be cancelled as cancelled, so the model sees they never finished.
+const STEERED = {
+  type: Tool.ErrorCode.Cancelled,
+  message: "Cancelled because the user sent a new message",
+} as const
 const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
 
 /** Captures Location-scoped dependencies without introducing another service or execution loop. */
 export const make = Effect.gen(function* () {
   const bus = yield* Bus.Service
+  const config = yield* Config.Service
+  const db = (yield* Database.Service).db
   const llm = yield* LLMClient.Service
   const snapshots = yield* Snapshot.Service
   const toolOutput = yield* ToolOutput.Service
@@ -78,8 +125,51 @@ export const make = Effect.gen(function* () {
       model: input.model.ref,
       providerMetadataKey: input.model.model.route.providerMetadataKey ?? input.model.model.provider,
       snapshot: startSnapshot,
+      displayName: (name) => input.prepared.describeTool(name)?.displayName,
       started: yield* Clock.currentTimeMillis,
     })
+    const scheduler = ToolScheduler.make<SessionError.Error>({
+      maxConcurrency:
+        Config.latest(yield* config.entries(), "tool_execution")?.max_concurrency ??
+        ConfigToolExecution.DEFAULT_MAX_CONCURRENCY,
+      onQueued: (id) => publisher.hint(id, { queued: true }),
+      onStarted: (id) => publisher.hint(id, {}),
+    })
+    // Queued and later calls never start; running ones are interrupted inside their race and settle as cancelled.
+    const cancelSiblings = (failed: ToolCall) => {
+      const messages = siblingsStopped(failed.name)
+      const select = (id: string) => id !== failed.id
+      return scheduler
+        .cancel({ running: false, future: true, select }, messages.queued)
+        .pipe(Effect.andThen(scheduler.cancel({ running: true, future: false, select }, messages.running)))
+    }
+    // Traits resolve after a call registers, so a steer cancels the calls whose traits are known and each later call
+    // checks the flag once its own traits arrive.
+    const interruptBehavior = new Map<string, Tool.ResolvedTraits["interruptBehavior"]>()
+    let steered = false
+    const cancelSteered = scheduler.cancel(
+      { running: true, future: false, select: (id) => interruptBehavior.get(id) === "cancel" },
+      STEERED,
+    )
+    // A steer is a user message that the next step boundary delivers; queued and synthetic input cancels nothing.
+    yield* bus.subscribe([SessionEvent.InboxEnqueued, SessionEvent.InboxDeliveryChanged]).pipe(
+      Stream.filter((event) => event.data.sessionID === input.sessionID),
+      Stream.filterEffect((event) =>
+        event.type === "session.inbox.enqueued"
+          ? Effect.succeed(event.data.item.type === "user" && event.data.item.delivery === "steer")
+          : event.data.delivery === "steer"
+            ? // A row that is gone has already been delivered.
+              SessionInbox.find(db, event.data.inboxID).pipe(Effect.map((item) => item?.type === "user"))
+            : Effect.succeed(false),
+      ),
+      Stream.runForEach(() =>
+        Effect.suspend(() => {
+          steered = true
+          return cancelSteered
+        }),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    )
     const toolRuns: Array<{
       readonly call: ToolCall
       readonly fiber: Fiber.Fiber<void, Permission.DeclinedError | QuestionTool.CancelledError>
@@ -87,10 +177,12 @@ export const make = Effect.gen(function* () {
     const interruptTools = Effect.suspend(() => Fiber.interruptAll(toolRuns.map((run) => run.fiber)))
     const executeTool = (call: ToolCall) => {
       if (input.prepared.request.toolChoice?.type === "none")
-        return new Tool.Error({
-          message: "Tools are disabled after the maximum agent steps",
-          code: Tool.ErrorCode.Disabled,
-        })
+        return Effect.fail(
+          new Tool.Error({
+            message: "Tools are disabled after the maximum agent steps",
+            code: Tool.ErrorCode.Disabled,
+          }),
+        )
       return input.prepared.executeTool({
         sessionID: input.sessionID,
         agent: input.agent,
@@ -118,17 +210,62 @@ export const make = Effect.gen(function* () {
           }
           yield* publisher.publish(event)
           if (event.type !== "tool-call" || event.providerExecuted) return
+          // Registering in the same uninterruptible block as the fork keeps provider order, and no call is left
+          // registered without a fiber that releases it. The scheduler starts the call once its traits allow.
           toolRuns.push({
             call: event,
-            fiber: yield* Effect.uninterruptibleMask((restore) =>
-              restore(executeTool(event)).pipe(
-                Effect.flatMap(toolOutput.truncate),
-                Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome)),
-                Effect.catchTag("Tool.Error", (error) =>
-                  publisher.failTool(event.id, toSessionError(error), error.metadata).pipe(Effect.asVoid),
+            fiber: yield* Effect.uninterruptibleMask((restore) => {
+              const entry = scheduler.register(event.id)
+              // A forked child does not inherit the mask, so keep it: publishing the outcome must not be interrupted.
+              return Effect.forkScoped(
+                restore(input.prepared.toolTraits(event)).pipe(
+                  Effect.tap((traits) =>
+                    Effect.suspend(() => {
+                      interruptBehavior.set(event.id, traits.interruptBehavior)
+                      return steered ? cancelSteered : Effect.void
+                    }),
+                  ),
+                  Effect.flatMap((traits) =>
+                    restore(
+                      scheduler.run(
+                        entry,
+                        traits,
+                        executeTool(event).pipe(
+                          // Only an explicit `metadata.error` on a tool that declares the trait counts as a failure.
+                          Effect.tap((result) =>
+                            traits.cancelSiblingsOnFailure && result.metadata?.error === true
+                              ? cancelSiblings(event)
+                              : Effect.void,
+                          ),
+                          Effect.tapError((error) =>
+                            error._tag !== "Tool.Error"
+                              ? scheduler.halt(SKIPPED_AFTER_DECLINE)
+                              : traits.cancelSiblingsOnFailure && error.metadata?.error === true
+                                ? cancelSiblings(event)
+                                : Effect.void,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Effect.flatMap((result) =>
+                    result._tag === "Cancelled"
+                      ? publisher.failTool(event.id, result.error).pipe(Effect.asVoid)
+                      : toolOutput
+                          .truncate(result.value)
+                          .pipe(Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome))),
+                  ),
+                  Effect.catchTag("Tool.Error", (error) =>
+                    (hasCorrection(error) ? scheduler.halt(SKIPPED_AFTER_REJECTION) : Effect.void).pipe(
+                      Effect.andThen(publisher.failTool(event.id, toSessionError(error), error.metadata)),
+                      Effect.asVoid,
+                    ),
+                  ),
+                  Effect.ensuring(scheduler.release(entry)),
                 ),
-              ),
-            ).pipe(Effect.forkScoped),
+                { uninterruptible: "inherit" },
+              )
+            }),
           })
         }),
       ),
@@ -195,7 +332,7 @@ export const make = Effect.gen(function* () {
         if (llmFailure && llmError && retry?.retry && !recorded.outputStarted) {
           // Retry state projects onto the existing assistant, even before it has produced output.
           yield* publisher.startAssistant()
-          return Outcome.Retry({ error: llmError, decision: retry })
+          return Outcome.Retry({ error: llmError, decision: retry, overloaded: isOverloaded(llmFailure) })
         }
         if (llmError) yield* publisher.failAssistant(llmError)
 
@@ -224,6 +361,13 @@ export const make = Effect.gen(function* () {
           const missing = yield* publisher.failUnsettledTools(RESULT_MISSING, "hosted")
           if (missing && !llmError && !recorded.finish) yield* publisher.failAssistant(RESULT_MISSING)
         }
+
+        // Read before the sweep below: an input cut off by a length stop is settled, not run, and must not start a step.
+        const ran = publisher.record().needsContinuation
+
+        // A length stop cuts inputs off before their call: settle them so nothing stays streaming and the model learns.
+        if (!llmError && Exit.isSuccess(stream) && !recorded.providerFailed && recorded.finish?.finish === "length")
+          yield* publisher.failUnsettledTools(INPUT_TRUNCATED, "uncalled")
 
         const record = publisher.record()
         if (record.finish || record.failure) {
@@ -261,7 +405,7 @@ export const make = Effect.gen(function* () {
           tools.declines.length === 0 &&
           !tools.interrupted
         )
-          return Outcome.Continue({ error: llmError, decision: retry })
+          return Outcome.Continue({ error: llmError, decision: retry, overloaded: isOverloaded(llmFailure) })
 
         if (Exit.isFailure(stream)) return yield* Effect.failCause(stream.cause)
         if (tools.declines.length > 0) {
@@ -271,15 +415,25 @@ export const make = Effect.gen(function* () {
         if (tools.interrupted && tools.failure) return yield* Effect.failCause(tools.failure)
         if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
-        return Outcome.Completed({
-          needsContinuation: input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation,
-        })
+        const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
+        if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation: needsContinuation && ran })
+        return Outcome.Completed({ needsContinuation })
       }),
     )
   }, Effect.scoped)
 
   return { attempt }
 })
+
+/** A tool turns the user's feedback into a failure whose cause is the correction, possibly through a wrapper. */
+const hasCorrection = (error: Tool.Error) => {
+  for (let cause: unknown = error, depth = 0; depth < 8; depth++) {
+    if (cause instanceof Permission.CorrectedError) return true
+    if (!(cause instanceof Error) || !("error" in cause)) return false
+    cause = cause.error
+  }
+  return false
+}
 
 const isInterruptedStream = (failure: AIError) => {
   if (failure.reason._tag === "InvalidProviderOutput") return failure.reason.classification === "incomplete-stream"

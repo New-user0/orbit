@@ -14,7 +14,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@orbit/client": "workspace:*"
+    "@orbit/client": "workspace:*",
+    "@orbit/util": "workspace:*"
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",

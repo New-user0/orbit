@@ -411,6 +411,7 @@ export async function runNonInteractivePrompt(input: Input) {
       // session's output. Other clients' sessions on a shared server are not owned and so are not counted.
       if (
         promoted &&
+        (input.envelope !== undefined || input.verbose) &&
         (event.type === "session.step.started" ||
           event.type === "session.step.ended" ||
           event.type === "session.step.failed") &&
@@ -1061,7 +1062,7 @@ export async function runNonInteractivePrompt(input: Input) {
                 : permissionRejected
                   ? "permission_rejected"
                   : formCancelled
-                    ? "question_cancelled"
+                    ? "form_cancelled"
                     : "incomplete",
         error: failure,
         steps: totals.steps,

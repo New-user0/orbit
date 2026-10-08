@@ -49,6 +49,26 @@ test("failed steps only override the assistant finish for content filters", () =
   expect(() => decode({ ...input, finish: "stop" })).toThrow()
 })
 
+test("a display name stays optional on the tool input event and the projected tool", () => {
+  const decodeEvent = Schema.decodeUnknownSync(SessionEvent.Tool.Input.Started.data)
+  const encodeEvent = Schema.encodeSync(SessionEvent.Tool.Input.Started.data)
+  const event = { sessionID: "ses_terminal", assistantMessageID: "msg_terminal", id: "call", name: "read" }
+  expect(encodeEvent(decodeEvent(event))).toEqual(event)
+  expect(encodeEvent(decodeEvent({ ...event, displayName: "Read" }))).toEqual({ ...event, displayName: "Read" })
+
+  const decodeTool = Schema.decodeUnknownSync(SessionMessage.AssistantTool)
+  const encodeTool = Schema.encodeSync(SessionMessage.AssistantTool)
+  const tool = {
+    type: "tool" as const,
+    id: "call",
+    name: "read",
+    state: { status: "streaming" as const, input: "" },
+    time: { created: 0 },
+  }
+  expect(encodeTool(decodeTool(tool))).toEqual(tool)
+  expect(encodeTool(decodeTool({ ...tool, displayName: "Read" }))).toEqual({ ...tool, displayName: "Read" })
+})
+
 test("provider compaction context is optional, versioned and JSON-only", () => {
   const decode = Schema.decodeUnknownSync(SessionEvent.Compaction.Ended.data)
   const encode = Schema.encodeSync(SessionEvent.Compaction.Ended.data)

@@ -7,6 +7,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Info, type Entry, type Scope } from "@orbit/schema/config"
 import { ConfigAgent } from "@orbit/schema/config/agent"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { ConfigCommand } from "@orbit/schema/config/command"
 import { Trust } from "@orbit/schema/trust"
 
@@ -46,6 +47,7 @@ describe("ConfigTrust.sanitize", () => {
     ["shell", "/bin/zsh", "shell"],
     ["default_agent", "mine", "permissions"],
     ["fallback_model", "acme/backup", "providers"],
+    ["output_token_cap", 8000, "providers"],
     ["update", "auto", "network"],
     ["share", "auto", "network"],
     ["enterprise", { url: "https://share.example.com" }, "network"],
@@ -343,6 +345,25 @@ describe("ConfigTrust.sanitize", () => {
     const off = decode({ warming: false })
     expect(ConfigTrust.sanitize(off, place)).toEqual({ info: off, withheld: [] })
     expect(ConfigTrust.sanitize(off, place).info.warming).toBe(false)
+  })
+
+  test("lets an untrusted folder lower the tool concurrency cap but not raise it past the default", () => {
+    for (const [cap, kept] of [
+      [1, true],
+      [2, true],
+      [ConfigToolExecution.DEFAULT_MAX_CONCURRENCY, true],
+      [ConfigToolExecution.DEFAULT_MAX_CONCURRENCY + 1, false],
+      [1000, false],
+    ] as const) {
+      const result = sanitize({ tool_execution: { max_concurrency: cap } })
+      if (kept) {
+        expect(result.info.tool_execution?.max_concurrency).toBe(cap)
+        expect(result.withheld).toEqual([])
+        continue
+      }
+      expect(result.info).not.toHaveProperty("tool_execution")
+      expect(result.withheld).toEqual(["settings"])
+    }
   })
 
   test("flags commands that run a shell snippet and keeps every command", () => {
