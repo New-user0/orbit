@@ -31,6 +31,8 @@ export interface DialogSelectProps<T> {
   ref?: (ref: DialogSelectRef<T>) => void
   onMove?: (option: DialogSelectOption<T>) => void
   onFilter?: (query: string) => void
+  /** Text the filter starts with. The caller starts whatever `onFilter` drives from the same text. */
+  initialFilter?: string
   onSelect?: (option: DialogSelectOption<T>) => void
   onCancel?: () => void
   skipFilter?: boolean
@@ -118,7 +120,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   const [store, setStore] = createStore({
     selected: 0,
-    filter: "",
+    filter: props.initialFilter ?? "",
   })
   const [focusedAction, setFocusedAction] = createSignal<number>()
   const actionFocused = createMemo(() => focusedAction() !== undefined)
@@ -672,6 +674,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               ref={(r) => {
                 input = r
                 input.traits = { status: "FILTER" }
+                if (props.initialFilter) input.value = props.initialFilter
                 setTimeout(() => {
                   if (!input) return
                   if (r.isDestroyed) return

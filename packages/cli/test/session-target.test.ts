@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { Orbit, type LocationGetOutput, type ModelRef, type SessionInfo } from "@orbit/client/promise"
-import { resolveSessionTarget, SessionTargetMutationError } from "../src/session-target"
+import { findResumeSession, resolveSessionTarget, SessionTargetMutationError } from "../src/session-target"
 
 function location(directory: string): LocationGetOutput {
   return { directory, project: { id: "project", directory, canonical: directory } }
@@ -61,6 +61,30 @@ describe("session target resolver", () => {
     await expect(resolveSessionTarget({ client, session: "ses_chosen", fork: true, prepare })).rejects.toThrow(
       "Session not found",
     )
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  test("with mustExist a missing ID fails and creates nothing", async () => {
+    const client = Orbit.make({ baseUrl: "https://orbit.test" })
+    spyOn(client.session, "get").mockRejectedValue({ _tag: "SessionNotFoundError" })
+    spyOn(client.location, "get").mockResolvedValue(location("/project"))
+    const create = spyOn(client.session, "create")
+
+    await expect(resolveSessionTarget({ client, session: "ses_missing", mustExist: true, prepare })).rejects.toThrow(
+      "Session not found",
+    )
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  test("with mustExist an existing ID resolves as a resumed Session", async () => {
+    const client = Orbit.make({ baseUrl: "https://orbit.test" })
+    const selected = session("ses_resume", "/session")
+    spyOn(client.session, "get").mockResolvedValue(selected)
+    spyOn(client.location, "get").mockResolvedValue(location("/session"))
+    const create = spyOn(client.session, "create")
+
+    const target = await resolveSessionTarget({ client, session: selected.id, mustExist: true, prepare })
+    expect(target).toMatchObject({ session: { id: "ses_resume" }, resume: true })
     expect(create).not.toHaveBeenCalled()
   })
 
@@ -127,6 +151,34 @@ describe("session target resolver", () => {
 
     const target = await resolveSessionTarget({ client, prepare })
     expect(target.agent).toBe("review")
+  })
+
+  test("resumes by ID first, then by the newest match for the words in the folder", async () => {
+    const client = Orbit.make({ baseUrl: "https://orbit.test" })
+    const named = session("ses_named", "/project")
+    const found = session("ses_found", "/project")
+    const get = spyOn(client.session, "get").mockImplementation(async (input) => {
+      if (input.sessionID === named.id) return named
+      throw { _tag: "SessionNotFoundError" }
+    })
+    const list = spyOn(client.session, "list").mockResolvedValue({ data: [found], cursor: {} })
+
+    expect((await findResumeSession(client, named.id, "/project")).id).toBe("ses_named")
+    expect(list).not.toHaveBeenCalled()
+    // Words are never looked up as an ID, so they cannot reach the server as one.
+    expect((await findResumeSession(client, "fix the build", "/project")).id).toBe("ses_found")
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ directory: "/project", search: "fix the build" }))
+  })
+
+  test.each(["", "  ", "ses_gone", "no such words"])("resuming %j finds nothing and says so", async (value) => {
+    const client = Orbit.make({ baseUrl: "https://orbit.test" })
+    spyOn(client.session, "get").mockRejectedValue({ _tag: "SessionNotFoundError" })
+    spyOn(client.session, "list").mockResolvedValue({ data: [], cursor: {} })
+
+    await expect(findResumeSession(client, value, "/project")).rejects.toThrow(
+      value.trim() ? "Session not found" : "--resume needs",
+    )
   })
 
   test("does not retry an ambiguous Session creation", async () => {

@@ -103,3 +103,51 @@ test("the flag tables match the flags that orb --help and orb -p --help print", 
     expect(PrintBooleanFlags[flag.long]).toBe(flag.short)
   }
 }, 60_000)
+
+// The parser has no optional values, so a -r or --resume with nothing after it is rewritten to an empty value, which is
+// how a line asks for the session list. It is rewritten on the interface, on `orb run` and on a print line, and nowhere else.
+test.each([
+  [["-r"], ["--resume="]],
+  [["--resume"], ["--resume="]],
+  [["-r", "--standalone"], ["--resume=", "--standalone"]],
+  [["--resume", "-c"], ["--resume=", "-c"]],
+  [["-cr"], ["-c", "--resume="]],
+  [["--standalone", "-r"], ["--standalone", "--resume="]],
+  [["run", "-r"], ["run", "--resume="]],
+  [["run", "hi", "--resume", "--format", "json"], ["run", "hi", "--resume=", "--format", "json"]],
+  [["-r", "--", "x"], ["--resume=", "--", "x"]],
+])("%j gets an empty resume value on the interface and on run", (argv, expected) => {
+  expect(classify(argv)).toEqual({ mode: "root", args: expected })
+})
+
+test.each([
+  [["-p", "-r"], ["--print=true", "--resume="]],
+  [["-r", "-p", "hi"], ["--resume=", "--print=true", "hi"]],
+  [["-pr"], ["--print=true", "--resume="]],
+  [["-p", "--resume", "--bare", "hi"], ["--print=true", "--resume=", "--bare=true", "hi"]],
+])("%j gets an empty resume value on a print line", (argv, expected) => {
+  expect(printed(argv)).toEqual(expected)
+})
+
+test.each([
+  [["-r", "ses_abc"]],
+  [["--resume", "ses_abc"]],
+  [["--resume=ses_abc"]],
+  [["--resume="]],
+  [["-r=x"]],
+  [["--title", "-r"]],
+  [["eval", "s", "--resume", "x"]],
+  [["flow", "resume", "-r"]],
+  [["mcp", "add", "x", "--", "server", "-r"]],
+  [["run", "x", "--", "-r"]],
+])("%j keeps its resume flag as typed", (argv) => {
+  expect(classify(argv)).toEqual({ mode: "root", args: argv })
+})
+
+test.each([
+  [["-p", "-r", "ses_abc", "hi"], ["--print=true", "-r", "ses_abc", "hi"]],
+  [["-p", "--resume", "fix", "it"], ["--print=true", "--resume", "fix", "it"]],
+  [["-p", "x", "--", "-r"], ["--print=true", "x", "--", "-r"]],
+])("%j takes the word after -r as its value on a print line", (argv, expected) => {
+  expect(printed(argv)).toEqual(expected)
+})

@@ -670,6 +670,7 @@ function App() {
           prompt: startupPrompt,
         })
       }
+      if (args.resume !== undefined) dialog.replace(() => <DialogSessionList initialSearch={args.resume} />)
     })
   })
 

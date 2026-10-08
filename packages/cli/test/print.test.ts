@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { SessionID } from "@orbit/schema/session-id"
 import { isolatedEnv } from "./fixture/environment"
 import { scriptedModel } from "./fixture/scripted-model"
 
@@ -27,6 +28,41 @@ beforeAll(async () => {
     }),
   )
 })
+
+test("-p --resume fails with one failed result for a session that does not exist, and creates none", async () => {
+  const before = model.requests.length
+
+  const missing = await orb(["-p", ...base, "--resume", "ses_missing", "--output-format", "json", "hello"])
+  expect(missing.code).toBe(1)
+  expect(missing.stdout.trim().split(/\r?\n/)).toHaveLength(1)
+  expect(JSON.parse(missing.stdout)).toMatchObject({ type: "result", is_error: true, error: "Session not found" })
+
+  // Words that match no session are not a new session either, and neither is an empty value.
+  for (const value of ["no session has these words", ""]) {
+    const result = await orb(["-p", ...base, `--resume=${value}`, "--output-format", "json", "hello"])
+    expect(result.code).toBe(1)
+    expect(JSON.parse(result.stdout)).toMatchObject({ type: "result", is_error: true })
+  }
+  expect(model.requests.length).toBe(before)
+
+  // A bare -r followed by a flag is an empty value, not a usage error of the parser.
+  const bare = await orb(["-p", ...base, "-r", "--output-format", "json", "hello"])
+  expect(bare.code).toBe(1)
+  expect(JSON.parse(bare.stdout).error).toContain("--resume needs")
+
+  const both = await orb(["-p", ...base, "-c", "-r", "ses_x", "--output-format", "json", "hello"])
+  expect(both.code).toBe(1)
+  expect(JSON.parse(both.stdout).error).toContain("cannot be combined")
+}, 180_000)
+
+test("-p --resume continues the session that --session made", async () => {
+  const id = SessionID.create()
+  await sent([...base, "-p", "--session", id, "first"])
+
+  const resumed = await sent([...base, "-p", "-r", id, "second"])
+
+  expect(resumed.users.at(-1)).toContain("second")
+}, 180_000)
 
 afterAll(async () => {
   await model.stop()

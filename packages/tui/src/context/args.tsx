@@ -9,6 +9,8 @@ export interface Args {
   sessionID?: string
   newSessionID?: string
   fork?: boolean
+  /** Open the session list with this text typed into its search (`--resume`); an empty value shows the whole list. */
+  resume?: string
   auto?: boolean
 }
 

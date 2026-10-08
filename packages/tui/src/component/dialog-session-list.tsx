@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { createMemo, createResource, createSignal, onMount, Show } from "solid-js"
 import path from "path"
 import type { SessionInfo } from "@orbit/client"
@@ -25,7 +26,7 @@ import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import { projectName } from "../util/project"
 import { useLocation } from "../context/location"
 
-export function DialogSessionList() {
+export function DialogSessionList(props: { initialSearch?: string } = {}) {
   const dialog = useDialog()
   const route = useRoute()
   const data = useData()
@@ -36,9 +37,9 @@ export function DialogSessionList() {
   const config = useConfig().data
   const toast = useToast()
   const activeLocation = useLocation()
-  const [filter, setFilter] = createSignal("")
+  const [filter, setFilter] = createSignal(props.initialSearch ?? "")
   const shortcuts = Keymap.useShortcuts()
-  const [search, setSearch] = createDebouncedSignal("", 150)
+  const [search, setSearch] = createDebouncedSignal(props.initialSearch ?? "", 150)
   const [toDelete, setToDelete] = createSignal<string>()
   const [prefs, updatePrefs] = useStorage().store("session-list", {
     initial: { allProjects: config.tabs?.scope !== "cwd" },
@@ -164,7 +165,7 @@ export function DialogSessionList() {
       return {
         title: deleting
           ? `Press ${shortcuts.get("session.delete")} again to confirm`
-          : withTimestampedFallback(session),
+          : plain(withTimestampedFallback(session)),
         value: session.id,
         category,
         footer,
@@ -208,6 +209,7 @@ export function DialogSessionList() {
       }
       options={options()}
       skipFilter={true}
+      initialFilter={props.initialSearch}
       current={currentSessionID()}
       onFilter={(query) => {
         setFilter(query)
