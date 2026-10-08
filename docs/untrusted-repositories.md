@@ -144,6 +144,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/component/dialog-flow-runs.test.tsx`.
 - Window titles, the exit summary and the Mini splash: `terminalTitle`, `sessionEpilogue` and the splash's own filter.
   Proof: `test/util/renderer.test.ts`, `test/util/presentation.test.ts`, `test/mini/splash.test.ts`.
+- The keybindings file: `Config.read` reads `keybindings.json` from the folder that holds `cli.json`, the person's own
+  config folder, and from nowhere else, so a project folder cannot supply one. An entry only chooses keys for commands
+  that exist, so nothing in it starts a program. A name or key that it holds reaches the screen only through `plain`, and
+  a file that cannot be read, parsed or checked costs only itself (`KeybindingsFile.load` never rejects). The
+  `/keybindings` command starts `$VISUAL` or `$EDITOR` through `openFile`, which finds it on `PATH` alone and starts it by
+  the path it found, in the folder of the file. Proof: `test/config-v2.test.tsx` (the file is read from beside cli.json
+  only, with a control), `test/keybindings-file.test.ts` (the hostile names and keys), `test/editor.test.ts` (the Windows
+  decoy test, with a control).
 
 **Build** (`packages/cli/script`):
 
@@ -1326,7 +1334,10 @@ fixes it or asks.
   on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
   `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a
   `vim.bat` that a repository ships is not found before `PATH` (measured with Bun 1.4.2 on Windows), but no test starts
-  the editor against a decoy (task `clients-ux-14`).
+  the editor against a decoy (task `clients-ux-14`). `openFile` in the same file, which the `/keybindings` command uses,
+  does not share this: it finds the editor with `which`, starts it by the path it found through cross-spawn, and a
+  Windows test plants a decoy of the same name in the working folder (`test/editor.test.ts`). `openEditor` can take the
+  same route.
 - **The VS Code extension's `orbit.executable`.** The setting has window scope, so the settings of a workspace can set
   it, the extension declares no `untrustedWorkspaces` capability, and `packages/vscode/src/runs.ts` starts the bare
   default `orb` with the workspace folder as its working directory, where Windows looks first. The extension host is not
