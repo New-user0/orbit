@@ -103,12 +103,12 @@ rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
-  `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
-  own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
-  model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
-  the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
-  that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours,
-  so it would otherwise replace the one in your own config.
+  `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
+  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours, so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -1207,6 +1207,26 @@ they send one request.
 **Affects:** people on an overloaded or unavailable provider, and plugins whose `retry` hook reads the proposed delay.
 
 **What to do:** nothing. A `retry` hook can still shorten or stop the wait.
+
+### `/cost` (alias `/usage`) shows what a session has cost
+
+A new `/cost` command, also reachable as `/usage` and from the command palette as "Cost and usage", opens a dialog with
+the session cost, its input, output, reasoning, cache read and cache write tokens, its wall-clock and API time, and a
+breakdown by model. The session cost is the figure the prompt footer and sidebar show, including the spend of its
+subagents; a Subagents line gives that part, and the tokens, breakdown and times stay this session's own. A cost that
+the listed responses do not explain, such as undone responses, shows as Other. A model that has no price entries at all,
+such as one you added in config, reads "unknown" rather than `$0.00` (the server records zero for it). A free model,
+and a catalog model whose price is listed as zero, read `$0.00`, and the dialog cannot tell those two apart. A response
+that failed with no recorded usage counts as unpriced. In a forked session the dialog counts only the forked session's
+own responses, not the ones copied from the parent. API time runs to the end of each provider response and leaves out
+tool execution and waiting on you. A time that older messages do not carry reads `-`. When older messages are not
+loaded, the breakdown and API time say they cover only the loaded responses.
+
+**Affects:** people who type `/cost` or `/usage` into the prompt. A user or project command with either name was
+possible before; typing the name and pressing Enter now opens the built-in dialog instead of running that command, and
+when the names collide both appear in autocomplete.
+
+**What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
 
 ### New `fallback_model` setting
 

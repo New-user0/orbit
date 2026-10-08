@@ -24,7 +24,7 @@ import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Tool } from "@orbit/core/tool"
 import { Document, Info } from "@orbit/schema/config"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Logger, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 import { stubSnapshot } from "./lib/tool"
 
@@ -145,9 +145,25 @@ it.effect("returns nothing when no fallback is set", () =>
   }),
 )
 
-it.effect("returns nothing for an unavailable model", () =>
+const logging = (logged: unknown[]) =>
+  Effect.provideService(
+    Logger.CurrentLoggers,
+    new Set([Logger.make((entry) => logged.push(...[entry.message].flat()))]),
+  )
+
+it.effect("returns nothing for an unavailable model and logs one warning", () =>
   Effect.gen(function* () {
     const { session, context } = yield* setup("acme/missing")
+    const logged: unknown[] = []
+    expect(yield* context.resolveFallback(session).pipe(logging(logged))).toBeUndefined()
+    expect(logged.filter((message) => message === "fallback model skipped")).toHaveLength(1)
+  }),
+)
+
+it.effect("returns nothing for the model the session would default to", () =>
+  Effect.gen(function* () {
+    const { session, context } = yield* setup("test/primary#high")
+    expect(session.model).toBeUndefined()
     expect(yield* context.resolveFallback(session)).toBeUndefined()
   }),
 )
@@ -155,7 +171,11 @@ it.effect("returns nothing for an unavailable model", () =>
 it.effect("returns nothing for the session's own model", () =>
   Effect.gen(function* () {
     const { session, context } = yield* setup("acme/backup")
-    expect(yield* context.resolveFallback({ ...session, model: Model.Ref.parse("acme/backup") })).toBeUndefined()
+    const logged: unknown[] = []
+    expect(
+      yield* context.resolveFallback({ ...session, model: Model.Ref.parse("acme/backup") }).pipe(logging(logged)),
+    ).toBeUndefined()
+    expect(logged).not.toContain("fallback model skipped")
   }),
 )
 

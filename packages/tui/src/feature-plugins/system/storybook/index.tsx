@@ -9,6 +9,7 @@ import { oneCellSpinnerStory } from "./one-cell-spinner"
 import { dialogTrustStory } from "./dialog-trust"
 import { trustIndicatorStory } from "./trust-indicator"
 import { historySearchStory } from "./history-search"
+import { costStory } from "./cost"
 
 /**
  * A story is a full-screen, fixture-driven simulation of a real production component. Stories own
@@ -28,6 +29,7 @@ const stories: Story[] = [
   dialogTrustStory,
   trustIndicatorStory,
   historySearchStory,
+  costStory,
 ]
 
 function Commands(props: { context: Plugin.Context }) {
