@@ -291,6 +291,7 @@ const layer = Layer.effect(
           toolChoice: stepLimitReached ? "none" : undefined,
           webSocket: "session",
           inputTokens: SessionCompaction.estimatePrompt(loaded),
+          outputTokenCap: loaded.outputTokenCap,
         })
         const outcome = yield* steps.attempt({
           isLocationClosed: lifecycle.isClosed,

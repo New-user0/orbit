@@ -13835,6 +13835,10 @@
               }
             ]
           },
+          "output_token_cap": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
           "default_agent": {
             "type": "string"
           },

@@ -33,6 +33,7 @@ import { PermissionSaved } from "@orbit/core/permission/saved"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Shell } from "@orbit/core/shell"
+import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
@@ -1820,5 +1821,143 @@ describe("ShellTool", () => {
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
+  )
+
+  // What a scheduler reads to decide that a shell call failed: `metadata.error`, on the result or on the failure.
+  const failureFlag = (registry: Tool.Interface, input: ReturnType<typeof call>) =>
+    registry.snapshot().pipe(
+      Effect.flatMap((tools) => tools.execute(input)),
+      Effect.match({
+        onFailure: (error) => ({ settled: "failed" as const, flag: error.metadata?.error }),
+        onSuccess: (result) => ({ settled: "completed" as const, flag: result.metadata?.error }),
+      }),
+    )
+
+  const killCommand = "kill -9 $$"
+  const flagCases = [
+    ["a timeout", { command: idleCommand, timeout: 50 }, { settled: "completed", flag: true }, true],
+    ["a signal kill", { command: killCommand }, { settled: "completed", flag: true }, !isWindows],
+    ["a non-zero exit", { command: bodyExitCommand }, { settled: "completed", flag: undefined }, true],
+    ["a clean exit", { command: helloCommand }, { settled: "completed", flag: undefined }, true],
+    ["a missing workdir", { command: cwdCommand, workdir: "missing" }, { settled: "failed", flag: undefined }, true],
+  ] as const
+  for (const [name, input, expected, enabled] of flagCases) {
+    const flagTest = enabled ? it.live : it.live.skip
+    flagTest(`flags ${name} for sibling cancellation as ${expected.flag === true ? "a failure" : "no failure"}`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) => failureFlag(registry, call(input))).pipe(
+            Effect.andThen((result) => Effect.sync(() => expect(result).toEqual(expected))),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    )
+  }
+
+  // A foreground call whose command record disappears while it waits ends through the job-error path. A client's
+  // shell.remove is a deliberate stop, and it counts as a failure here (unlike shell.kill, which settles "killed").
+  it.live(
+    "flags a foreground command removed while it runs as a failure",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const running = yield* failureFlag(registry, call({ command: idleCommand }, "call-removed")).pipe(
+                Effect.forkChild({ startImmediately: true }),
+              )
+              const first = (remaining = 1000): Effect.Effect<Shell.Info, Error> =>
+                Effect.gen(function* () {
+                  const listed = yield* shell.list()
+                  if (listed[0]) return listed[0]
+                  if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
+                  yield* Effect.promise(() => Bun.sleep(5))
+                  return yield* first(remaining - 1)
+                })
+              yield* shell.remove((yield* first()).id)
+              expect(yield* Fiber.join(running)).toEqual({ settled: "failed", flag: true })
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // Only Shell.create raises AppProcessError (spawn failure, missing sandbox). On Windows a missing program is an
+  // ordinary exit 1 until tool-runtime-11, so this case runs on POSIX only.
+  const spawnTest = isWindows ? it.live.skip : it.live
+  spawnTest("flags a shell that cannot be started as a failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const hooks = yield* PluginHooks.Service
+            yield* hooks.register("shell", "create.before", (event) =>
+              Effect.sync(() => {
+                event.shell = path.join(tmp.path, "missing-shell")
+              }),
+            )
+            expect(yield* failureFlag(registry, call({ command: helloCommand }))).toEqual({
+              settled: "failed",
+              flag: true,
+            })
+          }).pipe(Effect.scoped),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("flags no failure for a permission denial", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        denyAction = "shell"
+        return withSession(tmp.path, (registry) => failureFlag(registry, call({ command: cwdCommand }))).pipe(
+          Effect.andThen((result) => Effect.sync(() => expect(result).toEqual({ settled: "failed", flag: undefined }))),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("cancels the job of a foreground command that is interrupted", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const shell = yield* Shell.Service
+            const running = yield* executeTool(registry, call({ command: idleCommand }, "call-interrupted")).pipe(
+              Effect.forkChild({ startImmediately: true }),
+            )
+            const until = (done: (count: number) => boolean, remaining = 1000): Effect.Effect<void, Error> =>
+              Effect.gen(function* () {
+                if (done((yield* shell.list()).length)) return
+                if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
+                yield* Effect.promise(() => Bun.sleep(5))
+                return yield* until(done, remaining - 1)
+              })
+            yield* until((count) => count > 0)
+            yield* Fiber.interrupt(running)
+            // The job is cancelled on interrupt, so its shell goes away without the test removing it.
+            yield* until((count) => count === 0)
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+    { timeout: 15_000 },
   )
 })

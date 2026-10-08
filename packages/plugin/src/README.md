@@ -150,7 +150,8 @@ A tool can also declare `traits`: what it tells Orbit about itself beyond its sc
 are plain values: `openWorld`, `requiresUserInteraction`, `cancelSiblingsOnFailure`, `interruptBehavior`,
 `maxResultChars`, `searchHint` and `displayName`. A trait you leave out takes its default, and the tool's context
 carries the answers for the call as `context.traits`. A `searchHint` is a few words that Code Mode's `search` matches
-when it looks for a deferred tool.
+when it looks for a deferred tool. A call with `cancelSiblingsOnFailure` fails for that purpose only when its result or
+its `Tool.Error` carries `metadata.error: true`; denials, rejections with feedback and validation failures never count.
 
 ```ts
 tools.add({

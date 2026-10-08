@@ -12,7 +12,7 @@ import { SessionSchema } from "../schema.js"
 import { SessionError } from "@orbit/schema/session-error"
 import { Money } from "@orbit/schema/money"
 import { SessionUsage } from "../usage.js"
-import type { Tool } from "../../tool.js"
+import { Tool } from "../../tool.js"
 import { plain } from "@orbit/util/plain"
 import { ToolNames } from "../../tool/names.js"
 
@@ -356,7 +356,9 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       assistantMessageID,
       id,
       error:
-        ToolNames.canonical(tool.name) === "Agent" && error.type === "aborted" && typeof tool.progress?.sessionID === "string"
+        ToolNames.canonical(tool.name) === "Agent" &&
+        (error.type === "aborted" || error.type === Tool.ErrorCode.Cancelled) &&
+        typeof tool.progress?.sessionID === "string"
           ? { ...error, message: `${error.message} (sessionID: ${tool.progress.sessionID})` }
           : error,
       ...failureSnapshot(tool, metadata),

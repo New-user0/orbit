@@ -5,6 +5,7 @@ import type { Context } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import type { ShellCreateBefore } from "@orbit/plugin/effect/shell"
 import type { Tool } from "@orbit/schema/tool"
+import { AppProcess } from "@orbit/util/process"
 import { Deferred, Effect, Schema, Scope } from "effect"
 import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
@@ -90,6 +91,8 @@ const toolResult = (output: Output) => {
     metadata: {
       status: output.status,
       ...ShellResult.metadata(output),
+      // A timeout or a kill by signal counts as a failure that cancels sibling calls. Exit codes do not yet.
+      ...(output.timeout === true || output.signal !== undefined ? { error: true } : {}),
       ...(output.shellID !== undefined ? { shellID: output.shellID } : {}),
     },
   }
@@ -267,14 +270,28 @@ export const Plugin = {
                 return backgroundResult(info.id, info.file)
               }
               if (result?.info.status === "error")
-                return yield* Effect.fail(new Error(result.info.error ?? "Command failed"))
+                return yield* new ToolFailure({
+                  message: result.info.error ?? "Command failed",
+                  metadata: { error: true },
+                })
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
               return yield* Deferred.await(settled)
             }).pipe(
               Effect.map(toolResult),
               Effect.mapError(
-                (error) => new ToolFailure({ message: `Unable to execute command: ${input.command}`, error }),
+                (error) =>
+                  new ToolFailure({
+                    message: `Unable to execute command: ${input.command}`,
+                    error,
+                    // Only the execution-stage failure above carries `error: true`; prepare failures never do.
+                    // A spawn or sandbox refusal (AppProcessError) means the command never ran: also a failure.
+                    ...(error instanceof ToolFailure
+                      ? { metadata: error.metadata }
+                      : error instanceof AppProcess.AppProcessError
+                        ? { metadata: { error: true } }
+                        : {}),
+                  }),
               ),
             ),
         }),
