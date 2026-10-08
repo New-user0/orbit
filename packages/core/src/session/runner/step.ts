@@ -80,6 +80,18 @@ const SKIPPED_AFTER_REJECTION = {
   type: Tool.ErrorCode.Cancelled,
   message: "Not run: the user rejected an earlier tool call and gave feedback",
 } as const
+// A failed call whose tool asks for it keeps its siblings from finishing. Both texts name the tool only: the name is
+// one the request offered, never text from the call's input or output.
+const siblingsStopped = (tool: string) => ({
+  running: {
+    type: Tool.ErrorCode.Cancelled,
+    message: `Cancelled: the ${tool} call that ran alongside this one failed`,
+  },
+  queued: {
+    type: Tool.ErrorCode.Cancelled,
+    message: `Not run: an earlier ${tool} call failed before this one could start`,
+  },
+})
 const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
 
 /** Captures Location-scoped dependencies without introducing another service or execution loop. */
@@ -108,6 +120,14 @@ export const make = Effect.gen(function* () {
       onQueued: (id) => publisher.hint(id, { queued: true }),
       onStarted: (id) => publisher.hint(id, {}),
     })
+    // Queued and later calls never start; running ones are interrupted inside their race and settle as cancelled.
+    const cancelSiblings = (failed: ToolCall) => {
+      const messages = siblingsStopped(failed.name)
+      const select = (id: string) => id !== failed.id
+      return scheduler
+        .cancel({ running: false, future: true, select }, messages.queued)
+        .pipe(Effect.andThen(scheduler.cancel({ running: true, future: false, select }, messages.running)))
+    }
     const toolRuns: Array<{
       readonly call: ToolCall
       readonly fiber: Fiber.Fiber<void, Permission.DeclinedError | QuestionTool.CancelledError>
@@ -163,8 +183,18 @@ export const make = Effect.gen(function* () {
                         entry,
                         traits,
                         executeTool(event).pipe(
+                          // Only an explicit `metadata.error` on a tool that declares the trait counts as a failure.
+                          Effect.tap((result) =>
+                            traits.cancelSiblingsOnFailure && result.metadata?.error === true
+                              ? cancelSiblings(event)
+                              : Effect.void,
+                          ),
                           Effect.tapError((error) =>
-                            error._tag === "Tool.Error" ? Effect.void : scheduler.halt(SKIPPED_AFTER_DECLINE),
+                            error._tag !== "Tool.Error"
+                              ? scheduler.halt(SKIPPED_AFTER_DECLINE)
+                              : traits.cancelSiblingsOnFailure && error.metadata?.error === true
+                                ? cancelSiblings(event)
+                                : Effect.void,
                           ),
                         ),
                       ),

@@ -243,6 +243,22 @@ test("interrupted subagent failures expose their existing child session to the m
   })
 })
 
+test("cancelled subagent failures expose their existing child session to the model", async () => {
+  const { published, publisher } = capture("anthropic", { interruptProgress: true })
+  const subagent = LLMEvent.toolCall({
+    id: "call-subagent",
+    name: "subagent",
+    input: { agent: "general", description: "Recover child", prompt: "Continue working" },
+  })
+  await Effect.runPromise(publisher.publish(subagent))
+  await Effect.runPromiseExit(publisher.progress(subagent.id, { sessionID: "ses_existing_child", status: "running" }))
+  await Effect.runPromise(publisher.failTool(subagent.id, { type: "tool.cancelled", message: "Cancelled: a call failed" }))
+
+  expect(published.find((event) => event.type === "session.tool.failed.2")?.data).toMatchObject({
+    error: { type: "tool.cancelled", message: "Cancelled: a call failed (sessionID: ses_existing_child)" },
+  })
+})
+
 test("interrupted non-subagent failures do not expose their progress session IDs", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(call))
