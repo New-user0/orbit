@@ -17,6 +17,7 @@ export const Plugin = {
         editor.add({
           name: "list_mcp_resources",
           options: { namespace: "orbit", codemode: true },
+          traits: { readOnly: true, concurrencySafe: true, openWorld: true, interruptBehavior: "cancel" },
           description:
             "List documents, records, and other data exposed by MCP servers. Use this when the user refers to something that is not a local file, such as a URI with a custom scheme, then load a match with read_mcp_resource. Each entry names the server to read it from. Templates are resources addressed by a parameter such as a record ID; fill in the uriTemplate placeholders before reading.",
           input: Schema.Struct({
@@ -49,6 +50,7 @@ export const Plugin = {
         editor.add({
           name: "read_mcp_resource",
           options: { namespace: "orbit", codemode: true },
+          traits: { readOnly: true, concurrencySafe: true, openWorld: true, interruptBehavior: "cancel" },
           description:
             "Read one MCP resource by server and URI. Not for local files. Always return the full contents rather than slicing or filtering them; oversized output is truncated automatically and the full content is saved to a file you can read. Images and PDFs are shown to you directly.",
           input: Schema.Struct({

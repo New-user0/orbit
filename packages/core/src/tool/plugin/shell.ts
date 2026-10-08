@@ -190,6 +190,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { codemode: false },
+          traits: { cancelSiblingsOnFailure: true },
           description: description(),
           input: Input,
           output: Output,

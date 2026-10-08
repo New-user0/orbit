@@ -20,7 +20,7 @@ import { location } from "./fixture/location"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const globToolNode = makeLocationNode({
   name: "test/glob-tool-plugin",
@@ -41,6 +41,18 @@ const withTools = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const registry = yield* Tool.Service
+    expect(yield* toolTraits(registry, "glob")).toMatchObject({
+      readOnly: true,
+      concurrencySafe: true,
+      destructive: false,
+      interruptBehavior: "cancel",
+    })
+    expect(yield* toolTraits(registry, "grep")).toMatchObject({
+      readOnly: true,
+      concurrencySafe: true,
+      destructive: false,
+      interruptBehavior: "cancel",
+    })
     return yield* body(registry)
   }).pipe(
     Effect.provide(

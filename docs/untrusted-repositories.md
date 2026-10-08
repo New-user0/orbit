@@ -85,6 +85,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/config/config-trust.test.ts`.
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`.
+- An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
+  with control and format characters written out. Only this source escapes; a plugin or a simulated tool supplies its
+  `displayName` raw, so a client that draws any `displayName` still passes it through `plain` (escaping text that is
+  already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
+  `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
+  hints and permissions` in `core/test/mcp.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:
@@ -189,6 +195,9 @@ every other extension):
   `nodes` (`decodeRuns`, `decodeNodes`), keeping strings and finite numbers, and every string is written out with `plain`
   before the tree shows it. Proof: `test/runs.test.ts` (the usage with control characters and a cost that is not a
   number).
+- The runner's loop notices: `loopNotice` writes the description of a synthetic message, which a model, a hook or a
+  stored session can supply, out with `plain` before the chat shows it, live and when a session is opened from history.
+  Proof: `test/recovery.test.ts` (the escaped notice, and the replay on open).
 - The folder: the question shows the project's folder that the server names, the grant is made for that folder, and it
   counts only when the answer names it and the folder VS Code opened reads as trusted too. Proof: `test/trust.test.ts`
   ("trusts the folder the server named", "takes the stricter answer", "does not call a folder trusted").

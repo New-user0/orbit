@@ -16,7 +16,7 @@ import { tempLocationLayer } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const node = makeLocationNode({
   name: "test/memory-tool-plugin",
@@ -37,6 +37,22 @@ describe("memory tool", () => {
       const data = (yield* tmpdirScoped()).path
       yield* Effect.gen(function* () {
         const registry = yield* Tool.Service
+        for (const action of ["read", "list"])
+          expect(yield* toolTraits(registry, "memory", { action, name: "notes" })).toMatchObject({
+            readOnly: true,
+            concurrencySafe: true,
+            destructive: false,
+          })
+        expect(yield* toolTraits(registry, "memory", { action: "delete", name: "notes" })).toMatchObject({
+          readOnly: false,
+          concurrencySafe: false,
+          destructive: true,
+        })
+        expect(yield* toolTraits(registry, "memory", { action: "save", name: "notes", content: "x" })).toMatchObject({
+          readOnly: false,
+          concurrencySafe: false,
+          destructive: false,
+        })
         const discovery = yield* InstructionDiscovery.Service
         expect(text(yield* executeTool(registry, call({ action: "list" })))).toContain("No memories")
 

@@ -677,8 +677,8 @@ describe("ToolTraits", () => {
         // An inner Code Mode tool is not a tool the model can call by name.
         expect(snapshot.describe("inner")).toBeUndefined()
         expect(yield* snapshot.traits({ call: toolCall("inner") })).toEqual(ToolTraits.conservative)
-        // The Code Mode tool is described like any other, and carries no declared traits.
-        expect(snapshot.describe("execute")).toStrictEqual(ToolTraits.describe(make()))
+        // The Code Mode tool is described like any other: it declares that a program can reach the network.
+        expect(snapshot.describe("execute")).toStrictEqual({ ...ToolTraits.describe(make()), openWorld: true })
         expect((yield* snapshot.traits({ call: toolCall("execute", { code: "return 1" }) })).readOnly).toBe(false)
       }),
     )

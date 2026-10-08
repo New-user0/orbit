@@ -12,7 +12,7 @@ import { ShellControlTools } from "@orbit/core/tool/plugin/shell-control"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const controlNode = makeLocationNode({
   name: "test/shell-control-tool-plugin",
@@ -40,6 +40,17 @@ describe("shell control tools", () => {
     Effect.gen(function* () {
       const shell = yield* Shell.Service
       const registry = yield* Tool.Service
+      for (const name of ["shell_output", "shell_watch"])
+        expect(yield* toolTraits(registry, name, { id: "x", pattern: "x" })).toMatchObject({
+          readOnly: true,
+          concurrencySafe: true,
+          interruptBehavior: "cancel",
+        })
+      expect(yield* toolTraits(registry, "shell_stop", { id: "x" })).toMatchObject({
+        readOnly: false,
+        concurrencySafe: false,
+        interruptBehavior: "block",
+      })
       const info = yield* shell.create({
         command: "echo start; sleep 0.3; echo ready; sleep 30",
         shell: "/bin/sh",

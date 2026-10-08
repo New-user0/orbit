@@ -20,7 +20,7 @@ import { withTempDir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolTraits } from "./lib/tool"
 
 const notebookToolNode = makeLocationNode({
   name: "test/notebook-edit-tool-plugin",
@@ -119,6 +119,18 @@ describe("Notebook", () => {
 })
 
 describe("NotebookEditTool", () => {
+  it.effect("changes notebooks, so it is neither read-only nor safe beside other calls", () =>
+    withTool(import.meta.dir, (registry) =>
+      Effect.gen(function* () {
+        expect(yield* toolTraits(registry, "notebook_edit", {})).toMatchObject({
+          readOnly: false,
+          concurrencySafe: false,
+          destructive: false,
+        })
+      }),
+    ),
+  )
+
   it.live("replaces, inserts and deletes cells, keeping the file's layout and metadata", () =>
     withTempDir((tmp) => {
       const target = path.join(tmp.path, "analysis.ipynb")

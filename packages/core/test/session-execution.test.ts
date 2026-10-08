@@ -14,6 +14,7 @@ import { ProjectTable } from "@orbit/core/project/sql"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionExecution } from "@orbit/core/session/execution"
+import { StepFailedError } from "@orbit/core/session/error"
 import { SessionRestart } from "@orbit/core/session/execution/restart"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionInbox } from "@orbit/core/session/inbox"
@@ -43,6 +44,11 @@ describe("SessionExecution lifecycle", () => {
         ),
       ),
     ).toEqual({ type: "failed", error: { type: "provider.transport", message: "Disconnected" } })
+  })
+
+  test("ends a busy period that hit a turn limit as a failure carrying the limit's type", () => {
+    const error = { type: "limit.steps", message: "The turn reached its limit of 2 steps." }
+    expect(SessionExecution.terminal(Exit.fail(new StepFailedError({ error })))).toEqual({ type: "failed", error })
   })
 
   test("defaults owner-scope interruption to shutdown and preserves explicit reasons", () => {

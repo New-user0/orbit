@@ -81,6 +81,21 @@ export const Plugin = {
         editor.add({
           name,
           options: { codemode: false, permission: "edit" },
+          traits: {
+            readOnly: false,
+            concurrencySafe: false,
+            // A patch that cannot be parsed is treated as destructive rather than guessed at.
+            destructive: (input) => {
+              const parsed = Patch.parse(input.patchText)
+              return (
+                Result.isFailure(parsed) ||
+                // A move removes its source and replaces whatever is at its target.
+                parsed.success.some(
+                  (hunk) => hunk.type === "delete" || (hunk.type === "update" && hunk.movePath !== undefined),
+                )
+              )
+            },
+          },
           description: DESCRIPTION,
           input: Input,
           output: Output,

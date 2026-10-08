@@ -27,7 +27,7 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
 import { globalProjectNode } from "./lib/project"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const sessionID = Session.ID.make("ses_plan_mode_test")
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
@@ -100,6 +100,17 @@ const disk = Effect.fn("disk")(function* () {
 })
 
 describe("plan mode tools", () => {
+  it.live("declares that both tools wait for the person and are not read-only", () =>
+    Effect.gen(function* () {
+      const paths = yield* disk()
+      yield* Effect.gen(function* () {
+        const registry = yield* Tool.Service
+        for (const name of ["enter_plan_mode", "exit_plan_mode"])
+          expect(yield* toolTraits(registry, name)).toMatchObject({ readOnly: false, requiresUserInteraction: true })
+      }).pipe(Effect.provide(server({ ...paths, decisions: [] }).layer))
+    }),
+  )
+
   it.live("enters Plan mode, takes feedback, and returns to the previous agent once the plan is approved", () =>
     Effect.gen(function* () {
       const paths = yield* disk()

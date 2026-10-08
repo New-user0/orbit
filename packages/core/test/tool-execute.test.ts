@@ -26,6 +26,15 @@ const createCodeMode = (
   resolve: CodeModeTool.Resolve = () => Effect.succeed([]),
 ) => CodeModeTool.create({ tools }, (_, tool, input, context) => execute(tool, input, context), authorize, resolve)
 
+test("execute is not read-only or safe beside other calls, reaches the network and is left to finish", async () => {
+  expect(await Effect.runPromise(ToolTraits.resolve(createCodeMode(new Map()), undefined))).toMatchObject({
+    readOnly: false,
+    concurrencySafe: false,
+    openWorld: true,
+    interruptBehavior: "block",
+  })
+})
+
 test("execute describes invariant Code Mode behavior", () => {
   expect(createCodeMode(new Map()).description).toBe(
     [

@@ -23,7 +23,7 @@ import { SessionInstructions } from "@orbit/core/session/instructions"
 import { Environment } from "@orbit/core/environment/index"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const readToolNode = makeLocationNode({
   name: "test/read-tool-plugin",
@@ -164,6 +164,14 @@ describe("ReadTool", () => {
   it.effect("registers, authorizes, and reads through the location filesystem", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
+      expect(yield* toolTraits(registry, "read")).toMatchObject({
+        readOnly: true,
+        concurrencySafe: true,
+        destructive: false,
+        openWorld: false,
+        interruptBehavior: "cancel",
+        maxResultChars: Infinity,
+      })
 
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["read", "execute"])
       expect(

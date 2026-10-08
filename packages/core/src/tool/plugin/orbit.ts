@@ -93,6 +93,7 @@ export const Plugin = {
           input: RenameInput,
           output: RenameOutput,
           options: { namespace: "orbit", codemode: true },
+          traits: { readOnly: false, concurrencySafe: false },
           execute: (input, context) => {
             const sessionID = input.sessionID ?? context.sessionID
             const title = input.title.trim()
@@ -113,6 +114,7 @@ export const Plugin = {
           input: MoveInput,
           output: MoveOutput,
           options: { namespace: "orbit", codemode: true, pinned: true },
+          traits: { readOnly: false, concurrencySafe: false },
           execute: (input, context) =>
             Effect.gen(function* () {
               const sessionID = input.sessionID ?? context.sessionID
@@ -138,6 +140,7 @@ export const Plugin = {
           input: ModelsInput,
           output: ModelsOutput,
           options: { namespace: "orbit", codemode: true },
+          traits: { readOnly: true, concurrencySafe: true },
           execute: (input, context) =>
             Effect.gen(function* () {
               const offset = input.offset ?? 0
