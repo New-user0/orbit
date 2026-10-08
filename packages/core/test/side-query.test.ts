@@ -440,6 +440,7 @@ it.effect("a session on a reasoning variant still runs the primary model at the 
     const result = yield* sideQuery.text({ ...base, model: "primary" })
 
     expect(String(result.model.id)).toBe("side-primary")
+    expect(String(result.model.variant)).toBe("none")
     expect(selections).toContainEqual({ id: "side-primary", variant: "none" })
   }),
 )
@@ -505,6 +506,28 @@ it.effect("an undecodable answer keeps the model's text out of the error message
     const error = yield* sideQuery.object({ ...base, schema: Fruit }).pipe(Effect.flip)
 
     expect(error._tag).toBe("SideQuery.InvalidOutputError")
+    expect(error.message).toBe("The tool input failed schema decode")
     expect(error.message).not.toContain("SECRET-MODEL-TEXT")
+    expect(error.cause).toBeDefined()
+  }),
+)
+
+it.effect("text() reports a tool-call answer and a blank answer as InvalidOutputError", () =>
+  Effect.gen(function* () {
+    const { sideQuery } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* test.push(call({ name: "pear", sweetness: 7 }), answer(""), answer("  \n "))
+
+    const failures = yield* Effect.all([
+      sideQuery.text(base).pipe(Effect.flip),
+      sideQuery.text(base).pipe(Effect.flip),
+      sideQuery.text(base).pipe(Effect.flip),
+    ])
+
+    expect(failures.map((failure) => failure._tag)).toEqual([
+      "SideQuery.InvalidOutputError",
+      "SideQuery.InvalidOutputError",
+      "SideQuery.InvalidOutputError",
+    ])
   }),
 )

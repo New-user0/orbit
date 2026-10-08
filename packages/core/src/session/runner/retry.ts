@@ -5,8 +5,8 @@
  * go through this policy before every resend, and a plugin's `retry` hook can override each decision.
  *
  * Background calls make exactly one request: session titles (`SessionTitle`), `SideQuery` and
- * `SessionGenerate.generate`, with whatever is built on it, keep-alive warming among them. None is the step of a session that a person is watching, and a resend would add
- * load to a provider that is already shedding it. If a background call ever retries other failures, it must still
+ * `SessionGenerate.generate`, with whatever is built on it, keep-alive warming among them. None is the step of a
+ * session that a person is watching, and a resend would add load to a provider that is already shedding it. If a background call ever retries other failures, it must still
  * leave overloads out; `isOverloaded` from `@orbit/ai` tells them apart.
  */
 export * as SessionRunnerRetry from "./retry.js"

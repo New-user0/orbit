@@ -736,8 +736,9 @@ runs" is a permission.
   `false`.
 - A field that picks a model, a provider or a budget is withheld too, as `providers`, so that an untrusted folder
   cannot choose the most expensive of the models that you configured, another provider that you configured, or a larger
-  step allowance. The owner decided this: `model` (top-level, which also carries `small_model` once it is migrated, in
-  every agent, so also `title` and `side`, and in every command) and an agent's `steps` are `withhold("providers")`.
+  step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
+  receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
+  `withhold("providers")`.
   There is no `fallback_model` or `output_token_cap` field in the config today; when one is added, classify it the
   same way. Never classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets

@@ -101,8 +101,8 @@ agent products keep there, used to apply the moment Orbit opened the folder. The
 folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
 rest:
 
-- **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
-  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
+- **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
+  `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
   agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
   own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
   model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
