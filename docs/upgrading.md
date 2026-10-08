@@ -934,6 +934,14 @@ the note on error types describes.
 
 **What to do:** Nothing.
 
+### Tools that do not ask for themselves are now asked about
+
+Orbit now asks before running a tool that does not take care of its own permission question. Tools that plugins and the SDK add used to run unasked unless they asked for themselves; they now ask on their permission action (or their name), on every resource, once per call, and "always" saves `*` for that action. The same goes for Code Mode: a program that calls such a tool is asked for each call. A tool opts out by setting `options.authorizes` to `true`, or to a function of the decoded input that answers `true`; a function that throws, fails or answers with anything else counts as not opting out. The desktop browser tools, which never asked, now ask under `browser`. Orbit's own tools and MCP tools are unchanged: they keep the questions they asked before, and annotations from an MCP server never relax anything.
+
+**Affects:** plugin and SDK authors whose tools did not ask, and people who use them; they see a new prompt, and a deny rule written for the tool now applies.
+
+**What to do:** approve the prompt, or add an allow rule for the tool's action. Authors of a tool that asks in `execute` set `options.authorizes: true` to avoid the second question.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

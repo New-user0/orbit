@@ -27,7 +27,16 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { SessionMessage } from "./session/message.js"
 import { SessionSchema } from "./session/schema.js"
 import { State } from "./state.js"
-import { decode, definition, effectiveName, execute, normalizedName, normalizeContent } from "./tool/runtime.js"
+import { ToolAuthorization } from "./tool/authorization.js"
+import {
+  type Authorize,
+  decode,
+  definition,
+  effectiveName,
+  execute,
+  normalizedName,
+  normalizeContent,
+} from "./tool/runtime.js"
 import { ToolTraits } from "./tool/traits.js"
 import { Wildcard } from "./util/wildcard.js"
 
@@ -154,13 +163,42 @@ const layer = Layer.effect(
         input,
       })
 
+    // The registry gate, for every path that runs a tool: a direct call and a Code Mode inner call both pass through
+    // `executeTool`. A tool that does not say it asks about the call itself is asked about here, on its permission action
+    // or its name, and a declaration that is missing or broken counts as not saying so.
+    const gate: Authorize = (tool, decoded, context) =>
+      ToolAuthorization.authorizesItself(tool, decoded).pipe(
+        Effect.flatMap((authorizes) =>
+          authorizes
+            ? Effect.void
+            : permission
+                .assert({
+                  action: tool.options?.permission ?? effectiveName(tool),
+                  resources: ["*"],
+                  save: ["*"],
+                  metadata: {},
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.messageID, id: context.id },
+                })
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new Tool.Error({
+                        message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                      }),
+                  ),
+                ),
+        ),
+      )
+
     const executeTool = Effect.fn("Tool.execute")(function* (
       tool: Tool.Info,
       name: string,
       input: unknown,
       context: UnresolvedContext,
     ) {
-      const execution = yield* execute(tool, input, context).pipe(
+      const execution = yield* execute(tool, input, context, gate).pipe(
         Effect.map((value) => ({ value })),
         Effect.catchTag("Tool.Error", (failure) => Effect.succeed({ failure })),
       )

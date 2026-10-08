@@ -279,9 +279,10 @@ const permissionFail = {
     }),
 }
 const permission = permissionLayer()
+// These tools stand in for leaves that ask for themselves, so the registry gate leaves them alone.
 const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string, ToolInfo>>, options?: Tool.Options) =>
   registry.transform((editor) =>
-    Object.entries(tools).forEach(([name, tool]) => editor.add({ ...tool, name, options: options ?? tool.options })),
+    Object.entries(tools).forEach(([name, tool]) => editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } })),
   )
 const layer = Layer.unwrap(
   Effect.map(RunnerState, (state) => {

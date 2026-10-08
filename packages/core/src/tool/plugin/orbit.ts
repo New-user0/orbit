@@ -92,7 +92,7 @@ export const Plugin = {
             "Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.",
           input: RenameInput,
           output: RenameOutput,
-          options: { namespace: "orbit", codemode: true },
+          options: { authorizes: true, namespace: "orbit", codemode: true },
           traits: { readOnly: false, concurrencySafe: false },
           execute: (input, context) => {
             const sessionID = input.sessionID ?? context.sessionID
@@ -113,7 +113,7 @@ export const Plugin = {
             "Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.",
           input: MoveInput,
           output: MoveOutput,
-          options: { namespace: "orbit", codemode: true, pinned: true },
+          options: { authorizes: true, namespace: "orbit", codemode: true, pinned: true },
           traits: { readOnly: false, concurrencySafe: false },
           execute: (input, context) =>
             Effect.gen(function* () {
@@ -139,7 +139,7 @@ export const Plugin = {
             "Search the models available to use. Use this to turn a model name the user mentions into an exact reference before running a subagent on it. Check your own provider first.",
           input: ModelsInput,
           output: ModelsOutput,
-          options: { namespace: "orbit", codemode: true },
+          options: { authorizes: true, namespace: "orbit", codemode: true },
           traits: { readOnly: true, concurrencySafe: true },
           execute: (input, context) =>
             Effect.gen(function* () {

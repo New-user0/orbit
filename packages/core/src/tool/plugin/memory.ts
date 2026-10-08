@@ -76,7 +76,7 @@ export const Plugin = {
     yield* ctx.tool.transform((editor) => {
       editor.add({
         name,
-        options: { codemode: false },
+        options: { authorizes: true, codemode: false },
         traits: {
           readOnly: (input) => input.action === "read" || input.action === "list",
           concurrencySafe: (input) => input.action === "read" || input.action === "list",

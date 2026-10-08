@@ -67,7 +67,7 @@ export const Plugin = {
     yield* ctx.tool.transform((editor) => {
       editor.add({
         name: "task_create",
-        options: { codemode: false },
+        options: { authorizes: true, codemode: false },
         traits: { readOnly: false, concurrencySafe: false },
         description:
           "Add a task to this session's task list. Use the task tools instead of todo when work has many steps or steps that depend on each other; use blockedBy to record what must finish first.",
@@ -94,7 +94,7 @@ export const Plugin = {
       })
       editor.add({
         name: "task_update",
-        options: { codemode: false },
+        options: { authorizes: true, codemode: false },
         traits: { readOnly: false, concurrencySafe: false },
         description:
           "Change a task: set its status as you start and finish it, edit its subject or description, add dependencies, or delete it. Mark a task completed only when it is fully done.",
@@ -135,7 +135,7 @@ export const Plugin = {
       })
       editor.add({
         name: "task_list",
-        options: { codemode: false },
+        options: { authorizes: true, codemode: false },
         traits: { readOnly: true, concurrencySafe: true },
         description:
           "Show this session's tasks with their status and dependencies. A task is ready when every task it depends on is completed.",
