@@ -23,6 +23,7 @@ import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
 import { SessionTurn } from "../turn.js"
+import { SessionTurnEnd } from "../turn-end.js"
 import { toSessionError } from "../to-session-error.js"
 import { DrainResult, Service, type Interface } from "./index.js"
 import { Snapshot } from "../../snapshot.js"
@@ -73,6 +74,7 @@ const layer = Layer.effect(
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
     const title = yield* SessionTitle.Service
+    const turnEnd = yield* SessionTurnEnd.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -218,10 +220,26 @@ const layer = Layer.effect(
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
         continuing = yield* runStep(next.context, step)
+        if (!continuing) continuing = yield* endTurn(next.context.session.id)
         step++
         force = false
         entering = false
       }
+    })
+
+    // The checks run only when nothing waits in the inbox, since waiting input would continue the turn on its own. A
+    // continuation adds its notice and the drain takes another step, so the busy period still ends in one terminal.
+    const endTurn = Effect.fn("SessionRunner.endTurn")(function* (sessionID: SessionSchema.ID) {
+      if ((yield* SessionInbox.list(db, sessionID)).length > 0) return false
+      const continuation = yield* turnEnd.run({ sessionID, turn: yield* SessionTurn.current(db, sessionID) })
+      if (!continuation) return false
+      yield* bus.publish(SessionEvent.Synthetic, {
+        sessionID,
+        text: continuation.text,
+        description: continuation.description,
+        metadata: { notice: SessionTurnEnd.NOTICE, check: continuation.check },
+      })
+      return true
     })
 
     const prepareContext = Effect.fn("SessionRunner.prepareContext")(function* (sessionID: SessionSchema.ID) {
@@ -465,6 +483,7 @@ export const node = makeLocationNode({
     SessionCompaction.node,
     Plugin.node,
     SessionTitle.node,
+    SessionTurnEnd.node,
     Snapshot.node,
     ToolOutput.node,
     Database.node,

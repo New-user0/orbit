@@ -53,6 +53,7 @@ import { SessionRunner } from "@orbit/core/session/runner/index"
 import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
+import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Plugin } from "@orbit/core/plugin"
@@ -231,6 +232,7 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    turnEnd: ((_input: SessionTurnEnd.Input) => Effect.succeed(undefined)) as SessionTurnEnd.Check["run"],
     holds: new Map<string, { readonly started: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }>(),
     hold(text: string) {
       const existing = this.holds.get(text)
@@ -546,6 +548,7 @@ const layer = Layer.unwrap(
       PluginSupervisor.node.replace(Layer.empty),
       Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
       SessionModelTransport.node.replace(modelTransport),
+      SessionTurnEnd.node.replace(SessionTurnEnd.layerWith([{ name: "test", run: (input) => state.turnEnd(input) }])),
     ]
     const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
       ...replacements,
@@ -8438,6 +8441,73 @@ describe("SessionRunnerLLM", () => {
       Expected.user("Call provider tool"),
       Expected.assistant({}, [Expected.failedTool({ id: "call-parsed" }, { input: { query: "hello" } })]),
     ])
+  })
+
+  describe("turn end", () => {
+    const keepGoing = (check: string): SessionTurnEnd.Check["run"] => () =>
+      Effect.succeed({ check, text: `The ${check} check wants more work.` })
+    const notices = (s: Scenario) =>
+      s.context.pipe(
+        Effect.map((messages) =>
+          messages.flatMap((message) => (message.type === "synthetic" && message.metadata?.notice === "turn-end" ? [message] : [])),
+        ),
+      )
+
+    scenario("continues once in the same drain and settles one terminal", function* (s) {
+      // The check continues the first time it is asked and lets the second end stand.
+      let asked = 0
+      s.turnEnd = () =>
+        Effect.sync(() => {
+          asked++
+          return asked === 1 ? { check: "first", text: "Keep going." } : undefined
+        })
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("First", "text-1"), TestLLM.text("Second", "text-2"))
+
+      yield* s.resume
+      yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+
+      expect(s.requests).toHaveLength(2)
+      expect(asked).toBe(2)
+      expect(yield* notices(s)).toMatchObject([{ text: "Keep going.", metadata: { notice: "turn-end", check: "first" } }])
+      const messages = yield* s.messages
+      expect(messages.filter((message) => message.type === "idle")).toHaveLength(1)
+      expect(messages.filter((message) => message.type === "assistant")).toHaveLength(2)
+    })
+
+    scenario("asks nothing while input waits in the inbox", function* (s) {
+      let asked = 0
+      s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
+      yield* s.admit("One")
+      yield* s.session.prompt({ sessionID, text: "Two", delivery: "queue", resume: false })
+      yield* s.llm.push(TestLLM.text("A", "text-a"), TestLLM.text("B", "text-b"))
+
+      yield* s.resume
+
+      // The queued prompt is the next turn, so only the end of the second one asks.
+      expect(asked).toBe(1)
+    })
+
+    scenario("stops continuing after eight in one turn", function* (s) {
+      s.turnEnd = keepGoing("always")
+      yield* s.admit("Work")
+      yield* s.llm.push(...Array.from({ length: 10 }, (_, index) => TestLLM.text(`Answer ${index}`, `text-${index}`)))
+
+      yield* s.resume
+
+      expect(yield* notices(s)).toHaveLength(SessionTurnEnd.MAX_CONTINUATIONS)
+      expect(s.requests).toHaveLength(SessionTurnEnd.MAX_CONTINUATIONS + 1)
+    })
+
+    scenario("ends the turn when no check continues", function* (s) {
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("Done", "text-done"))
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(1)
+      expect(yield* notices(s)).toEqual([])
+    })
   })
 
   scenario("rejects malformed streamed tool input ordering", function* (s) {
