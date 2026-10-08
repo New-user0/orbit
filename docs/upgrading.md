@@ -104,11 +104,16 @@ rest:
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours, so it would otherwise replace the one in your own config.
+  because an agent's
+ own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the
+ model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as
+ the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key
+ that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours,
+ so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -715,8 +720,9 @@ dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count t
 cost that is not above zero, a `fallbackModel` that is not a model reference, or a key that `turn` does not define
 (`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
 fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
-message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
-turn; a fallback model is used after repeated overloads (see the note on the fallback switch).
+message, and the latest options in a turn are the ones that apply to it. Orbit acts on them: a limit ends the
+turn (see the note on enforced limits), and the fallback model is used after repeated overloads (see the note on the
+fallback switch).
 
 A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
 cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
@@ -1251,7 +1257,7 @@ produced text, that response stays failed and the step continues from it on the 
 `synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
 also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
 prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
-or a moved location keeps it. No new event type is added.
+or a moved location keeps it. The message comes before the fallback model's answer, never after it. No new event type is added.
 
 **Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
 

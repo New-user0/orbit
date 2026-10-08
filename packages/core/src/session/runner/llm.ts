@@ -318,7 +318,11 @@ const layer = Layer.effect(
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           Retry: Effect.fnUntraced(function* (outcome) {
-            if (yield* switchToFallback(outcome, loaded, current)) return undefined
+            if (yield* switchToFallback(outcome, loaded, current)) {
+              // The draft from the failed attempt sits before the notice; a new one keeps the notice ahead of the fallback's answer.
+              assistantMessageID = SessionMessage.ID.create()
+              return undefined
+            }
             yield* retry.wait({ decision: outcome.decision, error: outcome.error, assistantMessageID })
           }),
           Continue: Effect.fnUntraced(function* (outcome) {
