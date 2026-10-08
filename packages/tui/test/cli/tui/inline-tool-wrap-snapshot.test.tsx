@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { For } from "solid-js"
 import { testRender, type JSX } from "@opentui/solid"
+import { bodyText } from "../../../src/util/renderer"
 import {
   InlineToolRow,
   executeCallSummary,
@@ -221,6 +222,27 @@ describe("TUI inline tool wrapping", () => {
     expect(genericToolSummary("mcp_x\u001b]0;pwned\u0007", { q: "a‮b" })).toBe(
       "mcp_x\\x1b]0;pwned\\x07 [q=a\\u{202e}b]",
     )
+  })
+
+  test("draws an MCP tool title and an expanded tool error written out", async () => {
+    const frame = await renderFrame(
+      () => (
+        <InlineToolRow
+          icon="⚙"
+          complete={true}
+          pending=""
+          failed={true}
+          error={bodyText("bad\u001b]0;x\u0007")}
+          errorExpanded={true}
+        >
+          {genericToolSummary("mcp_x\u001b]0;pwned\u0007", {})}
+        </InlineToolRow>
+      ),
+      { width: 72, height: 4 },
+    )
+    expect(frame).toContain("mcp_x\\x1b]0;pwned\\x07")
+    expect(frame).toContain("bad\\x1b]0;x\\x07")
+    expect(frame).not.toContain("\u001b")
   })
 
   test("ignores diagnostics with malformed nested ranges", () => {

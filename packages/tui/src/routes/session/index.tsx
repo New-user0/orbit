@@ -1894,7 +1894,7 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
     <>
       <Show when={props.message.error && !interrupted() && !props.message.retry}>
         <box paddingLeft={3}>
-          <text fg={theme.text.feedback.error.base}>Error: {errorMessage(props.message.error)}</text>
+          <text fg={theme.text.feedback.error.base}>Error: {bodyText(errorMessage(props.message.error))}</text>
         </box>
       </Show>
       <AssistantRetry retry={props.message.retry} />
@@ -2387,7 +2387,7 @@ function AssistantRetry(props: { retry: SessionMessageAssistant["retry"] }) {
         <box paddingLeft={3}>
           <text fg={theme.text.feedback.warning.base}>
             ⚠ {seconds() > 0 ? `Retrying in ${seconds()}s` : "Retry due"} · attempt {retry().attempt} ·{" "}
-            {retry().error.message}
+            {bodyText(retry().error.message)}
           </text>
         </box>
       )}
@@ -2804,7 +2804,7 @@ function BlockTool(props: BlockToolProps) {
       </Show>
       {props.children}
       <Show when={error()}>
-        <text fg={props.errorColor ?? theme.text.feedback.error.base}>{error()}</text>
+        <text fg={props.errorColor ?? theme.text.feedback.error.base}>{bodyText(error() ?? "")}</text>
       </Show>
     </box>
   )
@@ -2925,7 +2925,7 @@ function ShellDisplay(props: {
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6 - (isRunning() ? 2 : 0)))
   const prefix = createMemo(() => (workdir() && workdir() !== "." ? `cd ${workdir()} && ` : ""))
-  const input = createMemo(() => (props.command ? `${isRunning() ? "" : "$ "}${prefix()}${props.command}` : ""))
+  const input = createMemo(() => (props.command ? `${isRunning() ? "" : "$ "}${prefix()}${bodyText(props.command)}` : ""))
   const collapsed = createMemo(() => collapseShellOutput(input(), output(), maxLines, maxChars()))
   const limitedInput = createMemo(() => (expanded() ? input() : collapsed().input))
   const limitedOutput = createMemo(() => (expanded() ? output() : collapsed().output))
@@ -3228,7 +3228,7 @@ function Todo(props: ToolProps) {
   const active = createMemo(() => items().find((item) => item.status === "in_progress"))
   return (
     <InlineTool icon="◎" pending="Planning…" complete={items().length} part={props.part}>
-      {`Plan ${done()}/${items().length}${active() ? ` · ${active()?.content}` : ""}`}
+      {bodyText(`Plan ${done()}/${items().length}${active() ? ` · ${active()?.content}` : ""}`)}
     </InlineTool>
   )
 }
@@ -3313,7 +3313,7 @@ function Edit(props: ToolProps) {
           <BlockTool path={{ label: "← Edit", value: pathFormatter.format(path()) }} part={props.part}>
             <box paddingLeft={1}>
               <PatchDiff
-                diff={item().patch}
+                diff={bodyText(item().patch)}
                 hunkFg={theme.diff.text.hunkHeader}
                 view={view()}
                 filetype={filetype(path())}
@@ -3403,7 +3403,7 @@ function ApplyPatch(props: ToolProps) {
                 >
                   <box paddingLeft={1}>
                     <PatchDiff
-                      diff={file.patch}
+                      diff={bodyText(file.patch)}
                       hunkFg={theme.diff.text.hunkHeader}
                       view={view()}
                       filetype={filetype(file.relativePath)}
@@ -3492,7 +3492,7 @@ function Question(props: ToolProps) {
             <For each={questions()}>
               {(q, i) => (
                 <box flexDirection="column">
-                  <text fg={theme.text.muted}>{q.question}</text>
+                  <text fg={theme.text.muted}>{bodyText(q.question)}</text>
                   <text fg={theme.text.base}>{format(answers()?.[i()])}</text>
                 </box>
               )}
@@ -3535,7 +3535,7 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
         <For each={errors()}>
           {(diagnostic) => (
             <text fg={theme.text.feedback.error.base}>
-              Error [{diagnostic.range.start.line + 1}:{diagnostic.range.start.character + 1}] {diagnostic.message}
+              Error [{diagnostic.range.start.line + 1}:{diagnostic.range.start.character + 1}] {bodyText(diagnostic.message)}
             </text>
           )}
         </For>
@@ -3545,7 +3545,7 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
 }
 
 function stringValue(value: unknown) {
-  return typeof value === "string" ? value : undefined
+  return typeof value === "string" ? bodyText(value) : undefined
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

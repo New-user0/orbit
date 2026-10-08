@@ -34,6 +34,7 @@ import {
 import type { FormBodyState } from "./form.shared"
 import type { RunFooterTheme } from "./theme"
 import type { FormCancel, FormReply, MiniFormRequest } from "./types"
+import { bodyText } from "../util/renderer"
 import { stringWidth } from "../util/string-width"
 
 export function RunFormBody(props: {
@@ -320,7 +321,7 @@ export function RunFormBody(props: {
           {props.mono ? "*" : "◆"}
         </text>
         <text fg={props.theme.text} wrapMode="none" truncate minWidth={0}>
-          {props.request.title}
+          {bodyText(props.request.title)}
         </text>
         <Show when={!unsupported() && !formSingle(props.request)}>
           <text fg={props.theme.muted} wrapMode="none" flexShrink={0}>
@@ -382,7 +383,7 @@ export function RunFormBody(props: {
             {(field) => (
               <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
                 <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                  {field().description ?? formLabel(field())}
+                  {bodyText(field().description ?? formLabel(field()))}
                 </text>
                 <text width="100%" fg={props.theme.link} wrapMode="word" flexShrink={0}>
                   {field().url}
@@ -404,7 +405,7 @@ export function RunFormBody(props: {
           <Show when={!unsupported() && answerField() && !confirm()}>
             <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
               <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                {answerField()!.description ?? formLabel(answerField()!)}
+                {bodyText(answerField()!.description ?? formLabel(answerField()!))}
                 {answerField()!.required ? " (required)" : ""}
                 {multiple() ? " (select all that apply)" : ""}
               </text>
@@ -463,12 +464,12 @@ export function RunFormBody(props: {
                               <span style={{ fg: picked() ? props.theme.selection : undefined }}>
                                 {multiple() ? `[${picked() ? "x" : " "}] ` : ""}
                               </span>
-                              {row.label}
+                              {bodyText(row.label)}
                               <span style={{ fg: props.theme.selection }}>{!multiple() && picked() ? " *" : ""}</span>
                             </text>
                             <Show when={row.description}>
                               <text fg={props.theme.muted} wrapMode="word" flexShrink={0}>
-                                {row.description}
+                                {bodyText(row.description ?? "")}
                               </text>
                             </Show>
                           </box>

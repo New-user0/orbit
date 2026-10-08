@@ -824,12 +824,13 @@ running session. Lines written by earlier builds are read as before.
 
 ### Control characters in messages are written out on screen
 
-The terminal UI and Mini used to draw model text, a workflow node's stored prompt, tool output, question previews and
-recaps as they were. A body that carried an escape sequence, a carriage return or a right-to-left override could set the
+The terminal UI and Mini used to draw model text, a workflow node's stored prompt, tool output, question previews, tool errors,
+approval prompts and shell commands as they were. A body that carried an escape sequence, a carriage return or a right-to-left override could set the
 window title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape
 and `\u{202e}` for an override, so you can see that they were there. Line breaks, tabs, emoji and other Unicode are
 unchanged, and so is Markdown formatting. Text that the model meant to color with escape sequences shows the written-out
-form instead.
+form instead. Mini turns a lone carriage return into a line break before it writes out the rest, and shell output
+loses its color sequences (they are removed, not written out).
 
 **Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
 `orb run` and the stored messages are unchanged.

@@ -147,7 +147,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
   step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
   thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
-  are message content, which waits for the renderer sanitizer of the terminal UI (`bodyText`, class 9). Proof:
+  are message content and still open (see Known gaps; close them with `body` from `@orbit/flow/plain`). Proof:
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
@@ -807,7 +807,7 @@ repository text.
   renderer.setTerminalTitle(terminalTitle(title))
   ```
 
-- A message body, which is model text, a stored prompt, tool output, a question preview or a recap, passes `bodyText`
+- A message body, which is model text, a stored prompt, tool output, a question preview or a tool error, passes `bodyText`
   (`packages/tui/src/util/renderer.ts`) where the terminal UI and Mini draw it. It is `body` in
   `packages/flow/src/plain.ts`, so the escaping is the one `plain` uses: line breaks and tabs stay, a carriage return
   alone, C0 controls, DEL, C1 controls and the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E and U+2066 to
@@ -815,7 +815,11 @@ repository text.
   a zero-width joiner holds an emoji sequence together. Mini passes every body through `entryBody`
   (`packages/tui/src/mini/entry.body.ts`), including the fields of a tool snapshot; the session screen passes the text
   and reasoning parts, the compaction summary, the user message, the output and arguments of a generic tool, shell and
-  `execute` output, the tool name and the `btw` answer through it. A new place that draws such text calls `bodyText`
+  `execute` output, the tool name, the `btw` answer, question and form text, tool and retry errors, the inline labels
+  of tools (through `stringValue`), edit diffs, the shell command line and the approval prompt (through
+  `permissionPresentation` and `permissionAlwaysLines`, which serve both clients) through it. Shell output goes through
+  `stripAnsi` first, so its sequences are removed rather than written out, and Mini turns a lone carriage return into a
+  line break before `bodyText`. A new place that draws such text calls `bodyText`
   too.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
@@ -1370,9 +1374,8 @@ fixes it or asks.
 - **Text that the person did not write, in `orb run`.** The terminal UI and Mini now write control characters out of
   message bodies with `bodyText` (task `clients-ux-60`). `orb run` is still open: the answer, the thinking lines and
   the tool blocks of its default format are written as the model and the tools made them (its JSON formats write the
-  same text out with `jsonLine`). Closing it means passing them through `body` from `@orbit/flow/plain`. The parts of
-  the session screen that `bodyText` does not reach yet, such as the file tools' own blocks and the permission
-  prompt's detail, stay open with it.
+  same text out with `jsonLine`). Closing it means passing them through `body` from `@orbit/flow/plain`. Recaps are not
+  drawn anywhere yet; they pass `bodyText` when `clients-ux-27` lands.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which

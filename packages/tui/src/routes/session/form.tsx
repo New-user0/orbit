@@ -33,6 +33,7 @@ import {
   formValidateValue,
   isFormAnswerField,
 } from "../../util/form"
+import { bodyText } from "../../util/renderer"
 import type { FormAnswerField } from "../../util/form"
 
 export const FORM_MODE = "form"
@@ -773,11 +774,11 @@ export function FormPrompt(props: { form: FormWithLocation }) {
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
         <box paddingLeft={1}>
-          <text fg={theme.text.muted}>{props.form.title}</text>
+          <text fg={theme.text.muted}>{bodyText(props.form.title)}</text>
         </box>
         <Show when={message()}>
           <box paddingLeft={1}>
-            <text fg={theme.text.base}>{message()}</text>
+            <text fg={theme.text.base}>{bodyText(message() ?? "")}</text>
           </box>
         </Show>
         <Show when={!single() && !tabbed()}>
@@ -862,10 +863,10 @@ export function FormPrompt(props: { form: FormWithLocation }) {
           {(external) => (
             <box paddingLeft={1} gap={1}>
               <Show when={external().title}>
-                <text fg={theme.text.base}>{external().title}</text>
+                <text fg={theme.text.base}>{bodyText(external().title ?? "")}</text>
               </Show>
               <Show when={external().description}>
-                <text fg={theme.text.muted}>{external().description}</text>
+                <text fg={theme.text.muted}>{bodyText(external().description ?? "")}</text>
               </Show>
               <text
                 fg={theme.text.action.primary.base}
@@ -892,7 +893,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
         <Show when={!confirm() && answerField()}>
           <box paddingLeft={1} gap={1}>
             <box>
-              <text fg={theme.text.base}>{answerField()!.description ?? formLabel(answerField()!)}</text>
+              <text fg={theme.text.base}>{bodyText(answerField()!.description ?? formLabel(answerField()!))}</text>
             </box>
             <Show when={textual() ? answerField()!.key : undefined} keyed>
               <box paddingLeft={1}>
@@ -968,7 +969,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                               </text>
                             </Show>
                             <text fg={active() ? theme.text.formfield.focused : theme.text.formfield.base}>
-                              {row.label}
+                              {bodyText(row.label)}
                             </text>
                           </box>
                           <Show when={!multi()}>
@@ -977,7 +978,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                         </box>
                         <Show when={row.description}>
                           <box paddingLeft={multi() ? 7 : 3}>
-                            <text fg={theme.text.muted}>{row.description}</text>
+                            <text fg={theme.text.muted}>{bodyText(row.description ?? "")}</text>
                           </box>
                         </Show>
                       </box>

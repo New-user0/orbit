@@ -15,13 +15,12 @@ const syntaxStyle = SyntaxStyle.fromStyles({
   "markup.list": { fg: "#ffffff" },
 })
 
-async function frame(draw: (renderer: CliRenderer) => void) {
+async function frame(draw: (renderer: CliRenderer) => void, ready = " d") {
   const setup = await createTestRenderer({ width: 60, height: 8, remote: true, useThread: false })
   try {
     draw(setup.renderer)
     setup.renderer.start()
-    await setup.waitForFrame((drawn) => drawn.trim().length > 0)
-    await Bun.sleep(150)
+    await setup.waitForFrame((drawn) => drawn.includes(ready))
     return setup.captureCharFrame()
   } finally {
     setup.renderer.destroy()
@@ -39,7 +38,7 @@ test.each(["text", "markdown"] as const)("draws the control characters of a body
   expect(drawn).toContain(written)
 
   // The control run: the same body drawn as it came never shows the written-out form.
-  const raw = await frame((renderer) => blocks[kind](renderer, hostile))
+  const raw = await frame((renderer) => blocks[kind](renderer, hostile), "b")
   expect(raw).not.toContain("\\x1b")
   expect(raw).not.toContain("\\u{202e}")
 })
@@ -56,10 +55,11 @@ test("draws ordinary Unicode, emoji and wide characters unchanged, and markdown 
   expect(bodyText(ordinary)).toBe(ordinary)
 
   const text = "Grüße 世界 😀 café"
-  expect(await frame((renderer) => blocks.text(renderer, bodyText(text)))).toContain(text)
+  expect(await frame((renderer) => blocks.text(renderer, bodyText(text)), "café")).toContain(text)
 
-  const markdown = await frame((renderer) =>
-    blocks.markdown(renderer, bodyText("Plain words\n\n- one\n- two\n\n```ts\nconst x = 1\n```")),
+  const markdown = await frame(
+    (renderer) => blocks.markdown(renderer, bodyText("Plain words\n\n- one\n- two\n\n```ts\nconst x = 1\n```")),
+    "const x = 1",
   )
   // The list becomes bullet rows and the fence is drawn without its backticks.
   expect(markdown.split("\n").filter((row) => row.startsWith("-"))).toHaveLength(2)

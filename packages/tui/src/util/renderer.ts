@@ -2,7 +2,7 @@ import type { CliRenderer } from "@opentui/core"
 import { body } from "@orbit/flow/plain"
 
 /**
- * A message body for the screen: model text, a stored prompt, tool output, a question preview or a recap. Line breaks
+ * A message body for the screen: model text, a stored prompt, tool output, a question preview or a tool error. Line breaks
  * and tabs stay; control characters and bidi overrides are written out, such as `\x1b` and `\u{202e}`, so an escape
  * sequence cannot act on the terminal and an approver can see that it was there. The escaping is `plain`'s, in
  * `@orbit/flow/plain`.
