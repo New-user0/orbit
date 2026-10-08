@@ -8701,16 +8701,73 @@ describe("SessionRunnerLLM", () => {
     ).toHaveLength(0)
   })
 
-  scenario("resumes a reply cut off at the configured cap", function* (s) {
+  const notices = (messages: ReadonlyArray<SessionMessage.Info>, notice: string) =>
+    messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === notice)
+
+  scenario("escalates a reply cut off at the configured cap, then resumes at the maximum", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
-    yield* s.llm.push(lengthStop("cap-resume-1", "Part"), TestLLM.text(" rest", "cap-resume-2"))
+    yield* s.llm.push(
+      lengthStop("cap-resume-1", "FirstCut"),
+      lengthStop("cap-resume-2", "SecondCut"),
+      TestLLM.text(" rest", "cap-resume-3"),
+    )
     yield* s.runPrompt("Question")
 
-    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 8_000])
-    expect(
-      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
-    ).toHaveLength(1)
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 64_000])
+    // The retry is the same request: the cut-off attempt and the notice are left out.
+    expect(s.requests[1]?.messages).toEqual(s.requests[0]?.messages)
+    // The resume keeps the second attempt, and neither the first attempt nor the escalation notice.
+    const resumed = JSON.stringify(s.requests[2]?.messages)
+    expect(resumed).toContain("SecondCut")
+    expect(resumed).not.toContain("FirstCut")
+    expect(resumed).not.toContain("larger one")
+    const context = yield* s.context
+    const escalations = notices(context, "output-escalation")
+    expect(escalations).toHaveLength(1)
+    expect(notices(context, "output-limit")).toHaveLength(1)
+    expect(escalations[0]).toMatchObject({ metadata: { maxTokens: 64_000 } })
+    expect(escalations[0]).not.toHaveProperty("description")
+    expect(context.some((message) => message.id === escalations[0]?.metadata?.replaces)).toBe(true)
+  })
+
+  scenario("answers at the maximum once escalated and returns to the cap on the next prompt", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-next-1", "Part"), TestLLM.text("Whole answer", "cap-next-2"))
+    yield* s.runPrompt("Question")
+    yield* s.llm.push(TestLLM.text("Short", "cap-next-3"))
+    yield* s.runPrompt("Another")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 8_000])
+    expect(notices(yield* s.context, "output-limit")).toHaveLength(0)
+  })
+
+  scenario("does not escalate when a hook set the output limit", function* (s) {
+    const hooks = yield* PluginHooks.Service
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-pin-1", "Part"), TestLLM.text(" rest", "cap-pin-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([20_000, 20_000])
+    const context = yield* s.context
+    expect(notices(context, "output-escalation")).toHaveLength(0)
+    expect(notices(context, "output-limit")).toHaveLength(1)
+  })
+
+  scenario("does not escalate without a lowered cap", function* (s) {
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-none-1", "Part"), TestLLM.text(" rest", "cap-none-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([64_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
   })
 
   scenario("starts a fresh output-limit streak after a new prompt", function* (s) {

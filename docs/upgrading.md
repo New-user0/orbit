@@ -1494,3 +1494,16 @@ completion notices never cancel anything. Before, every call ran to the end befo
 **Affects:** anyone who types or sends a prompt while Orbit is running tools, including SDK and API callers.
 
 **What to do:** Nothing. Send the message with delivery "queue" to let running calls finish first.
+
+### A reply cut off at `output_token_cap` is retried once at the model's maximum
+
+When a text-only reply stops at the output cap that `output_token_cap` set, Orbit now repeats the same request once with
+the model's own maximum before it resumes the reply. The cut-off attempt and a hidden note with `metadata.notice` set to
+`output-escalation` (and `metadata.replaces` naming that attempt) stay in the session's messages but are left out of
+every later request, token estimate and compaction summary. The larger limit lasts until a response ends normally, and
+resumes after it work as described above. A `session.context` hook that changes or removes the output limit keeps the
+limit it chose, and a request already at the model's maximum is not repeated.
+
+**Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
+
+**What to do:** nothing. Unset `output_token_cap` to avoid the extra request.
