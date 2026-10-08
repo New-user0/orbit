@@ -13,6 +13,8 @@ import type { Agent } from "@orbit/schema/agent"
 import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@orbit/schema/session-error"
 import { Bus } from "../../bus.js"
+import { Config } from "../../config.js"
+import { ConfigTrust } from "../../config/trust.js"
 import { Permission } from "../../permission.js"
 import { Snapshot } from "../../snapshot.js"
 import { Tool } from "../../tool.js"
@@ -28,6 +30,7 @@ import { SessionUsage } from "../usage.js"
 import { SessionRunnerModel } from "./model.js"
 import { createLLMEventPublisher } from "./publish-llm-event.js"
 import { SessionRunnerRetry } from "./retry.js"
+import { ToolScheduler } from "./tool-scheduler.js"
 
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
@@ -60,11 +63,22 @@ interface Input {
 
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
 const STEP_INTERRUPTED = { type: "aborted", message: "Step interrupted" } as const
+// A call the user's decline keeps from starting settles as aborted, like the declined call; one that a rejection with
+// feedback keeps from starting settles as cancelled, so the model can tell it never ran and carry on.
+const SKIPPED_AFTER_DECLINE = {
+  type: "aborted",
+  message: "Not run: the user declined an earlier tool call",
+} as const
+const SKIPPED_AFTER_REJECTION = {
+  type: Tool.ErrorCode.Cancelled,
+  message: "Not run: the user rejected an earlier tool call and gave feedback",
+} as const
 const RESULT_MISSING = { type: "tool.result-missing", message: "Provider did not return a tool result" } as const
 
 /** Captures Location-scoped dependencies without introducing another service or execution loop. */
 export const make = Effect.gen(function* () {
   const bus = yield* Bus.Service
+  const config = yield* Config.Service
   const llm = yield* LLMClient.Service
   const snapshots = yield* Snapshot.Service
   const toolOutput = yield* ToolOutput.Service
@@ -80,6 +94,13 @@ export const make = Effect.gen(function* () {
       snapshot: startSnapshot,
       started: yield* Clock.currentTimeMillis,
     })
+    const scheduler = ToolScheduler.make<SessionError.Error>({
+      maxConcurrency:
+        Config.latest(yield* config.entries(), "tool_execution")?.max_concurrency ??
+        ConfigTrust.DEFAULT_MAX_CONCURRENCY,
+      onQueued: (id) => publisher.hint(id, { queued: true }),
+      onStarted: (id) => publisher.hint(id, {}),
+    })
     const toolRuns: Array<{
       readonly call: ToolCall
       readonly fiber: Fiber.Fiber<void, Permission.DeclinedError | QuestionTool.CancelledError>
@@ -87,10 +108,12 @@ export const make = Effect.gen(function* () {
     const interruptTools = Effect.suspend(() => Fiber.interruptAll(toolRuns.map((run) => run.fiber)))
     const executeTool = (call: ToolCall) => {
       if (input.prepared.request.toolChoice?.type === "none")
-        return new Tool.Error({
-          message: "Tools are disabled after the maximum agent steps",
-          code: Tool.ErrorCode.Disabled,
-        })
+        return Effect.fail(
+          new Tool.Error({
+            message: "Tools are disabled after the maximum agent steps",
+            code: Tool.ErrorCode.Disabled,
+          }),
+        )
       return input.prepared.executeTool({
         sessionID: input.sessionID,
         agent: input.agent,
@@ -118,17 +141,44 @@ export const make = Effect.gen(function* () {
           }
           yield* publisher.publish(event)
           if (event.type !== "tool-call" || event.providerExecuted) return
+          // Registering in the same uninterruptible block as the fork keeps provider order, and no call is left
+          // registered without a fiber that releases it. The scheduler starts the call once its traits allow.
           toolRuns.push({
             call: event,
-            fiber: yield* Effect.uninterruptibleMask((restore) =>
-              restore(executeTool(event)).pipe(
-                Effect.flatMap(toolOutput.truncate),
-                Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome)),
-                Effect.catchTag("Tool.Error", (error) =>
-                  publisher.failTool(event.id, toSessionError(error), error.metadata).pipe(Effect.asVoid),
+            fiber: yield* Effect.uninterruptibleMask((restore) => {
+              const entry = scheduler.register(event.id)
+              return Effect.forkScoped(
+                restore(input.prepared.toolTraits(event)).pipe(
+                  Effect.flatMap((traits) =>
+                    restore(
+                      scheduler.run(
+                        entry,
+                        traits,
+                        executeTool(event).pipe(
+                          Effect.tapError((error) =>
+                            error._tag === "Tool.Error" ? Effect.void : scheduler.halt(SKIPPED_AFTER_DECLINE),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Effect.flatMap((result) =>
+                    result._tag === "Cancelled"
+                      ? publisher.failTool(event.id, result.error).pipe(Effect.asVoid)
+                      : toolOutput
+                          .truncate(result.value)
+                          .pipe(Effect.flatMap((outcome) => publisher.toolExecution(event.id, event.name, outcome))),
+                  ),
+                  Effect.catchTag("Tool.Error", (error) =>
+                    (hasCorrection(error) ? scheduler.halt(SKIPPED_AFTER_REJECTION) : Effect.void).pipe(
+                      Effect.andThen(publisher.failTool(event.id, toSessionError(error), error.metadata)),
+                      Effect.asVoid,
+                    ),
+                  ),
+                  Effect.ensuring(scheduler.release(entry)),
                 ),
-              ),
-            ).pipe(Effect.forkScoped),
+              )
+            }),
           })
         }),
       ),
@@ -280,6 +330,16 @@ export const make = Effect.gen(function* () {
 
   return { attempt }
 })
+
+/** A tool turns the user's feedback into a failure whose cause is the correction, possibly through a wrapper. */
+const hasCorrection = (error: Tool.Error) => {
+  for (let cause: unknown = error, depth = 0; depth < 8; depth++) {
+    if (cause instanceof Permission.CorrectedError) return true
+    if (!(cause instanceof Error) || !("error" in cause)) return false
+    cause = cause.error
+  }
+  return false
+}
 
 const isInterruptedStream = (failure: AIError) => {
   if (failure.reason._tag === "InvalidProviderOutput") return failure.reason.classification === "incomplete-stream"

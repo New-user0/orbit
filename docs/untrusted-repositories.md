@@ -733,7 +733,8 @@ runs" is a permission.
 - Classify each new field in `ConfigTrust.classification` (`info`, `agent` and `command`). Ask of every field: does it
   choose which rules, agent or mode apply? Then it is a permission, `withhold("permissions")`, and a permission list
   keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming` keeps only
-  `false`.
+  `false`. `tool_execution` keeps a `max_concurrency` at or below the default of 10 (`toolExecution`): the user's own
+  value is not visible to the filter, so a repository may lower the cap from the default but not raise it.
 - A field that picks a model, a provider or a step budget is not covered by that rule, and the table does not treat it
   as a permission: `model` (in the config, in every agent and in every command) and an agent's `steps` are `inert`. An
   untrusted folder can therefore choose the most expensive of the models that you configured, or another provider that

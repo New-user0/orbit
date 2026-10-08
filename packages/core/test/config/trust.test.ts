@@ -299,6 +299,25 @@ describe("ConfigTrust.sanitize", () => {
     expect(ConfigTrust.sanitize(off, place).info.warming).toBe(false)
   })
 
+  test("lets an untrusted folder lower the tool concurrency cap but not raise it past the default", () => {
+    for (const [cap, kept] of [
+      [1, true],
+      [2, true],
+      [ConfigTrust.DEFAULT_MAX_CONCURRENCY, true],
+      [ConfigTrust.DEFAULT_MAX_CONCURRENCY + 1, false],
+      [1000, false],
+    ] as const) {
+      const result = sanitize({ tool_execution: { max_concurrency: cap }, model: "acme/fast" })
+      if (kept) {
+        expect(result.info.tool_execution?.max_concurrency).toBe(cap)
+        expect(result.withheld).toEqual([])
+        continue
+      }
+      expect(result.info).not.toHaveProperty("tool_execution")
+      expect(result.withheld).toEqual(["settings"])
+    }
+  })
+
   test("flags commands that run a shell snippet and keeps every command", () => {
     const plain = decode({ commands: { review: { template: "Review $ARGUMENTS. Say `hello` and !not-a-snippet" } } })
     expect(ConfigTrust.sanitize(plain, place)).toEqual({ info: plain, withheld: [] })

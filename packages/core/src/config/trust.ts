@@ -5,6 +5,7 @@ import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
+import type { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import type { ConfigWarming } from "@orbit/schema/config/warming"
 import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
@@ -67,6 +68,9 @@ export interface Place {
   readonly directory: string
 }
 
+/** How many tool calls of one step run at once when the config does not say. */
+export const DEFAULT_MAX_CONCURRENCY = 10
+
 const inert = { type: "inert" } as const
 const withhold = (kind: Trust.Kind) => ({ type: "withhold", kind }) as const
 const flag = <V>(kind: Trust.Kind, when: (value: V) => boolean) => ({ type: "flag", kind, when }) as const
@@ -124,6 +128,14 @@ function webSearch(selection: ConfigWebSearch.Selection): Outcome<ConfigWebSearc
 // Only turning them off is kept, for the reason that applies to web search.
 function warming(selection: boolean | ConfigWarming.Info): Outcome<boolean | ConfigWarming.Info> {
   return selection === false ? { value: selection, withheld: [] } : { value: undefined, withheld: ["network"] }
+}
+
+// A lower cap only slows work down, but a higher one lets a repository start more tool calls at once than the user
+// allowed. The user's own value is not visible here, so only a cap at or below the default is kept.
+function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecution.Info> {
+  if (value.max_concurrency === undefined || value.max_concurrency <= DEFAULT_MAX_CONCURRENCY)
+    return { value, withheld: [] }
+  return { value: undefined, withheld: ["settings"] }
 }
 
 function agents(
@@ -198,6 +210,7 @@ export const classification = {
     media: inert,
     sandbox: withhold("sandbox"),
     tool_output: inert,
+    tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),
     compaction: inert,
     // The switch reads only the user's, the flag's and the organization's documents, so a repository cannot set it.

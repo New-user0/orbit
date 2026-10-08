@@ -1,7 +1,7 @@
 export * as Permission from "./permission.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { Context, Deferred, Effect, Layer, Schema } from "effect"
+import { Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
 import { Permission } from "@orbit/schema/permission"
 import { Bus } from "./bus.js"
 import { Location } from "./location.js"
@@ -270,6 +270,17 @@ const layer = Layer.effect(
               // WITH feedback (CorrectedError) intentionally stays typed so the leaf can turn
               // it into ToolFailure and the model continues.
               Effect.catchTag("Permission.DeclinedError", (error) => Effect.die(error)),
+              // A prompt whose waiter is interrupted (a cancelled call, an interrupted step) is closed for clients
+              // the way `close` closes it, so none is left showing a stale question.
+              Effect.onExit((exit) =>
+                Exit.hasInterrupts(exit) && pending.has(item.request.id)
+                  ? bus.publish(Permission.Event.Replied, {
+                      sessionID: item.request.sessionID,
+                      requestID: item.request.id,
+                      reply: "reject",
+                    })
+                  : Effect.void,
+              ),
               Effect.ensuring(
                 Effect.sync(() => {
                   pending.delete(item.request.id)
