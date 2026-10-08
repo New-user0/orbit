@@ -80,7 +80,7 @@ function stepStarted(messageID = "msg_assistant", agent = "build"): V2Event {
   }
 }
 
-function stepFailed(message: string, messageID = "msg_assistant"): V2Event {
+function stepFailed(message: string, messageID = "msg_assistant", cost?: number): V2Event {
   return {
     id: `evt_step_failed_${messageID}`,
     created: 2,
@@ -89,12 +89,15 @@ function stepFailed(message: string, messageID = "msg_assistant"): V2Event {
     data: {
       sessionID: "ses_1",
       assistantMessageID: messageID,
+      ...(cost === undefined
+        ? {}
+        : { cost, tokens: { input: 2, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }),
       error: { type: "provider.transport", message },
     },
   }
 }
 
-function stepEnded(messageID: string, finish: "stop" | "length" | "tool-calls" = "stop"): V2Event {
+function stepEnded(messageID: string, finish: "stop" | "length" | "tool-calls" = "stop", cost = 0): V2Event {
   return {
     id: `evt_step_ended_${messageID}`,
     created: 3,
@@ -104,7 +107,7 @@ function stepEnded(messageID: string, finish: "stop" | "length" | "tool-calls" =
       sessionID: "ses_1",
       assistantMessageID: messageID,
       finish,
-      cost: 0,
+      cost,
       tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
     },
   }
@@ -1002,6 +1005,97 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
     })
     expect(JSON.parse(shutdown.stdout)).toMatchObject({ is_error: true, outcome: "interrupted", reason: "shutdown" })
     expect(shutdown.exitCode).toBe(1)
+  })
+
+  test("the result takes the run's own outcome before the answer's validity, field by field", async () => {
+    const envelope = { cwd: "/tmp", version: "test" }
+    const jsonSchema = { type: "object" }
+    const answer = (text: string, ...ending: V2Event[]) => (messageID: string) => [
+      prompted(messageID),
+      stepStarted("msg_one"),
+      textEnded("msg_one", text),
+      stepEnded("msg_one"),
+      ...ending,
+    ]
+    const rows: {
+      name: string
+      turn: (messageID: string) => V2Event[]
+      expected: Record<string, unknown>
+      absent: string[]
+    }[] = [
+      {
+        name: "success",
+        turn: answer('{"a":1}', settled()),
+        expected: { is_error: false, outcome: "succeeded", structured_output: { a: 1 } },
+        absent: ["reason", "error"],
+      },
+      {
+        name: "invalid JSON after a success",
+        turn: answer("nope", settled()),
+        expected: { is_error: true, outcome: "failed", reason: "invalid_output", error: "The answer was not valid JSON." },
+        absent: ["structured_output"],
+      },
+      {
+        name: "failure with an empty answer",
+        turn: (messageID) => [prompted(messageID), executionFailed("boom")],
+        expected: { is_error: true, outcome: "failed", reason: "error", error: "boom" },
+        absent: ["structured_output"],
+      },
+      {
+        name: "failure after an answer that is not JSON",
+        turn: answer("nope", executionFailed("boom")),
+        expected: { is_error: true, outcome: "failed", reason: "error", error: "boom" },
+        absent: [],
+      },
+      {
+        name: "interruption",
+        turn: answer("nope", settled("interrupted", "shutdown")),
+        expected: { is_error: true, outcome: "interrupted", reason: "shutdown", error: "Session interrupted: shutdown" },
+        absent: [],
+      },
+      {
+        name: "stop at the output limit",
+        turn: (messageID) => [
+          prompted(messageID),
+          stepStarted("msg_one"),
+          textEnded("msg_one", "nope"),
+          stepEnded("msg_one", "length"),
+          settled(),
+        ],
+        expected: { is_error: true, outcome: "failed" },
+        absent: [],
+      },
+    ]
+
+    // One after the other: each run replaces process.stdout.write.
+    for (const row of rows) {
+      const output = await capture({ format: "result", envelope, jsonSchema, turn: row.turn })
+      const result = JSON.parse(output.stdout)
+      expect({ row: row.name, ...result }).toMatchObject({ row: row.name, ...row.expected })
+      row.absent.forEach((key) => expect({ row: row.name, has: key in result }).toEqual({ row: row.name, has: false }))
+      expect(output.exitCode).toBe(1 - Number(row.expected.is_error === false))
+    }
+  })
+
+  test("the result counts the cost, tokens and steps of a failed step too", async () => {
+    const output = await capture({
+      format: "result",
+      envelope: { cwd: "/tmp", version: "test" },
+      turn: (messageID) => [
+        prompted(messageID),
+        stepStarted("msg_one"),
+        stepFailed("gave up", "msg_one", 0.25),
+        stepStarted("msg_two"),
+        stepEnded("msg_two", "stop", 0.5),
+        settled(),
+      ],
+    })
+
+    expect(JSON.parse(output.stdout)).toMatchObject({
+      steps: 2,
+      cost: 0.75,
+      tokens: { input: 3, output: 1 },
+    })
   })
 
   test("a failed run with a schema in the text format prints its error once", async () => {

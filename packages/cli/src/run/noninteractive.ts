@@ -1207,7 +1207,8 @@ function writeEnvelopeResult(run: {
   rejected: unknown
 }) {
   const parsed = run.schema === undefined ? undefined : parseJson(unfence(run.text))
-  const invalid = run.schema !== undefined && parsed === undefined
+  // The run's own failure is what happened; an answer that is not JSON matters only when the run itself succeeded.
+  const invalid = !run.failed && run.schema !== undefined && parsed === undefined
   const failed = run.failed || invalid
   if (failed) process.exitCode = process.exitCode || 1
   resultWritten = true
@@ -1220,7 +1221,11 @@ function writeEnvelopeResult(run: {
       ...(run.reason === undefined && !invalid ? {} : { reason: run.reason ?? "invalid_output" }),
       result: run.text,
       ...(parsed === undefined ? {} : { structured_output: parsed.value }),
-      ...(invalid ? { error: "The answer was not valid JSON." } : run.error === undefined ? {} : { error: run.error }),
+      ...(run.error !== undefined
+        ? { error: run.error }
+        : invalid
+          ? { error: "The answer was not valid JSON." }
+          : {}),
       steps: run.steps,
       duration_ms: run.duration,
       cost: run.cost,

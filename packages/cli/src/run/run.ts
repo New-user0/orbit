@@ -145,7 +145,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
   }
 
   // The model of the init line is the one the run asks for, or the default of the folder when it asks for none.
-  const initModel = input.envelope
+  const initModel = input.envelope && input.format === "stream-json"
     ? (model ??
       (await client.model
         .default({ location: { directory: target.location.directory } })
@@ -161,7 +161,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     agent: target.agent,
     model,
     variant,
-    thinking: input.thinking || input.verbose || false,
+    thinking: input.thinking ?? false,
     format: input.format,
     envelope: input.envelope
       ? {

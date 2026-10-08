@@ -230,6 +230,20 @@ test("--include-partial-messages without stream-json is a usage error", async ()
   expect(model.requests.length).toBe(before)
 }, 60_000)
 
+test("--verbose outside the text format is a usage error", async () => {
+  const before = model.requests.length
+
+  const runs = await Promise.all(
+    ["json", "stream-json"].map((format) => orb(["-p", ...base, "--output-format", format, "--verbose", "say ok"])),
+  )
+
+  runs.forEach((run) => {
+    expect(run.code).toBe(1)
+    expect(run.stderr).toContain("--verbose requires --output-format text")
+  })
+  expect(model.requests.length).toBe(before)
+}, 60_000)
+
 test("an answer that is not JSON under --json-schema is an error in every format", async () => {
   await scripted(["not json"], async (own, home) => {
     const text = await print(own, home, ["--json-schema", schema, "say ok"], "text")

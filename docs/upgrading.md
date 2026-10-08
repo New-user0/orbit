@@ -314,7 +314,7 @@ prints only that result object. Besides `sessionID`, `is_error`, `result`, `stru
 such as `shutdown`, which is an `interrupted` outcome), `steps`, `duration_ms`,
 `cost`, `tokens` and `rejected` (the requests that were rejected because nobody could approve them). The steps, cost and
 tokens include failed steps and the steps of subagents the run started. `--include-partial-messages` (stream-json only)
-adds `text_delta`, `reasoning_delta` (with `--thinking`) and `tool_input_delta` lines. `--verbose` implies `--thinking`,
+adds `text_delta`, `reasoning_delta` (with `--thinking`) and `tool_input_delta` lines. `--verbose` (text format only; a usage error otherwise) implies `--thinking`,
 prints what the tools returned and writes one usage line per step to stderr. With the text format, a run that
 auto-rejected requests ends with one summary line on stderr; its exit code does not change.
 
