@@ -1,8 +1,8 @@
 # Known test failures on Windows
 
-This is the list of tests that fail, or fail under load, on the Windows development machine for a reason that has nothing to do with the change under test. Compare a package's failures with this list before you decide a run is red. A new flake is fixed, or added here with its reason, in the PR that meets it.
+This is the list of tests that fail, or fail under load, on the Windows development machine for a reason that has nothing to do with the change under test. Compare a package's failures with this list before you decide a run is red. A new flake is fixed, or added here with its reason, in the PR that meets it; the one exception is a timeout-only failure that passes when its file is re-run alone (see the end of this file).
 
-Last verified against `origin/main` at `4b5e035` by running each package's `bun run test` one at a time from its directory.
+Last verified at commit `b79898f` (this branch with `origin/main` at `a0a4222` merged in; this and later commits change only documentation). All 22 packages that have a `test` script were run, one at a time, with `bun run test` from their directories: cli, core, tui, client, schema, sdk, util, vscode, merman, ai, codemode, compat, flow, http-recorder, httpapi-codegen, latex, plugin, plugin-browser, protocol, server, simulation and theme. A package with a row below fails those tests and nothing else; ai, codemode, compat, flow, http-recorder, httpapi-codegen, latex, plugin, plugin-browser, protocol, simulation and theme had no failures, so a failure in one of them is new, not missing from this list. The cli run needs about 40 minutes on a loaded machine (the first run, with a 25 minute limit, was cut off).
 
 How to start a run: PowerShell or Git Bash works for every package except `packages/cli`, which needs Git Bash because its `mini-config` tests call `mktemp -d`. Core clears `SHELL` in `packages/core/test/preload.ts` on win32, so a Git Bash terminal (which exports `SHELL=/bin/bash.exe`) gives the same result as PowerShell.
 
@@ -21,6 +21,7 @@ A gate is a test that pins a promise in `docs/untrusted-repositories.md`. A gate
 | Package | Test (file) | Cause | On main |
 | --- | --- | --- | --- |
 | cli | `acp additional directories over the wire > grants both the written and real spelling of a symlinked root and drops links to cwd` (`packages/cli/test/acp/additional-directories.test.ts`) | Creating a symlink fails with `EPERM` without Developer Mode or elevation. Class 3/4 gate: see Gates. | yes |
+| cli | `a gateway behind a private CA is reachable only once ORBIT_CA_CERTS trusts it` (`packages/cli/test/tachyon.test.ts`, line 74) | Not Windows-specific. Since #31 a failed certificate check is retried through a retry schedule of about 160 s (`packages/core/src/session/runner/retry.ts`), beyond the test's 120 s limit, so the run without the CA times out. A separate fix PR (branch `tls-no-retry`, in progress) stops retrying certificate failures and removes this row. | yes |
 | cli | `acp config option subprocess > model option is listed with category "model"` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Not root-caused: the fixture's `test` provider is missing from the listed options, and the current model reported is `ollama/gemma3:4b`, the host's own Ollama model. Also fails at the import commit `7845c97`. Not verified with Ollama stopped. | yes |
 | cli | `acp config option subprocess > model switch updates currentValue` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Same as above: not root-caused. | yes |
 | cli | `acp config option subprocess > effort option is listed with category "thought_level" when selected model supports variants` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Same as above: not root-caused. | yes |
@@ -47,11 +48,11 @@ A gate is a test that pins a promise in `docs/untrusted-repositories.md`. A gate
 | vscode | `reports why orb could not start` (`packages/vscode/test/endpoint.test.ts`) | Same fake `orb` cause. | yes |
 | vscode | `reads the version orb prints` (`packages/vscode/test/endpoint.test.ts`) | Same fake `orb` cause. | yes |
 | vscode | `lists runs and their nodes, and approves a waiting gate` (`packages/vscode/test/runs.test.ts`) | Same fake `orb` cause. | yes |
-| vscode | `afterAll` hook (`test/endpoint.test.ts:22`, reported as `(unnamed)`) | Stopping the service with the fake `orb` throws, so the hook ends before it removes its temporary folder. Same fake `orb` cause. | yes |
+| vscode | `afterAll` hook (`packages/vscode/test/endpoint.test.ts:22`, reported as `(unnamed)`) | Stopping the service with the fake `orb` throws, so the hook ends before it removes its temporary folder. Same fake `orb` cause. | yes |
 
 ## Flaky, depend on load
 
-Each passes when re-run alone.
+Each passes when re-run alone, unless its row says otherwise.
 
 | Package | Test (file) | Cause | On main |
 | --- | --- | --- | --- |
@@ -60,14 +61,23 @@ Each passes when re-run alone.
 | cli | (`packages/cli/test/flow.test.ts`) `a YAML workflow runs nodes as their needs finish, fills templates, and pauses at its gate` | Timing flake in the YAML gate test. | intermittent |
 | cli | (`packages/cli/test/standalone.test.ts`) `standalone server exits when its owner is killed` | Takes about 9.6 s alone against a 10 s race, so it fails under any load. | intermittent |
 | core | (`packages/core/test/npm.test.ts`) `Npm.add > reifies when package cache directory exists without the package installed` | The real install times out under load. | intermittent |
+| core | `Npm.add > installs and locates unnamed Git packages with dependencies` (`packages/core/test/npm.test.ts`, line 223) | The real install times out under load (5 second limit). | intermittent |
+| core | `Npm.add > installs and locates named Git packages with dependencies` (same file) | Same. | intermittent |
 | core | `Vcs > ignores stale, deleted, renamed, and self-mirroring creation hints` (`packages/core/test/vcs.test.ts`) | Git work exceeds the 5 second limit under load. | intermittent |
+| core | `Vcs > uses an explicit diff base without treating upstream or Git config as a parent` (same file) | Same 5 second limit; passes at `--timeout 30000`. | intermittent |
+| core | `PluginSupervisor reload > retains a discovered plugin change during initial activation` and `... a configured plugin change ...` (`packages/core/test/plugin/supervisor-reload.test.ts`) | Not a timeout: `condition never became true after 100 advances` (`packages/core/test/lib/clock.ts`). Failed in the full run and in 2 of 3 runs of its file alone, so it does not always pass alone. Not root-caused; not shown to be Windows-specific. | intermittent |
+| server | `refresh discovers both clones while list alone never discovers external worktrees` and `remove loads canonical strategies and enforces project ownership` (`packages/server/test/worktree.test.ts`) | Exceed the default 5 second limit even when the package is re-run alone; pass with `bun test --timeout 60000`. | intermittent |
 | core | `Vcs > creates detached worktrees without review metadata and requires an explicit base without a named hint` (same file) | Same 5 second limit. | intermittent |
 | core | `Vcs > does not infer beyond the bounded creation-reflog window` (same file) | Same 5 second limit. | intermittent |
 | core | `Formatter > does not cache a command resolved before reload` (`packages/core/test/formatter.test.ts`) | Hit the 5 second limit under load; passes when its file is re-run alone. | intermittent |
 | core | `Git > fetches, checks out, and resets remote changes` (`packages/core/test/git.test.ts`) | Same 5 second limit. | intermittent |
-| core | two `LocationServiceMap` tests (`packages/core/test/location-layer.test.ts`) | Same 5 second limit. | intermittent |
-| core | `LifecycleHooksPlugin under workspace trust > runs the user's hooks ... only once trusted` (`packages/core/test/plugin/lifecycle-hooks.test.ts`) | Same 5 second limit. A trust gate: see Gates. | intermittent |
+| core | `LocationServiceMap > routes located events only to their location` (`packages/core/test/location-layer.test.ts`, line 351) | Same 5 second limit. | intermittent |
+| core | `LocationServiceMap > isolates provider state by location` (same file, line 453) | Same 5 second limit. | intermittent |
+| core | `LifecycleHooksPlugin under workspace trust > runs the user's hooks, and the project's and its other-product settings hooks only once trusted` (`packages/core/test/plugin/lifecycle-hooks.test.ts`) | Same 5 second limit. A trust gate: see Gates. | intermittent |
+| cli | `acp lifecycle subprocess` tests (`packages/cli/test/acp/lifecycle.subprocess.test.ts`; for example `delete capability and delete request`, `close capability and close request`, `new session succeeds on the first request`) | A different one to three of the file's tests fail with `Timed out waiting for initialize response` in each run, and did so in two of two runs of the file alone while other agents were using the machine. Not root-caused. | intermittent |
+| cli | `unresponsive managed port occupancy reports a bounded conflict`, `port contender recognizes an incumbent registered during the bind race` and `a failed service stays registered and owns the selected port until stopped` (`packages/cli/test/service.test.ts`) | Time out at 20 to 27 s in the full run; the file passes alone (28 pass with the lifecycle file's other test). | intermittent |
+| cli | `acp prompt content subprocess > accepts embedded text resource image and file resource link prompt content` (`packages/cli/test/acp/prompt-content.subprocess.test.ts`) | Fails with `Timed out waiting for initialize response`, a harness wait for the spawned process, under load. | intermittent |
 | tui | (`packages/tui/test/session-home.test.tsx`) `Home loads a stable, bounded beginning (mixed)` | Timing flake. | intermittent |
 | util | (`packages/util/test/observability-otlp.test.ts`) `exports a span through the configured OTLP trace endpoint` | Hit its 5.16 s timeout under load. | intermittent |
 
-A test that fails only with its 5 second timeout under load, and passes when its file is re-run alone, is a load flake: it needs no new row of its own beyond the rows above, but say in the PR which file you re-ran alone.
+A timeout-only failure under load is a load flake: it passes when its file is re-run alone, and it needs no new row. The timeout may be the test's own (5 seconds in core, 30 seconds in cli and tui), the runner's, or a harness wait such as a spawned process that does not answer. The PR names the test and the file it re-ran alone. A gate (see Gates) must still pass when re-run alone. Any other failure is fixed, or added here with its reason.
