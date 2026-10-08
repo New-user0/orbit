@@ -375,6 +375,7 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
   const starts = [
     ["text", ["-p", "--standalone", "--model", model, "say ok"]],
     ["json", ["-p", "--standalone", "--output-format", "json", "--model", model, "say ok"]],
+    ["stream-json", ["-p", "--standalone", "--output-format", "stream-json", "--model", model, "say ok"]],
     ["bare", ["-p", "--bare", "--model", model, "say ok"]],
     ["continue", ["-p", "--standalone", "--continue", "--model", model, "say ok"]],
   ] as const
@@ -385,6 +386,19 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
       const result = await orb(folder, [...args])
       const context = `${startName} in ${folderName}`
       expect({ context, code: result.code }).toEqual({ context, code: 1 })
+      if (startName === "stream-json") {
+        // No session exists, so there is no init line: the output is the result line alone.
+        const lines = result.stdout.trim().split("\n")
+        expect({ context, lines: lines.length }).toEqual({ context, lines: 1 })
+        expect(JSON.parse(lines[0])).toMatchObject({
+          type: "result",
+          sessionID: "",
+          outcome: "failed",
+          is_error: true,
+          error: expect.stringContaining("is not trusted"),
+        })
+        continue
+      }
       if (startName === "json") {
         expect(JSON.parse(result.stdout)).toMatchObject({
           type: "result",

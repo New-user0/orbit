@@ -316,6 +316,35 @@ still go ahead in a folder that holds nothing back.
 
 **What to do:** nothing for `-p`; to send a message that starts with a dash, put it after `--`.
 
+### `orb -p` prints an init line, an enriched result and, on request, streamed fragments
+
+`orb -p --output-format stream-json` prints one JSON line per event, beginning with an init line
+`{"type":"init","protocol":1,"sessionID","cwd","agent","model","version"}` that is written before the message is sent
+(`agent` is `null` until the session has chosen one), and ending with exactly one result line. A run that fails
+before its prompt is sent (the trust refusal, a `--resume` that names no session, no message, a variant that does not exist, a title that cannot be set) prints only the
+result line, with an empty `sessionID`. `--output-format json` prints only that result object. It also carries `subtype`
+(`success`, `error`, `interrupted`, or `error_max_steps`, `error_max_tokens` or `error_max_cost` when a limit ended the
+run) and `truncated`. Besides `sessionID`, `is_error`, `result`, `structured_output` and `error`, it now has
+`outcome` (`succeeded`, `failed` or `interrupted`), `reason` when the run did not succeed (`error`, `invalid_output`,
+`form_cancelled` (a form such as an MCP elicitation was cancelled), `incomplete`, `interrupted` for Ctrl-C, or the reason the runner stopped it,
+such as `shutdown`, which is an `interrupted` outcome), `steps`, `duration_ms`,
+`cost`, `tokens` and `rejected` (the requests that were rejected because nobody could approve them). The steps, cost and
+tokens include failed steps and the steps of subagents the run started. `--include-partial-messages` (stream-json only)
+adds `text_delta`, `reasoning_delta` (with `--thinking`) and `tool_input_delta` lines. `--verbose` (text format only; a usage error otherwise) implies `--thinking`,
+prints what the tools returned and writes one usage line per step to stderr. With the text format, a run that
+auto-rejected requests ends with one summary line on stderr; its exit code does not change.
+
+`orb -p --json-schema` with the text format now prints only the parsed JSON answer (it used to print the result object,
+which `--output-format json` still does); an answer that is not JSON is an error on stderr and exits 1. `orb run
+--format` is hidden from `--help` and prints what it printed before, without the new fields or lines. The one visible
+change is that its text output now writes out control characters in tool titles, descriptions, block bodies and the
+failed line, so a line break in a title or description shows as `\n` and an escape as `\x1b`, while a block body keeps
+its line breaks and tabs.
+
+**Affects:** scripts that read the output of `orb -p --json-schema` as a result object.
+
+**What to do:** add `--output-format json` to keep reading the result object; ignore the new fields otherwise.
+
 ### The sidebar's getting-started text no longer lists model families
 
 The getting-started panel in the TUI sidebar used to end its second line with a list of three model families. It now says
@@ -1591,12 +1620,13 @@ output limit keeps the limit it chose, and a request already at the model's maxi
 
 `orb run` and `orb -p` take `--max-steps` (alias `--max-turns`), `--max-cost` (US dollars), `--max-tokens` and
 `--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
-them. A run that reaches a limit exits 1 and says which: the result object of `--format result` and `--json-schema`
+them. A run that reaches a limit exits 1 and says which: the result object of `orb run --format result` and `orb run --json-schema`
 gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
 (the steps, cost and tokens of this session's own responses to the prompt, read from the stored messages when the run
 ends, so a subagent's spend is not in it; a response that failed part way adds its spend but is not a step) and
 `truncated` (the last step stopped at the output limit, even when a limit then ended the run, which also prints a
-warning). With `--format json` and `stream-json` every `error` line of a printed run carries the same
+warning). `orb -p` has no `usage`: its result carries the flat `steps`, `cost` and `tokens` described in the note on its
+output envelope, which count failed steps and subagents' steps, so `steps` can exceed what `--max-steps` counted. With `--format json` and `stream-json` every `error` line of a printed run carries the same
 `subtype`. A `--max-cost` that the model's missing price cannot check fails the run with the session error type
 `limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
 turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
