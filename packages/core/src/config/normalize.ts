@@ -203,6 +203,7 @@ export function normalize(input: unknown): Result {
     $schema: Info.fields.$schema,
     shell: Info.fields.shell,
     model: Info.fields.model,
+    fallback_model: Info.fields.fallback_model,
     default_agent: Info.fields.default_agent,
     output_style: Info.fields.output_style,
     sandbox: Info.fields.sandbox,

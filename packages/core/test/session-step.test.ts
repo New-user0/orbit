@@ -173,7 +173,7 @@ for (const fixture of [
   )
 }
 
-it.effect("fails inputs that never became calls when the response stops at the output limit", () =>
+const runCutOff = (finish: "length" | "unknown", calls: "input" | "partial-call") =>
   Effect.gen(function* () {
     const db = (yield* Database.Service).db
     const llm = yield* TestLLM.Test
@@ -202,9 +202,12 @@ it.effect("fails inputs that never became calls when the response stops at the o
     )
     yield* llm.push(
       TestLLM.complete(
-        { reason: { normalized: "length", raw: "max_tokens" } },
+        { reason: finish === "length" ? { normalized: "length", raw: "max_tokens" } : { normalized: "unknown" } },
         LLMEvent.toolInputStart({ id: "call-cut", name: "test" }),
         LLMEvent.toolInputDelta({ id: "call-cut", name: "test", text: '{"a":' }),
+        ...(calls === "partial-call"
+          ? [LLMEvent.toolCall({ id: "call-cut", name: "test", input: { a: 1 }, partialInput: true })]
+          : []),
       ),
     )
     let executions = 0
@@ -229,22 +232,39 @@ it.effect("fails inputs that never became calls when the response stops at the o
       retry: () => Effect.succeed({ retry: false }),
       recoverContinuation: true,
       recoverOverflow: Effect.succeed(false),
-    })
-    expect(result).toEqual(SessionStep.Outcome.OutputLimited({ needsContinuation: true }))
-    expect(executions).toBe(0)
+    }).pipe(Effect.exit)
     const events = yield* db
       .select({ type: EventTable.type, data: EventTable.data })
       .from(EventTable)
       .where(eq(EventTable.aggregate_id, sessionID))
       .orderBy(asc(EventTable.seq))
       .all()
-    const types = events.map((event) => event.type)
-    expect(types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
-    expect(types.indexOf("session.tool.failed.2")).toBeLessThan(types.indexOf("session.step.ended.1"))
-    expect(events[types.indexOf("session.tool.failed.2")]?.data).toMatchObject({
+    return { result, executions, events, types: events.map((event) => event.type) }
+  })
+
+it.effect("fails inputs that never became calls when the response stops at the output limit", () =>
+  Effect.gen(function* () {
+    const run = yield* runCutOff("length", "input")
+    expect(run.result).toEqual(Exit.succeed(SessionStep.Outcome.OutputLimited({ needsContinuation: true })))
+    expect(run.executions).toBe(0)
+    expect(run.types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
+    expect(run.types.indexOf("session.tool.failed.2")).toBeLessThan(run.types.indexOf("session.step.ended.1"))
+    expect(run.events[run.types.indexOf("session.tool.failed.2")]?.data).toMatchObject({
       error: { type: "tool.input-truncated" },
       executed: false,
     })
-    expect(events[types.indexOf("session.step.ended.1")]?.data).toMatchObject({ finish: "length" })
+    expect(run.events[run.types.indexOf("session.step.ended.1")]?.data).toMatchObject({ finish: "length" })
+  }),
+)
+
+it.effect("drops a call rebuilt from partial input when the response finishes with an unknown reason", () =>
+  Effect.gen(function* () {
+    const run = yield* runCutOff("unknown", "partial-call")
+    expect(run.executions).toBe(0)
+    expect(run.types).not.toContain("session.tool.success.2")
+    // Only an output limit is recorded as truncated; this fails with the response's own error.
+    const failed = run.events[run.types.indexOf("session.tool.failed.2")]?.data
+    expect(failed).toMatchObject({ executed: false })
+    expect(failed).not.toMatchObject({ error: { type: "tool.input-truncated" } })
   }),
 )

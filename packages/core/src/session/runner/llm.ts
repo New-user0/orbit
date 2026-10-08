@@ -41,20 +41,20 @@ const RESUME_AFTER_OUTPUT_LIMIT =
 const MAX_OUTPUT_RECOVERIES = 3
 
 /**
- * Resume notices since the last response that did not hit the limit; read from history. `current` is the in-flight
- * assistant (a retry or recovery reuses it, and it has no finish yet), so it must not end the streak.
+ * Resume notices since the last response that ended normally; read from history. A failed or interrupted response
+ * (a retry or an incomplete stream) does not end the streak, so one logical step cannot resume without bound.
  */
-const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>, current: SessionMessage.ID) => {
-  const stop = messages.findLastIndex(
-    (message) =>
-      message.type === "user" ||
-      message.type === "idle" ||
-      (message.type === "assistant" && message.id !== current && message.finish !== "length"),
-  )
-  return messages
-    .slice(stop + 1)
+const outputLimitStreak = (messages: ReadonlyArray<SessionMessage.Info>) =>
+  messages
+    .slice(
+      messages.findLastIndex(
+        (message) =>
+          message.type === "user" ||
+          message.type === "idle" ||
+          (message.type === "assistant" && (message.finish === "stop" || message.finish === "tool-calls")),
+      ) + 1,
+    )
     .filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit").length
-}
 
 const layer = Layer.effect(
   Service,
@@ -223,6 +223,17 @@ const layer = Layer.effect(
       return selected
     })
 
+    const turnLimit = Effect.fnUntraced(function* (loaded: SessionContext.Loaded) {
+      const turn = (yield* SessionTurn.current(db, loaded.session.id)).options
+      if (!turn || (turn.maxSteps === undefined && turn.maxCost === undefined && turn.maxTokens === undefined)) return
+      return SessionTurn.exceeded(
+        turn,
+        yield* SessionTurn.usage(db, loaded.session.id, turn),
+        // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
+        loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0)),
+      )
+    })
+
     /** Owns logical Step policy; each attempt owns its streaming, tools, and durable settlement. */
     const runStep = Effect.fn("SessionRunner.runStep")(function* (first: SessionContext.Loaded, step: number) {
       const sessionID = first.session.id
@@ -236,16 +247,8 @@ const layer = Layer.effect(
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
         initial = undefined
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
-        const turn = (yield* SessionTurn.current(db, sessionID)).options
-        if (turn && (turn.maxSteps !== undefined || turn.maxCost !== undefined || turn.maxTokens !== undefined)) {
-          const limit = SessionTurn.exceeded(
-            turn,
-            yield* SessionTurn.usage(db, sessionID, turn),
-            // A catalog entry with no price is a tier-less $0, which would let the turn spend without bound.
-            loaded.model.cost.some((cost) => cost.tier === undefined && (cost.input > 0 || cost.output > 0)),
-          )
-          if (limit) return yield* new StepFailedError({ error: limit })
-        }
+        const limit = yield* turnLimit(loaded)
+        if (limit) return yield* new StepFailedError({ error: limit })
         const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
         if (compacted.status === "completed") {
@@ -302,8 +305,9 @@ const layer = Layer.effect(
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
-            if (outputLimitStreak(loaded.messages, assistantMessageID) >= MAX_OUTPUT_RECOVERIES)
-              return outcome.needsContinuation
+            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return outcome.needsContinuation
+            // The loop-top check fails this turn next; a note now would reach the next prompt's request.
+            if (yield* turnLimit(loaded)) return outcome.needsContinuation
             yield* bus.publish(SessionEvent.Synthetic, {
               sessionID,
               text: RESUME_AFTER_OUTPUT_LIMIT,

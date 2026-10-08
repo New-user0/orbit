@@ -102,13 +102,13 @@ folder is trusted. Until then Orbit keeps what cannot run code, spend money or r
 rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
-  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
-  agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
-  own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
-  model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
-  the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
-  that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours,
-  so it would otherwise replace the one in your own config.
+  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
+  `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
+  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours, so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -1054,9 +1054,10 @@ When a response ended in the middle of a tool call, for example because the mode
 rebuilt the arguments from the half-written text and ran the tool with them, so a `write` call cut off inside its
 `content` wrote a truncated file. Routes that close each call before the finish reason arrives did this. A call rebuilt
 from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
-any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped:
-the tool does not run, and the input is recorded as failed with `tool.input-truncated` (a cut-off by the output limit is
-then resumed, see "A response cut off by the output limit is resumed"). A call whose arguments
+any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped
+and the tool does not run. After an output limit the input is recorded as failed with `tool.input-truncated` and the
+response is resumed (see "A response cut off by the output limit is resumed"); otherwise it fails with the response's
+own error. A call whose arguments
 arrived complete is not affected, and still runs when a later call in the same response was cut off. A call that
 stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
 still runs with empty arguments.
@@ -1228,6 +1229,20 @@ when the names collide both appear in autocomplete.
 
 **What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
 
+### New `fallback_model` setting
+
+The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
+use for the rest of a turn after the selected model is repeatedly overloaded. This change only adds and resolves the
+setting; the switch itself follows in a later change. A model that is unavailable, or is the session's own model, is
+ignored.
+
+In a folder that is not trusted yet, `fallback_model` is left out whole, so a repository cannot choose your fallback
+model. Orbit uses your own setting until you trust the folder.
+
+**Affects:** people who want a backup model, and anyone reading `config.get`, which now lists the key.
+
+**What to do:** nothing. Set `fallback_model` in your own config to use it.
+
 ### A response cut off by the output limit is resumed
 
 When a model response stops because it reached its output limit, Orbit now adds a short hidden note asking the model to
@@ -1235,7 +1250,7 @@ resume where it stopped and sends the request again, up to three times in a row.
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
 `tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
 the next cut-off stays as it is. The count comes from the session history and starts over after any response that
-finishes normally and after a new message from you.
+finishes with `stop` or `tool-calls` and after a new message from you.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
