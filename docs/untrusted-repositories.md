@@ -1291,7 +1291,9 @@ fixes it or asks.
   an agent's `request` are withheld. The promise says that no file may spend your money, and the user-facing note lists
   `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
   [upgrading](upgrading.md) note. Until it is made, class 8 calls a field a permission only when it selects which rules,
-  agent or mode apply.
+  agent or mode apply. The owner has decided one case: a field that picks a model, provider or budget for work that
+  runs without anyone choosing it is withheld, and `agents.side.model` is (`pinnedModel` in `ConfigTrust`, proved by
+  `test/config/trust.test.ts`). The other `model` fields wait for the wider decision.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
   reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
   bodies need a sanitizer in the renderer (#22 round 7).

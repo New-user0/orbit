@@ -168,6 +168,25 @@ describe("ConfigTrust.sanitize", () => {
     expect(result.withheld).toEqual(["permissions", "providers"])
   })
 
+  // Side queries run for every session, so the model that `agents.side.model` pins is one a folder would spend on.
+  test("withholds the model of the side agent and keeps the rest of its entry", () => {
+    const result = sanitize({
+      agents: { side: { model: "acme/expensive#high", description: "Side queries" }, reviewer: { model: "acme/fast" } },
+    })
+    expect(result.info.agents?.side).toEqual(new ConfigAgent.Info({ description: "Side queries" }))
+    expect(result.info.agents?.side).not.toHaveProperty("model")
+    expect(result.info.agents?.reviewer?.model).toMatchObject({ providerID: "acme" })
+    expect(result.withheld).toEqual(["network"])
+
+    const alone = sanitize({ agents: { side: { model: "acme/expensive" } } })
+    expect(alone.info.agents?.side).toEqual(new ConfigAgent.Info({}))
+    expect(alone.withheld).toEqual(["network"])
+
+    const unpinned = decode({ agents: { side: { description: "No model" } } })
+    expect(ConfigTrust.sanitize(unpinned, place)).toEqual({ info: unpinned, withheld: [] })
+    expect(ConfigTrust.sanitize(unpinned, place).info).toBe(unpinned)
+  })
+
   test("keeps an agent whose request and rules are already harmless as it was", () => {
     const original = decode({
       agents: { reviewer: { system: "Review.", permissions: [] }, plain: { color: "#112233" } },

@@ -56,8 +56,15 @@ export interface Interface {
   readonly resolveModel: (
     session: SessionSchema.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved, SessionRunnerModel.Error>
-  /** Selects auxiliary title capabilities without instruction or tool preflight. */
-  readonly selectTitle: (session: SessionSchema.Info) => Effect.Effect<
+  /**
+   * Selects the agent and model for work beside the Session, such as titles and side queries, without instruction or
+   * tool preflight. The agent's configured model comes first, then the small model of the primary provider, then the
+   * primary model; the first two use the variant that reasons least.
+   */
+  readonly selectAuxiliary: (
+    session: SessionSchema.Info,
+    agentID: Agent.ID,
+  ) => Effect.Effect<
     | {
         readonly agent: Agent.Info
         readonly primary: SessionRunnerModel.Resolved | undefined
@@ -92,8 +99,11 @@ const layer = Layer.effect(
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
-    const selectTitle = Effect.fn("SessionContext.selectTitle")(function* (session: SessionSchema.Info) {
-      const agent = yield* agents.get(Agent.ID.make("title"))
+    const selectAuxiliary = Effect.fn("SessionContext.selectAuxiliary")(function* (
+      session: SessionSchema.Info,
+      agentID: Agent.ID,
+    ) {
+      const agent = yield* agents.get(agentID)
       if (!agent) return
       const primary = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
       const info = yield* Effect.gen(function* () {
@@ -178,7 +188,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ select, load, resolveModel, selectTitle, request })
+    return Service.of({ select, load, resolveModel, selectAuxiliary, request })
   }),
 )
 

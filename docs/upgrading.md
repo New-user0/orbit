@@ -231,6 +231,19 @@ run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit:
 also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" and "The
 terminal UI asks whether to trust a folder" under Clients.
 
+### `agents.side.model` waits for its folder to be trusted
+
+Small background model calls (see "Side queries run on the small model" under Plugins and SDK) use a hidden agent named
+`side`, and `agents.side.model` pins the model they use. Because that model is one a folder would spend your money on,
+an untrusted folder's config cannot set it: `ConfigTrust` takes the model out of the `side` entry, keeps the rest of the
+entry, and reports the `network` kind as withheld. The model of every other agent is unchanged.
+
+**Affects:** a repository that pins `agents.side.model` in its own `orbit.json` or in an agent file of its `.orbit`
+directory, until its folder is trusted.
+
+**What to do:** Nothing for your own config. To use a pinned side model in a repository, run `orb trust` in it, or pin it
+in your user config.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -929,6 +942,22 @@ instead.
 
 **What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
 would use for it.
+
+### Side queries run on the small model
+
+`SideQuery` in `@orbit/core/side-query` runs one non-streaming model call on behalf of a session: `text` returns text
+and `object` returns a value decoded from a single forced tool call. It uses the small model of the session's
+provider, then the session's own model, always with the variant that reasons least, and `agents.side.model` pins the
+choice. Nothing is added to the conversation. The cost lands on the session through a new durable event,
+`session.side_query.recorded`, which `orb stats` counts in its cost and token totals; `session.usage.recorded` is
+unchanged. A side query fails with `UnavailableError`, `InvalidOutputError` or `TimeoutError`, and never fails the
+session. Title generation now picks its model through the same `SessionContext.selectAuxiliary`.
+
+**Affects:** plugin authors, and anyone who reads the event log or `orb stats`: `generate` hooks see side queries with
+`agent` set to `side`, and the new event type appears in the log. An older Orbit build that shares the database skips
+the event, so its session cost and totals leave side queries out.
+
+**What to do:** Nothing. A `generate` hook that should ignore side queries can return early when `agent` is `side`.
 
 ## Agent loop
 
