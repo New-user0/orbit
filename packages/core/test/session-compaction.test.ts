@@ -635,6 +635,24 @@ it.effect("summary compaction leaves out an escalated attempt and its notice", (
   }),
 )
 
+it.effect("the recent text of a summary leaves out an escalated attempt and its notice", () =>
+  Effect.gen(function* () {
+    requests = []
+    const session = yield* insertSession(Session.ID.make("ses_escalated_recent"))
+    const history = escalatedHistory()
+    // An earlier user message gives the summary something older, so the exchange below is kept as recent text.
+    const earlier = SessionMessage.User.make({ ...history.user, id: SessionMessage.ID.create(), text: "Earlier question" })
+    expect(
+      yield* compactManually(session, [earlier, history.user, history.cut, history.notice, history.answer]),
+    ).toEqual({ status: "completed" })
+    const stored = (yield* (yield* SessionStore.Service).context(session.id))[0]
+    const recent = stored?.type === "compaction" && stored.status === "completed" ? stored.recent : ""
+    expect(recent).toContain("WholeAnswerText")
+    expect(recent).not.toContain("FirstCutText")
+    expect(recent).not.toContain("escalated")
+  }),
+)
+
 it.effect("native compaction finds nothing to compact in a replaced attempt", () =>
   Effect.gen(function* () {
     requests = []

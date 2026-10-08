@@ -76,10 +76,10 @@ export interface Prepared<Event = SessionRequest> {
   /** The traits of an advertised tool that do not depend on the call, by the name the model uses. */
   readonly describeTool: (name: string) => ToolTraits.Static | undefined
   /**
-   * The larger output limit the runner could send instead, when this request carried the runner's own lowered cap
-   * untouched by hooks. Absent when nothing larger exists, a hook changed the limit, or the request is already at it.
+   * Whether a larger output limit exists to send instead: this request carried the runner's own lowered cap untouched
+   * by hooks and the model's maximum is larger.
    */
-  readonly escalation?: number
+  readonly escalation: boolean
 }
 
 export interface Input {
@@ -415,8 +415,6 @@ export const layer = Layer.effect(
         defaultLimit !== undefined &&
         shaped.options.maxTokens === defaultLimit &&
         maximum > defaultLimit
-          ? maximum
-          : undefined
       return {
         event: shaped,
         request,

@@ -2,6 +2,7 @@ export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@orbit/ai"
 import { Model } from "@orbit/schema/model"
+import { plain } from "@orbit/util/plain"
 import { and, desc, eq, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
@@ -23,6 +24,7 @@ import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
 import { SessionTurn } from "../turn.js"
+import { SessionTurnEnd } from "../turn-end.js"
 import { toSessionError } from "../to-session-error.js"
 import { DrainResult, Service, type Interface } from "./index.js"
 import { Snapshot } from "../../snapshot.js"
@@ -85,6 +87,7 @@ const layer = Layer.effect(
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
     const title = yield* SessionTitle.Service
+    const turnEnd = yield* SessionTurnEnd.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
@@ -229,11 +232,37 @@ const layer = Layer.effect(
       while (true) {
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
-        continuing = yield* runStep(next.context, step)
+        const stopped = yield* runStep(next.context, step)
+        continuing = stopped === "continue" || (stopped === "ended" && (yield* endTurn(next.context)))
         step++
         force = false
         entering = false
       }
+    })
+
+    // The checks run only for a turn that ended on its own: not at a limit, and not while steered input waits, since
+    // that would continue the turn itself. A queued prompt starts the next turn, so it does not skip them. A
+    // continuation adds its notice and the drain takes another step, so the busy period still ends in one terminal.
+    const endTurn = Effect.fn("SessionRunner.endTurn")(function* (loaded: SessionContext.Loaded) {
+      const sessionID = loaded.session.id
+      if (
+        (yield* SessionInbox.list(db, sessionID)).some(
+          (item) => item.delivery === "steer" && item.type !== "compaction" && item.type !== "move",
+        )
+      )
+        return false
+      const current = yield* SessionTurn.current(db, sessionID)
+      // No step can follow a spent turn limit, and a notice left behind would reach the next prompt's request.
+      if (yield* turnLimit(loaded, current.options)) return false
+      const continuation = yield* turnEnd.run({ sessionID, turn: current })
+      if (!continuation) return false
+      yield* bus.publish(SessionEvent.Synthetic, {
+        sessionID,
+        text: continuation.text,
+        description: continuation.description === undefined ? undefined : plain(continuation.description),
+        metadata: { notice: SessionTurnEnd.NOTICE, check: continuation.check },
+      })
+      return true
     })
 
     const prepareContext = Effect.fn("SessionRunner.prepareContext")(function* (sessionID: SessionSchema.ID) {
@@ -358,7 +387,8 @@ const layer = Layer.effect(
           ),
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
-          Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
+          Completed: (outcome) =>
+            Effect.succeed(outcome.needsContinuation ? ("continue" as const) : stepLimitReached ? ("limited" as const) : ("ended" as const)),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
             // A finished response is not an overload, so it restarts the count of overloads in a row.
             overloads = 0
@@ -366,7 +396,7 @@ const layer = Layer.effect(
             const limit = yield* turnLimit(loaded, current.options)
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
-            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return false
+            if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return "limited" as const
             // A text-only resume never reaches the step boundary, so a waiting steered message would sit behind up to
             // three requests. Return now: the boundary delivers it and its user message starts a fresh streak.
             if (
@@ -375,12 +405,13 @@ const layer = Layer.effect(
                 (item) => item.type === "user" && item.delivery === "steer",
               )
             )
-              return false
-            // The first cut-off of a text-only reply under the runner's own lowered cap retries the same request at the
-            // model's maximum before any resume. The notice replaces the cut-off attempt, which later requests leave out.
+              return "ended" as const
+            // The first cut-off of a reply that ran no tool, under the runner's own lowered cap, retries the same
+            // request at the model's maximum before any resume. A hosted tool call counts: repeating it reruns and
+            // rebills it. The notice replaces the cut-off attempt, which later requests leave out.
             if (
-              !outcome.needsContinuation &&
-              prepared.escalation !== undefined &&
+              !outcome.toolCalled &&
+              prepared.escalation &&
               outputLimitStreak(loaded.messages) === 0 &&
               !outputEscalated(loaded.messages)
             ) {
@@ -397,7 +428,7 @@ const layer = Layer.effect(
               text: RESUME_AFTER_OUTPUT_LIMIT,
               metadata: { notice: "output-limit" },
             })
-            if (outcome.needsContinuation) return true
+            if (outcome.needsContinuation) return "continue" as const
             assistantMessageID = SessionMessage.ID.create()
           }),
           Retry: Effect.fnUntraced(function* (outcome) {
@@ -501,6 +532,7 @@ export const node = makeLocationNode({
     SessionCompaction.node,
     Plugin.node,
     SessionTitle.node,
+    SessionTurnEnd.node,
     Snapshot.node,
     ToolOutput.node,
     Database.node,
