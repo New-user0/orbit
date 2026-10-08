@@ -36,6 +36,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Default model to use when no session or agent model is selected",
   }),
+  fallback_model: ConfigModel.Selection.pipe(optional).annotate({
+    description: "Model used for the rest of a turn after the selected model is repeatedly overloaded",
+  }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
   }),

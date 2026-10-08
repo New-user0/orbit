@@ -21,6 +21,16 @@ describe("Config.Entry", () => {
     expect(() => decode({ worktree: { directory: " " } })).toThrow()
     expect(() => decode({ worktree: { directory: false } })).toThrow()
   })
+  test("decodes fallback_model in the short and the explicit form", () => {
+    const decode = Schema.decodeUnknownSync(Config.Info)
+    const explicit = { providerID: "acme", model: "backup", variant: "high" }
+    expect(decode({ fallback_model: "acme/backup#high" }).fallback_model).toEqual<unknown>(explicit)
+    expect(decode({ fallback_model: explicit }).fallback_model).toEqual<unknown>(explicit)
+    expect(() => decode({ fallback_model: "backup" })).toThrow()
+    expect(Schema.encodeSync(Config.Info)(new Config.Info({ fallback_model: undefined }))).not.toHaveProperty(
+      "fallback_model",
+    )
+  })
   test("round-trips the compatibility switch and omits it when absent", () => {
     const decode = Schema.decodeUnknownSync(Config.Info)
     const encode = Schema.encodeSync(Config.Info)

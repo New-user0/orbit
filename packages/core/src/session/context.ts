@@ -1,5 +1,6 @@
 export * as SessionContext from "./context.js"
 
+import { Config } from "../config.js"
 import { Model } from "../model.js"
 import { Permission } from "../permission.js"
 import { Context, Effect, Layer } from "effect"
@@ -65,6 +66,14 @@ export interface Interface {
       }
     | undefined
   >
+  /**
+   * Resolves the fallback model: `requested`, else the configured `fallback_model`. Undefined when neither is set,
+   * the model is unavailable, or it is the session's own model (the same provider and model, whatever the variant).
+   */
+  readonly resolveFallback: (
+    session: SessionSchema.Info,
+    requested?: Model.Ref,
+  ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
   readonly request: SessionModelRequest.Interface
 }
 
@@ -89,6 +98,7 @@ const layer = Layer.effect(
     const skillInstructions = yield* SkillInstructions.Service
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
+    const config = yield* Config.Service
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
 
@@ -116,6 +126,31 @@ const layer = Layer.effect(
       const selected = preferred ?? primary
       if (!selected) return
       return { agent, primary, selected }
+    })
+
+    const resolveFallback = Effect.fn("SessionContext.resolveFallback")(function* (
+      session: SessionSchema.Info,
+      requested?: Model.Ref,
+    ) {
+      const configured = Config.latest(yield* config.entries(), "fallback_model")
+      const ref =
+        requested ??
+        (configured &&
+          Model.Ref.make({
+            providerID: configured.providerID,
+            id: configured.model,
+            ...(configured.variant ? { variant: configured.variant } : {}),
+          }))
+      if (!ref) return
+      // Compare identity before resolving: the session's own ref, or else what it would default to.
+      const own = session.model ?? (yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined)))?.ref
+      if (own?.providerID === ref.providerID && own.id === ref.id) return
+      return yield* resolveModel({ ...session, model: ref }).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("fallback model skipped", { providerID: ref.providerID, model: ref.id, error }),
+        ),
+        Effect.orElseSucceed(() => undefined),
+      )
     })
 
     const select = Effect.fn("SessionContext.select")(function* (sessionID: SessionSchema.ID) {
@@ -178,7 +213,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ select, load, resolveModel, selectTitle, request })
+    return Service.of({ select, load, resolveModel, selectTitle, resolveFallback, request })
   }),
 )
 
@@ -190,6 +225,7 @@ export const node = makeLocationNode({
   layer,
   deps: [
     Agent.node,
+    Config.node,
     Model.node,
     Database.node,
     InstructionBuiltIns.node,
