@@ -732,12 +732,24 @@ rebuilt the arguments from the half-written text and ran the tool with them, so 
 from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
 any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped:
 the tool does not run, and the response ends with an input that was started and never called. A call whose arguments
-arrived complete is not affected, and still runs when a later call in the same response was cut off.
+arrived complete is not affected, and still runs when a later call in the same response was cut off. A call that
+stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
+still runs with empty arguments.
+
+A cut-off call never counts as the evidence that its response finished. Two kinds of stream used to report `tool-calls`
+because such a call was in them, which released the call: a Responses-style stream that the provider ended as
+incomplete, with no reason or a reason Orbit does not know, and a Chat-style stream that ended without a finish reason
+from a model whose `compatibility.requireFinishReason` is `false`. Both now report an unknown finish, so the call is
+dropped, and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
+retries or continues. The first kind reports an unknown finish even when every call in it is complete, where it used to
+report `tool-calls`; those calls still run.
 
 **Affects:** sessions whose model reaches its output limit while writing a tool call, most often a large `write` or
-`edit`. It also affects code built on `@orbit/ai`: a `tool-call` event carries `partialInput: true` when its input was
-rebuilt, `LLMClient.stream` and `generate` hold such a call back until the response finishes and drop it unless the
-finish is `tool-calls` or `stop`, and `TestLLM` follows the same rule for scripted responses.
+`edit`, and sessions on a Responses-style provider that ends a response as incomplete without saying why, which the
+session now retries or continues instead of treating as finished. It also affects code built on `@orbit/ai`: a
+`tool-call` event carries `partialInput: true` when its input was rebuilt, `LLMClient.stream` and `generate` hold such a
+call back until the response finishes and drop it unless the finish is `tool-calls` or `stop`, and `TestLLM` follows the
+same rule for scripted responses.
 
 **What to do:** nothing. To carry on after a cut-off, send a follow-up message, and if a large write keeps being cut
 off, ask the model to split it.

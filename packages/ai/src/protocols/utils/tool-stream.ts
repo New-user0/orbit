@@ -81,6 +81,8 @@ const toolCall = (route: string, tool: PendingTool, inputOverride?: string) => {
       providerMetadata: tool.providerMetadata,
       ...(partialInput ? { partialInput } : {}),
     })
+  // Empty input parses as `{}` and is not marked: a call cut off before its first argument token looks exactly like a
+  // call to a tool that takes no arguments.
   return parseToolInput(route, tool.name, raw).pipe(
     Effect.map((input) => call(input)),
     Effect.catch((error) =>
@@ -262,8 +264,9 @@ interface Gate {
 /**
  * Hold calls rebuilt from incomplete JSON (`partialInput`) until the response says how it ended. A `tool-calls` or
  * `stop` finish releases them just before it. Any other finish drops them, and so does a stream that ends or fails
- * without one, so a response cut off by an output limit never runs a half-written call. The `tool-input-*` events of
- * a dropped call still pass, which leaves an input that was started and never called for the consumer to settle.
+ * without one, so a response cut off by an output limit does not run a call whose arguments were half written. The
+ * `tool-input-*` events of a dropped call still pass, which leaves an input that was started and never called for the
+ * consumer to settle.
  * Unmarked calls pass in order, and a marked call that arrives after a releasing finish passes straight through until
  * the next step starts: each step is decided by its own finish.
  */
