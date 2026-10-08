@@ -35,6 +35,7 @@ Nothing in `src/*` except `src/promise.ts` may know about Promises. `@orbit/ai/p
 - `reason.body` is the sole original-response or triggering-event payload field. Preserve original text before schema decoding removes fields; do not replace the complete event with only its nested error.
 - `reason.http` describes an observed HTTP response with required `url`, `status`, and response `headers`. Do not invent status codes or derive a separate request ID from headers.
 - Reclassification and transport recovery must preserve the reason's body, HTTP context, and underlying cause. Error `message` and `cause` are non-enumerable: copy them explicitly when constructing an enriched reason with its constructor or `AIErrorReason.make`.
+- `ProviderInternal` carries `classification: "overloaded"` only on affirmative evidence, and `isOverloaded(error)` reads it. The evidence is status 529, an `overloaded_error` or `server_is_overloaded` code (which also wins over a 429), or "overloaded" or "at capacity" wording on a 5xx or on a failure that carries no error status. Unavailable, busy and every other server failure stay unclassified, so a caller that reacts to repeated overloads does not act on a failure that never said so. Add new evidence to `classifyProviderFailure` with a row in the tables in `test/provider-error.test.ts`.
 
 ## Architecture
 
@@ -204,6 +205,8 @@ const followUp = LLM.request({
 ```
 
 Routes lower these into provider-native assistant tool-call messages and tool-result messages. Streaming providers should emit `tool-input-delta` events while arguments arrive, then a final `tool-call` event with parsed input.
+
+A local call whose argument JSON is incomplete or malformed is rebuilt with the partial-JSON parser, and `ToolStream` marks its `tool-call` event `partialInput: true`. `LLMClient.stream` passes every route through `ToolStream.gateOnFinish`, and `TestLLM` does the same, which holds marked calls until the step finish: a `tool-calls` or `stop` finish releases them just before it, any other finish drops them with one warning, and a stream that ends or fails first drops them too. A dropped call keeps its `tool-input-*` events, so the consumer sees an input that was started and never called and settles it. A protocol may emit a recovered call as soon as its block closes and leave the decision to the gate; a provider-executed call with malformed input still fails the stream.
 
 ### Tool dispatch
 

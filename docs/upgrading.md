@@ -719,3 +719,41 @@ where it used to send the request on to a proxy that resolved the name, if there
 scripts reach local dev servers, set `experimental.allow_local_fetch` to `true` in your own config. It lets `fetch` reach
 loopback and private-network addresses and no others, and like the rest of `experimental` it is ignored in the config of
 a folder that is not trusted.
+
+## Agent loop
+
+Changes to how a turn runs: what a response may call, and how its failures are told apart.
+
+### A tool call the model did not finish writing no longer runs
+
+When a response ended in the middle of a tool call, for example because the model reached its output limit, Orbit
+rebuilt the arguments from the half-written text and ran the tool with them, so a `write` call cut off inside its
+`content` wrote a truncated file. Routes that close each call before the finish reason arrives did this. A call rebuilt
+from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
+any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped:
+the tool does not run, and the response ends with an input that was started and never called. A call whose arguments
+arrived complete is not affected, and still runs when a later call in the same response was cut off.
+
+**Affects:** sessions whose model reaches its output limit while writing a tool call, most often a large `write` or
+`edit`. It also affects code built on `@orbit/ai`: a `tool-call` event carries `partialInput: true` when its input was
+rebuilt, `LLMClient.stream` and `generate` hold such a call back until the response finishes and drop it unless the
+finish is `tool-calls` or `stop`, and `TestLLM` follows the same rule for scripted responses.
+
+**What to do:** nothing. To carry on after a cut-off, send a follow-up message, and if a large write keeps being cut
+off, ask the model to split it.
+
+### Overloaded providers are classified, and an overload sent as a 429 is no longer a rate limit
+
+A provider failure that says it is overloaded now carries `classification: "overloaded"` on its `ProviderInternal` error
+reason, and `isOverloaded(error)` from `@orbit/ai` reads it. The evidence is status 529, the `overloaded_error` and
+`server_is_overloaded` codes, or "overloaded" or "at capacity" in the error text of a 5xx or of a failure that carries
+no error status. "Unavailable", "busy" and other server failures stay unclassified. An overload code now wins over
+status 429, so a gateway that reports an overload as a 429 produces a `ProviderInternal` failure, which is the session
+error `provider.internal`, where it used to produce a `RateLimit` one, `provider.rate-limit`. Both are retried, so
+retries do not change.
+
+**Affects:** code that matches on provider error reasons or on the session error type, and `orb flow` workflows whose
+`retryOn` lists `rate-limit` without `transient`: such a 429 is `transient` to them now, so they no longer retry it.
+
+**What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
+overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
