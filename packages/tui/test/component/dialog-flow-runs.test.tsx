@@ -101,7 +101,7 @@ test("lists runs, opens a run's nodes, and approves a waiting gate", async () =>
   const after = Store.at(directory)
   expect(after.nodes(run).get("ship")).toMatchObject({ status: "succeeded", result: { approved: true } })
   after.close()
-  await fs.rm(directory, { recursive: true, force: true })
+  await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 // What a clone's run store can hold in any text it says: an operating system command that sets the title of the window
@@ -151,7 +151,7 @@ test("writes out the control characters that a run store holds in the runs and t
   expect(nodes).toContain(`✓ build${shown}`)
   expect(nodes).toContain("NaN tokens")
   expectNoControl(nodes)
-  await fs.rm(directory, { recursive: true, force: true })
+  await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
 
 test("writes out the control characters of a gate in its dialog, its note prompt and its toasts", async () => {
@@ -206,5 +206,5 @@ test("writes out the control characters of a gate in its dialog, its note prompt
     message: `gate${shown} is not waiting for a decision`,
     variant: "error",
   })
-  await fs.rm(directory, { recursive: true, force: true })
+  await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 })
