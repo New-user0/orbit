@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
 import { Orbit } from "@orbit/client"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -82,8 +82,12 @@ async function folder(options: { config?: boolean; git?: boolean; in?: string } 
 
 type Answer = TrustAnswer | ((trust: TrustView) => TrustAnswer | Promise<TrustAnswer>)
 
+// The real servers of this file answer slowly when the machine is busy, so their chats wait longer than a person would.
+setDefaultTimeout(60_000)
+const patient = { read: 20_000, grant: 20_000 }
+
 // A chat in `directory`: what it told the window, and every question it asked the person, answered as `answer` says.
-function chat(client: ReturnType<typeof Orbit.make>, directory: string, answer: Answer = "later", wait = limits) {
+function chat(client: ReturnType<typeof Orbit.make>, directory: string, answer: Answer = "later", wait = patient) {
   const updates: Update[] = []
   const questions: TrustView[] = []
   const controller = new Controller(
@@ -370,7 +374,7 @@ test("carries on when the server does not answer in time, after the time it is g
   const server = stub({ get: () => new Promise<Response>(() => {}) })
   try {
     const started = performance.now()
-    const { controller, updates, questions } = chat(server.client, project)
+    const { controller, updates, questions } = chat(server.client, project, "later", limits)
 
     // The first read, and the one the message waits for, each have the time that a person would wait: two seconds.
     await controller.send("hello").catch(() => undefined)
@@ -390,7 +394,7 @@ test("carries on when the server does not answer in time, after the time it is g
   }
 }, 30_000)
 
-test("carries on, and says so, when the server is older than workspace trust", async () => {
+test("sends nothing, and says so, when the server is older than workspace trust", async () => {
   const server = stub({})
   try {
     const { controller, updates, questions } = chat(server.client, project, "trust", quick)
@@ -399,7 +403,8 @@ test("carries on, and says so, when the server is older than workspace trust", a
     await controller.send("hello").catch(() => undefined)
 
     expect(trusts(updates).at(-1)).toEqual({ type: "trust", trust: undefined, unchecked: true })
-    expect(server.seen).toContain("POST /api/session")
+    expect(server.seen.filter((item) => item.startsWith("POST /api/session"))).toEqual([])
+    expect(notes(updates).map((item) => item.text)).toEqual([expect.stringContaining("orb service restart")])
     expect(questions).toEqual([])
     // A route that is not there is not a failure to read: the server is simply old.
     expect(logs(updates)).toEqual([])

@@ -193,7 +193,7 @@ test.skipIf(!node)(
       `import { execFile } from "node:child_process"
 import { launch } from "./program.mjs"
 const [mode, cwd, bin] = process.argv.slice(2)
-const env = { ...process.env, PATH: [".", bin].join(process.platform === "win32" ? ";" : ":") }
+const env = { ...process.env, PATH: (process.platform === "win32" ? [bin] : [".", bin]).join(process.platform === "win32" ? ";" : ":") }
 if (mode === "bare") await new Promise((resolve) => execFile("orb", ["--version"], { cwd, env, windowsHide: true }, resolve))
 else await launch("orb", ["--version"], { cwd, env, timeout: 20000 })
 `,

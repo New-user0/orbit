@@ -862,6 +862,7 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+
 ### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
 
 The extension could not trust a folder, and it started whatever `orbit.executable` named, a setting that a repository's
@@ -887,8 +888,9 @@ The extension could not trust a folder, and it started whatever `orbit.executabl
 - **When the server cannot say.** Each read of the answer waits two seconds, and a grant ten. A server that does not
   answer in time, fails or sends something that is not a trust status leaves the last answer in place with a line in the
   Orbit output channel, and the chat goes on: the server applies the same rules whether the extension asked or not. A
-  server older than workspace trust has no such route, so the setup list says that trust was not checked and suggests
-  `orb service restart`.
+  server older than workspace trust has no such route and would apply the folder's hooks and servers unasked, so the
+  setup list says that trust was not checked, and a message is not sent: the chat says to run `orb service restart` and
+  sends nothing to the model until then.
 - **The program.** `orbit.executable` now has machine scope, so only your user settings, or those of the remote machine,
   can set it; a workspace's or a folder's value is ignored. The extension also declares that it does not support
   untrusted workspaces, so it stays off in VS Code's Restricted Mode until you trust the workspace in VS Code, which is a
@@ -906,4 +908,3 @@ now ignored. Everyone who opens a folder that holds project config sees the bann
 
 **What to do:** choose "Trust this folder" for each repository you trust, or run `orb trust` in it. Move `orbit.executable`
 into your user settings, and give it the full path of `orb` if `orb` is not on PATH.
-

@@ -510,7 +510,11 @@ function paint() {
 }
 
 // The banner is built when the answer changes and not on every repaint, so a list the person opened stays open.
+let paintedTrust: string | undefined
 function paintTrust(trust: TrustView | undefined) {
+  const next = JSON.stringify(trust ?? null)
+  if (next === paintedTrust) return
+  paintedTrust = next
   banner.hidden = trust === undefined
   if (!trust) return banner.replaceChildren()
   const head = element("div", "trust-head")

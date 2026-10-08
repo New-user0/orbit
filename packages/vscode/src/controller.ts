@@ -162,6 +162,14 @@ export class Controller {
    */
   async send(text: string) {
     await this.gate()
+    // A server older than workspace trust applies the folder's hooks and servers without asking, so nothing is sent to it.
+    if (this.unchecked)
+      return this.update({
+        type: "note",
+        id: `trust:${crypto.randomUUID()}`,
+        text: "This server is older than workspace trust and cannot say whether the folder is trusted, so the message was not sent. Run `orb service restart`, then send it again.",
+        tone: "error",
+      })
     const sessionID = this.session ?? (await this.create())
     this.update({ type: "user", id: `user:${crypto.randomUUID()}`, text })
     this.emit({ type: "busy", busy: true })

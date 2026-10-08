@@ -160,8 +160,9 @@ every other extension):
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
   command, starter and button that sends a prompt ends in. `send` asks the person, once per folder, before a session
   exists. The server decides and enforces; what the extension adds is the question, and it never trusts a folder on its
-  own account. So a read that fails, is late or finds a server older than workspace trust leaves the chat going and costs
-  a log line, as it does in the terminal UI, and no file of the folder runs because of it. `orb run` stops on the same
+  own account. So a read that fails or is late leaves the chat going and costs a log line, as it does in the terminal UI. A
+  server older than workspace trust has no such route and applies a folder's config unasked, so `send` posts an error
+  naming `orb service restart` and asks the model nothing while that is so. `orb run` stops on the same
   failures because it cannot ask. Proof: `test/trust.test.ts`, and the table of commands and the scan of the doors in
   `test/manifest.test.ts`.
 - The folder: the question shows the project's folder that the server names, the grant is made for that folder, and it
@@ -1374,7 +1375,8 @@ fixes it or asks.
   folder. No task yet.
 - **VS Code, the part that loads `vscode`.** `extension.ts`, `runs-view.ts` and the webview import `vscode` or the DOM,
   so no test loads them. What they do with trust (the banner, the status bar item, the dialog, the command and the
-  terminals) was exercised once by hand against a stand-in for `vscode`, a real server and a stand-in `orb`, and the
+  terminals) was exercised by hand once, on an earlier commit of this branch and not again on the final tree, against a
+  stand-in for `vscode`, a real server and a stand-in `orb`, and the
   logic behind it is in `Controller`, `trust.ts` and `program.ts`, which are tested. No task yet.
 - **A string comparison in `Git.clean`.** It keeps the entries of `git worktree list` with
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder

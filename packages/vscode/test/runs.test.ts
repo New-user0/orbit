@@ -68,3 +68,13 @@ test("lists runs and their nodes, and approves a waiting gate", async () => {
     "ship is not waiting for a decision",
   )
 }, 180_000)
+
+test("writes out control characters that a run store holds, in labels and tooltips", () => {
+  const hostile = "a\u202Eb\u001b[2Jc"
+  const run = runItem({ id: hostile, workflow: hostile, status: "failed", updated: 0 })
+  const node = nodeItem({ id: hostile, status: "failed", attempts: 1, message: hostile, error: { message: hostile }, started: 0 })
+  for (const text of [run.label, run.tooltip, node.label, node.tooltip]) {
+    expect(text).not.toContain("\u202E")
+    expect(text).not.toContain("\u001b")
+  }
+})

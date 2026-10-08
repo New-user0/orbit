@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { launch } from "./program.js"
 
 // The Runs view reads Orbit Flow runs through the `orb flow` commands' JSON, so the extension needs no database
@@ -63,9 +64,9 @@ const icons = { running: "sync~spin", waiting: "question", succeeded: "pass", fa
 
 export function runItem(run: Run): Item {
   return {
-    label: run.workflow,
+    label: plain(run.workflow),
     description: `${run.status} · ${new Date(run.updated).toLocaleString()}`,
-    tooltip: `${run.id}\n${run.workflow}: ${run.status}`,
+    tooltip: `${plain(run.id)}\n${plain(run.workflow)}: ${run.status}`,
     icon: icons[run.status],
     context: `run-${run.status}`,
   }
@@ -82,9 +83,9 @@ export function nodeItem(node: Node): Item {
     ...(seconds !== undefined ? [`${seconds}s`] : []),
   ]
   return {
-    label: node.id,
+    label: plain(node.id),
     description: details.join(" · "),
-    tooltip: [node.id, node.message, node.error?.message].filter(Boolean).join("\n\n"),
+    tooltip: [node.id, node.message, node.error?.message].flatMap((text) => (text ? [plain(text)] : [])).join("\n\n"),
     icon: icons[node.status],
     context: node.status === "waiting" ? "gate" : "node",
   }
