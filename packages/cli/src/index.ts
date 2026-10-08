@@ -4,7 +4,8 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { progress } from "@orbit/flow/plain"
 import { Cause, Effect } from "effect"
 import { getErrorReported } from "effect/Runtime"
-import { Commands } from "./commands/commands"
+import { Commands, Print } from "./commands/commands"
+import { classify } from "./framework/argv"
 import { Runtime } from "./framework/runtime"
 import { Observability } from "@orbit/util/observability"
 import { ORBIT_ARTIFACT, ORBIT_CHANNEL, ORBIT_LOCAL, ORBIT_VERSION } from "./version"
@@ -101,6 +102,11 @@ const Handlers = Runtime.handlers(Commands, {
   serve: () => import("./commands/handlers/serve"),
 })
 
+// `orb -p <message>` is parsed with a spec that has no subcommands, so no word of the message is dispatched as one.
+const line = classify(process.argv.slice(2))
+
+const PrintHandlers = Runtime.handlers(Print, () => import("./commands/handlers/print"))
+
 Effect.gen(function* () {
   yield* Heap.listen
   yield* CpuProfile.listen
@@ -125,7 +131,8 @@ Effect.gen(function* () {
     local: ORBIT_LOCAL,
     args: process.argv.slice(2),
   })
-  return yield* Runtime.run(Commands, Handlers, { version: ORBIT_VERSION })
+  if (line.mode === "print") return yield* Runtime.run(Print, PrintHandlers, { version: ORBIT_VERSION }, line.args)
+  return yield* Runtime.run(Commands, Handlers, { version: ORBIT_VERSION }, line.args)
 }).pipe(
   Effect.catchCause((cause) =>
     Effect.logError("cli process failed", {

@@ -257,6 +257,26 @@ who lose them until Orbit's IDE bridge ships, and people who turn compatibility 
 **What to do:** set `ORBIT_EDITOR_SSE_PORT` to the editor's port if you still want that connection, or nothing if you do
 not. Leave compatibility on if you want Zed's selection in the TUI.
 
+### `orb -p` sends a message and prints the answer
+
+`orb -p <message>` (or `--print`) runs one message the way `orb run` does and exits. The words after the flags are the
+message, so `orb -p run the tests` sends "run the tests" and never starts `orb run`; the flag may come anywhere before
+a literal `--`, and `orb run -p` is still a `run` command line. A word right after a flag that takes a value is that
+flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the next word, so `orb -p yes do it` sends
+"yes do it". `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
+object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
+takes the same flags from one shared definition. The flags that only a printed run takes (`--output-format`, `--model`,
+`--agent`, `--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error without `-p`.
+
+Like `orb run`, `orb -p` stops in an untrusted folder whose project config is held back, before anything is sent, and
+reports the refusal as a JSON result object under `--output-format json`; `--trust` runs it once.
+
+`orb run a -- b` used to send the operands after `--` twice ("a b b"). It now sends them once.
+
+**Affects:** scripts that passed operands after `--` to `orb run` and relied on the repeat.
+
+**What to do:** nothing for `-p`; to send a message that starts with a dash, put it after `--`.
+
 ### The sidebar's getting-started text no longer lists model families
 
 The getting-started panel in the TUI sidebar used to end its second line with a list of three model families. It now says

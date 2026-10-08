@@ -46,6 +46,61 @@ const PermissionParams = {
   ),
 }
 
+// What a run that sends one message and prints the answer takes, shared by `orb run` and `orb -p`.
+const HeadlessParams = {
+  bare: Flag.boolean("bare").pipe(
+    Flag.withDescription(
+      "Run on a private server without project config or instruction files (AGENTS.md and the like), for reproducible scripts",
+    ),
+    Flag.withDefault(false),
+  ),
+  jsonSchema: Flag.string("json-schema").pipe(
+    Flag.withDescription("JSON Schema file the final answer must follow; prints one JSON result object"),
+    Flag.optional,
+  ),
+  file: Flag.string("file").pipe(
+    Flag.withAlias("f"),
+    Flag.withDescription("File to attach to the message"),
+    Flag.atMost(100),
+  ),
+  title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
+  thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
+}
+
+// The flags that only `orb -p` takes, which the root command lists so that --help shows them.
+const PrintParams = {
+  ...HeadlessParams,
+  outputFormat: Flag.choice("output-format", ["text", "json"]).pipe(
+    Flag.withDescription('Output format with -p: "text" prints the answer, "json" prints one JSON result object'),
+    Flag.optional,
+  ),
+  model: Flag.string("model").pipe(
+    Flag.withAlias("m"),
+    Flag.withDescription("Model to use in the format provider/model#variant"),
+    Flag.optional,
+  ),
+  agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
+}
+
+const SessionParams = {
+  continue: Flag.boolean("continue").pipe(
+    Flag.withAlias("c"),
+    Flag.withDescription("Continue the last session"),
+    Flag.withDefault(false),
+  ),
+  session: Flag.string("session").pipe(
+    Flag.withAlias("s"),
+    Flag.withDescription("Session ID to continue, or to create if it does not exist"),
+    Flag.optional,
+  ),
+}
+
+const PrintFlag = Flag.boolean("print").pipe(
+  Flag.withAlias("p"),
+  Flag.withDescription("Send the words after the flags as one message, print the answer and exit"),
+  Flag.withDefault(false),
+)
+
 const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "orb", {
   description: "Orbit command line interface",
   params: {
@@ -55,16 +110,9 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       Argument.withDescription("Directory to start Orbit in"),
       Argument.optional,
     ),
-    continue: Flag.boolean("continue").pipe(
-      Flag.withAlias("c"),
-      Flag.withDescription("Continue the last session"),
-      Flag.withDefault(false),
-    ),
-    session: Flag.string("session").pipe(
-      Flag.withAlias("s"),
-      Flag.withDescription("Session ID to continue, or to create if it does not exist"),
-      Flag.optional,
-    ),
+    print: PrintFlag,
+    ...SessionParams,
+    ...PrintParams,
     prompt: Flag.string("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
@@ -590,23 +638,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           ),
           Flag.withDefault("default"),
         ),
-        bare: Flag.boolean("bare").pipe(
-          Flag.withDescription(
-            "Run on a private server without project config or instruction files (AGENTS.md and the like), for reproducible scripts",
-          ),
-          Flag.withDefault(false),
-        ),
-        jsonSchema: Flag.string("json-schema").pipe(
-          Flag.withDescription("JSON Schema file the final answer must follow; implies --format result"),
-          Flag.optional,
-        ),
-        file: Flag.string("file").pipe(
-          Flag.withAlias("f"),
-          Flag.withDescription("File to attach to the message"),
-          Flag.atMost(100),
-        ),
-        title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
-        thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
+        ...HeadlessParams,
         ...PermissionParams,
       },
     }),
@@ -773,3 +805,63 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
 })
 
 export const Commands = Root
+
+/** `orb -p`: the words after the flags are the message, so no word of it is a subcommand. */
+export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "orb", {
+  description: "Orbit command line interface: send a message, print the answer and exit",
+  params: {
+    ...ServerParams,
+    ...TrustParams,
+    ...PermissionParams,
+    ...SessionParams,
+    ...PrintParams,
+    print: PrintFlag,
+    fork: Flag.boolean("fork").pipe(
+      Flag.withDescription("Fork the session before continuing"),
+      Flag.withDefault(false),
+    ),
+    message: Argument.string("message").pipe(
+      Argument.withDescription("Message to send"),
+      Argument.variadic({ min: 0 }),
+    ),
+  },
+})
+
+/** The flags of the root command that take a value, so a word after one is that value and not a message word. */
+export const RootValueFlags = {
+  long: [
+    "server",
+    "session",
+    "prompt",
+    "model",
+    "agent",
+    "output-format",
+    "json-schema",
+    "file",
+    "title",
+    "completions",
+    "log-level",
+  ],
+  short: ["s", "m", "f"],
+} as const
+
+/** The boolean flags of `orb -p`, each with the short letter it is also written with, if it has one. */
+export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
+  print: "p",
+  standalone: undefined,
+  trust: undefined,
+  auto: undefined,
+  yolo: undefined,
+  "dangerously-skip-permissions": undefined,
+  continue: "c",
+  fork: undefined,
+  bare: undefined,
+  thinking: undefined,
+  "print-logs": undefined,
+}
+
+/** The words `orb` dispatches on, which a message word of `orb -p` is not. */
+export const Subcommands = Object.values(Root.commands).flatMap((command) => [
+  command.name,
+  ...command.aliases.map((alias) => alias.name),
+])
