@@ -28,6 +28,9 @@ type HeadlessInput = {
   readonly file: ReadonlyArray<string>
   readonly title: Option.Option<string>
   readonly thinking: boolean
+  readonly envelope?: boolean
+  readonly partial?: boolean
+  readonly verbose?: boolean
   readonly maxSteps: Option.Option<number>
   readonly maxCost: Option.Option<number>
   readonly maxTokens: Option.Option<number>
@@ -48,7 +51,8 @@ export function headlessInput(input: HeadlessInput) {
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
     const schemaFile = Option.getOrUndefined(input.jsonSchema)
     const jsonSchema = schemaFile ? yield* Effect.promise(() => Bun.file(schemaFile).json()) : undefined
-    const format = jsonSchema === undefined ? input.format : "result"
+    // Without the envelope a schema always prints the result object; with it the format picks what is printed.
+    const format = jsonSchema === undefined || input.envelope ? input.format : "result"
     // The private server inherits this process's environment, which is how --bare reaches it.
     if (input.bare) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
@@ -64,7 +68,10 @@ export function headlessInput(input: HeadlessInput) {
     // checked and the folder the run happens in are the folder of that one session.
     const resume = Option.getOrUndefined(input.resume)
     if (resume !== undefined && (input.continue || Option.isSome(input.session)))
-      return reportRunError({ format }, "--resume cannot be combined with --continue or --session")
+      return reportRunError(
+        { format, envelope: input.envelope },
+        "--resume cannot be combined with --continue or --session",
+      )
     const resumed =
       resume === undefined
         ? undefined
@@ -72,7 +79,7 @@ export function headlessInput(input: HeadlessInput) {
             try: () => findResumeSession(client, resume, directory()),
             catch: (cause) => new Error(errorMessage(cause)),
           }).pipe(Effect.catch((error) => Effect.succeed(error)))
-    if (resumed instanceof Error) return reportRunError({ format }, resumed.message)
+    if (resumed instanceof Error) return reportRunError({ format, envelope: input.envelope }, resumed.message)
     const session = resumed?.id ?? Option.getOrUndefined(input.session)
     // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
     // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
@@ -80,7 +87,7 @@ export function headlessInput(input: HeadlessInput) {
     const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session, strict: input.strict }).pipe(
       Effect.catch((error) => Effect.succeed(errorMessage(error))),
     )
-    if (stopped !== undefined) return reportRunError({ format }, stopped)
+    if (stopped !== undefined) return reportRunError({ format, envelope: input.envelope }, stopped)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
@@ -97,6 +104,9 @@ export function headlessInput(input: HeadlessInput) {
         file: [...input.file],
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,
+        envelope: input.envelope,
+        partial: input.partial,
+        verbose: input.verbose,
         maxSteps: Option.getOrUndefined(input.maxSteps),
         maxCost: Option.getOrUndefined(input.maxCost),
         maxTokens: Option.getOrUndefined(input.maxTokens),
