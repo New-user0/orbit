@@ -632,6 +632,27 @@ skip the working folder too.
 **What to do:** nothing for programs on PATH. For one that you keep in the folder, write `.\server.bat` or its full
 path.
 
+### Messages say how they were delivered, and a prompt can carry turn options
+
+A `user` message and a `synthetic` message now carry a `delivery` field, `steer` or `queue`: the delivery that the input
+left the inbox with. A queued input waits until the previous work ended and then starts a new turn, while a steer joins
+the turn in progress, so the field tells where a turn begins. A message that Orbit records directly, such as a note
+from the agent loop, has no `delivery` and never starts a turn, and neither does a message stored before this change,
+which counts as a steer. The `session.prompt` request also takes a `turn` object, with `maxSteps`, `maxCost` (in US
+dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count that is not a whole number above zero, a
+cost that is not above zero, or a `fallbackModel` that is not a model reference is refused with a 400. Orbit stores the
+options with the prompt and returns them as `turn` on the `user` message, and the latest options in a turn are the ones
+that apply to it. It does not act on them yet: no limit stops a turn and no fallback model is used. A turn ends only at
+a queued input or when the session is marked idle, so a steer that arrives after the agent loop has finished its last
+response, but before the idle mark, still joins that turn.
+
+**Affects:** programs that read messages through the HTTP API, the client libraries or an exported session, and code
+that checks them against the old shape: `user` messages gain optional `turn` and `delivery`, `synthetic` messages gain
+optional `delivery`, and the `session.inbox.enqueued` event carries `turn` on a prompt that had it. The generated client
+types add `SessionTurnOptions` and the new fields.
+
+**What to do:** nothing. Every new field is optional, and a prompt without `turn` behaves as before.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

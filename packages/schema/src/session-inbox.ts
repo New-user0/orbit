@@ -5,16 +5,19 @@ import { Location } from "./location.js"
 import { Project } from "./project.js"
 import { Prompt } from "./prompt.js"
 import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema.js"
+import { SessionDelivery } from "./session-delivery.js"
 import { SessionID } from "./session-id.js"
 import { SessionMessage } from "./session-message.js"
+import { SessionTurn } from "./session-turn.js"
 
-export const Delivery = Schema.Literals(["steer", "queue"]).annotate({ identifier: "Session.Inbox.Delivery" })
-export type Delivery = typeof Delivery.Type
+export const Delivery = SessionDelivery.Delivery
+export type Delivery = SessionDelivery.Delivery
 
 export interface UserPayload extends Schema.Schema.Type<typeof UserPayload> {}
 export const UserPayload = Schema.Struct({
   ...Prompt.fields,
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
+  turn: SessionTurn.Options.pipe(optional),
 }).annotate({ identifier: "Session.Inbox.UserPayload" })
 
 export interface SyntheticPayload extends Schema.Schema.Type<typeof SyntheticPayload> {}

@@ -398,6 +398,7 @@ export const makeSessionGroup = <
           id: SessionMessage.ID.pipe(Schema.optional),
           ...PromptInput.Prompt.fields,
           metadata: SessionInbox.UserPayload.fields.metadata,
+          turn: SessionInbox.UserPayload.fields.turn,
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
         }),

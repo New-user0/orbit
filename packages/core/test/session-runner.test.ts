@@ -50,6 +50,7 @@ import { SessionRunCoordinator } from "@orbit/core/session/run-coordinator"
 import { SessionRunner } from "@orbit/core/session/runner/index"
 import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
+import { SessionTurn } from "@orbit/core/session/turn"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Plugin } from "@orbit/core/plugin"
@@ -4325,6 +4326,57 @@ describe("SessionRunnerLLM", () => {
       "Background completion before next queued input",
       "Queue second",
     ])
+  })
+
+  scenario("starts a turn at a queued prompt it promotes and joins steers to the turn in progress", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Start working", turn: { maxSteps: 4 }, resume: false })
+    yield* s.llm.push(TestLLM.stop(), TestLLM.stop(), TestLLM.stop())
+    const seqOf = (id: SessionMessage.ID) =>
+      s.db
+        .select({ seq: SessionMessageTable.seq })
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, id))
+        .get()
+        .pipe(
+          Effect.orDie,
+          Effect.flatMap((row) => (row ? Effect.succeed(row.seq) : Effect.die(new Error(`Not projected: ${id}`)))),
+        )
+
+    const firstStream = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* firstStream.started
+    expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+      boundary: undefined,
+      options: { value: { maxSteps: 4 } },
+    })
+    const queued = yield* s.session.prompt({ sessionID, text: "Queued", delivery: "queue", turn: { maxSteps: 2 } })
+    const secondStream = yield* s.llm.gate
+    yield* firstStream.release
+    yield* secondStream.started
+
+    // The queued prompt waited for the first response to end: it began a turn, and nothing it set before it applies.
+    expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+      boundary: yield* seqOf(queued.id),
+      options: { value: { maxSteps: 2 }, seq: yield* seqOf(queued.id) },
+    })
+    const steer = yield* s.session.prompt({ sessionID, text: "Steer", turn: { maxCost: Money.USD.make(1) } })
+    const thirdStream = yield* s.llm.gate
+    yield* secondStream.release
+    yield* thirdStream.started
+
+    // The steer joined that turn, and its options replaced the queued prompt's.
+    const joined = yield* SessionTurn.current(s.db, sessionID)
+    expect(joined.boundary).toBe(yield* seqOf(queued.id))
+    expect(joined.options).toMatchObject({ value: { maxCost: 1 }, seq: yield* seqOf(steer.id) })
+    yield* thirdStream.release
+    yield* Fiber.join(run)
+
+    // One drain promoted all three, with no idle marker between the turns: the queue delivery tells them apart.
+    const messages = yield* s.session.messages({ sessionID, order: "asc" })
+    expect(
+      messages.flatMap((message) => (message.type === "user" ? [`${message.text}: ${message.delivery}`] : [])),
+    ).toEqual(["Start working: steer", "Queued: queue", "Steer: steer"])
+    expect(messages.some((message) => message.type === "idle")).toBe(false)
   })
 
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
