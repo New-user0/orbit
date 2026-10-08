@@ -18,6 +18,8 @@ export type RunCommandInput = {
   message: string[]
   continue?: boolean
   session?: string
+  /** `session` came from --resume: it must exist already, and a miss never creates it. */
+  mustExist?: boolean
   fork?: boolean
   model?: string
   agent?: string
@@ -71,7 +73,7 @@ export function runNonInteractiveWithOptions(input: RunCommandInput, options: Ex
 }
 
 async function run(input: RunCommandInput, options: ExecutionOptions) {
-  if (input.fork && !input.continue && !input.session) fail("--fork requires --continue or --session")
+  if (input.fork && !input.continue && !input.session) fail("--fork requires --continue, --session or --resume")
   const root = options.root ?? process.env.PWD ?? process.cwd()
   const local = localDirectory(root)
   const directory = options.useServerDirectory ? undefined : (options.directory ?? local)
@@ -96,6 +98,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     location: prepared.directory ? { directory: prepared.directory } : undefined,
     continue: input.continue,
     session: input.session,
+    mustExist: input.mustExist,
     fork: input.fork,
     model: explicit
       ? { providerID: explicit.model.providerID, id: explicit.model.modelID, variant: explicit.variant }

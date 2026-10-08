@@ -34,6 +34,8 @@ export async function resolveSessionTarget(input: {
   location?: { directory?: string; workspace?: string }
   continue?: boolean
   session?: string
+  /** The session has to exist already: a miss fails with "Session not found" and creates nothing. */
+  mustExist?: boolean
   fork?: boolean
   model?: ModelRef
   agent?: string
@@ -99,12 +101,13 @@ async function selectSession(input: {
   location?: { directory?: string }
   continue?: boolean
   session?: string
+  mustExist?: boolean
   fork?: boolean
   signal?: AbortSignal
 }) {
   const explicit = input.session ? await findSession(input.client, input.session, input.signal) : undefined
   if (input.session && !explicit) {
-    if (input.fork) throw new Error("Session not found")
+    if (input.fork || input.mustExist) throw new Error("Session not found")
     return { session: undefined }
   }
   if (explicit)
@@ -129,6 +132,23 @@ async function selectSession(input: {
         })
       : selected,
   }
+}
+
+/**
+ * The session that `--resume` names in a printed run: the one whose ID is the value, or else the newest session of the
+ * folder that matches the value as words. It fails when there is none, so a typo never starts a new session.
+ */
+export async function findResumeSession(client: OrbitClient, value: string, directory: string, signal?: AbortSignal) {
+  if (!value.trim()) throw new Error("--resume needs a session ID or some words to search for")
+  const named = /^ses\S*$/.test(value) ? await findSession(client, value, signal) : undefined
+  if (named) return named
+  const found = await client.session.list(
+    { directory, parentID: null, search: value, limit: 1, order: "desc" },
+    ...requestOptions(signal),
+  )
+  const match = found.data[0]
+  if (!match) throw new Error("Session not found")
+  return match
 }
 
 export function findSession(client: OrbitClient, sessionID: string, signal?: AbortSignal) {

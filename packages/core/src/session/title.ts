@@ -1,5 +1,6 @@
 export * as SessionTitle from "./title.js"
 
+import { withoutReplaced } from "./runner/to-llm-message.js"
 import { isDeepStrictEqual } from "node:util"
 import { LLMClient, LLMEvent, Message, SystemPart } from "@orbit/ai"
 import { Agent } from "../agent.js"
@@ -106,7 +107,7 @@ export const layer = Layer.effect(
         ? yield* store.context(session.id).pipe(
             Effect.map((messages) => {
               const original = `Original request:\n${firstUser.text.slice(0, MAX_FIRST_MESSAGE_LENGTH)}`
-              const recent = messages
+              const recent = withoutReplaced(messages)
                 .flatMap((message) => {
                   if (message.type === "user" && message.id !== firstUser.id) return [`User: ${message.text.trim()}`]
                   if (message.type !== "assistant") return []

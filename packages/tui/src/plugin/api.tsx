@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { PluginContextProvider } from "@orbit/plugin/tui"
 import type { JSX } from "solid-js"
 import type { Context, Dialog, Page, SlotClaim, SlotMap, SlotPath, Toast } from "@orbit/plugin/tui/context"
@@ -115,7 +116,7 @@ export function createPluginContext(input: {
       }
       host.toast.show({
         ...toast,
-        title: toast.title ?? host.data.session.get(sessionID)?.title,
+        title: toast.title ?? (plain(host.data.session.get(sessionID)?.title ?? "") || undefined),
         action: { label: "Open", run: () => host.route.navigate({ type: "session", sessionID }) },
       })
     },

@@ -8901,16 +8901,186 @@ describe("SessionRunnerLLM", () => {
     ).toHaveLength(0)
   })
 
-  scenario("resumes a reply cut off at the configured cap", function* (s) {
+  const notices = (messages: ReadonlyArray<SessionMessage.Info>, notice: string) =>
+    messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === notice)
+
+  scenario("escalates a reply cut off at the configured cap, then resumes at the maximum", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
-    yield* s.llm.push(lengthStop("cap-resume-1", "Part"), TestLLM.text(" rest", "cap-resume-2"))
+    yield* s.llm.push(
+      lengthStop("cap-resume-1", "FirstCut"),
+      lengthStop("cap-resume-2", "SecondCut"),
+      TestLLM.text(" rest", "cap-resume-3"),
+    )
     yield* s.runPrompt("Question")
 
-    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 8_000])
-    expect(
-      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
-    ).toHaveLength(1)
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 64_000])
+    // The retry is the same request: the cut-off attempt and the notice are left out.
+    expect(s.requests[1]?.messages).toEqual(s.requests[0]?.messages)
+    // The resume keeps the second attempt, and neither the first attempt nor the escalation notice.
+    const resumed = JSON.stringify(s.requests[2]?.messages)
+    expect(resumed).toContain("SecondCut")
+    expect(resumed).not.toContain("FirstCut")
+    expect(resumed).not.toContain("larger one")
+    const context = yield* s.context
+    const escalations = notices(context, "output-escalation")
+    expect(escalations).toHaveLength(1)
+    expect(notices(context, "output-limit")).toHaveLength(1)
+    expect(escalations[0]?.metadata).toEqual({ notice: "output-escalation", replaces: expect.any(String) })
+    expect(escalations[0]).not.toHaveProperty("description")
+    expect(context.some((message) => message.id === escalations[0]?.metadata?.replaces)).toBe(true)
+  })
+
+  scenario("answers at the maximum once escalated and returns to the cap on the next prompt", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-next-1", "Part"), TestLLM.text("Whole answer", "cap-next-2"))
+    yield* s.runPrompt("Question")
+    yield* s.llm.push(TestLLM.text("Short", "cap-next-3"))
+    yield* s.runPrompt("Another")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 8_000])
+    expect(notices(yield* s.context, "output-limit")).toHaveLength(0)
+  })
+
+  // A reply that made any tool call before the cut-off is never repeated, a provider-hosted call included: repeating
+  // it would run and bill the call again. Only an input that never became a call escalates.
+  const capped = { reason: { normalized: "length", raw: "max_tokens" } } as const
+  for (const row of [
+    {
+      name: "a local call that ran",
+      cut: () => TestLLM.complete(capped, LLMEvent.toolCall({ id: "cap-tool", name: "echo", input: { text: "ran" } })),
+      executions: ["ran"],
+      escalates: false,
+      kept: "cap-tool",
+    },
+    {
+      name: "a hosted call with its result",
+      cut: () =>
+        TestLLM.complete(
+          capped,
+          hostedCall("cap-hosted", "weather"),
+          LLMEvent.toolResult({
+            id: "cap-hosted",
+            name: "web_search",
+            result: { type: "text", value: "HostedResultText" },
+            providerExecuted: true,
+          }),
+          LLMEvent.textStart({ id: "cap-hosted-text" }),
+          LLMEvent.textDelta({ id: "cap-hosted-text", text: "Cut" }),
+          LLMEvent.textEnd({ id: "cap-hosted-text" }),
+        ),
+      executions: [],
+      escalates: false,
+      kept: "HostedResultText",
+    },
+    {
+      name: "an input that never became a call",
+      cut: () =>
+        TestLLM.complete(
+          capped,
+          LLMEvent.toolInputStart({ id: "cap-input", name: "echo" }),
+          LLMEvent.toolInputDelta({ id: "cap-input", name: "echo", text: '{"text":' }),
+        ),
+      executions: [],
+      escalates: true,
+      kept: undefined,
+    },
+  ])
+    scenario(`escalates a capped reply only if it made no tool call: ${row.name}`, function* (s) {
+      yield* s.configControl!.setEntries([
+        new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+      ])
+      s.currentModel = fittedOutputModel
+      yield* s.llm.push(row.cut(), TestLLM.text("Done", "cap-tool-2"))
+      yield* s.runPrompt("Question")
+
+      expect(s.executions).toEqual(row.executions)
+      expect(notices(yield* s.context, "output-escalation")).toHaveLength(row.escalates ? 1 : 0)
+      expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual(
+        row.escalates ? [8_000, 64_000] : [8_000, 8_000],
+      )
+      if (row.kept) expect(JSON.stringify(s.requests[1]?.messages)).toContain(row.kept)
+    })
+
+  scenario("does not escalate at a spent turn limit", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+    yield* s.llm.push(lengthStop("esc-limit", "Part"), TestLLM.stop())
+
+    yield* s.resume.pipe(Effect.ignore)
+
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+  })
+
+  scenario("delivers a waiting steer instead of escalating", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("esc-steer-1", "A"), TestLLM.text("Answer", "esc-steer-done"))
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    yield* s.admit("STEER")
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
+  })
+
+  scenario("leaves an escalated attempt out of a fork's requests", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-fork-1", "FirstCut"), TestLLM.text("Whole answer", "cap-fork-2"))
+    yield* s.runPrompt("Question")
+    yield* s.llm.push(TestLLM.text("Second answer", "cap-fork-3"))
+    const second = yield* s.runPrompt("Second")
+
+    const forked = yield* s.session.fork({ sessionID, before: second.id })
+    const copied = yield* s.session.messages({ sessionID: forked.id })
+    const notice = copied.find(
+      (message) => message.type === "synthetic" && message.metadata?.notice === "output-escalation",
+    )
+    // The copy names the copied attempt, not the parent's.
+    expect(notice?.metadata?.replaces).toBeDefined()
+    expect(copied.some((message) => message.id === notice?.metadata?.replaces)).toBe(true)
+
+    yield* s.llm.push(TestLLM.text("Fork answer", "cap-fork-4"))
+    s.requests.length = 0
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    expect(JSON.stringify(s.requests[0]?.messages)).toContain("Whole answer")
+    expect(JSON.stringify(s.requests[0]?.messages)).not.toContain("FirstCut")
+  })
+
+  scenario("does not escalate when a hook set the output limit", function* (s) {
+    const hooks = yield* PluginHooks.Service
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-pin-1", "Part"), TestLLM.text(" rest", "cap-pin-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([20_000, 20_000])
+    const context = yield* s.context
+    expect(notices(context, "output-escalation")).toHaveLength(0)
+    expect(notices(context, "output-limit")).toHaveLength(1)
+  })
+
+  scenario("does not escalate without a lowered cap", function* (s) {
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-none-1", "Part"), TestLLM.text(" rest", "cap-none-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([64_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
   })
 
   scenario("starts a fresh output-limit streak after a new prompt", function* (s) {

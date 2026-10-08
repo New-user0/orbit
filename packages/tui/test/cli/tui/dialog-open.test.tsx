@@ -938,3 +938,21 @@ async function renderOpen(
     },
   }
 }
+
+test.each([
+  ["an escape sequence", "Fix\u001b[2Kbuild", "Fix\\x1b[2Kbuild"],
+  ["a right-to-left override", "Fix‮build", "Fix\\u{202e}build"],
+  ["ordinary text", "Fix the build", "Fix the build"],
+])("draws a session title with %s written out", async (_name, title, expected) => {
+  const fixture = await renderOpen((url) =>
+    url.pathname === "/api/session" ? json({ data: [{ ...recentSession, title }], cursor: {} }) : undefined,
+  )
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(expected))
+    const frame = fixture.app.captureCharFrame()
+    expect(frame).not.toContain("\u001b")
+    expect(frame).not.toContain("‮")
+  } finally {
+    await fixture.dispose()
+  }
+})

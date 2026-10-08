@@ -21,7 +21,8 @@ const subcommands = new Set<string>(Subcommands)
  * (`--print=true`), so a following word such as `yes` stays in the message instead of becoming the flag's value. When
  * finding the first word, though, a yes/no/true/false literal right after a bare boolean flag is that flag's value, as
  * the parser reads it on an ordinary line, so `orb --standalone yes serve -p` is still a `serve` line. The tokens from
- * `--` on are never touched.
+ * `--` on are never touched. The parser has no optional values, so on a print line, on `orb run` and on the interface
+ * a `-r` or `--resume` that ends the line, or is followed by another flag, becomes `--resume=`.
  */
 export function classify(argv: ReadonlyArray<string>): Classified {
   const separator = argv.indexOf("--")
@@ -30,41 +31,63 @@ export function classify(argv: ReadonlyArray<string>): Classified {
 
   const tokens = scan(flags)
   const printAt = tokens.findIndex((token) => token.kind === "flag" && token.print)
-  if (printAt === -1) return { mode: "root", args: argv }
   const wordAt = tokens.findIndex((token) => token.kind === "word")
   const first = tokens[wordAt]
-  const prints = first?.kind !== "word" || !subcommands.has(first.text) || printAt < wordAt
-  if (!prints) return { mode: "root", args: argv }
-  return { mode: "print", args: [...tokens.flatMap((token) => token.rewritten), ...operands] }
+  const prints = printAt !== -1 && (first?.kind !== "word" || !subcommands.has(first.text) || printAt < wordAt)
+  if (prints) return { mode: "print", args: [...tokens.flatMap((token) => token.rewritten), ...operands] }
+  // A bare --resume is only a flag of the interface and of `orb run`; another command's -r is its own.
+  // The interface also takes a directory as its first word, so only a real subcommand other than `run` keeps its own -r.
+  if (first?.kind === "word" && subcommands.has(first.text) && first.text !== "run") return { mode: "root", args: argv }
+  return { mode: "root", args: [...tokens.flatMap((token) => token.resumed), ...operands] }
 }
 
 type Token =
-  | { readonly kind: "word"; readonly text: string; readonly rewritten: ReadonlyArray<string> }
-  | { readonly kind: "flag"; readonly print: boolean; readonly rewritten: ReadonlyArray<string> }
+  | {
+      readonly kind: "word"
+      readonly text: string
+      readonly rewritten: ReadonlyArray<string>
+      readonly resumed: ReadonlyArray<string>
+    }
+  | {
+      readonly kind: "flag"
+      readonly print: boolean
+      readonly rewritten: ReadonlyArray<string>
+      readonly resumed: ReadonlyArray<string>
+    }
   // The value of a flag that takes one, which is never a word of the message and is never rewritten.
-  | { readonly kind: "value"; readonly rewritten: ReadonlyArray<string> }
+  | { readonly kind: "value"; readonly rewritten: ReadonlyArray<string>; readonly resumed: ReadonlyArray<string> }
 
+// `rewritten` is what a print line sends the parser. `resumed` is the token as typed, except that a bare -r or
+// --resume, which has no value for the parser to take, becomes `--resume=`, an empty value: that is how a line says
+// "pick the session from the list". It is the only rewrite an ordinary line gets.
 function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
   const result: Token[] = []
   let expectsValue = false
   // The parser takes a literal right after a boolean flag written without a value as that flag's value. It is only
   // classified that way here, so it is never the first word; a print line still sends it as part of the message.
   let afterBoolean = false
-  for (const text of flags) {
+  for (const [index, text] of flags.entries()) {
     const bare = afterBoolean
     afterBoolean = false
     if (bare && literals.has(text)) {
-      result.push({ kind: "value", rewritten: [text] })
+      result.push({ kind: "value", rewritten: [text], resumed: [text] })
       continue
     }
     if (expectsValue) {
       expectsValue = false
-      result.push({ kind: "value", rewritten: [text] })
+      result.push({ kind: "value", rewritten: [text], resumed: [text] })
       continue
     }
+    // A -r or --resume that ends the line, or is followed by another flag, has no value.
+    const next = flags[index + 1]
+    const valueless = next === undefined || next.startsWith("-")
     if (text.startsWith("--") && text.length > 2) {
       const equals = text.indexOf("=")
       const name = equals === -1 ? text.slice(2) : text.slice(2, equals)
+      if (equals === -1 && name === "resume" && valueless) {
+        result.push({ kind: "flag", print: false, rewritten: ["--resume="], resumed: ["--resume="] })
+        continue
+      }
       if (equals === -1 && valueLong.has(name)) expectsValue = true
       const boolean = equals === -1 && Object.hasOwn(PrintBooleanFlags, name)
       afterBoolean = boolean
@@ -74,22 +97,33 @@ function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
         kind: "flag",
         print: name === "print" && text !== "--print=false",
         rewritten: [negated ? `--${name.slice(3)}=false` : boolean ? `${text}=true` : text],
+        resumed: [text],
       })
       continue
     }
     // A short flag with an inline value takes no word after it.
     if (/^-[A-Za-z]+=/.test(text)) {
-      result.push({ kind: "flag", print: false, rewritten: [text] })
+      result.push({ kind: "flag", print: false, rewritten: [text], resumed: [text] })
       continue
     }
     if (/^-[A-Za-z]+$/.test(text)) {
       const cluster = expand(text.slice(1))
+      const last = cluster.rewritten.at(-1)
+      if (last === "-r" && valueless) {
+        result.push({
+          kind: "flag",
+          print: cluster.names.includes("print"),
+          rewritten: [...cluster.rewritten.slice(0, -1), "--resume="],
+          resumed: text.length === 2 ? ["--resume="] : [text.slice(0, -1), "--resume="],
+        })
+        continue
+      }
       expectsValue = cluster.value
       afterBoolean = !cluster.value && booleanShort.has(text.at(-1) ?? "")
-      result.push({ kind: "flag", print: cluster.names.includes("print"), rewritten: cluster.rewritten })
+      result.push({ kind: "flag", print: cluster.names.includes("print"), rewritten: cluster.rewritten, resumed: [text] })
       continue
     }
-    result.push({ kind: "word", text, rewritten: [text] })
+    result.push({ kind: "word", text, rewritten: [text], resumed: [text] })
   }
   return result
 }

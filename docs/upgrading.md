@@ -290,7 +290,7 @@ flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the n
 boolean flag as its value, so `orb --standalone yes serve -p` is still a `serve` command line. `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
 object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
 takes the same flags from one shared definition. The flags that `orb` takes only with `-p` (`--output-format`,
-`--model`, `--agent`, `--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error on `orb` without `-p`;
+`--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error on `orb` without `-p` (`--model` and `--agent` are not: see "Session flags on `orb`" below);
 `orb run` takes the others too, and keeps its own `--format` in place of `--output-format`. `orb -p --help` lists every flag a printed run accepts,
 including `--trust` and `--fork`.
 
@@ -868,6 +868,38 @@ running session. Lines written by earlier builds are read as before.
 
 **What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
 `prompt.history_limit` to keep more or fewer prompts.
+
+### Session flags on `orb`: `--model`, `--agent`, `--fork` and `-r`/`--resume`
+
+`orb` (the terminal UI) now takes `-m`/`--model`, `--agent` and `--fork`; they used to be an error without `-p`. `--model`
+is your own choice on the command line, so it applies in any folder; a model that a project file names is still held
+back until the folder is trusted. `--fork` needs `--continue`, `--session` or `--resume` with a session ID.
+
+`-r`/`--resume [ID or words]` is new on `orb`, `orb run` and `orb -p`. In the terminal UI an ID that names a session
+opens it, as `--session` does; an empty value, or anything else, opens the session list with the words typed into its
+search. In `orb run` and `orb -p` it needs a session that exists: the ID, or the newest session of the working folder
+that matches the words, and a miss fails with "Session not found" (as one failed result under `--output-format json`)
+instead of creating a session, as `--session` does. The session's own folder is the one checked for trust, wherever the
+command starts. `--resume` cannot be combined with `--continue` or `--session`.
+
+`--prompt` cannot be combined with a `-r` that opens the session list, because the prompt would go to a new session and
+not to the one you pick. `--model provider/model#variant` applies the variant to that model. Your `--model` wins over
+the selected agent's own model and over the model a resumed session has stored (`--session`, `-r <ID>` and `--continue`)
+until you pick another model with the model picker or the cycle keys; picking a variant keeps the model.
+
+The TUI now writes the title of a session out wherever it draws one: the tab rail, the sidebar, the banner, Home's recent
+list, the session list, the open dialog, the agent map, the rename prompt, the session-deleted notice and the
+notification text of a session. Control and format characters in a title appear as `\x1b` or `\u{202e}` instead of acting
+on the terminal. The rename prompt shows a title written out the same way, so renaming a title that held such a
+character saves the written-out form unless you retype it.
+
+`-r` takes the next word as its value, so `orb -p -r fix it` resumes the session matching "fix" and sends "it". Quote the
+message, or put it after `--`, as in `orb -p -r ses_abc -- fix it`. A `-r` that ends the line, or is followed by another
+flag, has an empty value.
+
+**Affects:** anyone who wrote `-r` in a command line, which `orb` did not take before.
+
+**What to do:** nothing; quote a message that follows `-r`.
 
 ### Control characters in messages are written out on screen
 
@@ -1459,8 +1491,8 @@ limits each model request, not the whole reply. Compaction summaries and titles 
 request, including a subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied
 before `session.context` hooks run, so a hook can still change it. It reaches every provider, including one whose
 adapter otherwise omits the default limit, and `session.context` hooks see it as `outputTokenCap` when it lowered the
-model's limit. The one exception is a model that rejects an output limit at its highest reasoning effort, where Orbit
-sends none. The cap never raises a limit. Left unset, requests are unchanged. Zero, a negative number or a fraction is
+model's limit (except while an escalated retry is in effect, see the retry note below). The one exception is a model
+that rejects an output limit at its highest reasoning effort, where Orbit sends none. The cap never raises a limit. Left unset, requests are unchanged. Zero, a negative number or a fraction is
 reported and ignored. With a cap of 1,024 or less, every request from a model with a fixed reasoning budget is refused;
 below about 2,000, most of the cap goes to reasoning.
 
@@ -1518,3 +1550,20 @@ completion notices never cancel anything. Before, every call ran to the end befo
 **Affects:** anyone who types or sends a prompt while Orbit is running tools, including SDK and API callers.
 
 **What to do:** Nothing. Send the message with delivery "queue" to let running calls finish first.
+
+### A reply cut off at `output_token_cap` is retried once at the model's maximum
+
+When a reply that ran no tool stops at the output cap that `output_token_cap` set, Orbit now repeats the same request
+once with the model's own maximum before it resumes the reply (the resume works as described in the output-limit note
+above). A reply that made any tool call before the cut-off, a provider-hosted one included, is resumed as before and is
+never repeated, since a repeat would run and bill the call again. The cut-off attempt and a hidden
+note with `metadata.notice` set to `output-escalation` (and `metadata.replaces` naming that attempt) stay in the
+session's messages but are left out of every later request, token estimate, compaction summary and regenerated title, including in a fork,
+whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
+`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction empties the history
+the runner reads, so a long stretch can escalate again after one. A `session.context` hook that changes or removes the
+output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
+
+**Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
+
+**What to do:** nothing. Unset `output_token_cap` to avoid the extra request.

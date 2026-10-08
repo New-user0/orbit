@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { useData } from "../../context/data"
 import { createMemo, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
@@ -34,7 +35,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
             fg={theme.text.base}
             rename={{
               pending: data.session.title.pending(props.sessionID),
-              title: withTimestampedFallback(session()),
+              title: plain(withTimestampedFallback(session())),
             }}
             enabled={config.animations ?? true}
             backdrop={theme.background.raised.base}
@@ -44,7 +45,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                 : TextAttributes.BOLD
             }
           >
-            {withTimestampedFallback(session())}
+            {plain(withTimestampedFallback(session()))}
           </title_shimmer>
         </box>
         <scrollbox

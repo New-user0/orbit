@@ -20,6 +20,7 @@ import { truncateFilePath } from "../ui/file-path"
 import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 import { stringWidth } from "../util/string-width"
+import { plain } from "@orbit/flow/plain"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import { Spinner } from "./spinner"
 import { projectName } from "../util/project"
@@ -190,7 +191,7 @@ export function DialogOpen(props: { sessions: SessionInfo[]; onLoad: (sessions: 
         data.session.status(session.id) === "running" ||
         data.session.family(session.id).some((id) => data.session.status(id) === "running")
       return {
-        title: withTimestampedFallback(session),
+        title: plain(withTimestampedFallback(session)),
         searchText: `${session.id} ${session.location.directory}`,
         value: { type: "session", sessionID: session.id } as OpenTarget,
         category: "Sessions",

@@ -82,7 +82,31 @@ const PrintParams = {
   agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
 }
 
+// A bare -r or --resume is rewritten to `--resume=` by framework/argv.ts, because the parser has no optional values.
+const ResumeParams = {
+  resume: Flag.string("resume").pipe(
+    Flag.withAlias("r"),
+    Flag.withDescription(
+      "Resume a session: a session ID, or words to search for (a bare flag opens the session list). The next word is its value, so quote a message or put it after --",
+    ),
+    Flag.optional,
+  ),
+}
+
+// Where no session list can open, a bare flag fails, so the help does not offer one.
+const HeadlessResumeParams = {
+  resume: Flag.string("resume").pipe(
+    Flag.withAlias("r"),
+    Flag.withDescription(
+      "Resume an existing session: a session ID, or words to search for in this folder's sessions. The next word is its value, so quote a message or put it after --",
+    ),
+    Flag.optional,
+  ),
+}
+
 const SessionParams = {
+  ...ResumeParams,
+  fork: Flag.boolean("fork").pipe(Flag.withDescription("Fork the session before continuing"), Flag.withDefault(false)),
   continue: Flag.boolean("continue").pipe(
     Flag.withAlias("c"),
     Flag.withDescription("Continue the last session"),
@@ -624,6 +648,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           Flag.withDescription("Session ID to continue, or to create if it does not exist"),
           Flag.optional,
         ),
+        ...HeadlessResumeParams,
         fork: Flag.boolean("fork").pipe(
           Flag.withDescription("Fork the session before continuing"),
           Flag.withDefault(false),
@@ -816,12 +841,9 @@ export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NA
     ...TrustParams,
     ...PermissionParams,
     ...SessionParams,
+    ...HeadlessResumeParams,
     ...PrintParams,
     print: PrintFlag,
-    fork: Flag.boolean("fork").pipe(
-      Flag.withDescription("Fork the session before continuing"),
-      Flag.withDefault(false),
-    ),
     message: Argument.string("message").pipe(
       Argument.withDescription("Message to send"),
       Argument.variadic({ min: 0 }),
@@ -834,6 +856,7 @@ export const RootValueFlags = {
   long: [
     "server",
     "session",
+    "resume",
     "prompt",
     "model",
     "agent",
@@ -844,7 +867,7 @@ export const RootValueFlags = {
     "completions",
     "log-level",
   ],
-  short: ["s", "m", "f"],
+  short: ["s", "m", "f", "r"],
 } as const
 
 /** The boolean flags of `orb -p`, each with the short letter it is also written with, if it has one. */
