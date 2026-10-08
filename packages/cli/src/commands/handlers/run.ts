@@ -5,6 +5,7 @@ import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
+import { findResumeSession } from "../../session-target"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -18,6 +19,7 @@ type HeadlessInput = {
   readonly message: ReadonlyArray<string>
   readonly continue: boolean
   readonly session: Option.Option<string>
+  readonly resume: Option.Option<string>
   readonly fork: boolean
   readonly model: Option.Option<string>
   readonly agent: Option.Option<string>
@@ -51,14 +53,27 @@ export function headlessInput(input: HeadlessInput) {
       standalone: input.standalone || input.bare,
       trust: input.trust,
     })
-    // Checks the folder the run happens in, which is the folder of the session when --session names one that exists.
-    // A refusal, and a request that fails, go out the way any error before a session exists does, so a script that asked
-    // for JSON gets JSON.
-    const stopped = yield* trustRefusal(
-      Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
-      directory(),
-      { grant: input.trust, session: Option.getOrUndefined(input.session) },
-    ).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
+    const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+    // --resume names a session that must exist. It is resolved once, before the trust check, so the folder that is
+    // checked and the folder the run happens in are the folder of that one session.
+    const resume = Option.getOrUndefined(input.resume)
+    if (resume !== undefined && (input.continue || Option.isSome(input.session)))
+      return reportRunError({ format }, "--resume cannot be combined with --continue or --session")
+    const resumed =
+      resume === undefined
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () => findResumeSession(client, resume, directory()),
+            catch: (cause) => new Error(errorMessage(cause)),
+          }).pipe(Effect.catch((error) => Effect.succeed(error)))
+    if (resumed instanceof Error) return reportRunError({ format }, resumed.message)
+    const session = resumed?.id ?? Option.getOrUndefined(input.session)
+    // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
+    // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
+    // script that asked for JSON gets JSON.
+    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session }).pipe(
+      Effect.catch((error) => Effect.succeed(errorMessage(error))),
+    )
     if (stopped !== undefined) return reportRunError({ format }, stopped)
     yield* Effect.promise(() =>
       runNonInteractive({
@@ -66,7 +81,8 @@ export function headlessInput(input: HeadlessInput) {
         // The parser already appends the operands after a literal -- to the message.
         message: [...input.message],
         continue: input.continue,
-        session: Option.getOrUndefined(input.session),
+        session,
+        mustExist: resumed !== undefined,
         fork: input.fork,
         model: Option.getOrUndefined(input.model),
         agent: Option.getOrUndefined(input.agent),

@@ -1,6 +1,7 @@
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, Show } from "solid-js"
+import { plain } from "@orbit/flow/plain"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import { useData } from "../context/data"
 import { Keymap } from "../context/keymap"
@@ -46,7 +47,7 @@ export function Banner() {
     const id = sessionID()
     if (!id) return "new session"
     const session = data.session.get(id)
-    return session ? withTimestampedFallback(session) : ""
+    return session ? plain(withTimestampedFallback(session)) : ""
   })
   const model = () => local.model.parsed().model
   const commands = () => shortcuts.get("command.palette.show")

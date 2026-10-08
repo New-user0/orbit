@@ -184,6 +184,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   (the escaping), `test/cli/tui/form.test.tsx`, `test/mini/entry.body.test.ts` and
   `test/util/permission-body.test.ts`. Sinks that are routed through `bodyText` but have no frame test, and the
   places that are still open, are listed in Known gaps.
+- Session titles in the session list (`dialog-session-list.tsx`) and the open dialog (`dialog-open.tsx`): both pass the
+  title through `plain`. Proof: the hostile-title tests in `test/cli/tui/dialog-session-list.test.tsx` and
+  `test/cli/tui/dialog-open.test.tsx`. The tab rail (`session-tabs.tsx`: both rails, the tooltip and the closed-tab menu),
+  the sidebar (`sidebar.tsx`), the banner (`banner.tsx`), Home's recent list (`routes/home.tsx`), the agent-map dialog
+  (`dialog-agent-map.tsx`) and the rename prompt (`dialog-session-rename.tsx`) pass it through `plain` too. Proof: one
+  row each in `test/resume-title.test.tsx`, captured from the real app at 100 and 160 columns with a trusted control
+  row. The tab rail's four title sites are pinned together, not one by one, because the rail is on screen in every row.
+  The session-deleted toast, the `plugin/api.tsx` toast and the notification title (`notifications.ts`) pass `plain`
+  and have no frame test (Known gaps).
 - Window titles, the exit summary and the Mini splash: `terminalTitle`, `sessionEpilogue` and the splash's own filter.
   Proof: `test/util/renderer.test.ts`, `test/util/presentation.test.ts`, `test/mini/splash.test.ts`.
 - The keybindings file: `Config.read` reads `keybindings.json` from the folder that holds `cli.json`, the person's own
@@ -1418,9 +1427,10 @@ fixes it or asks.
   rows. Open, with no sanitizer: `orb run`, whose default format writes the answer, the thinking lines and the tool
   blocks as the model and the tools made them (its JSON formats write the same text out with `jsonLine`); the text of
   the desktop notification that `notifications.ts` sends through `context.attention.notify`, which carries the
-  "Session failed" message and the session title; the markdown export of a session; the prompt history search and the
-  stash list, which draw text that the person typed or pasted; and the session titles in the tab rail, the session list
-  and the sidebar, which belong to the session-title work. Recaps are not drawn anywhere yet; they pass `bodyText`
+  "Session failed" message (its title passes `plain`, below); the markdown export of a session; the prompt history search and the
+  stash list, which draw text that the person typed or pasted. Session titles that pass `plain` but have no frame test:
+  the session-deleted toast (`app.tsx`), the toast of `plugin/api.tsx` and the notification title (`notifications.ts`).
+  The window title passes `terminalTitle` (`test/util/renderer.test.ts`). Recaps are not drawn anywhere yet; they pass `bodyText`
   when `clients-ux-27` lands.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The

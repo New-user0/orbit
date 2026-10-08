@@ -290,7 +290,7 @@ flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the n
 boolean flag as its value, so `orb --standalone yes serve -p` is still a `serve` command line. `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
 object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
 takes the same flags from one shared definition. The flags that `orb` takes only with `-p` (`--output-format`,
-`--model`, `--agent`, `--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error on `orb` without `-p`;
+`--bare`, `--json-schema`, `--file`, `--title`, `--thinking`) are an error on `orb` without `-p` (`--model` and `--agent` are not: see "Session flags on `orb`" below);
 `orb run` takes the others too, and keeps its own `--format` in place of `--output-format`. `orb -p --help` lists every flag a printed run accepts,
 including `--trust` and `--fork`.
 
@@ -868,6 +868,38 @@ running session. Lines written by earlier builds are read as before.
 
 **What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
 `prompt.history_limit` to keep more or fewer prompts.
+
+### Session flags on `orb`: `--model`, `--agent`, `--fork` and `-r`/`--resume`
+
+`orb` (the terminal UI) now takes `-m`/`--model`, `--agent` and `--fork`; they used to be an error without `-p`. `--model`
+is your own choice on the command line, so it applies in any folder; a model that a project file names is still held
+back until the folder is trusted. `--fork` needs `--continue`, `--session` or `--resume` with a session ID.
+
+`-r`/`--resume [ID or words]` is new on `orb`, `orb run` and `orb -p`. In the terminal UI an ID that names a session
+opens it, as `--session` does; an empty value, or anything else, opens the session list with the words typed into its
+search. In `orb run` and `orb -p` it needs a session that exists: the ID, or the newest session of the working folder
+that matches the words, and a miss fails with "Session not found" (as one failed result under `--output-format json`)
+instead of creating a session, as `--session` does. The session's own folder is the one checked for trust, wherever the
+command starts. `--resume` cannot be combined with `--continue` or `--session`.
+
+`--prompt` cannot be combined with a `-r` that opens the session list, because the prompt would go to a new session and
+not to the one you pick. `--model provider/model#variant` applies the variant to that model. Your `--model` wins over
+the selected agent's own model and over the model a resumed session has stored (`--session`, `-r <ID>` and `--continue`)
+until you pick another model with the model picker or the cycle keys; picking a variant keeps the model.
+
+The TUI now writes the title of a session out wherever it draws one: the tab rail, the sidebar, the banner, Home's recent
+list, the session list, the open dialog, the agent map, the rename prompt, the session-deleted notice and the
+notification text of a session. Control and format characters in a title appear as `\x1b` or `\u{202e}` instead of acting
+on the terminal. The rename prompt shows a title written out the same way, so renaming a title that held such a
+character saves the written-out form unless you retype it.
+
+`-r` takes the next word as its value, so `orb -p -r fix it` resumes the session matching "fix" and sends "it". Quote the
+message, or put it after `--`, as in `orb -p -r ses_abc -- fix it`. A `-r` that ends the line, or is followed by another
+flag, has an empty value.
+
+**Affects:** anyone who wrote `-r` in a command line, which `orb` did not take before.
+
+**What to do:** nothing; quote a message that follows `-r`.
 
 ### Control characters in messages are written out on screen
 
