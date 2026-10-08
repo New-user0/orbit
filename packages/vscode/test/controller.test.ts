@@ -102,10 +102,15 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
   })
   const items = new Map<string, Item>()
   const busy: boolean[] = []
-  const controller = new Controller(client, workspace, (update) => {
-    if (update.type === "busy") return void busy.push(update.busy)
-    if (update.type === "item") items.set(update.item.id, update.item)
-  })
+  const controller = new Controller(
+    client,
+    workspace,
+    (update) => {
+      if (update.type === "busy") return void busy.push(update.busy)
+      if (update.type === "item") items.set(update.item.id, update.item)
+    },
+    neverAsked,
+  )
   // The event stream must be connected before the prompt so no event is missed.
   await Bun.sleep(500)
 
@@ -128,9 +133,14 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
   const sessions = await controller.sessions()
   expect(sessions).toHaveLength(1)
   const replayed = new Map<string, Item>()
-  const other = new Controller(client, workspace, (update) => {
-    if (update.type === "item") replayed.set(update.item.id, update.item)
-  })
+  const other = new Controller(
+    client,
+    workspace,
+    (update) => {
+      if (update.type === "item") replayed.set(update.item.id, update.item)
+    },
+    neverAsked,
+  )
   expect(await other.open(sessions[0]?.id ?? "")).toBe("build")
   expect([...replayed.values()].map((item) => item.type)).toEqual(["user", "tool", "text"])
   expect([...replayed.values()].find((item) => item.type === "tool")).toMatchObject({
@@ -141,6 +151,11 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
   other.dispose()
   controller.dispose()
 }, 90_000)
+
+// The server of this file trusts every folder (ORBIT_TRUST_PROJECT in `isolatedEnv`), so nothing may ask about trust.
+function neverAsked(): never {
+  throw new Error("A trusted folder was asked about trust")
+}
 
 async function until<T>(read: () => T | undefined, timeout = 30_000): Promise<T | undefined> {
   const deadline = Date.now() + timeout

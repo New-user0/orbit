@@ -1,4 +1,4 @@
-export { CallID, Error } from "@orbit/schema/tool"
+export { CallID, Error, ErrorCode } from "@orbit/schema/tool"
 export type { Metadata, Options, ResolvedTraits, Result } from "@orbit/schema/tool"
 
 import { Tool } from "@orbit/schema/tool"
@@ -32,11 +32,21 @@ export interface Traits<Input = unknown>
 export type Info<
   Input extends Tool.ValueSchema<any> = Tool.ValueSchema<any>,
   Output extends Tool.ValueSchema<any> | undefined = Tool.ValueSchema<any> | undefined,
-> = Omit<Tool.Info<Input, Output>, "execute" | "traits"> & {
+> = Omit<Tool.Info<Input, Output>, "execute" | "traits" | "validate"> & {
   readonly execute: (
     input: Parameters<Tool.Info<Input, Output>["execute"]>[0],
     context: ToolContext,
   ) => Promise<Tool.Result<Output>>
+  /**
+   * `Tool.Info.validate` for a Promise plugin: refuses a call that cannot succeed before the tool asks anyone about it,
+   * by throwing. A thrown `Tool.Error` that carries a `code` keeps it; any other error, and a `Tool.Error` without a
+   * code, is reported as `tool.validation`. The same rules apply as for `execute`: it must not ask for permission or
+   * change anything, and `execute` repeats every check it relies on.
+   */
+  readonly validate?: (
+    input: Parameters<Tool.Info<Input, Output>["execute"]>[0],
+    context: ToolContext,
+  ) => void | Promise<void>
   readonly traits?: Traits<Parameters<Tool.Info<Input, Output>["execute"]>[0]>
 }
 

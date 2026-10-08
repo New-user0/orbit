@@ -8,6 +8,7 @@ import { sessionLocationMissingStory } from "./session-location-missing"
 import { oneCellSpinnerStory } from "./one-cell-spinner"
 import { dialogTrustStory } from "./dialog-trust"
 import { trustIndicatorStory } from "./trust-indicator"
+import { historySearchStory } from "./history-search"
 
 /**
  * A story is a full-screen, fixture-driven simulation of a real production component. Stories own
@@ -26,6 +27,7 @@ const stories: Story[] = [
   oneCellSpinnerStory,
   dialogTrustStory,
   trustIndicatorStory,
+  historySearchStory,
 ]
 
 function Commands(props: { context: Plugin.Context }) {

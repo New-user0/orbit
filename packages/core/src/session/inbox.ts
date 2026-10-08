@@ -126,20 +126,12 @@ const promotedFromMessage = Effect.fn("SessionInbox.promotedFromMessage")(functi
   if (row.session_id !== sessionID || (row.type !== "user" && row.type !== "synthetic"))
     return yield* new LifecycleConflict({ id })
   const message = decodeMessage({ ...row.data, id: row.id, type: row.type })
-  const base = { id, sessionID, time: { created: message.time.created }, delivery }
-  if (message.type === "user")
-    return User.make({
-      ...base,
-      type: "user",
-      payload: decodeUser(message),
-    })
-  if (message.type === "synthetic")
-    return Synthetic.make({
-      ...base,
-      type: "synthetic",
-      payload: decodeSynthetic(message),
-    })
-  return yield* new LifecycleConflict({ id })
+  if (message.type !== "user" && message.type !== "synthetic") return yield* new LifecycleConflict({ id })
+  // The first admission wins, so the delivery is the one the message records. A message projected before it was
+  // recorded has none, and then the retry's is the best answer left.
+  const base = { id, sessionID, time: { created: message.time.created }, delivery: message.delivery ?? delivery }
+  if (message.type === "user") return User.make({ ...base, type: "user", payload: decodeUser(message) })
+  return Synthetic.make({ ...base, type: "synthetic", payload: decodeSynthetic(message) })
 })
 
 export type Interface = Effect.Success<ReturnType<typeof make>>

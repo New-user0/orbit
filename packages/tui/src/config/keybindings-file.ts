@@ -210,6 +210,7 @@ const listing = {
     "prompt.clear",
     "prompt.history.previous",
     "prompt.history.next",
+    "prompt.history.search",
     "prompt.autocomplete.prev",
     "prompt.autocomplete.next",
     "prompt.autocomplete.hide",
@@ -312,7 +313,7 @@ const listing = {
     "dialog.select.submit",
     "session.pin.toggle",
     "session.delete",
-    "session.rename",
+    "dialog.session.rename",
   ],
   diff: [
     "app.exit",

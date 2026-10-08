@@ -613,6 +613,7 @@ const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
         })
         if (input.type === "compaction" || input.type === "move") return
+        // The message keeps the delivery it left the inbox with: a queued input is where a new turn starts.
         yield* insertMessage(
           db,
           event,
@@ -625,6 +626,8 @@ const layer = Layer.effectDiscard(
                 files: input.payload.files,
                 agents: input.payload.agents,
                 skills: input.payload.skills,
+                turn: input.payload.turn,
+                delivery: input.delivery,
                 time: { created: DateTime.makeUnsafe(event.created) },
               }
             : {
@@ -633,6 +636,7 @@ const layer = Layer.effectDiscard(
                 text: input.payload.text,
                 description: input.payload.description,
                 metadata: input.payload.metadata,
+                delivery: input.delivery,
                 time: { created: DateTime.makeUnsafe(event.created) },
               },
         )

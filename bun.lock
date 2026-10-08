@@ -567,6 +567,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@orbit/client": "workspace:*",
+        "@orbit/flow": "workspace:*",
         "diff": "catalog:",
       },
       "devDependencies": {

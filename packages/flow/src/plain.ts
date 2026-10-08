@@ -32,6 +32,16 @@ export function json(value: unknown) {
   return `${JSON.stringify(value, null, 2)}`.replace(/\p{C}/gu, (match) => (match === "\n" ? match : units(match)))
 }
 
+/**
+ * `value` as one line of JSON, for a program that reads its input line by line, as it reads `orb run --format
+ * stream-json`. It writes out what `json` does, and U+2028 and U+2029 as well: `JSON.stringify` leaves those two raw,
+ * and a reader written in JavaScript splits a line at either. `JSON.parse` reads the line back as the value it was
+ * given.
+ */
+export function jsonLine(value: unknown) {
+  return `${JSON.stringify(value)}`.replace(/[\p{C}\p{Zl}\p{Zp}]/gu, (match) => units(match))
+}
+
 function units(text: string) {
   return Array.from(
     { length: text.length },

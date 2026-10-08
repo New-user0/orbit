@@ -7,6 +7,7 @@ import type {
   Model,
   Todo,
   ToView,
+  TrustView,
   WorkflowAgent,
   Workspace,
 } from "../protocol.js"
@@ -39,6 +40,9 @@ const state = {
 }
 
 const app = document.getElementById("app") ?? document.body
+// Shown above the conversation while the folder is untrusted and holds something back.
+const banner = element("div", "trust")
+banner.hidden = true
 const scroll = element("div", "scroll")
 const column = element("div", "column")
 scroll.append(column)
@@ -70,7 +74,7 @@ stopButton.type = "button"
 stopButton.title = "Stop"
 bar.append(chip, element("span", "spacer"), agentsChip, modeButton, modelButton, sendButton, stopButton)
 composer.append(input, bar)
-app.append(scroll, menu, map, composer)
+app.append(banner, scroll, menu, map, composer)
 
 const nodes = new Map<string, HTMLElement>()
 const items = new Map<string, Item>()
@@ -151,6 +155,8 @@ window.addEventListener("message", (event: MessageEvent<ToView>) => {
     case "mode":
       state.mode = message.mode
       return paint()
+    case "trust":
+      return paintTrust(message.trust)
     case "title":
       return
     case "models":
@@ -501,6 +507,45 @@ function paint() {
   modelButton.textContent = `${model?.name ?? "Default model"} ▾`
   sendButton.hidden = state.busy
   stopButton.hidden = !state.busy
+}
+
+// The banner is built when the answer changes and not on every repaint, so a list the person opened stays open.
+let paintedTrust: string | undefined
+function paintTrust(trust: TrustView | undefined) {
+  const next = JSON.stringify(trust ?? null)
+  if (next === paintedTrust) return
+  paintedTrust = next
+  banner.hidden = trust === undefined
+  if (!trust) return banner.replaceChildren()
+  const head = element("div", "trust-head")
+  head.append(element("span", "strong", "⊙ Untrusted"), element("span", "muted grow trust-folder", trust.directory))
+  const files = element("details", "trust-files")
+  files.append(
+    element("summary", undefined, `${trust.held.length} ${trust.held.length === 1 ? "file" : "files"} held back`),
+    ...trust.held.map((item) => {
+      const row = element("div", "trust-file")
+      row.append(element("span", "grow", item.name), element("span", "muted", item.kinds))
+      return row
+    }),
+  )
+  banner.replaceChildren(
+    head,
+    element("div", undefined, `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`),
+    files,
+    ...(trust.opened === undefined
+      ? []
+      : [element("div", "muted small", `VS Code opened ${trust.opened}. Trust is decided for the project's folder.`)]),
+    ...(trust.above.length === 0
+      ? []
+      : [
+          element(
+            "div",
+            "muted small",
+            `Config in ${trust.above.join(", ")} stays off: each folder is trusted on its own.`,
+          ),
+        ]),
+    button("Review and trust…", () => vscode.postMessage({ type: "trust" }), "primary"),
+  )
 }
 
 function paintEmpty() {

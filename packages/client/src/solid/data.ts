@@ -748,6 +748,10 @@ export function createData(config: CreateDataInput) {
       }
       case "session.inbox.delivered": {
         const admitted = result.session.input.has(event.data.sessionID, event.data.inboxID)
+        // The delivery the input leaves the inbox with is the one it has now: delivery.changed may have moved it.
+        const delivery = store.session.pending[event.data.sessionID]?.find(
+          (entry) => entry.id === event.data.inboxID,
+        )?.delivery
         removePending(event.data.sessionID, event.data.inboxID)
         message.update(event.data.sessionID, (draft, index) => {
           const position = index.get(event.data.inboxID)
@@ -755,6 +759,8 @@ export function createData(config: CreateDataInput) {
           const existing = draft[position]
           if (!existing || !admitted) return
           existing.time.created = event.created
+          // The projection records it on the message, so a row read live matches the same row read after a reload.
+          if (existing.type === "user" || existing.type === "synthetic") existing.delivery = delivery
           draft.splice(position, 1)
           draft.push(existing)
           message.reindex(draft, index, position)
