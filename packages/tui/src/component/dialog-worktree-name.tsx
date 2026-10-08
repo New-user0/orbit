@@ -24,6 +24,7 @@ export function DialogWorktreeName(props: { onConfirm: (name: string) => void })
   }
 
   Keymap.createLayer(() => ({
+    context: "dialog",
     mode: "modal",
     target: inputTarget,
     enabled: inputTarget() !== undefined,

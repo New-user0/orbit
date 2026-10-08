@@ -194,6 +194,7 @@ export function DialogSessionList() {
 
   return (
     <DialogSelect
+      context="session-list"
       title="Sessions"
       titleView={
         <box flexDirection="row">

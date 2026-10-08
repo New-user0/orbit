@@ -291,6 +291,7 @@ function RejectPrompt(props: {
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
   Keymap.createLayer(() => ({
+    context: "permission",
     mode: "base",
     commands: [
       {
@@ -447,6 +448,7 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
   }
 
   Keymap.createLayer(() => ({
+    context: "permission",
     mode: "base",
     commands: [
       ...(props.escapeKey

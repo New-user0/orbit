@@ -1166,6 +1166,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: baseBindingsEnabled(),
     commands: [
       {
@@ -1181,6 +1182,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: input.prompt(),
     commands: [
       {
@@ -1202,6 +1204,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     priority: 1,
     enabled: input.prompt() && (!visible() || mode() === "slash"),
     commands: [
@@ -1218,6 +1221,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     priority: 1,
     enabled: input.prompt() && !visible(),
     commands: [
@@ -1233,6 +1237,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     priority: 1,
     enabled: input.prompt() && !visible(),
     commands: [
@@ -1258,6 +1263,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: input.prompt() && !visible(),
     commands: [
       {
@@ -1275,6 +1281,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: input.prompt() && shell() && !visible(),
     commands: [
       {
@@ -1297,6 +1304,7 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: input.prompt() && visible(),
     commands: [
       {

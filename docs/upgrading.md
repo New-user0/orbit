@@ -678,6 +678,40 @@ text that the output limit cut is one line.
 **What to do:** nothing for most setups. A program that reads `json` or `stream-json` joins the parts of steps whose
 `step_finish` has reason `length`, and drops the parts of the message that a `notice` line replaces.
 
+### Keys can be set in `keybindings.json`, per place, and as two-step chords
+
+The terminal UI and `orb mini` now read an optional `keybindings.json` from the folder that holds `cli.json`. It takes
+comments and trailing commas and has three settings: `leader`, `bindings` and `contexts`.
+
+- `bindings` gives a command other keys wherever it is bound, and `null` takes its keys away. `contexts` does the same in
+  one place only: `global`, `prompt`, `session`, `permission`, `composer`, `dialog`, `session-list`, `diff`, `which-key`
+  (which has no commands yet) or `mini`. So `session.rename` can have one key in the session list and another in a
+  session. A command's keys come from its context first, then `bindings`, then `keybinds` in `cli.json`, then the
+  defaults. `keybinds` in `cli.json` works as before.
+- A key can be a chord, two or more strokes separated by a space, such as `ctrl+k ctrl+s`. `<leader>` sequences, lists
+  separated by commas and `enter` or `esc` work beside it, and Escape cancels a chord that is waiting for its next stroke.
+  A chord takes its first key from every other binding of that key: while `ctrl+k ctrl+s` exists, `ctrl+k` waits for a
+  second stroke everywhere, and no longer deletes to the end of the line in the prompt.
+- Orbit leaves out an entry that names no command, no place or no key it can read, says so in one toast, and applies the
+  rest. It also warns when two entries of one place use the same keys, or when one starts the other. It never compares
+  the file with its own default keys. A file that cannot be parsed is ignored whole, with one note, and the settings in
+  `cli.json` are not touched. In the terminal UI, saving the file applies it at once, including the leader key and the
+  editing keys of the prompt, which were read only once at start-up before. `orb mini` reads the file when it starts and
+  prints what it left out to the terminal before the footer takes the screen.
+- `/keybindings`, or "Edit keybindings" in the command palette of the terminal UI, writes a template that lists every
+  place with its commands, all commented out, where there is no file, and opens the file in `$VISUAL` or `$EDITOR`. With
+  neither set it opens the file with the program your system uses for that kind of file, and when that fails it shows
+  the path. Orbit looks for the editor on PATH only and starts it from the folder of the file, so a program of the same
+  name in the project folder is never the one that runs.
+- A plugin's keymap layer can name its place with the new `context` field of `KeymapLayer`. A layer that names none, or
+  one that is not in the list above, gets only the keys set in `bindings`.
+
+**Affects:** anyone who wants other keys, and plugin authors. Nothing changes until the file exists, except that a change
+to `leader` or to an `input.*` key in `cli.json` now also applies while the terminal UI runs. `cli.json` also accepts
+`keybindings.open`, the command behind `/keybindings`, which has no key by default.
+
+**What to do:** nothing. Run `/keybindings` to start from the template.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

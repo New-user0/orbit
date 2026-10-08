@@ -548,6 +548,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }
 
   Keymap.createLayer(() => ({
+    context: "mini",
     commands: [
       {
         id: "app.clear",
@@ -559,6 +560,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: active().type === "prompt" && route().type === "composer" && !composer.visible(),
     commands: [
       {
@@ -577,6 +579,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: active().type === "prompt" && route().type === "composer" && foregroundSubagents() && !!props.onBackground,
     priority: 1,
     commands: [
@@ -590,6 +593,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: active().type === "prompt" && route().type === "composer" && tabs().length > 0,
     commands: [
       {
@@ -602,6 +606,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled: active().type === "prompt" && route().type === "composer" && queuedPrompts().length > 0,
     commands: [
       {
@@ -614,6 +619,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   }))
 
   Keymap.createLayer(() => ({
+    context: "mini",
     enabled:
       active().type === "prompt" &&
       route().type === "subagent" &&
