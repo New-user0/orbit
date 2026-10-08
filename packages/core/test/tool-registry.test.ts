@@ -8,6 +8,7 @@ import { Session } from "@orbit/core/session"
 import { SessionMessage } from "@orbit/core/session/message"
 import { State } from "@orbit/core/state"
 import { Tool } from "@orbit/core/tool"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info } from "@orbit/schema/tool"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { codeModeListings, executeTool, toolDefinitions } from "./lib/tool"
@@ -874,10 +875,112 @@ describe("Tool", () => {
         call: { type: "tool-call", id: "call-context", name: "context", input: {} },
       })
       expect(contexts).toEqual([
-        { sessionID, ...identity, id: Tool.CallID.make("call-context"), progress: expect.any(Function) },
+        {
+          sessionID,
+          ...identity,
+          id: Tool.CallID.make("call-context"),
+          progress: expect.any(Function),
+          traits: ToolTraits.defaults,
+        },
       ])
     }),
   )
+  it.effect("resolves Tool.Context.traits from the input an execute.before hook rewrote", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const hooks = yield* PluginHooks.Service
+      const contexts: Tool.Context[] = []
+      const answered: unknown[] = []
+      yield* transform(
+        service,
+        {
+          classified: {
+            name: "classified",
+            description: "Classified by its input",
+            input: Schema.Struct({ text: Schema.String }),
+            output: Schema.Struct({ ok: Schema.Boolean }),
+            traits: {
+              readOnly: (input: { readonly text: string }) => {
+                answered.push(input)
+                return input.text === "safe"
+              },
+              destructive: (input: { readonly text: string }) => input.text !== "safe",
+            },
+            execute: (_, context) =>
+              Effect.sync(() => contexts.push(context)).pipe(Effect.as({ output: { ok: true } })),
+          },
+        },
+        { codemode: false },
+      )
+      const rewrites: string[] = []
+      yield* hooks.register("tool", "execute.before", (event) =>
+        Effect.sync(() => {
+          rewrites.push(event.tool)
+          event.input = { text: "safe" }
+        }),
+      )
+      const snapshot = yield* service.snapshot()
+      const sent = { type: "tool-call" as const, id: "call-rewritten", name: "classified", input: { text: "risky" } }
+
+      // Scheduling asks first, on the input the model sent, and no hook runs for it.
+      const scheduled = yield* snapshot.traits({ call: sent })
+      expect([scheduled.readOnly, scheduled.destructive]).toEqual([false, true])
+      expect(rewrites).toEqual([])
+
+      yield* snapshot.execute({ sessionID, ...identity, call: sent })
+      expect(rewrites).toEqual(["classified"])
+      expect(contexts.map((context) => [context.traits.readOnly, context.traits.destructive])).toEqual([[true, false]])
+      expect(answered).toEqual([{ text: "risky" }, { text: "safe" }])
+    }),
+  )
+
+  it.effect("gives a Code Mode inner call the traits of the tool it calls", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const seen = new Map<string, Tool.ResolvedTraits>()
+      const inner = (name: string, traits?: Info["traits"]): Info => ({
+        ...make(),
+        name,
+        traits,
+        execute: ({ text }, context) =>
+          Effect.sync(() => void seen.set(name, context.traits)).pipe(Effect.as({ output: { text }, content: text })),
+      })
+      yield* service.transform((editor) => {
+        editor.add(
+          inner("lookup", {
+            readOnly: (input: { readonly text: string }) => input.text === "lookup",
+            concurrencySafe: true,
+            openWorld: true,
+            displayName: "Lookup",
+          }),
+        )
+        editor.add(inner("plain"))
+      })
+
+      const snapshot = yield* service.snapshot()
+      yield* snapshot.execute({
+        ...call("execute"),
+        call: {
+          type: "tool-call",
+          id: "call-inner-traits",
+          name: "execute",
+          input: {
+            code: `await tools.lookup({ text: "lookup" }); await tools.plain({ text: "plain" }); return "done"`,
+          },
+        },
+      })
+
+      expect(seen.get("lookup")).toEqual({
+        ...ToolTraits.defaults,
+        readOnly: true,
+        concurrencySafe: true,
+        openWorld: true,
+        displayName: "Lookup",
+      })
+      expect(seen.get("plain")).toEqual(ToolTraits.defaults)
+    }),
+  )
+
   it.effect("lists registered tools by effective name", () =>
     Effect.gen(function* () {
       const service = yield* Tool.Service
