@@ -441,6 +441,79 @@ describe("ToolStream.gateOnFinish", () => {
     }),
   )
 
+  // Each step is decided by its own finish. A hand-scripted or multi-step stream is the only way to reach this: every
+  // route ends its response after one step.
+  const steps = [
+    {
+      name: "a step that dropped, then one that released",
+      finishes: ["length", "tool-calls"],
+      released: [false, true],
+    },
+    {
+      name: "a step that released, then one that dropped",
+      finishes: ["tool-calls", "length"],
+      released: [true, false],
+    },
+    {
+      name: "a step that released, then one that released",
+      finishes: ["stop", "tool-calls"],
+      released: [true, true],
+    },
+    {
+      name: "a step that dropped, then one that dropped",
+      finishes: ["unknown", "content-filter"],
+      released: [false, false],
+    },
+  ] as const
+  steps.forEach((row) => {
+    it.effect(`decides a recovered call by the finish of its own step: ${row.name}`, () =>
+      Effect.gen(function* () {
+        const calls = [recovered("call_1"), recovered("call_2")]
+        const result = yield* gate(
+          script(
+            ...row.finishes.flatMap((reason, index) => [
+              LLMEvent.stepStart({ index }),
+              calls[index],
+              stepFinish(reason),
+            ]),
+          ),
+        )
+
+        expect(result.seen).toEqual(
+          row.finishes.flatMap((reason, index) => [
+            LLMEvent.stepStart({ index }),
+            ...(row.released[index] ? [calls[index]] : []),
+            stepFinish(reason),
+          ]),
+        )
+      }),
+    )
+  })
+
+  it.effect("holds a recovered call in a new step even after a releasing finish let a late one through", () =>
+    Effect.gen(function* () {
+      const [late, next] = [recovered("call_late"), recovered("call_next")]
+      const result = yield* gate(
+        script(
+          LLMEvent.stepStart({ index: 0 }),
+          stepFinish("tool-calls"),
+          late,
+          LLMEvent.stepStart({ index: 1 }),
+          next,
+          stepFinish("length"),
+        ),
+      )
+
+      expect(result.seen).toEqual([
+        LLMEvent.stepStart({ index: 0 }),
+        stepFinish("tool-calls"),
+        late,
+        LLMEvent.stepStart({ index: 1 }),
+        stepFinish("length"),
+      ])
+    }),
+  )
+
   it.effect("lets the finish event decide when a stream has no step finish", () =>
     Effect.gen(function* () {
       const call = recovered("call_1")

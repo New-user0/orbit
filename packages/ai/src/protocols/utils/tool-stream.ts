@@ -252,7 +252,10 @@ export const finishAll = <K extends StreamKey>(route: string, tools: State<K>) =
 
 interface Gate {
   readonly held: ReadonlyArray<ToolCall>
-  /** The latest finish was `tool-calls` or `stop`, so a marked call that arrives now has nothing left to wait for. */
+  /**
+   * The latest finish since the current step started was `tool-calls` or `stop`, so a marked call that arrives now has
+   * nothing left to wait for.
+   */
   readonly released: boolean
 }
 
@@ -261,12 +264,15 @@ interface Gate {
  * `stop` finish releases them just before it. Any other finish drops them, and so does a stream that ends or fails
  * without one, so a response cut off by an output limit never runs a half-written call. The `tool-input-*` events of
  * a dropped call still pass, which leaves an input that was started and never called for the consumer to settle.
- * Unmarked calls pass in order, and a marked call that arrives after a releasing finish passes straight through.
+ * Unmarked calls pass in order, and a marked call that arrives after a releasing finish passes straight through until
+ * the next step starts: each step is decided by its own finish.
  */
 export const gateOnFinish = <E, R>(events: Stream.Stream<LLMEvent, E, R>) =>
   events.pipe(Stream.mapAccumEffect((): Gate => ({ held: [], released: false }), gate))
 
 const gate = (state: Gate, event: LLMEvent): Effect.Effect<readonly [Gate, ReadonlyArray<LLMEvent>]> => {
+  // An earlier step's clean finish does not vouch for a call from this one.
+  if (LLMEvent.is.stepStart(event)) return Effect.succeed([{ ...state, released: false }, [event]])
   if (LLMEvent.is.toolCall(event) && event.partialInput)
     return Effect.succeed(state.released ? [state, [event]] : [{ ...state, held: [...state.held, event] }, []])
   if (!LLMEvent.is.stepFinish(event) && !LLMEvent.is.finish(event)) return Effect.succeed([state, [event]])

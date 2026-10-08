@@ -1053,6 +1053,8 @@ describe("Bedrock Converse route", () => {
     [
       ["max_tokens", "length", 0],
       ["tool_use", "tool-calls", 1],
+      // The finish comes from the stop field alone, so a reason that this route does not know is not a clean one.
+      ["a_reason_added_later", "unknown", 0],
     ] as const
   ).forEach(([stopReason, normalized, calls]) => {
     it.effect(`${calls ? "emits" : "withholds"} a tool call with cut-off input on ${stopReason}`, () =>
