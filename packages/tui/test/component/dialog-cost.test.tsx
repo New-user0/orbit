@@ -161,5 +161,41 @@ test("the dialog says when older responses are not loaded", async () => {
   expect(setup.data.session.message.more("windowed")).toBe(true)
   setup.dialog.replace(() => <DialogCost sessionID="windowed" />)
   const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame.replace(/\s+/g, " ")).toContain("cover only the 1 newest loaded responses")
+  expect(frame.replace(/\s+/g, " ")).toContain("cover only the newest loaded response.")
+})
+
+test("a fork leaves out the messages it copied from its parent", () => {
+  const fork = { ...info(0, 0), fork: { sessionID: "parent", boundary: {} }, time: { created: 10_000 } } as Info
+  const copied = assistant("a", "big", 100, 1.5, { created: 1_000, streamed: 2_000, completed: 3_000 })
+  expect(costSummary(fork, [copied], [priced("big")])).toMatchObject({
+    cost: 0,
+    models: [],
+    api: undefined,
+    wall: undefined,
+  })
+  const own = assistant("b", "big", 100, 0.5, { created: 11_000, streamed: 12_000, completed: 13_000 })
+  const summary = costSummary({ ...fork, cost: 0.5 }, [copied, own], [priced("big")])
+  expect(summary.models.map((row) => [row.responses, row.cost])).toEqual([[1, 0.5]])
+  expect(summary).toMatchObject({ api: 1_000, wall: 3_000 })
+})
+
+test("a known amount is kept when no row is priced, and a recorded cost beats an empty catalog entry", () => {
+  const titles = costSummary(info(0.01, 100), [assistant("a", "local", 100, undefined)], undefined)
+  expect(titles).toMatchObject({ cost: 0.01, partial: true })
+  const removed = costSummary(info(0.4, 100), [assistant("a", "big", 100, 0.4)], [model("big")])
+  expect(removed.models[0]).toMatchObject({ cost: 0.4, unpriced: 0 })
+})
+
+test("a response that used no tokens is never counted as unpriced", () => {
+  const idle = { ...assistant("a", "local", 0, 0), tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+  const summary = costSummary(info(0, 0), [idle as SessionMessageInfo], [model("local")])
+  expect(summary.models[0]).toMatchObject({ responses: 1, unpriced: 0 })
+})
+
+test("the dialog counts several loaded responses in the plural", async () => {
+  await using setup = await renderLocal()
+  const summary = { ...costSummary(info(0, 0), [], undefined), loaded: 2 }
+  setup.dialog.replace(() => <CostView summary={summary} />)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
+  expect(frame.replace(/\s+/g, " ")).toContain("cover only the 2 newest loaded responses")
 })

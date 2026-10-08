@@ -63,6 +63,36 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     },
   },
   {
+    label: "partly loaded history",
+    summary: {
+      cost: 0.5,
+      partial: false,
+      other: undefined,
+      loaded: 1,
+      tokens: tokens(2),
+      wall: 95_000,
+      api: 40_000,
+      models: [
+        { providerID: "a", modelID: "large", name: "Large", responses: 1, tokens: tokens(1), cost: 0.3, unpriced: 0 },
+      ],
+    },
+  },
+  {
+    label: "other usage",
+    summary: {
+      cost: 0.62,
+      partial: false,
+      other: 0.12,
+      loaded: undefined,
+      tokens: tokens(2),
+      wall: 95_000,
+      api: 40_000,
+      models: [
+        { providerID: "a", modelID: "large", name: "Large", responses: 2, tokens: tokens(2), cost: 0.5, unpriced: 0 },
+      ],
+    },
+  },
+  {
     label: "no responses",
     summary: { cost: 0, partial: false, other: undefined, loaded: undefined, tokens: tokens(0), wall: undefined, api: undefined, models: [] },
   },

@@ -25,11 +25,14 @@ export type ModelCost = {
  * zero-valued catalog entries, so those two cannot be told apart.
  */
 export function costSummary(
-  session: Pick<SessionInfo, "cost" | "tokens"> & { time: Pick<SessionInfo["time"], "created"> },
-  messages: ReadonlyArray<SessionMessageInfo>,
+  session: Pick<SessionInfo, "cost" | "tokens" | "fork"> & { time: Pick<SessionInfo["time"], "created"> },
+  history: ReadonlyArray<SessionMessageInfo>,
   models: ReadonlyArray<ModelInfo> | undefined,
   windowed = false,
 ) {
+  // A fork copies its parent's settled messages with their original timestamps, but its own totals start at zero:
+  // messages older than the fork belong to the parent and stay out of the rows and times.
+  const messages = session.fork ? history.filter((message) => message.time.created >= session.time.created) : history
   const rows = new Map<string, ModelCost>()
   const used = messages.flatMap((message) => {
     if (message.type === "compaction" && message.status !== "completed") return []
@@ -57,7 +60,7 @@ export function costSummary(
     row.tokens.reasoning += message.tokens.reasoning
     row.tokens.cache.read += message.tokens.cache.read
     row.tokens.cache.write += message.tokens.cache.write
-    if (message.cost === undefined || info?.cost.length === 0) {
+    if (message.cost === undefined || (message.cost === 0 && info?.cost.length === 0)) {
       if (TokenUsage.total(message.tokens) > 0) row.unpriced += 1
     } else row.cost = (row.cost ?? 0) + message.cost
     rows.set(key, row)
@@ -77,8 +80,9 @@ export function costSummary(
 
   return {
     // Everything loaded was unpriced and nothing older is missing: the cost is unknown, not zero.
-    cost: !priced && all.length > 0 && !windowed ? undefined : session.cost,
-    partial: all.some((row) => row.unpriced > 0) && (priced || windowed),
+    // A recorded amount above zero is known even when no row is priced (for example title generation on a priced model).
+    cost: !priced && all.length > 0 && !windowed && session.cost === 0 ? undefined : session.cost,
+    partial: all.some((row) => row.unpriced > 0) && (priced || windowed || session.cost > 0),
     tokens: session.tokens,
     wall: completed.length > 0 ? Math.max(0, Math.max(...completed) - session.time.created) : undefined,
     api: spans.length > 0 ? spans.reduce((total, span) => total + span, 0) : undefined,

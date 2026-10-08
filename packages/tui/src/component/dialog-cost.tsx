@@ -55,7 +55,9 @@ export function CostView(props: { readonly summary?: CostSummary }) {
             </box>
             <Show when={value().loaded !== undefined}>
               <text fg={theme.text.muted}>
-                {`The breakdown and API time cover only the ${value().loaded} newest loaded responses.`}
+                {value().loaded === 1
+                  ? "The breakdown and API time cover only the newest loaded response."
+                  : `The breakdown and API time cover only the ${value().loaded} newest loaded responses.`}
               </text>
             </Show>
             <Show
