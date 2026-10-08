@@ -867,6 +867,37 @@ running session. Lines written by earlier builds are read as before.
 **What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
 `prompt.history_limit` to keep more or fewer prompts.
 
+### Control characters in messages are written out on screen
+
+The terminal UI and Mini used to draw model text, tool output, tool errors, approval prompts, shell commands and the
+labels of tools as they were. A body that carried an escape sequence or a right-to-left override could set the window
+title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape and
+`\u{202e}` for an override, so you can see that they were there. The places include the text of questions and their
+answers, the plan, the notices that a background shell or subagent finished, skill names, the paths that a read loaded,
+the queued-prompt line, the cards of a workflow, the call lines of `execute`, the external link and the review rows of
+a form. Line breaks, tabs, emoji and other Unicode are unchanged, and so is Markdown formatting. Text that the model
+meant to color with escape sequences shows the written-out form instead.
+
+A carriage return is handled by where it is drawn. In program output (shell, `execute` and the output of other tools)
+a lone carriage return, which progress meters use to redraw a line, is drawn as a line break, as Mini already did, and
+the color sequences of shell output are removed rather than written out. In a command line, an approval prompt or any
+other text, a carriage return is written out as `\x0d`, because a shell treats it as an ordinary character.
+
+The background shell views follow the same rule: the command in the shell tab of the composer, and the command and the
+output in the output dialog, show `\x1b` and `\x07` where a program wrote them. So do toasts, the error text of the
+details dialog, the queued-prompt dialog and Mini's queued-prompt picker.
+
+A few places also write controls out but have no frame test of their own yet: the tool list of the token-usage view, the
+details dialog of `execute`, the timeline and fork lists, the `/btw` answer, the Mini subagent picker and the
+composer's terminal and subagent rows. Three places do not write them out yet: the desktop notification text, the
+markdown export, and the prompt history and stash lists. Known gaps in
+[untrusted-repositories.md](untrusted-repositories.md) names all of them, and `orb run` is unchanged.
+
+**Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
+`orb run` and the stored messages are unchanged.
+
+**What to do:** nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

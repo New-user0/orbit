@@ -2,6 +2,7 @@ import { createMemo, onMount } from "solid-js"
 import { useData } from "../../context/data"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { Locale } from "../../util/locale"
+import { bodyText } from "../../util/renderer"
 import { DialogMessage } from "./dialog-message"
 import { useDialog } from "../../ui/dialog"
 import type { PromptInfo } from "../../prompt/history"
@@ -24,7 +25,7 @@ export function DialogTimeline(props: {
     for (const message of messages) {
       if (message.type !== "user") continue
       result.push({
-        title: message.text.replace(/\n/g, " "),
+        title: bodyText(message.text).replace(/\n/g, " "),
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: (dialog) => {

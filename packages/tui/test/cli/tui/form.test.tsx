@@ -731,3 +731,25 @@ test("space does not select a single-choice option", async () => {
     prompt.app.renderer.destroy()
   }
 })
+
+test("draws the control characters of an external URL and of a review row written out", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 100, [
+    { key: "authorization", type: "external", url: "https://example.com/a\u001b]0;pwn\u0007b", title: "Authorize" },
+    { key: "note", type: "string", title: "Note", default: "x\u001b[2Ky" },
+  ])
+  try {
+    const frame = await prompt.app.waitForFrame((drawn) => drawn.includes("a\\x1b]0;pwn\\x07b"))
+    expect(frame).not.toContain("\u001b")
+    // The review page lists every answer, here the default the form arrived with.
+    for (let step = 0; step < 3 && !prompt.app.captureCharFrame().includes("x\\x1b[2Ky"); step++) {
+      prompt.app.mockInput.pressKey("right")
+      await prompt.app.renderOnce()
+    }
+    const review = prompt.app.captureCharFrame()
+    expect(review).toContain("x\\x1b[2Ky")
+    expect(review).not.toContain("\u001b")
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})

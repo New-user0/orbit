@@ -12,6 +12,7 @@ import { reasoningSummary } from "../../context/thinking"
 import { usePlugin } from "../../plugin/context"
 import { SplitBorder } from "../../ui/border"
 import { Locale } from "../../util/locale"
+import { bodyText } from "../../util/renderer"
 import { use } from "./render-context"
 import { generateThinkingSyntax } from "./thinking-syntax"
 import { canonicalToolName } from "../../util/tool-display"
@@ -118,7 +119,7 @@ export function ReasoningPart(props: {
 
 export function reasoningContent(part: SessionMessageAssistantReasoning) {
   // OpenRouter encrypts some reasoning blocks; drop the placeholder.
-  return part.text.replace("[REDACTED]", "").trim()
+  return bodyText(part.text.replace("[REDACTED]", "")).trim()
 }
 
 function ReasoningHeader(props: {
@@ -171,14 +172,15 @@ export function TextPart(props: {
   const theme = useTheme()
   const { currentSyntax: syntax } = useThemes()
   const plugins = usePlugin()
+  const content = createMemo(() => bodyText(props.part.text).trim())
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={content()}>
       <box paddingLeft={3} flexShrink={0}>
         {/* Configure custom nodes before parsing; apply content before streaming so completion keeps the final tokens. */}
         <markdown
           syntaxStyle={syntax()}
           renderNode={plugins.markdown()}
-          content={props.part.text.trim()}
+          content={content()}
           streaming={props.message.time.completed === undefined}
           internalBlockMode="top-level"
           tableOptions={{ style: "grid", cellPaddingX: 1 }}
@@ -263,7 +265,7 @@ export function InlineToolRow(props: {
       </Switch>
       <Show when={props.failed && props.errorExpanded}>
         <box paddingLeft={INLINE_TOOL_ICON_WIDTH}>
-          <text fg={props.errorColor}>{props.error}</text>
+          <text fg={props.errorColor}>{bodyText(props.error ?? "")}</text>
         </box>
       </Show>
     </box>
