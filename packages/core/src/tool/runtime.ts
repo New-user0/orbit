@@ -4,6 +4,7 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/sp
 import { Cache, Effect, JsonSchema, Schema, SchemaIssue, SchemaRepresentation } from "effect"
 import { $ZodType, toJSONSchema } from "zod/v4/core"
 import { ToolTraits } from "./traits.js"
+import { Permission } from "../permission.js"
 
 const formatEffectIssues = SchemaIssue.makeFormatterStandardSchemaV1()
 
@@ -90,6 +91,12 @@ export const decode = (tool: Tool.Info<any, any>, value: unknown) =>
 // is enforced here at the untrusted boundary. Declines tunnel through as defects and interrupts are not errors; neither
 // is touched. A failure that names no code takes `fallback`, if there is one.
 const toolError = (error: unknown, fallback?: Tool.ErrorCode) => {
+  // A refusal keeps its cause so the session error is `permission.rejected`, not a crash.
+  if (error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError)
+    return new Tool.Error({
+      message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+      error,
+    })
   if (!(error instanceof Tool.Error))
     return new Tool.Error({
       message: error instanceof globalThis.Error ? error.message : String(error),

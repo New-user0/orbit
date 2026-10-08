@@ -17,6 +17,7 @@ import { Session } from "@orbit/core/session"
 import { SessionMessage } from "@orbit/core/session/message"
 import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
+import { toSessionError } from "@orbit/core/session/to-session-error"
 import { Tool } from "@orbit/core/tool"
 import { ToolAuthorization } from "@orbit/core/tool/authorization"
 import { McpTool } from "@orbit/core/tool/mcp"
@@ -126,6 +127,11 @@ const failure = (settled: Settled) =>
         Cause.isFailReason(reason) && reason.error instanceof Tool.Error ? [reason.error] : [],
       )[0]
     : undefined
+// What a client sees: a refusal must read as one and not as a crash.
+const errorType = (settled: Settled) => {
+  const error = failure(settled)
+  return error === undefined ? undefined : toSessionError(error).type
+}
 const declined = (settled: Settled) =>
   Exit.isFailure(settled.exit) &&
   settled.exit.cause.reasons.some(
@@ -158,11 +164,11 @@ const register = (...tools: Info[]) =>
 
 // A case per row of a table, titled with the row's name.
 const each =
-  <Row extends readonly [name: string, ...rest: any[]]>(table: ReadonlyArray<Row>) =>
+  <Row extends readonly [name: string, ...rest: unknown[]]>(table: ReadonlyArray<Row>) =>
   (title: string, body: (row: Row) => Effect.Effect<void, unknown, Scope.Scope>) =>
     table.forEach((row) => it.effect(title.replace("%s", row[0]), () => body(row)))
 const eachGate =
-  <Row extends readonly [name: string, ...rest: any[]]>(table: ReadonlyArray<Row>) =>
+  <Row extends readonly [name: string, ...rest: unknown[]]>(table: ReadonlyArray<Row>) =>
   (title: string, body: (row: Row) => Effect.Effect<void, unknown, any>) =>
     table.forEach((row) => gate.live(title.replace("%s", row[0]), () => body(row)))
 
@@ -241,7 +247,8 @@ describe("the registry gate", () => {
       })
       expect(result.asked[0]?.call).toEqual({ tool: "plugin", input: { text: "hello" } })
       expect(ran).toEqual(["plugin"])
-      expect(yield* (yield* Permission.Service).list()).toEqual([])
+      const permission = yield* Permission.Service
+      expect(yield* permission.list()).toEqual([])
     }),
   )
 
@@ -265,6 +272,7 @@ describe("the registry gate", () => {
       const error = failure(result)
       expect(error).toBeInstanceOf(Tool.Error)
       expect(error?.message).toBe("Permission denied: plugin")
+      expect(errorType(result)).toBe("permission.rejected")
       expect(result.asked).toEqual([])
       expect(ran).toEqual([])
     }),
@@ -300,6 +308,7 @@ describe("the registry gate", () => {
       expect(actions(refused)).toEqual(["plugin"])
       expect(failure(refused)).toBeInstanceOf(Tool.Error)
       expect(failure(refused)?.message).toBe("Use another tool.")
+      expect(errorType(refused)).toBe("permission.rejected")
       expect(ran).toEqual([])
     }),
   )
@@ -339,6 +348,7 @@ describe("the registry gate", () => {
       })
       const result = yield* settle(call("own"))
       expect(result.asked.map((item) => item.request.resources)).toEqual([["thing"]])
+      expect(result.asked[0]?.call).toEqual({ tool: "own", input: { text: "hi" } })
     }),
   )
 
@@ -358,9 +368,8 @@ describe("the registry gate", () => {
       yield* register(make("plugin", { codemode: false }))
       const first = yield* settle(call("plugin"), { reply: "always" })
       expect(actions(first)).toEqual(["plugin"])
-      expect((yield* (yield* PermissionSaved.Service).list()).map((item) => [item.action, item.resource])).toEqual([
-        ["plugin", "*"],
-      ])
+      const saved = yield* PermissionSaved.Service
+      expect((yield* saved.list()).map((item) => [item.action, item.resource])).toEqual([["plugin", "*"]])
       const second = yield* settle(call("plugin"))
       expect(second.asked).toEqual([])
       expect(ran).toEqual(["plugin", "plugin"])
@@ -430,6 +439,8 @@ describe("the registry gate", () => {
   )
 })
 
+// More rows for the same doors live elsewhere: MCP tools in "MCP tools" below, the session runner in
+// session-runner.test.ts, and the desktop browser tools in plugin-browser (their registration is checked there).
 // Every door into execution is `Snapshot.execute`, which runs the registry's `executeTool`: a model call, a Code Mode
 // inner call, a Promise plugin's tool and a desktop browser tool (its registration is checked in plugin-browser) all
 // reach a tool only there. Each door below runs an unmarked tool and must be asked.
@@ -478,6 +489,7 @@ describe("every door into tool execution", () => {
       const result = yield* settle(run)
       expect(ran).toEqual([])
       expect(result.asked).toEqual([])
+      if (options.codemode === false) expect(errorType(result)).toBe("permission.rejected")
       // A Code Mode program sees the refusal as an error it can catch; a direct call fails with it.
       expect(JSON.stringify(failure(result) ?? result.exit)).toContain("Permission denied")
     }),
@@ -659,6 +671,7 @@ describe("MCP tools", () => {
       yield* mcpTools.flush
       const result = yield* settle(call("demo_lookup", {}))
       expect(failure(result)).toBeInstanceOf(Tool.Error)
+      expect(errorType(result)).toBe("permission.rejected")
       expect(ran).toEqual([])
     }),
   )

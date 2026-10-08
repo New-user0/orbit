@@ -280,11 +280,13 @@ const permissionFail = {
 }
 // What the registry gate asked, and what the next question is answered with.
 const gateAsked: string[] = []
-let gateAnswer: "allow" | "decline" = "allow"
+let gateAnswer: "allow" | "decline" | "deny" = "allow"
 const permission = permissionLayer({
   assert: (input) =>
     Effect.suspend(() => {
       gateAsked.push(input.action)
+      if (gateAnswer === "deny")
+        return Effect.fail(new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }))
       return gateAnswer === "decline" ? Effect.die(new Permission.DeclinedError()) : Effect.void
     }),
 })
@@ -5342,6 +5344,40 @@ describe("SessionRunnerLLM", () => {
 
     expect(gateAsked).toEqual(["unmarked"])
     expect(ran).toEqual(["unmarked"])
+  })
+
+  scenario("fails a tool the registry gate denies as a permission rejection and continues", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAnswer = "deny"
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}))
+    yield* s.llm.push(TestLLM.stop())
+
+    yield* s.resume.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          gateAnswer = "allow"
+        }),
+      ),
+    )
+
+    expect(ran).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call unmarked"),
+      Expected.assistant({}, [Expected.failedTool({ id: "call-unmarked" }, { error: { type: "permission.rejected" } })]),
+      { type: "assistant", finish: "stop" },
+    ])
   })
 
   scenario("interrupts runner continuation when the registry gate is declined", function* (s) {

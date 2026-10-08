@@ -191,6 +191,7 @@ const layer = Layer.effect(
                     (error) =>
                       new Tool.Error({
                         message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                        error,
                       }),
                   ),
                 ),
@@ -290,6 +291,7 @@ const layer = Layer.effect(
                 (error) =>
                   new Tool.Error({
                     message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                    error,
                   }),
               ),
             ),
