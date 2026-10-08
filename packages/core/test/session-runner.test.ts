@@ -278,11 +278,22 @@ const permissionFail = {
       }),
     }),
 }
-const permission = permissionLayer()
+// What the registry gate asked, and what the next question is answered with.
+const gateAsked: string[] = []
+let gateAnswer: "allow" | "decline" = "allow"
+const permission = permissionLayer({
+  assert: (input) =>
+    Effect.suspend(() => {
+      gateAsked.push(input.action)
+      return gateAnswer === "decline" ? Effect.die(new Permission.DeclinedError()) : Effect.void
+    }),
+})
 // These tools stand in for leaves that ask for themselves, so the registry gate leaves them alone.
 const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string, ToolInfo>>, options?: Tool.Options) =>
   registry.transform((editor) =>
-    Object.entries(tools).forEach(([name, tool]) => editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } })),
+    Object.entries(tools).forEach(([name, tool]) =>
+      editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
+    ),
   )
 const layer = Layer.unwrap(
   Effect.map(RunnerState, (state) => {
@@ -5307,6 +5318,74 @@ describe("SessionRunnerLLM", () => {
         ]),
       ])
     })
+
+  // The runner is a door into execution: a tool that does not ask for itself is asked about by the registry, and a
+  // decline there ends the step as a decline from a leaf does.
+  scenario("asks about a tool that does not authorize itself before the runner executes it", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAsked.length = 0
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}), TestLLM.stop())
+
+    yield* s.resume
+
+    expect(gateAsked).toEqual(["unmarked"])
+    expect(ran).toEqual(["unmarked"])
+  })
+
+  scenario("interrupts runner continuation when the registry gate is declined", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAsked.length = 0
+    gateAnswer = "decline"
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}))
+
+    const exit = yield* s.resume.pipe(
+      Effect.exit,
+      Effect.ensuring(
+        Effect.sync(() => {
+          gateAnswer = "allow"
+        }),
+      ),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(gateAsked).toEqual(["unmarked"])
+    expect(ran).toEqual([])
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call unmarked"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-unmarked" },
+          { error: { type: "aborted", message: "The user declined this tool call" } },
+        ),
+      ]),
+    ])
+  })
 
   scenario("returns permission corrections to the model and continues", function* (s) {
     const registry = yield* Tool.Service

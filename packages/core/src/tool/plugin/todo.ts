@@ -40,7 +40,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { authorizes: true, codemode: false },
+          options: { codemode: false },
           traits: { readOnly: false, concurrencySafe: false },
           description,
           input: Input,

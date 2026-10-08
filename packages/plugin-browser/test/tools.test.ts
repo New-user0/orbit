@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { rm } from "node:fs/promises"
 import { basename, dirname } from "node:path"
+import type { Tool } from "@orbit/schema/tool"
 import { Effect } from "effect"
 import { Browser } from "../src/rpc.js"
 import { BrowserFiles } from "../src/files.js"
@@ -50,5 +51,21 @@ test("saved capture names never escape their directory or name a Windows device"
     expect(await Bun.file(saved[0]!.path).text()).toBe("..")
   } finally {
     await rm(dirname(dirname(saved[0]!.path)), { recursive: true, force: true })
+  }
+})
+
+test("the browser tools are asked about on the browser action and never claim to ask for themselves", async () => {
+  const added: Array<Tool.Info> = []
+  const editor = { namespace: () => {}, add: (tool: Tool.Info) => added.push(tool) }
+  const ctx = {
+    tool: { transform: (callback: (editor: never) => void) => Effect.sync(() => callback(editor as never)) },
+    location: { directory: "/project" },
+  }
+  await Effect.runPromise(BrowserTools.register(ctx as never, {} as never).pipe(Effect.scoped))
+  expect(added.length).toBeGreaterThan(0)
+  // The registry gate asks for every tool that leaves `authorizes` out, on the action `permission` names.
+  for (const tool of added) {
+    expect(tool.options?.permission).toBe("browser")
+    expect(tool.options?.authorizes).toBeUndefined()
   }
 })

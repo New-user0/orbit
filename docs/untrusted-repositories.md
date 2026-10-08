@@ -91,12 +91,17 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
   hints and permissions` in `core/test/mcp.test.ts`.
-- A tool call, whichever door it came through: `Tool.Snapshot.execute` is the one door into execution, so a model call,
-  a Code Mode inner call, an MCP tool, a plugin or SDK-host tool and a flow node (which runs sessions) all pass the
-  registry gate in `executeTool` (`packages/core/src/tool.ts`). A tool asks about a call itself only when
+- A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
+  model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
+  a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
+  gate in `executeTool` (`packages/core/src/tool.ts`). Plugin code is trusted and can still call a listed tool's
+  `execute` directly, which skips hooks, validation and the gate. A tool asks about a call itself only when
   `options.authorizes` is `true` or a predicate answers `true`; a tool that leaves it out, or whose predicate throws, fails,
   dies or answers with anything else, is asked about on its permission action or its name. MCP annotations never set it.
-  Proof: `core/test/tool-gate.test.ts` (`every door into tool execution`, `MCP tools`).
+  Proof: `core/test/tool-gate.test.ts` (`every door into tool execution`, including the Promise adapter's add and
+  update, and `MCP tools`), `core/test/session-runner.test.ts` (`does not authorize itself`, `registry gate is declined`),
+  `plugin-browser/test/tools.test.ts` (the browser tools ask on `browser`), and the `expectRegistryAsks` line in the suite
+  of each built-in the registry asks about.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:

@@ -28,6 +28,7 @@ import { SessionMessage } from "./session/message.js"
 import { SessionSchema } from "./session/schema.js"
 import { State } from "./state.js"
 import { ToolAuthorization } from "./tool/authorization.js"
+import { ToolCurrentCall } from "./tool/current-call.js"
 import {
   type Authorize,
   decode,
@@ -39,6 +40,10 @@ import {
 } from "./tool/runtime.js"
 import { ToolTraits } from "./tool/traits.js"
 import { Wildcard } from "./util/wildcard.js"
+
+/** The call that is executing; see `ToolCurrentCall`. */
+export const CurrentCall = ToolCurrentCall.Current
+export type Call = ToolCurrentCall.Call
 
 export class RegistrationError extends Schema.TaggedError<RegistrationError>()("Tool.RegistrationError", {
   name: Schema.String,
@@ -199,6 +204,7 @@ const layer = Layer.effect(
       context: UnresolvedContext,
     ) {
       const execution = yield* execute(tool, input, context, gate).pipe(
+        Effect.provideService(CurrentCall, { tool: name, input }),
         Effect.map((value) => ({ value })),
         Effect.catchTag("Tool.Error", (failure) => Effect.succeed({ failure })),
       )
@@ -520,7 +526,8 @@ function registrationError(tool: Tool.Info) {
     if (error) return error
   }
   const name = normalizedName(tool)
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(name)) return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(name))
+    return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
   if (ToolTraits.exposure(tool) === "direct" && id === "execute")
     return new RegistrationError({ name: id, message: 'Tool name "execute" is reserved for CodeMode' })

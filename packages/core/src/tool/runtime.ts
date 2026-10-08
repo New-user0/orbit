@@ -45,7 +45,7 @@ export const execute = (
   tool: Tool.Info<any, any>,
   input: unknown,
   context: Omit<Tool.Context, "traits">,
-  authorize?: Authorize,
+  authorize: Authorize,
 ) =>
   Effect.gen(function* () {
     const decoded = yield* decode(tool, input)
@@ -54,8 +54,7 @@ export const execute = (
       yield* tool
         .validate(decoded, resolved)
         .pipe(Effect.mapError((error: unknown) => toolError(error, Tool.ErrorCode.Validation)))
-    if (authorize !== undefined)
-      yield* authorize(tool, decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
+    yield* authorize(tool, decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
     const result = yield* tool.execute(decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
     if (tool.output === undefined) {
       if ("output" in result) return yield* Effect.die("Tool result declared output without an output schema")
