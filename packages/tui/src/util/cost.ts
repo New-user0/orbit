@@ -41,11 +41,8 @@ export function costSummary(
     if (message.type !== "assistant" && message.type !== "compaction") return []
     if (!message.model) return []
     // A response that failed mid-stream carries neither tokens nor cost: its spend is unknown, as for the turn cost limit.
-    if (!message.tokens) {
-      if (message.type === "assistant" && message.finish === "error" && message.cost === undefined)
-        return [{ ...message, tokens: undefined, model: message.model }]
-      return []
-    }
+    const failed = message.type === "assistant" && message.finish === "error" && message.cost === undefined
+    if (!message.tokens && !failed) return []
     return [{ ...message, tokens: message.tokens, model: message.model }]
   })
   used.forEach((message) => {
