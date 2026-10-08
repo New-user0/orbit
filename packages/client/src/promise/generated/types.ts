@@ -2202,6 +2202,7 @@ export type ConfigEntry =
         $schema?: string
         shell?: string
         model?: string | { providerID: string; model: string; variant?: string }
+        fallback_model?: string | { providerID: string; model: string; variant?: string }
         default_agent?: string
         output_style?: string
         update?: "disable" | "notify" | "auto"

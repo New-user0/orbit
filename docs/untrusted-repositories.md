@@ -739,8 +739,8 @@ runs" is a permission.
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
   receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
   `withhold("providers")`.
-  There is no `fallback_model` or `output_token_cap` field in the config today; when one is added, classify it the
-  same way. Never classify such a field as inert.
+  `fallback_model` is withheld the same way. There is no `output_token_cap` field in the config today; when it is
+  added, classify it the same way. Never classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
   enforced, as `hooks.disabled` has yet to be, read it in policy-authority order and not by value precedence, or a
   repository could switch off the user's guard hooks (#7).
@@ -1354,8 +1354,8 @@ fixes it or asks.
   trust the folder." `ConfigTrust.classification` therefore withholds, as `providers`, the top-level `model`, the
   `model` and `steps` of every agent (so also `agents.title.model` and `agents.side.model`) and the `model` of
   every command, from the config and from agent and command files (`test/config/trust.test.ts`,
-  `test/config/agent.test.ts`). The config has no `fallback_model` or `output_token_cap` field; a task that adds
-  one classifies it the same way. No command-file test pins the `model` of a command: `sanitizeCommands` is tested
+  `test/config/agent.test.ts`), and `fallback_model` the same way. The config has no `output_token_cap` field yet;
+  the task that adds it classifies it the same way. No command-file test pins the `model` of a command: `sanitizeCommands` is tested
   on a command record only.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
   reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
