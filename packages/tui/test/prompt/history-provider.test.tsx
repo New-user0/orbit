@@ -3,9 +3,11 @@ import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
+import { ConfigProvider } from "../../src/config"
 import { TuiPathsProvider } from "../../src/context/runtime"
 import { PromptHistoryProvider, usePromptHistory } from "../../src/prompt/history"
 import { tmpdir } from "../fixture/fixture"
+import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
 test("down rejects at the newest history item with an empty prompt", async () => {
   await using tmp = await tmpdir()
@@ -50,7 +52,53 @@ test("keeps legacy unscoped history on the home composer", async () => {
   }
 })
 
-async function renderHistory(root: string, persisted?: string) {
+test("files a sent prompt under its directory and time, and keeps only history_limit entries", async () => {
+  await using tmp = await tmpdir()
+  const setup = await renderHistory(tmp.path, undefined, 2)
+  try {
+    const before = Date.now()
+    setup.history.append({ text: "one", files: [], agents: [], pasted: [] }, "/work/a")
+    setup.history.append({ text: "two", files: [], agents: [], pasted: [] }, "/work/b")
+    setup.history.append({ text: "three", files: [], agents: [], pasted: [] }, "/work/a")
+
+    expect(setup.history.entries().map((item) => item.text)).toEqual(["two", "three"])
+    expect(setup.history.entries()[1]).toMatchObject({ directory: "/work/a" })
+    expect(setup.history.entries()[1]?.time).toBeGreaterThanOrEqual(before)
+    expect(setup.history.search("t", "/work/a").map((item) => item.text)).toEqual(["three", "two"])
+
+    // The file is rewritten when the limit trims it, and holds the same two entries.
+    await Bun.sleep(50)
+    const lines = (await Bun.file(path.join(tmp.path, "state", "prompt-history.jsonl")).text()).trim().split("\n")
+    expect(lines.map((item) => JSON.parse(item).text)).toEqual(["two", "three"])
+  } finally {
+    setup.app.renderer.destroy()
+  }
+})
+
+test("keeps an image and a large paste in memory but saves neither", async () => {
+  await using tmp = await tmpdir()
+  const setup = await renderHistory(tmp.path)
+  try {
+    const big = "x".repeat(5000)
+    setup.history.append({
+      text: "look [Image 1] [Pasted ~1 lines]",
+      files: [{ uri: "data:image/png;base64,AAAA", mention: { start: 5, end: 14, text: "[Image 1]" } }],
+      agents: [],
+      pasted: [{ text: big, source: { start: 15, end: 32, text: "[Pasted ~1 lines]" } }],
+    })
+
+    expect(setup.history.entries()[0]?.files).toHaveLength(1)
+    expect(setup.history.entries()[0]?.pasted[0]?.text).toBe(big)
+    await Bun.sleep(50)
+    const saved = await Bun.file(path.join(tmp.path, "state", "prompt-history.jsonl")).text()
+    expect(saved).not.toContain("data:")
+    expect(saved).not.toContain(big)
+  } finally {
+    setup.app.renderer.destroy()
+  }
+})
+
+async function renderHistory(root: string, persisted?: string, historyLimit?: number) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
   if (persisted) await Bun.write(path.join(state, "prompt-history.jsonl"), persisted)
@@ -63,9 +111,11 @@ async function renderHistory(root: string, persisted?: string) {
 
   const app = await testRender(() => (
     <TuiPathsProvider value={{ cwd: root, home: root, state, worktree: root }}>
-      <PromptHistoryProvider>
-        <Consumer />
-      </PromptHistoryProvider>
+      <ConfigProvider config={createTuiResolvedConfig({ prompt: { history_limit: historyLimit } })}>
+        <PromptHistoryProvider>
+          <Consumer />
+        </PromptHistoryProvider>
+      </ConfigProvider>
     </TuiPathsProvider>
   ))
   await app.renderOnce()

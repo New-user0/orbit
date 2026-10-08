@@ -79,12 +79,12 @@ test("a loop notice with a description is one muted note, escaped", () => {
 })
 
 test.each([
-  ["a plan-exit notice", { description: "Plan ready.", metadata: { notice: "plan-exit" } }, 1],
-  ["no description", { metadata: { notice: "output-escalation" } }, 0],
-  ["a blank description", { description: "  ", metadata: { notice: "fallback" } }, 0],
-  ["no notice kind", { description: "Hello" }, 0],
-  ["a notice that is not text", { description: "Hello", metadata: { notice: 3 } }, 0],
-])("a synthetic with %s renders %d notes", (_name, data, expected) => {
+  ["a plan-exit notice", 1, { description: "Plan ready.", metadata: { notice: "plan-exit" } }],
+  ["no description", 0, { metadata: { notice: "output-escalation" } }],
+  ["a blank description", 0, { description: "  ", metadata: { notice: "fallback" } }],
+  ["no notice kind", 0, { description: "Hello" }],
+  ["a notice that is not text", 0, { description: "Hello", metadata: { notice: 3 } }],
+])("a synthetic with %s renders %d notes", (_name, expected, data) => {
   const { controller, send, notes } = chat()
   send("session.synthetic", { text: "x", ...data })
   expect(notes()).toHaveLength(expected)
@@ -145,6 +145,59 @@ test("opening a session replays the notices that have a description and skips th
     const { controller, notes } = chat(`http://127.0.0.1:${server.port}`)
     await controller.open("ses_old")
     expect(notes()).toMatchObject([{ id: "notice:msg_a", tone: "muted", text: "Switched model\\x1b" }])
+  } finally {
+    await server.stop(true)
+  }
+})
+
+test.each([
+  ["a clean end", false],
+  ["an errored end", true],
+] as const)("a held failure does not outlive the event stream after %s", async (_name, errored) => {
+  let connections = 0
+  // The controller listens from construction; events are held back until the session is open so that belongs() accepts them.
+  const opened = Promise.withResolvers<void>()
+  const frame = (type: string, data: Record<string, unknown>) =>
+    `data: ${JSON.stringify({ id: `evt_${type}_${connections}`, type, created: Date.now(), data: { sessionID: "ses_old", ...data } })}\n\n`
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    idleTimeout: 0,
+    fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/session/ses_old") return Response.json({ data: { id: "ses_old", title: "Earlier" } })
+      if (url.pathname === "/api/session/ses_old/message") return Response.json({ data: [], cursor: {} })
+      if (url.pathname !== "/api/event") return new Response("not found", { status: 404 })
+      connections++
+      const first = connections === 1
+      return new Response(
+        new ReadableStream({
+          async start(stream) {
+            await opened.promise
+            stream.enqueue(
+              new TextEncoder().encode(
+                first
+                  ? frame("session.step.failed", failure)
+                  : frame("session.execution.interrupted", { reason: "shutdown" }),
+              ),
+            )
+            if (!first) return
+            await Bun.sleep(50)
+            if (errored) stream.error(new Error("cut"))
+            else stream.close()
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    },
+  })
+  try {
+    const { controller, notes } = chat(`http://127.0.0.1:${server.port}`)
+    await controller.open("ses_old")
+    opened.resolve()
+    const deadline = Date.now() + 8000
+    while (notes().length === 0 && Date.now() < deadline) await Bun.sleep(50)
+    expect(notes()).toMatchObject([{ tone: "muted", text: "Stopped." }])
   } finally {
     await server.stop(true)
   }

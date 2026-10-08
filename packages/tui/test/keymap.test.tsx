@@ -146,27 +146,27 @@ const keybindings = (file: object) =>
   createTuiResolvedConfig({}, { keybindings: KeybindingsFile.decode(JSON.stringify(file)) })
 const nothingPending = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-test("a session-list override of session.rename applies only in the session-list layer", async () => {
+test("a session-list override of dialog.session.rename applies only in the session-list layer", async () => {
   const calls: string[] = []
   const [listOpen, setListOpen] = createSignal(false)
 
   function Harness() {
-    // The same command in two places, as the session list and a session both have session.rename.
+    // The harness reuses one command ID in two contexts, to show that a context entry applies only to its own layers.
     Keymap.createLayer(() => ({
       context: "session-list",
       enabled: () => listOpen(),
-      commands: [{ id: "session.rename", run: () => void calls.push("list") }],
+      commands: [{ id: "dialog.session.rename", run: () => void calls.push("list") }],
     }))
     Keymap.createLayer(() => ({
       context: "session",
       enabled: () => !listOpen(),
-      commands: [{ id: "session.rename", run: () => void calls.push("session") }],
+      commands: [{ id: "dialog.session.rename", run: () => void calls.push("session") }],
     }))
     return <box />
   }
 
   const app = await testRender(() => (
-    <Keymap.Provider config={keybindings({ contexts: { "session-list": { "session.rename": "ctrl+alt+r" } } })}>
+    <Keymap.Provider config={keybindings({ contexts: { "session-list": { "dialog.session.rename": "ctrl+alt+r" } } })}>
       <Harness />
     </Keymap.Provider>
   ))
@@ -195,18 +195,18 @@ test("null in a context unbinds the command there and nowhere else", async () =>
     Keymap.createLayer(() => ({
       context: "session-list",
       enabled: () => listOpen(),
-      commands: [{ id: "session.rename", run: () => void calls.push("list") }],
+      commands: [{ id: "dialog.session.rename", run: () => void calls.push("list") }],
     }))
     Keymap.createLayer(() => ({
       context: "session",
       enabled: () => !listOpen(),
-      commands: [{ id: "session.rename", run: () => void calls.push("session") }],
+      commands: [{ id: "dialog.session.rename", run: () => void calls.push("session") }],
     }))
     return <box />
   }
 
   const app = await testRender(() => (
-    <Keymap.Provider config={keybindings({ contexts: { "session-list": { "session.rename": null } } })}>
+    <Keymap.Provider config={keybindings({ contexts: { "session-list": { "dialog.session.rename": null } } })}>
       <Harness />
     </Keymap.Provider>
   ))
@@ -228,7 +228,7 @@ test("a layer with no context, or one that Orbit does not know, gets only what a
     Keymap.createLayer(() => ({ commands: [{ id: "session.new", run: () => void calls.push("untagged") }] }))
     Keymap.createLayer(() => ({
       context: "made-up",
-      commands: [{ id: "session.rename", run: () => void calls.push("made-up") }],
+      commands: [{ id: "dialog.session.rename", run: () => void calls.push("made-up") }],
     }))
     Keymap.createLayer(() => ({
       context: "session",
@@ -243,7 +243,7 @@ test("a layer with no context, or one that Orbit does not know, gets only what a
       config={keybindings({
         bindings: { "session.list": "ctrl+alt+l" },
         contexts: {
-          session: { "session.new": "ctrl+alt+n", "session.rename": "ctrl+alt+r", "session.fork": "ctrl+alt+f" },
+          session: { "session.new": "ctrl+alt+n", "dialog.session.rename": "ctrl+alt+r", "session.fork": "ctrl+alt+f" },
         },
       })}
     >

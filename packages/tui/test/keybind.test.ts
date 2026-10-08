@@ -7,6 +7,13 @@ test("binds agent cycling only to shift+tab by default", () => {
   expect(TuiKeybind.Definitions["agent.cycle.reverse"].default).toBe("none")
 })
 
+test("gives ctrl+r to history search in the prompt and to rename in the session list, not to both everywhere", () => {
+  expect(TuiKeybind.Definitions["prompt.history.search"].default).toBe("ctrl+r")
+  expect(TuiKeybind.Definitions["dialog.session.rename"].default).toBe("ctrl+r")
+  // Rename in a session stays on /rename and the palette, so ctrl+r in the prompt is only the search.
+  expect(TuiKeybind.Definitions["session.rename"].default).toBe("none")
+})
+
 test("names the contexts a layer can belong to", () => {
   expect(TuiKeybind.Contexts).toEqual([
     "global",

@@ -350,7 +350,7 @@ test("gives the keybindings file the last word over cli.json", () => {
   const file = KeybindingsFile.decode(`{
     "leader": "ctrl+a",
     "bindings": { "session.list": "ctrl+shift+l", "app.exit": null },
-    "contexts": { "session-list": { "session.rename": "ctrl+shift+r" } }
+    "contexts": { "session-list": { "dialog.session.rename": "ctrl+shift+r" } }
   }`)
   const config = resolve(
     { keybinds: { leader: "ctrl+o", "session.list": "ctrl+l", "session.new": "ctrl+n" } },
@@ -362,10 +362,10 @@ test("gives the keybindings file the last word over cli.json", () => {
   expect(config.keybinds.get("app.exit")).toEqual([])
   // cli.json and the defaults still apply wherever the file says nothing.
   expect(config.keybinds.get("session.new")).toMatchObject([{ key: "ctrl+n" }])
-  expect(config.keybinds.get("session.rename")).toMatchObject([{ key: "ctrl+r" }])
+  expect(config.keybinds.get("dialog.session.rename")).toMatchObject([{ key: "ctrl+r" }])
   // A context entry is for the layers of that context only.
-  expect(config.keybinds.override("session-list", "session.rename")).toMatchObject([{ key: "ctrl+shift+r" }])
-  expect(config.keybinds.override("session", "session.rename")).toBeUndefined()
+  expect(config.keybinds.override("session-list", "dialog.session.rename")).toMatchObject([{ key: "ctrl+shift+r" }])
+  expect(config.keybinds.override("session", "dialog.session.rename")).toBeUndefined()
   expect(config.keybindings.diagnostics).toEqual([])
 })
 
@@ -380,7 +380,7 @@ test("accepts a key for the keybindings command in cli.json too", () => {
 test("has no overrides and no notes without a keybindings file", () => {
   const config = resolve({}, { terminalSuspend: true })
 
-  expect(config.keybinds.override("session-list", "session.rename")).toBeUndefined()
+  expect(config.keybinds.override("session-list", "dialog.session.rename")).toBeUndefined()
   expect(config.keybinds.override(undefined, "leader")).toBeUndefined()
   expect(config.keybindings.diagnostics).toEqual([])
 })
