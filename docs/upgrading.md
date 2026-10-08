@@ -1138,9 +1138,14 @@ they send one request.
 
 A new `/cost` command, also reachable as `/usage` and from the command palette as "Cost and usage", opens a dialog with
 the session cost, its input, output, reasoning, cache read and cache write tokens, its wall-clock and API time, and a
-breakdown by model. A price the provider did not report reads "unknown" rather than `$0.00`, and a time that older
-messages do not carry reads `-`.
+breakdown by model. A model that the model catalog lists without a price reads "unknown" rather than `$0.00` (the
+server records zero for it). A free model, and a catalog model whose price is listed as zero, read `$0.00`, and the
+dialog cannot tell those two apart. API time runs to the end of each provider response and leaves out tool execution
+and waiting on you. A time that older messages do not carry reads `-`. When older messages are not loaded, the
+breakdown and API time say they cover only the loaded responses.
 
-**Affects:** people who type `/cost` or `/usage` into the prompt, where those words were not commands before.
+**Affects:** people who type `/cost` or `/usage` into the prompt. A user or project command with either name was
+possible before; when the names collide, both appear in autocomplete. Selecting the built-in entry opens the dialog,
+and a name typed in full and sent as-is still runs your command. Rename yours to keep the two apart.
 
 **What to do:** nothing.

@@ -20,6 +20,8 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: 1.2345,
       partial: false,
+      other: undefined,
+      loaded: undefined,
       tokens: tokens(3),
       wall: 18 * 60_000 + 5_000,
       api: 6 * 60_000 + 40_000,
@@ -34,6 +36,8 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: undefined,
       partial: false,
+      other: undefined,
+      loaded: undefined,
       tokens: tokens(1),
       wall: undefined,
       api: undefined,
@@ -47,6 +51,8 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
     summary: {
       cost: 0.5,
       partial: true,
+      other: undefined,
+      loaded: undefined,
       tokens: tokens(2),
       wall: 95_000,
       api: 40_000,
@@ -58,7 +64,7 @@ const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
   },
   {
     label: "no responses",
-    summary: { cost: 0, partial: false, tokens: tokens(0), wall: undefined, api: undefined, models: [] },
+    summary: { cost: 0, partial: false, other: undefined, loaded: undefined, tokens: tokens(0), wall: undefined, api: undefined, models: [] },
   },
 ]
 
