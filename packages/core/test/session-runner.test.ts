@@ -603,7 +603,10 @@ const layer = Layer.unwrap(
       ],
     )
   }),
-).pipe(Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)), Layer.provideMerge(testLLM))
+).pipe(
+  Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
+  Layer.provideMerge(testLLM),
+)
 const it = testEffect(layer)
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
@@ -1270,6 +1273,49 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.tools.map((tool) => tool.name)).toContain("renamed_echo")
     expect(s.requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
     expect(s.executions).toEqual(["renamed"])
+  })
+
+  scenario("projects a declared display name, escaped, onto the assistant tool and keeps it on replay", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        named: {
+          name: "named",
+          description: "A tool that declares a display name",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { displayName: "Named\u001b]0;x\u0007\u001b[2K\u009b\u202e" },
+          execute: () => Effect.succeed({ output: {} }),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Use the named tool")
+    yield* s.llm.push(
+      TestLLM.tool("call-named", "named", {}),
+      TestLLM.tool("call-echo", "echo", { text: "plain" }),
+      [],
+    )
+
+    yield* s.resume
+
+    const shown = "Named\\x1b]0;x\\x07\\x1b[2K\\x9b\\u{202e}"
+    const tools = () =>
+      Effect.map(s.context, (context) =>
+        context.flatMap((message) =>
+          message.type === "assistant" ? message.content.flatMap((part) => (part.type === "tool" ? [part] : [])) : [],
+        ),
+      )
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
+    yield* replaySessionProjection(sessionID)
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
   })
 
   scenario("executes the tool advertised before a registry reload", function* (s) {
@@ -3695,6 +3741,41 @@ describe("SessionRunnerLLM", () => {
     yield* s.runPrompt("Question")
 
     expect(s.requests[0]?.generation?.maxTokens).toBe(256_000)
+  })
+
+  scenario("lowers the output limit to the configured cap and never raises it", function* (s) {
+    const config = s.configControl!
+    const setCap = (cap: number) =>
+      config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: cap }) })])
+    s.currentModel = fittedOutputModel
+    yield* setCap(8_000)
+    yield* s.llm.push(TestLLM.text("Capped", "text-cap-low"))
+    yield* s.runPrompt("Question")
+    yield* setCap(500_000)
+    yield* s.llm.push(TestLLM.text("Above the maximum", "text-cap-high"))
+    yield* s.runPrompt("Again")
+
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
+    expect(s.requests[1]?.generation?.maxTokens).toBe(64_000)
+  })
+
+  scenario("applies the configured cap before session context hooks run", function* (s) {
+    const config = s.configControl!
+    const hooks = yield* PluginHooks.Service
+    const seen: (number | undefined)[] = []
+    yield* config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        seen.push(event.options.maxTokens)
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(TestLLM.text("Hooked", "text-cap-hook"))
+    yield* s.runPrompt("Question")
+
+    expect(seen).toEqual([8_000])
+    expect(s.requests[0]?.generation?.maxTokens).toBe(20_000)
   })
 
   scenario("gives the summary its full output limit when the conversation overshot the threshold", function* (s) {
@@ -6757,7 +6838,19 @@ describe("SessionRunnerLLM", () => {
     yield* s.session.prompt({ sessionID, text: "Overloaded around a cut-off", turn: { fallbackModel }, resume: false })
     yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), lengthStop("cut-between", "Part"))
     yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Done", "after-cut"))
-    yield* retriesBefore(s, 3)
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    // Before the fix the third overload switched models with no retry, so waiting for one would only time out.
+    const third = yield* Effect.raceFirst(
+      Queue.take(scheduled).pipe(Effect.as(true)),
+      Fiber.await(run).pipe(Effect.as(false)),
+    )
+    if (third) yield* TestClock.adjust("1 minute")
+    yield* Fiber.join(run)
 
     expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
     expect(yield* fallbackNotices(s)).toEqual([])

@@ -192,6 +192,7 @@ export const classification = {
     // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
     model: withhold("providers"),
     fallback_model: withhold("providers"),
+    output_token_cap: withhold("providers"),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,

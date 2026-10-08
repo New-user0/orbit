@@ -101,28 +101,15 @@ agent products keep there, used to apply the moment Orbit opened the folder. The
 folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
 rest:
 
-- **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
-  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
-  `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's
- own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the
- model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as
- the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key
- that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours,
- so it would otherwise replace the one in your own config.
-
-- **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
-  `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
-  agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
-  own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
-  model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
-  the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
-  that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours,
-  so it would otherwise replace the one in your own config.
+- **Left out whole:** `model`, an agent's `model` and `steps`, a command's `model`, `hooks`, `mcp`, `plugins`, `shell`,
+  `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`,
+  `enterprise`, `update`, `fallback_model`, `output_token_cap` and `default_agent`, and `disabled` on an agent, whose
+  entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's own rules
+  come after yours and win: which agent a session starts as, which agent runs a command, and which agents the model
+  may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as the
+  session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key that
+  is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a project's value outranks yours, so
+  it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
@@ -1164,6 +1151,21 @@ protocol, which accepts one more optional field.
 
 **What to do:** Nothing.
 
+### A tool's display name on its input event
+
+When a tool declares a `displayName`, the `session.tool.input.started` event now carries it, and the projected assistant
+tool message (`Session.Message.Assistant.Tool`) exposes it, so a client can show the name a tool chose for people. The
+name is stored with control and format characters written out (`ESC` as `\x1b`, a right-to-left override as `\u{202e}`),
+because the event is durable and outlives its source. A session file imported with `orb session import` is escaped the same
+way. A tool that declares none, and a provider-hosted tool, leave the
+field out, and events written before this change decode as they did.
+
+**Affects:** SDK and client callers that read `session.tool.input.started` or assistant tool content, and the generated
+client types, which gain one optional field. `@orbit/flow/plain` still exports the same escapers, which now live in
+`@orbit/util/plain`.
+
+**What to do:** Nothing. Show `displayName` when it is present and fall back to `name`.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
@@ -1375,6 +1377,22 @@ together; clients that show tool progress, which may now see `{ "queued": true }
 **What to do:** nothing in most setups. To change how many safe calls run together, set `tool_execution.max_concurrency`
 to a positive whole number in your own config. A project's config cannot raise it above 10 until you trust the folder.
 
+### A failed certificate check is no longer retried
+
+When a connection to a model endpoint failed because its certificate could not be verified (a self-signed or unknown
+issuer, an untrusted chain, an expired or not yet valid certificate, or a host name that does not match), Orbit treated
+it like any other network failure and retried it for about 160 seconds before showing anything. A failed certificate
+check gives the same answer every time, so it is now shown at once, with the verification message. Other network
+failures, such as a reset or refused connection, still retry as before. This also covers the token request of a gateway
+provider. Under Node, a verification result that Node does not name (a weak signature digest, a name-constraint
+violation) is recognized by the generic `UNSPECIFIED` code on the cause of a failed fetch; under Bun every verification
+result has a name. Cloudflare workerd reports no code, so a failed check there still retries.
+
+**Affects:** people who reach a model endpoint behind a private certificate authority and have not yet told Orbit to
+trust it, and scripts that waited out the retries.
+
+**What to do:** trust the authority with `ORBIT_CA_CERTS` (or `NODE_EXTRA_CA_CERTS`), or fix the endpoint's certificate.
+
 ### New `fallback_model` setting
 
 The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
@@ -1406,14 +1424,33 @@ session's messages, which now see an extra note with `metadata.notice` set to `o
 
 **What to do:** nothing. Raise the model's output limit if you would rather avoid the extra requests.
 
+### New `output_token_cap` setting
+
+The root `output_token_cap` setting is a positive whole number of tokens that caps how much a model may write in one
+request. A reply cut off at the cap is resumed like any other cut-off (see the output-limit note below), so one step
+can write several times the cap, and a reply that runs several steps can write more still. Compaction summaries and
+titles keep their own limits. Every agent request, including a subagent's, asks for the smaller of the cap and the
+model's own maximum, and the cap is applied before `session.context` hooks run, so a hook can still change it. It
+reaches every provider, including one whose adapter otherwise omits the default limit, and `session.context` hooks
+see it as `outputTokenCap` when it lowered the model's limit. The one exception is a model that rejects an output
+limit at its highest reasoning effort, where Orbit sends none. The cap never raises a limit. Left unset, requests
+are unchanged. Zero, a negative number or a fraction is reported and ignored. With a cap of 1,024 or less, every request
+from a model with a fixed reasoning budget is refused; below about 2,000, most of the cap goes to reasoning.
+
+In a folder that is not trusted yet, `output_token_cap` is left out whole, like the other settings that choose a model
+or a budget. Orbit uses your own setting until you trust the folder.
+
+**Affects:** people who want to bound each model request, and anyone reading `config.get`, which now lists the key.
+
+**What to do:** nothing. Set `output_token_cap` in your own config to use it.
+
 ### A run switches to the fallback model after three overloads in a row
 
 When the provider reports that the model is overloaded three times in a row within one step, Orbit now switches to the
 fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
 session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
-other failure between two overloads, such as a rate limit, or a response cut off by the output limit, restarts the
-count. If the overloaded response had already
-produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
+other failure between two overloads, such as a rate limit, restarts the count, and so does a response cut off by the
+output limit. If the overloaded response had already produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
 `synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
 also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
 prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
