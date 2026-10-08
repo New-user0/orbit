@@ -20,6 +20,7 @@ import { ConfigProvider } from "./config/provider.js"
 import { ConfigReference } from "./config/reference.js"
 import { ConfigSandbox } from "./config/sandbox.js"
 import { ConfigWebSearch } from "./config/websearch.js"
+import { ConfigToolExecution } from "./config/tool-execution.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
 import { ConfigWarming } from "./config/warming.js"
@@ -41,7 +42,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   output_token_cap: PositiveInt.pipe(optional).annotate({
     description:
-      "Most tokens a model may write in one model call. Lowers the model's own maximum and never raises it; unset leaves the maximum in place",
+      "Most tokens a model may write in one agent step. Lowers the model's own maximum and never raises it; compaction summaries and titles keep their own limits; unset leaves the maximum in place",
   }),
   default_agent: Schema.String.pipe(optional).annotate({
     description: "Default primary agent to use when no session agent is selected",
@@ -96,6 +97,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
     description: "Tool output truncation thresholds",
+  }),
+  tool_execution: ConfigToolExecution.Info.pipe(optional).annotate({
+    description: "How the tool calls of one step are scheduled",
   }),
   mcp: ConfigMCP.Info.pipe(optional).annotate({
     description: "MCP server configuration",

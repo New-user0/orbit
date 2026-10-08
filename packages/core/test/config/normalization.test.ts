@@ -147,6 +147,17 @@ describe("ConfigNormalize", () => {
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
+  test("keeps a positive tool concurrency cap and reports any other value", () => {
+    expect(normalized({ tool_execution: { max_concurrency: 3 } }).encoded.tool_execution).toEqual({
+      max_concurrency: 3,
+    })
+    for (const cap of [0, -2, 1.5, "3"]) {
+      const invalid = normalized({ tool_execution: { max_concurrency: cap } })
+      expect(invalid.encoded.tool_execution).toBeUndefined()
+      expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+    }
+  })
+
   test("preserves arbitrary JSON-round-tripped native configuration", () => {
     FastCheck.assert(
       FastCheck.property(Schema.toArbitrary(Info)(FastCheck), (info) => {

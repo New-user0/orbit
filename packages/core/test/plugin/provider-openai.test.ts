@@ -107,6 +107,8 @@ describe("OpenAIPlugin", () => {
   const limitCases = [
     { provider: Provider.ID.openai, kind: "primary", cap: undefined, expected: undefined },
     { provider: Provider.ID.openai, kind: "primary", cap: 8000, expected: 8000 },
+    // A cap above the model's own 128,000-token maximum lowers nothing, so the default stays omitted.
+    { provider: Provider.ID.openai, kind: "primary", cap: 200_000, expected: undefined },
     { provider: Provider.ID.openai, kind: "compaction", cap: 8000, expected: undefined },
     { provider: Provider.ID.azure, kind: "primary", cap: undefined, expected: 32_000 },
     { provider: Provider.ID.azure, kind: "primary", cap: 8000, expected: 8000 },

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import {
   AIError,
   InvalidProviderOutputError,
@@ -10,7 +11,12 @@ import {
   isOverloaded,
   isRetryable,
 } from "../src/index.js"
-import { classifyProviderFailure, providerErrorMessage, type ProviderFailure } from "../src/provider-error.js"
+import {
+  certificateFailureCode,
+  classifyProviderFailure,
+  providerErrorMessage,
+  type ProviderFailure,
+} from "../src/provider-error.js"
 
 describe("provider error classification", () => {
   test("classifies provider token limit messages as context overflow", () => {
@@ -724,5 +730,151 @@ describe("provider overload classification", () => {
     ])
     // An overload is still an ordinary provider failure to the retry rules.
     expect(isRetryable(new AIError({ reason: overloaded }))).toBe(true)
+  })
+})
+
+describe("certificate failures", () => {
+  const transport = (input: { code?: string; message?: string; cause?: unknown }) =>
+    new AIError({
+      reason: new TransportError({
+        message: input.message ?? "Transport failed",
+        code: input.code,
+        cause: input.cause,
+        transport: "http",
+        operation: "request",
+      }),
+    })
+
+  const codes = [
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "CERT_HAS_EXPIRED",
+    "CERT_NOT_YET_VALID",
+    "CERT_UNTRUSTED",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "INVALID_PURPOSE",
+    "INVALID_CA",
+    "CERT_SIGNATURE_FAILURE",
+    "PATH_LENGTH_EXCEEDED",
+    "UNABLE_TO_DECODE_ISSUER_PUBLIC_KEY",
+    "ERROR_IN_CERT_NOT_BEFORE_FIELD",
+    "ERROR_IN_CERT_NOT_AFTER_FIELD",
+    "CRL_HAS_EXPIRED",
+    "UNABLE_TO_GET_CRL",
+    "NAME_CONSTRAINTS_WITHOUT_SANS",
+    "UNKNOWN_CERTIFICATE_VERIFICATION_ERROR",
+    "SUITE_B_INVALID_CURVE",
+    "APPLICATION_VERIFICATION",
+  ]
+
+  test.each(codes)("does not retry %s", (code) => {
+    expect(isRetryable(transport({ code }))).toBe(false)
+    expect(isRetryable(transport({ cause: Object.assign(new Error("fetch failed"), { cause: { code } }) }))).toBe(false)
+  })
+
+  // Node's shapes: undici throws TypeError("fetch failed") whose cause carries the code, and the AI SDK wraps that as
+  // the cause of an APICallError. The native route lifts the cause's code onto the TransportError and keeps the cause.
+  const undici = (message: string, code = "UNSPECIFIED") =>
+    new TypeError("fetch failed", { cause: Object.assign(new Error(message), { code }) })
+
+  test.each([
+    { name: "undici fetch failed", code: undefined, cause: undici("CA signature digest algorithm too weak") },
+    { name: "native route lifted code", code: "UNSPECIFIED", cause: undici("permitted subtree violation") },
+    {
+      name: "AI SDK APICallError",
+      code: undefined,
+      cause: Object.assign(new Error("Cannot connect to API"), { cause: undici("permitted subtree violation") }),
+    },
+  ])("does not retry Node's UNSPECIFIED verification result: $name", (input) => {
+    expect(certificateFailureCode(transport({ code: input.code, cause: input.cause }).reason)).toBe("UNSPECIFIED")
+    expect(isRetryable(transport({ code: input.code, cause: input.cause }))).toBe(false)
+  })
+
+  test.each([
+    { name: "a transport code of its own", failure: transport({ code: "UNSPECIFIED" }) },
+    {
+      name: "a direct cause with that code",
+      failure: transport({ cause: Object.assign(new Error("x"), { code: "UNSPECIFIED" }) }),
+    },
+    { name: "a plain-object cause", failure: transport({ code: "UNSPECIFIED", cause: { code: "UNSPECIFIED" } }) },
+    {
+      name: "a provider object in a cause",
+      failure: transport({ cause: new Error("x", { cause: { code: "UNSPECIFIED" } }) }),
+    },
+    {
+      name: "a reset connection",
+      failure: transport({ code: "ECONNRESET", cause: undici("other side closed", "ECONNRESET") }),
+    },
+  ])("keeps $name retryable", (input) => {
+    expect(isRetryable(input.failure)).toBe(true)
+  })
+
+  test("a provider message that mentions a certificate stays retryable", () => {
+    expect(isRetryable(transport({ message: "unknown certificate authority", code: "server_error" }))).toBe(true)
+  })
+
+  // The errors are whatever the runtime's fetch actually throws against a real TLS server.
+  const fixture = (name: string) =>
+    Bun.file(path.join(import.meta.dir, "..", "..", "util", "test", "fixture", "tls", name)).text()
+
+  test.each([
+    {
+      name: "an unknown CA",
+      cert: "server",
+      ca: undefined,
+      serverName: undefined,
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    },
+    {
+      name: "a host name mismatch",
+      cert: "server",
+      ca: "ca.pem",
+      serverName: "mismatch.invalid",
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+    },
+    {
+      name: "the wrong purpose",
+      cert: "client-only",
+      ca: "purpose-ca.pem",
+      serverName: undefined,
+      code: "INVALID_PURPOSE",
+    },
+    {
+      name: "a leaf with no subject alternative name under a name-constrained CA",
+      cert: "nameconstrained-leaf",
+      ca: "nameconstrained-ca.pem",
+      serverName: undefined,
+      code: "NAME_CONSTRAINTS_WITHOUT_SANS",
+    },
+  ])("does not retry what fetch throws for $name", async (input) => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      tls: { cert: await fixture(`${input.cert}.pem`), key: await fixture(`${input.cert}.key`) },
+      fetch: () => new Response("ok"),
+    })
+    const thrown = await fetch(`https://127.0.0.1:${server.port}`, {
+      tls: {
+        ...(input.ca ? { ca: await fixture(input.ca) } : {}),
+        ...(input.serverName ? { serverName: input.serverName } : {}),
+      },
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    await server.stop(true)
+    expect(thrown).toBeInstanceOf(Error)
+    expect(certificateFailureCode(thrown)).toBe(input.code)
+    expect(isRetryable(transport({ cause: thrown }))).toBe(false)
+  })
+
+  test("still retries a reset connection and other transport failures", () => {
+    expect(isRetryable(transport({ code: "ECONNRESET", message: "other side closed" }))).toBe(true)
+    expect(isRetryable(transport({ code: "ETIMEDOUT" }))).toBe(true)
+    expect(isRetryable(transport({ cause: Object.assign(new Error("fetch failed"), { code: "ECONNREFUSED" }) }))).toBe(
+      true,
+    )
   })
 })

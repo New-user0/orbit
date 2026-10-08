@@ -14166,6 +14166,16 @@
             },
             "additionalProperties": false
           },
+          "tool_execution": {
+            "type": "object",
+            "properties": {
+              "max_concurrency": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
           "mcp": {
             "type": "object",
             "properties": {

@@ -80,8 +80,12 @@ test("a gateway behind a private CA is reachable only once ORBIT_CA_CERTS trusts
   })
   const origin = `https://127.0.0.1:${mock.server.port}`
 
+  const started = Date.now()
   const untrusted = await run(origin)
   expect(untrusted.code).not.toBe(0)
+  expect(untrusted.stderr).toMatch(/certificate/i)
+  // The retry schedule runs for minutes; a failed certificate check must stop on the first attempt.
+  expect(Date.now() - started).toBeLessThan(60_000)
   expect(mock.calls).toEqual([])
 
   const trusted = await run(origin, { ORBIT_CA_CERTS: tlsFixture("ca.pem") })

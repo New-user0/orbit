@@ -21,6 +21,15 @@ describe("Config.Entry", () => {
     expect(() => decode({ worktree: { directory: " " } })).toThrow()
     expect(() => decode({ worktree: { directory: false } })).toThrow()
   })
+  test("accepts a positive whole tool concurrency cap and refuses any other", () => {
+    const decode = Schema.decodeUnknownSync(Config.Info)
+    const encode = Schema.encodeSync(Config.Info)
+    for (const input of [{ tool_execution: { max_concurrency: 3 } }, { tool_execution: {} }])
+      expect(encode(decode(input))).toEqual(input)
+    expect(encode(new Config.Info({ tool_execution: undefined }))).not.toHaveProperty("tool_execution")
+    for (const cap of [0, -1, 1.5, "2", null])
+      expect(() => decode({ tool_execution: { max_concurrency: cap } })).toThrow()
+  })
   test("decodes fallback_model in the short and the explicit form", () => {
     const decode = Schema.decodeUnknownSync(Config.Info)
     const explicit = { providerID: "acme", model: "backup", variant: "high" }

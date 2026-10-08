@@ -757,7 +757,9 @@ runs" is a permission.
 - Classify each new field in `ConfigTrust.classification` (`info`, `agent` and `command`). Ask of every field: does it
   choose which rules, agent or mode apply? Then it is a permission, `withhold("permissions")`, and a permission list
   keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming` keeps only
-  `false`.
+  `false`. `tool_execution` keeps a `max_concurrency` at or below the default of 10 (`toolExecution`): the user's own
+  value is not visible to the filter, so a repository cannot raise the cap above 10. It can still set a higher value
+  than a user's own lower one, up to 10.
 - A field that picks a model, a provider or a budget is withheld too, as `providers`, so that an untrusted folder
   cannot choose the most expensive of the models that you configured, another provider that you configured, or a larger
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
@@ -1487,6 +1489,11 @@ fixes it or asks.
   run from there. `node-gyp/bin/node-gyp.js`, which the bundle does leave to the runtime, is only a path that npm looks
   up with `require.resolve` and does not load, and Orbit installs with scripts off. Replace the first before the binary
   imports the npm `ws`, and re-check the second before Orbit installs with scripts on.
+- **A rejection with feedback inside Code Mode, and ACP.** The step stops its tool queue when a direct tool call fails
+  with a permission correction (`session-runner.test.ts`, `mcp.test.ts`). A Code Mode program turns the same rejection
+  into an error result, so the calls queued behind its `execute` call still start and can ask (task `tool-runtime-6`
+  and `tool-runtime-7`). The ACP client does not close the permission prompt of an interrupted call yet, and no
+  bundled client reads `metadata.queued`.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
   saved "always allow" approvals.
 - **Git in the folder.** Orbit runs git in a folder to resolve its project, and git applies that folder's own

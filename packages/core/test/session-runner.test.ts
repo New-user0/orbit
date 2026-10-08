@@ -64,6 +64,7 @@ import { Agent } from "@orbit/core/agent"
 import { Config } from "@orbit/core/config"
 import { Document, Info } from "@orbit/schema/config"
 import { ConfigCompaction } from "@orbit/schema/config/compaction"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { Tool } from "@orbit/core/tool"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info as ToolInfo } from "@orbit/schema/tool"
@@ -230,6 +231,18 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    holds: new Map<string, { readonly started: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }>(),
+    hold(text: string) {
+      const existing = this.holds.get(text)
+      if (existing) return existing
+      const created = { started: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() }
+      this.holds.set(text, created)
+      return created
+    },
+    configControl: undefined as Config.TestInterface | undefined,
+    traitGate: Deferred.makeUnsafe<void>(),
+    asking: Deferred.makeUnsafe<void>(),
+    answer: Deferred.makeUnsafe<void>(),
     closedTransports: new Array<Session.ID>(),
     blockTools: (count = 1) =>
       Effect.acquireRelease(
@@ -297,18 +310,6 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
       editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
     ),
   )
-const config = Config.testLayer([
-  new Document({
-    type: "document",
-    info: new Info({
-      compaction: new ConfigCompaction.Info({
-        buffer: 3_000,
-        keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
-      }),
-    }),
-  }),
-])
-
 const layer = Layer.unwrap(
   Effect.map(RunnerState, (state) => {
     const modelTransport = Layer.succeed(
@@ -329,6 +330,7 @@ const layer = Layer.unwrap(
               description: "Echo text",
               input: Schema.Struct({ text: Schema.String }),
               output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: true },
               execute: ({ text }, context) =>
                 Effect.gen(function* () {
                   state.authorizations.push(context)
@@ -337,11 +339,72 @@ const layer = Layer.unwrap(
                   return { output: { text }, content: text }
                 }),
             },
+            // Runs alone: the scheduler starts it only when nothing else runs.
+            mutate: {
+              name: "mutate",
+              description: "Echo text, as a call that changes things",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: false },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* state.awaitToolBarrier
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Finishes when the test lets it, so calls can finish in another order than they started.
+            held: {
+              name: "held",
+              description: "Echo text once the test releases it",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: true },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  const hold = state.hold(text)
+                  state.executions.push(text)
+                  yield* Deferred.succeed(hold.started, undefined)
+                  yield* Deferred.await(hold.release)
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Its concurrencySafe answer waits for the test, to show that a pending answer holds back later calls only.
+            gated: {
+              name: "gated",
+              description: "Echo text, after its traits are known",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: () => Deferred.await(state.traitGate).pipe(Effect.as(true)) },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* state.awaitToolBarrier
+                  return { output: { text }, content: text }
+                }),
+            },
+            // Waits for an answer that is a decline: the calls queued behind it must not start.
+            ask: {
+              name: "ask",
+              description: "Echo text after a permission",
+              input: Schema.Struct({ text: Schema.String }),
+              output: Schema.Struct({ text: Schema.String }),
+              traits: { concurrencySafe: false },
+              execute: ({ text }) =>
+                Effect.gen(function* () {
+                  state.executions.push(text)
+                  yield* Deferred.succeed(state.asking, undefined)
+                  yield* Deferred.await(state.answer)
+                  // The way `Permission.assert` surfaces a decline: as a defect that the model request recovers.
+                  return yield* Effect.die(new Permission.DeclinedError())
+                }),
+            },
             defect: {
               name: "defect",
               description: "Fail unexpectedly",
               input: Schema.Struct({}),
               output: Schema.Struct({}),
+              traits: { concurrencySafe: true },
               execute: () => state.awaitToolBarrier.pipe(Effect.andThen(Effect.die("unexpected tool defect"))),
             },
             storefail: {
@@ -349,6 +412,7 @@ const layer = Layer.unwrap(
               description: "Produce output that cannot be persisted",
               input: Schema.Struct({}),
               output: Schema.Struct({}),
+              traits: { concurrencySafe: true },
               execute: () => Effect.succeed({ output: {} }),
             },
           },
@@ -430,6 +494,23 @@ const layer = Layer.unwrap(
       load: () => Effect.succeed(Instructions.empty),
     })
     const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
+    const config = Config.testLayer([
+      new Document({
+        type: "document",
+        info: new Info({
+          compaction: new ConfigCompaction.Info({
+            buffer: 3_000,
+            keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
+          }),
+        }),
+      }),
+    ]).pipe(
+      Layer.tap((context) =>
+        Effect.sync(() => {
+          state.configControl = Context.get(context, Config.Test)
+        }),
+      ),
+    )
     const promptModels = Layer.mock(Model.Service, {
       get: () => Effect.undefined,
       all: () => Effect.succeed([]),
@@ -525,7 +606,6 @@ const layer = Layer.unwrap(
 ).pipe(
   Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
   Layer.provideMerge(testLLM),
-  Layer.provideMerge(config),
 )
 const it = testEffect(layer)
 const sessionID = Session.ID.make("ses_runner_test")
@@ -1375,7 +1455,15 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests).toHaveLength(1)
     expect(s.requests[0]?.model).toBe(model)
-    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual([
+      "ask",
+      "defect",
+      "echo",
+      "gated",
+      "held",
+      "mutate",
+      "storefail",
+    ])
     expect(s.requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
       { role: "user", content: [{ type: "text", text: "First" }] },
       { role: "user", content: [{ type: "text", text: "Second" }] },
@@ -3613,7 +3701,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("lowers the output limit to the configured cap and never raises it", function* (s) {
-    const config = yield* Config.Test
+    const config = s.configControl!
     const setCap = (cap: number) =>
       config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: cap }) })])
     s.currentModel = fittedOutputModel
@@ -3629,7 +3717,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("applies the configured cap before session context hooks run", function* (s) {
-    const config = yield* Config.Test
+    const config = s.configControl!
     const hooks = yield* PluginHooks.Service
     const seen: (number | undefined)[] = []
     yield* config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
@@ -3811,7 +3899,15 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
 
     expect(s.requests).toHaveLength(1)
-    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).toEqual([
+      "ask",
+      "defect",
+      "echo",
+      "gated",
+      "held",
+      "mutate",
+      "storefail",
+    ])
     expect(yield* s.context).toMatchObject([
       Expected.user("Use tools"),
       {
@@ -4216,6 +4312,439 @@ describe("SessionRunnerLLM", () => {
     expect(s.executions).toHaveLength(5)
     expect(yield* tools.maxActive).toBe(5)
     expect(s.requests).toHaveLength(2)
+  })
+
+  // The provider stream as stages: events that arrive at once, and gates that hold the stream until the test opens them.
+  const staged = (...stages: ReadonlyArray<ReadonlyArray<LLMEvent> | Deferred.Deferred<void>>) =>
+    stages.reduce<Stream.Stream<LLMEvent>>(
+      (stream, stage) =>
+        Stream.concat(
+          stream,
+          Array.isArray(stage)
+            ? Stream.fromIterable(stage)
+            : Stream.fromEffect(Deferred.await(stage as Deferred.Deferred<void>)).pipe(
+                Stream.flatMap(() => Stream.empty),
+              ),
+        ),
+      Stream.empty,
+    )
+  const callOf = (id: string, name: string, text: string) => LLMEvent.toolCall({ id, name, input: { text } })
+  const toolsDone = [
+    LLMEvent.stepFinish({ index: 0, reason: { normalized: "tool-calls" } }),
+    LLMEvent.finish({ reason: { normalized: "tool-calls" } }),
+  ]
+  // What the step published about its tool calls, in order, taken one event at a time so no clock is involved.
+  const watchTools = (s: Scenario) =>
+    Effect.gen(function* () {
+      const called = yield* Queue.unbounded<string>()
+      const settled = yield* Queue.unbounded<string>()
+      const hints = yield* Queue.unbounded<{ readonly id: string; readonly metadata: unknown }>()
+      yield* s.bus.subscribe(SessionEvent.Tool.Called).pipe(
+        Stream.runForEach((event) => Queue.offer(called, event.data.id)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* s.bus.subscribe(SessionEvent.Tool.Success).pipe(
+        Stream.runForEach((event) => Queue.offer(settled, event.data.id)),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* s.bus.subscribe(SessionEvent.Tool.Progress).pipe(
+        Stream.runForEach((event) => Queue.offer(hints, { id: event.data.id, metadata: event.data.metadata })),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return { called, settled, hints }
+    })
+  const toolResultIDs = (request: LLMRequest | undefined) =>
+    request?.messages
+      .filter((message) => message.role === "tool")
+      .flatMap((message) => message.content.flatMap((part) => (part.type === "tool-result" ? [part.id] : [])))
+
+  scenario("starts every partition while the provider stream is open", function* (s) {
+    yield* s.admit("Echo, mutate, echo")
+    const watch = yield* watchTools(s)
+    const [g1, g2, g3] = yield* Effect.all([Deferred.make<void>(), Deferred.make<void>(), Deferred.make<void>()])
+    yield* s.llm.push(
+      staged(
+        [LLMEvent.stepStart({ index: 0 }), callOf("call-a", "echo", "a")],
+        g1,
+        [callOf("call-b", "mutate", "b")],
+        g2,
+        [callOf("call-c", "echo", "c")],
+        g3,
+        toolsDone,
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const first = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    // `a` runs while the provider is still waiting to send `b`.
+    expect(s.executions).toEqual(["a"])
+
+    const second = yield* s.blockTools(1)
+    yield* Deferred.succeed(g1, undefined)
+    expect(yield* Effect.forEach([0, 1], () => Queue.take(watch.called))).toEqual(["call-a", "call-b"])
+    // `b` is not safe, so it waits for `a`, and says so to live clients.
+    expect(yield* Queue.take(watch.hints)).toEqual({ id: "call-b", metadata: { queued: true } })
+    expect(s.executions).toEqual(["a"])
+
+    yield* first.release
+    yield* second.started
+    expect(s.executions).toEqual(["a", "b"])
+    expect(s.requests).toHaveLength(1)
+
+    const third = yield* s.blockTools(1)
+    yield* Deferred.succeed(g2, undefined)
+    expect(yield* Queue.take(watch.called)).toBe("call-c")
+    yield* second.release
+    yield* third.started
+    expect(s.executions).toEqual(["a", "b", "c"])
+    expect(s.requests).toHaveLength(1)
+
+    yield* Deferred.succeed(g3, undefined)
+    yield* third.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-a", "call-b", "call-c"])
+  })
+
+  scenario("a safe call arriving mid-stream joins the running safe group", function* (s) {
+    yield* s.admit("Echo twice")
+    const [g1, g2] = yield* Effect.all([Deferred.make<void>(), Deferred.make<void>()])
+    yield* s.llm.push(
+      staged(
+        [LLMEvent.stepStart({ index: 0 }), callOf("call-a", "echo", "a")],
+        g1,
+        [callOf("call-a2", "echo", "a2")],
+        g2,
+        toolsDone,
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.succeed(g1, undefined)
+    yield* tools.started
+
+    expect(s.executions).toEqual(["a", "a2"])
+    expect(yield* tools.maxActive).toBe(2)
+    expect(s.requests).toHaveLength(1)
+
+    yield* Deferred.succeed(g2, undefined)
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.requests).toHaveLength(2)
+  })
+
+  scenario("a pending trait predicate does not hold back the stream", function* (s) {
+    yield* s.admit("Gated, then echo")
+    const watch = yield* watchTools(s)
+    yield* s.llm.push(
+      TestLLM.toolCalls(callOf("call-x", "gated", "x"), callOf("call-y", "echo", "y")),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    expect(yield* Effect.forEach([0, 1], () => Queue.take(watch.called))).toEqual(["call-x", "call-y"])
+    // `y` is safe, but it starts after `x`, whose answer is still pending.
+    expect(s.executions).toEqual([])
+
+    yield* Deferred.succeed(s.traitGate, undefined)
+    yield* tools.started
+    expect(s.executions).toEqual(["x", "y"])
+    expect(yield* tools.maxActive).toBe(2)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("runs calls that are not safe one at a time, in call order", function* (s) {
+    yield* s.admit("Mutate three times")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        callOf("call-0", "mutate", "m0"),
+        callOf("call-1", "mutate", "m1"),
+        callOf("call-2", "mutate", "m2"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(s.executions).toEqual(["m0"])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["m0", "m1", "m2"])
+    expect(yield* tools.maxActive).toBe(1)
+  })
+
+  scenario("keeps the start order of a safe, a not safe and a safe call", function* (s) {
+    yield* s.admit("Echo, mutate, echo")
+    yield* s.llm.push(
+      TestLLM.toolCalls(callOf("call-a", "echo", "a"), callOf("call-b", "mutate", "b"), callOf("call-c", "echo", "c")),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(s.executions).toEqual(["a"])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["a", "b", "c"])
+    expect(yield* tools.maxActive).toBe(1)
+  })
+
+  scenario("caps the safe calls that run together at tool_execution.max_concurrency", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({
+        type: "document",
+        info: new Info({ tool_execution: new ConfigToolExecution.Info({ max_concurrency: 2 }) }),
+      }),
+    ])
+    yield* s.admit("Echo five times")
+    yield* s.llm.push(
+      TestLLM.toolCalls(...Array.from({ length: 5 }, (_, index) => callOf(`call-${index}`, "echo", `${index}`))),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(s.executions).toEqual(["0", "1"])
+
+    yield* tools.release
+    yield* Fiber.join(run)
+    expect(s.executions).toEqual(["0", "1", "2", "3", "4"])
+    expect(yield* tools.maxActive).toBe(2)
+  })
+
+  scenario("orders results by call even when a later call finishes first", function* (s) {
+    yield* s.admit("Hold two")
+    const watch = yield* watchTools(s)
+    yield* s.llm.push(
+      TestLLM.toolCalls(callOf("call-h1", "held", "h1"), callOf("call-h2", "held", "h2")),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.hold("h1").started)
+    yield* Deferred.await(s.hold("h2").started)
+    yield* Deferred.succeed(s.hold("h2").release, undefined)
+    expect(yield* Queue.take(watch.settled)).toBe("call-h2")
+    yield* Deferred.succeed(s.hold("h1").release, undefined)
+    yield* Fiber.join(run)
+
+    expect(toolResultIDs(s.requests[1])).toEqual(["call-h1", "call-h2"])
+  })
+
+  scenario("settles a finished call whose outcome waits on the session when it is interrupted", function* (s) {
+    yield* s.admit("Hold two")
+    const gate = yield* Deferred.make<void>()
+    const holding = yield* Deferred.make<void>()
+    const successes = new Array<string>()
+    // The first success holds the session's durable lock, so the second call's outcome has to wait for it.
+    const unsubscribe = yield* s.bus.listen((event) =>
+      event.type === "session.tool.success"
+        ? Effect.suspend(() => {
+            successes.push(event.type)
+            return successes.length === 1
+              ? Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void
+          })
+        : Effect.void,
+    )
+    yield* s.llm.push(TestLLM.toolCalls(callOf("call-h1", "held", "h1"), callOf("call-h2", "held", "h2")))
+
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.hold("h1").started)
+    yield* Deferred.await(s.hold("h2").started)
+    yield* Deferred.succeed(s.hold("h1").release, undefined)
+    yield* Deferred.await(holding)
+    yield* Deferred.succeed(s.hold("h2").release, undefined)
+    // The second call has no signal of its own while it waits for the lock, so give it time to reach the wait.
+    for (let i = 0; i < 50; i++) yield* Effect.yieldNow
+    yield* s.session.interrupt(sessionID)
+    yield* Deferred.succeed(gate, undefined)
+    yield* Fiber.await(run)
+    yield* unsubscribe
+
+    // Both calls finished, so both are recorded as completed, each with one terminal event, and none is left running.
+    expect(successes).toHaveLength(2)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Hold two"),
+      Expected.assistant({}, [
+        Expected.completedTool({ id: "call-h1" }, {}),
+        Expected.completedTool({ id: "call-h2" }, {}),
+      ]),
+    ])
+  })
+
+  scenario("stops the queue on a correction that a tool lets through unwrapped", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        raw: {
+          name: "raw",
+          description: "Fail with the user's feedback, unwrapped",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { concurrencySafe: false },
+          execute: () => Effect.fail(new Permission.CorrectedError({ feedback: "Use another tool" }) as never),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Reject raw, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-raw", name: "raw", input: {} }),
+        callOf("call-next", "mutate", "next"),
+      ),
+      TestLLM.stop(),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Reject raw, then mutate"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-raw" },
+          { error: { type: "permission.rejected", message: "Use another tool" } },
+        ),
+        Expected.failedTool({ id: "call-next" }, { error: { type: "tool.cancelled" } }),
+      ]),
+      { type: "assistant", finish: "stop" },
+    ])
+  })
+
+  scenario("runs a Code Mode execute call alone between two direct safe calls", function* (s) {
+    const registry = yield* Tool.Service
+    // Deferred, so a program reaches it and the model does not see it.
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "probe",
+        description: "Echo from a program",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        execute: () =>
+          Effect.gen(function* () {
+            s.executions.push("probe")
+            yield* s.awaitToolBarrier
+            return { output: {}, content: "probe" }
+          }),
+      }),
+    )
+    yield* s.admit("Echo, program, echo")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        callOf("call-a1", "echo", "a1"),
+        LLMEvent.toolCall({ id: "call-program", name: "execute", input: { code: "return await tools.probe({})" } }),
+        callOf("call-a2", "echo", "a2"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    const first = yield* s.blockTools(1)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    expect(s.executions).toEqual(["a1"])
+
+    const second = yield* s.blockTools(1)
+    yield* first.release
+    yield* second.started
+    // The program runs only once the first call is done, and the last call waits for the program.
+    expect(s.executions).toEqual(["a1", "probe"])
+
+    const third = yield* s.blockTools(1)
+    yield* second.release
+    yield* third.started
+    expect(s.executions).toEqual(["a1", "probe", "a2"])
+
+    yield* third.release
+    yield* Fiber.join(run)
+  })
+
+  scenario("settles the calls queued behind a declined one as aborted without running them", function* (s) {
+    yield* s.admit("Ask twice")
+    yield* s.llm.push(TestLLM.toolCalls(callOf("call-ask-1", "ask", "first"), callOf("call-ask-2", "ask", "second")))
+
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Deferred.await(s.asking)
+    // Only the first call has asked; the second is still queued behind it.
+    expect(s.executions).toEqual(["first"])
+    yield* Deferred.succeed(s.answer, undefined)
+    const exit = yield* Fiber.await(run)
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(s.executions).toEqual(["first"])
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Ask twice"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-ask-1" },
+          { error: { type: "aborted", message: "The user declined this tool call" } },
+        ),
+        Expected.failedTool({ id: "call-ask-2" }, { error: { type: "aborted" } }),
+      ]),
+    ])
+  })
+
+  scenario("settles the calls queued behind a rejection with feedback as cancelled", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        rejected: {
+          name: "rejected",
+          description: "Fail with the user's feedback",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { concurrencySafe: false },
+          execute: () =>
+            Effect.fail(
+              new Tool.Error({
+                message: "Use another tool",
+                error: new Permission.CorrectedError({ feedback: "Use another tool" }),
+              }),
+            ),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Reject, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-rejected", name: "rejected", input: {} }),
+        callOf("call-next", "mutate", "next"),
+      ),
+      TestLLM.stop(),
+    )
+
+    yield* s.resume
+
+    // The step goes on: the model is told what happened and answers.
+    expect(s.requests).toHaveLength(2)
+    expect(s.executions).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Reject, then mutate"),
+      Expected.assistant({}, [
+        Expected.failedTool({ id: "call-rejected" }, { error: { type: "permission.rejected" } }),
+        Expected.failedTool({ id: "call-next" }, { error: { type: "tool.cancelled" } }),
+      ]),
+      { type: "assistant", finish: "stop" },
+    ])
   })
 
   scenario("settles repeated provider-local tool call IDs against their owning assistant messages", function* (s) {
@@ -6189,6 +6718,212 @@ describe("SessionRunnerLLM", () => {
     yield* TestClock.adjust("1 millis")
     yield* Fiber.join(run)
     expect(s.requests).toHaveLength(2)
+  })
+
+  const fallbackModel = { providerID: Provider.ID.make("fake"), id: ID.make("replacement") }
+  const primaryRef = { providerID: Provider.ID.make("fake"), id: ID.make("fake-model") }
+  const retriesBefore = (s: Scenario, retries: number) =>
+    Effect.gen(function* () {
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      for (let index = 0; index < retries; index++) {
+        yield* Queue.take(scheduled)
+        yield* TestClock.adjust("1 minute")
+      }
+      yield* Fiber.join(run)
+    })
+  const retryCount = () =>
+    recordedEventTypes(sessionID).pipe(
+      Effect.map((types) => types.filter((type) => type === "session.retry.scheduled.1").length),
+    )
+  const fallbackNotices = (s: Scenario) =>
+    s.context.pipe(
+      Effect.map((messages) =>
+        messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === "fallback"),
+      ),
+    )
+
+  scenario("switches to the fallback model after three overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "fallback-success"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel])
+    expect(yield* retryCount()).toBe(2)
+    expect(s.closedTransports).toContain(sessionID)
+    const context = yield* s.context
+    // The failed attempt's empty draft is closed without a finish, so the only finished assistant is the fallback's.
+    expect(context.filter((message) => message.type === "assistant" && message.finish !== undefined)).toMatchObject([
+      { model: { id: "replacement" }, finish: "stop" },
+    ])
+    expect(yield* fallbackNotices(s)).toMatchObject([
+      {
+        description: "Switched from fake/fake-model to fake/replacement after repeated overloads",
+        metadata: { notice: "fallback", model: fallbackModel, previous: primaryRef },
+      },
+    ])
+  })
+
+  scenario("records the notice before the fallback's answer and keeps it out of the tail after a tool call", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.tool("call-fallback", "echo", { text: "fallback" }), TestLLM.text("Done", "after-tool"))
+    yield* retriesBefore(s, 2)
+
+    const types = (yield* s.context).flatMap((message) =>
+      message.type === "synthetic" || (message.type === "assistant" && message.finish !== undefined)
+        ? [message.type]
+        : [],
+    )
+    expect(types).toEqual(["synthetic", "assistant", "assistant"])
+    const tail = s.requests.at(-1)
+    expect(tail?.model).toBe(replacementModel)
+    expect(tail?.messages.at(-1)?.role).not.toBe("user")
+  })
+
+  scenario("tells the fallback model about the switch and gives it a fresh retry allowance", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Recovered", "fresh-allowance"))
+    const attempts: number[] = []
+    yield* s.bus.subscribe(SessionEvent.RetryScheduled).pipe(
+      Stream.filter((event) => event.data.sessionID === sessionID),
+      Stream.runForEach((event) => Effect.sync(() => attempts.push(event.data.attempt))),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, replacementModel])
+    expect(userTexts(s.requests[3]!)).toContain(
+      "The previous model was overloaded, so this turn continues on a different model.",
+    )
+    // Without a fresh allowance the fallback's first retry would continue the primary's count.
+    expect(attempts.at(-1)).toBe(attempts[0])
+  })
+
+  scenario("fails the step on the primary model once the retry allowance is spent", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded", resume: false })
+    yield* s.llm.push(...Array.from({ length: 11 }, () => Stream.fail(overloaded())))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
+    for (let index = 0; index < 10; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    expect((yield* Fiber.join(run))._tag).toBe("Failure")
+    expect(s.requests).toHaveLength(11)
+    expect(s.requests.every((request) => request.model === model)).toBe(true)
+  })
+
+  scenario("does not switch when another failure interrupts the overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Mixed", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(rateLimited()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "mixed-success"))
+    yield* retriesBefore(s, 3)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("restarts the overload count after another failure", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Reset", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      Stream.fail(overloaded()),
+      Stream.fail(overloaded()),
+      Stream.fail(rateLimited()),
+      Stream.fail(overloaded()),
+    )
+    yield* s.llm.push(TestLLM.text("Recovered", "reset-success"))
+    yield* retriesBefore(s, 4)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* retryCount()).toBe(4)
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("fails the partial response and continues on the fallback after mid-stream overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Partial", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      ...[0, 1, 2].map((index) =>
+        TestLLM.failAfter(
+          overloaded(),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: `partial-${index}` }),
+          LLMEvent.textDelta({ id: `partial-${index}`, text: `Partial ${index}` }),
+        ),
+      ),
+    )
+    yield* s.llm.push(TestLLM.text("Finished", "partial-fallback-success"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests).toHaveLength(4)
+    expect(s.requests.at(-1)?.model).toBe(replacementModel)
+    const context = yield* s.context
+    const assistants = context.filter((message) => message.type === "assistant")
+    expect(assistants.map((message) => message.finish)).toEqual(["error", "error", "error", "stop"])
+    expect(new Set(assistants.map((message) => message.id)).size).toBe(4)
+    expect(
+      context.flatMap((message) =>
+        message.type === "synthetic" ? [message.metadata?.notice ?? message.text] : [],
+      ),
+    ).toEqual([INCOMPLETE_STREAM_CONTINUATION, INCOMPLETE_STREAM_CONTINUATION, "fallback", INCOMPLETE_STREAM_CONTINUATION])
+  })
+
+  for (const [name, turn] of [
+    ["no fallback is configured", {}],
+    ["the fallback is the primary model", { fallbackModel: primaryRef }],
+  ] as const)
+    scenario(`stays on the primary model when ${name}`, function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Overloaded", turn, resume: false })
+      yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+      yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Recovered", "primary-success"))
+      yield* retriesBefore(s, 4)
+
+      expect(s.requests).toHaveLength(5)
+      expect(s.requests.every((request) => request.model === model)).toBe(true)
+      expect(yield* retryCount()).toBe(4)
+      expect(yield* fallbackNotices(s)).toEqual([])
+    })
+
+  scenario("returns to the primary model on the next turn", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "First", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(TestLLM.text("Recovered", "turn-one"), TestLLM.text("Next", "turn-two"))
+    yield* retriesBefore(s, 2)
+    // A queued prompt starts the next turn; a steer would join this one and keep its fallback.
+    yield* s.session.prompt({ sessionID, text: "Second", delivery: "queue", resume: false })
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, replacementModel, model])
+  })
+
+  // A restarted or reloaded drain has no memory, so the fallback must come from the durable notice alone.
+  scenario("keeps the fallback for a later drain of the same turn", function* (s) {
+    yield* s.admit("Mid turn")
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Switched",
+      metadata: { notice: "fallback", model: fallbackModel },
+    })
+    yield* s.llm.push(TestLLM.text("Still on fallback", "reloaded"))
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([replacementModel])
+  })
+
+  scenario("clears the fallback when the model is switched explicitly", function* (s) {
+    yield* s.admit("Mid turn")
+    yield* s.bus.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "Switched",
+      metadata: { notice: "fallback", model: fallbackModel },
+    })
+    yield* s.bus.publish(SessionEvent.ModelSelected, { sessionID, model: primaryRef })
+    yield* s.llm.push(TestLLM.text("Back on primary", "cleared"))
+    yield* s.resume
+
+    expect(s.requests.map((request) => request.model)).toEqual([model])
   })
 
   scenario("continues an incomplete stream after observable text", function* (s) {

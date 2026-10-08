@@ -114,7 +114,8 @@ rest:
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
-  keyless search pool, and it cannot start generations that you pay for.
+  keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
+  10 or less, so a repository cannot raise the limit above 10.
 - **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
@@ -760,8 +761,9 @@ dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count t
 cost that is not above zero, a `fallbackModel` that is not a model reference, or a key that `turn` does not define
 (`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
 fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
-message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
-turn and no fallback model is used.
+message, and the latest options in a turn are the ones that apply to it. Orbit acts on them: a limit ends the
+turn (see the note on enforced limits), and the fallback model is used after repeated overloads (see the note on the
+fallback switch).
 
 A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
 cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
@@ -1333,12 +1335,54 @@ when the names collide both appear in autocomplete.
 
 **What to do:** rename your own `cost` or `usage` command if you want Enter to run it; otherwise nothing.
 
+### Tool calls in one step run in order, and only safe ones run together
+
+A step used to start every tool call the moment the model finished writing it, all at once. Calls now start in the order
+the model wrote them, and each waits for its turn. A call that a tool declares concurrency-safe (reads, searches, fetches)
+runs beside other safe calls, up to `tool_execution.max_concurrency` at a time (default 10). A call that is not safe
+(an edit, a shell command, a Code Mode `execute` call) runs alone, after the calls before it have finished, and the calls
+after it wait for it. Calls start while the model is still writing later ones, and results still reach the model in
+the order of the calls. A call that is waiting reports `{ "queued": true }` in its metadata until it starts; the bundled
+clients do not show it yet.
+
+A decline stops the queue. When you decline a call, the calls that have not started are not run and finish as
+"aborted", as the declined call does. When you reject a call with feedback, the calls that have not started finish as
+`tool.cancelled`, and the model sees your feedback and carries on. Calls that are already running are left to finish.
+This holds for a call the model makes directly, including a direct MCP tool. It does not yet hold when the rejected call
+is inside a Code Mode program: that program receives the feedback as an error result, and the calls queued behind it
+still start and can ask. A permission prompt whose call is interrupted now closes in the terminal UI and the other
+clients that follow permission events; the ACP client does not close it yet.
+
+Subagents are tool calls too, so one step starts at most `max_concurrency` of them at once.
+
+**Affects:** people whose model writes several edits, shell commands or other calls that change things in one response,
+which used to overlap and now take turns; anyone who set no limit and relied on a large number of safe calls running
+together; clients that show tool progress, which may now see `{ "queued": true }` on a call that has not started.
+
+**What to do:** nothing in most setups. To change how many safe calls run together, set `tool_execution.max_concurrency`
+to a positive whole number in your own config. A project's config cannot raise it above 10 until you trust the folder.
+
+### A failed certificate check is no longer retried
+
+When a connection to a model endpoint failed because its certificate could not be verified (a self-signed or unknown
+issuer, an untrusted chain, an expired or not yet valid certificate, or a host name that does not match), Orbit treated
+it like any other network failure and retried it for about 160 seconds before showing anything. A failed certificate
+check gives the same answer every time, so it is now shown at once, with the verification message. Other network
+failures, such as a reset or refused connection, still retry as before. This also covers the token request of a gateway
+provider. Under Node, a verification result that Node does not name (a weak signature digest, a name-constraint
+violation) is recognized by the generic `UNSPECIFIED` code on the cause of a failed fetch; under Bun every verification
+result has a name. Cloudflare workerd reports no code, so a failed check there still retries.
+
+**Affects:** people who reach a model endpoint behind a private certificate authority and have not yet told Orbit to
+trust it, and scripts that waited out the retries.
+
+**What to do:** trust the authority with `ORBIT_CA_CERTS` (or `NODE_EXTRA_CA_CERTS`), or fix the endpoint's certificate.
+
 ### New `fallback_model` setting
 
 The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
-use for the rest of a turn after the selected model is repeatedly overloaded. This change only adds and resolves the
-setting; the switch itself follows in a later change. A model that is unavailable, or is the session's own model, is
-ignored.
+use for the rest of a turn after the selected model is repeatedly overloaded (see the note on switching below). A
+model that is unavailable, or is the session's own model, is ignored.
 
 In a folder that is not trusted yet, `fallback_model` is left out whole, so a repository cannot choose your fallback
 model. Orbit uses your own setting until you trust the folder.
@@ -1350,10 +1394,10 @@ model. Orbit uses your own setting until you trust the folder.
 ### New `output_token_cap` setting
 
 The root `output_token_cap` setting is a positive whole number of tokens that caps how much a model may write in one
-model call. A reply that runs several calls can write more than the cap in total. Every agent request, including a
-subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied before `session.context`
+agent step. A reply that runs several steps can write more than the cap in total. Compaction summaries and titles keep
+their own limits. Every agent request, including a subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied before `session.context`
 hooks run, so a hook can still change it. It reaches every provider, including one whose adapter otherwise omits the
-default limit, and `session.context` hooks see it as `outputTokenCap`. The one exception is a model that rejects an
+default limit, and `session.context` hooks see it as `outputTokenCap` when it lowered the model's limit. The one exception is a model that rejects an
 output limit at its highest reasoning effort, where Orbit sends none. The cap never raises a limit. Left unset, requests
 are unchanged. Zero, a negative number or a fraction is reported and ignored. With a cap of 1,024 or less, every request
 from a model with a fixed reasoning budget is refused; below about 2,000, most of the cap goes to reasoning.
@@ -1364,3 +1408,21 @@ or a budget. Orbit uses your own setting until you trust the folder.
 **Affects:** people who want shorter replies, and anyone reading `config.get`, which now lists the key.
 
 **What to do:** nothing. Set `output_token_cap` in your own config to use it.
+
+### A run switches to the fallback model after three overloads in a row
+
+When the provider reports that the model is overloaded three times in a row within one step, Orbit now switches to the
+fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
+session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
+other failure between two overloads, such as a rate limit, restarts the count. If the overloaded response had already
+produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
+`synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
+also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
+prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
+or a moved location keeps it. The message comes before the fallback model's answer, never after it. The failed
+attempt's empty draft stays ahead of the message; it is closed without a finish, left out of requests and not counted as
+a step. No new event type is added.
+
+**Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
+
+**What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.

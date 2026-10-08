@@ -578,6 +578,16 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     })
   })
 
+  /**
+   * Publishes live progress that is not kept as the call's progress snapshot, so that a scheduling hint such as
+   * `{ queued: true }` never reaches the metadata of a failure. A call that is gone is skipped.
+   */
+  const hint = Effect.fnUntraced(function* (id: string, metadata: Tool.Metadata) {
+    const tool = tools.get(id)
+    if (!tool?.called || tool.settled) return
+    yield* bus.publish(SessionEvent.Tool.Progress, { sessionID: input.sessionID, assistantMessageID, id, metadata })
+  })
+
   /** Publishes one canonical terminal event for a locally executed tool call. */
   const toolExecution = Effect.fnUntraced(function* (id: string, name: string, result: Tool.NormalizedResult) {
     const tool = tools.get(id)
@@ -605,6 +615,7 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       return publishTraced(event)
     },
     progress,
+    hint,
     toolExecution,
     flush,
     failAssistant,
