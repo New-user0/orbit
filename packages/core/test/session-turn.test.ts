@@ -154,7 +154,7 @@ describe("SessionTurn.current", () => {
       const turn = yield* s.current
 
       expect(turn.boundary).toBeUndefined()
-      expect(turn.options).toMatchObject({ value: { maxSteps: 4 }, seq: yield* s.seq(first.id) })
+      expect(turn.options).toMatchObject({ maxSteps: 4, seq: yield* s.seq(first.id) })
     }),
   )
 
@@ -166,7 +166,7 @@ describe("SessionTurn.current", () => {
       yield* s.notice("fallback", { model: backup })
       yield* s.notice("stop-hook")
       expect(yield* s.current).toMatchObject({
-        options: { value: { maxSteps: 1 }, seq: yield* s.seq(first.id) },
+        options: { maxSteps: 1, seq: yield* s.seq(first.id) },
         fallback: backup,
         notices: { "stop-hook": 1, fallback: 1 },
       })
@@ -193,9 +193,9 @@ describe("SessionTurn.current", () => {
 
       expect(yield* s.current).toMatchObject({
         boundary: yield* s.seq(queued.id),
-        options: { value: { maxCost: 2 }, seq: yield* s.seq(queued.id) },
+        options: { maxCost: 2, seq: yield* s.seq(queued.id) },
       })
-      expect((yield* s.current).options?.value).not.toHaveProperty("maxSteps")
+      expect((yield* s.current).options).not.toHaveProperty("maxSteps")
     }),
   )
 
@@ -210,15 +210,15 @@ describe("SessionTurn.current", () => {
       expect((yield* s.current).boundary).toBeUndefined()
 
       yield* s.promote("input")
-      expect(yield* s.current).toMatchObject({ boundary: yield* s.seq(first.id), options: { value: { maxSteps: 2 } } })
+      expect(yield* s.current).toMatchObject({ boundary: yield* s.seq(first.id), options: { maxSteps: 2 } })
 
       const steer = yield* s.admit("Steer")
       yield* s.promote("steer")
       expect(yield* s.seq(steer.id)).toBeGreaterThan(yield* s.seq(first.id))
-      expect(yield* s.current).toMatchObject({ boundary: yield* s.seq(first.id), options: { value: { maxSteps: 2 } } })
+      expect(yield* s.current).toMatchObject({ boundary: yield* s.seq(first.id), options: { maxSteps: 2 } })
 
       yield* s.promote("input")
-      expect(yield* s.current).toMatchObject({ boundary: yield* s.seq(second.id), options: { value: { maxSteps: 9 } } })
+      expect(yield* s.current).toMatchObject({ boundary: yield* s.seq(second.id), options: { maxSteps: 9 } })
     }),
   )
 
@@ -233,7 +233,7 @@ describe("SessionTurn.current", () => {
 
       const moved = yield* s.current
       expect(moved.options).toEqual({
-        value: { maxCost: Money.USD.make(2) },
+        maxCost: Money.USD.make(2),
         seq: yield* s.seq(steer.id),
         time: expect.anything(),
       })
@@ -244,7 +244,7 @@ describe("SessionTurn.current", () => {
       yield* s.admit("Plain steer")
       yield* s.promote("steer")
       expect(plain(yield* s.current).options).toMatchObject({
-        value: { maxCost: 2 },
+        maxCost: 2,
         seq: moved.options?.seq,
         time: 5_000,
       })
@@ -252,7 +252,7 @@ describe("SessionTurn.current", () => {
       // An empty set of options is still options: it lifts the limits set before it.
       const lifted = yield* s.admit("Lift the limits", { turn: {} })
       yield* s.promote("steer")
-      expect(plain(yield* s.current).options).toEqual({ value: {}, seq: yield* s.seq(lifted.id), time: 10_000 })
+      expect(plain(yield* s.current).options).toEqual({ seq: yield* s.seq(lifted.id), time: 10_000 })
     }),
   )
 
@@ -273,7 +273,7 @@ describe("SessionTurn.current", () => {
       yield* s.promote("input")
       expect(yield* s.current).toMatchObject({
         boundary: afterIdle.boundary,
-        options: { value: { maxSteps: 7 }, seq: yield* s.seq(next.id) },
+        options: { maxSteps: 7, seq: yield* s.seq(next.id) },
       })
     }),
   )
@@ -288,7 +288,7 @@ describe("SessionTurn.current", () => {
       yield* s.promote("steer")
       expect(yield* s.current).toMatchObject({
         boundary: undefined,
-        options: { value: { maxSteps: 3 } },
+        options: { maxSteps: 3 },
         notices: { "stop-hook": 1 },
       })
 
@@ -429,7 +429,7 @@ describe("SessionTurn.current", () => {
 
       expect(yield* s.current).toMatchObject({
         boundary: undefined,
-        options: { value: { maxSteps: 1 }, seq: yield* s.seq(first.id) },
+        options: { maxSteps: 1, seq: yield* s.seq(first.id) },
       })
     }),
   )
@@ -476,10 +476,10 @@ describe("SessionTurn.current", () => {
       yield* s.other.notice("fallback", { model: spare })
 
       expect((yield* s.current).notices).toEqual({ fallback: 1, "stop-hook": 1 })
-      expect(yield* s.current).toMatchObject({ options: { value: { maxSteps: 5 } }, fallback: backup })
+      expect(yield* s.current).toMatchObject({ options: { maxSteps: 5 }, fallback: backup })
       expect(yield* s.other.current).toMatchObject({
         boundary: yield* s.seq(queued.id),
-        options: { value: { maxCost: 9 } },
+        options: { maxCost: 9 },
         fallback: spare,
         notices: { "stop-hook": 2, fallback: 2 },
       })
@@ -510,7 +510,8 @@ describe("SessionTurn.current", () => {
 
       const before = yield* s.current
       expect(before.boundary).toBeDefined()
-      expect(before.options?.value).toEqual({ maxCost: Money.USD.make(1.5) })
+      expect(before.options).toMatchObject({ maxCost: Money.USD.make(1.5) })
+      expect(before.options).not.toHaveProperty("maxSteps")
       expect(before.fallback).toEqual(spare)
       expect(before.notices).toEqual({ fallback: 2, "output-limit": 1, "stop-hook": 1, "output-escalation": 1 })
 

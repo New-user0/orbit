@@ -16,8 +16,11 @@ type DatabaseService = Database.Interface["db"]
 export interface Current {
   /** Sequence of the row that began the turn, or undefined when the turn began with the Session. */
   readonly boundary: number | undefined
-  /** The latest options the turn's prompts carried, with where the prompt that set them sits in the transcript. */
-  readonly options: { readonly value: Options; readonly seq: number; readonly time: DateTime.Utc } | undefined
+  /**
+   * The latest options the turn's prompts carried, with the sequence and time of the prompt that set them: a limit
+   * counts what happened after that point.
+   */
+  readonly options: (Options & { readonly seq: number; readonly time: DateTime.Utc }) | undefined
   /** The model a fallback notice named in this turn, until the Session switches model again. */
   readonly fallback: Model.Ref | undefined
   /** How many notices of each kind (`metadata.notice` of a synthetic message) the turn holds. */
@@ -137,7 +140,7 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
     boundary: read.boundary,
     options:
       read.options && prompt?.type === "user" && prompt.turn
-        ? { value: prompt.turn, seq: read.options.seq, time: prompt.time.created }
+        ? { ...prompt.turn, seq: read.options.seq, time: prompt.time.created }
         : undefined,
     fallback: model?._tag === "Some" ? model.value : undefined,
     // fromEntries defines own properties, so a kind named like a prototype member is still a plain count.

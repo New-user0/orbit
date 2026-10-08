@@ -4347,7 +4347,7 @@ describe("SessionRunnerLLM", () => {
     yield* firstStream.started
     expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
       boundary: undefined,
-      options: { value: { maxSteps: 4 } },
+      options: { maxSteps: 4 },
     })
     const queued = yield* s.session.prompt({ sessionID, text: "Queued", delivery: "queue", turn: { maxSteps: 2 } })
     const secondStream = yield* s.llm.gate
@@ -4357,7 +4357,7 @@ describe("SessionRunnerLLM", () => {
     // The queued prompt waited for the first response to end: it began a turn, and nothing it set before it applies.
     expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
       boundary: yield* seqOf(queued.id),
-      options: { value: { maxSteps: 2 }, seq: yield* seqOf(queued.id) },
+      options: { maxSteps: 2, seq: yield* seqOf(queued.id) },
     })
     const steer = yield* s.session.prompt({ sessionID, text: "Steer", turn: { maxCost: Money.USD.make(1) } })
     const thirdStream = yield* s.llm.gate
@@ -4367,7 +4367,8 @@ describe("SessionRunnerLLM", () => {
     // The steer joined that turn, and its options replaced the queued prompt's.
     const joined = yield* SessionTurn.current(s.db, sessionID)
     expect(joined.boundary).toBe(yield* seqOf(queued.id))
-    expect(joined.options).toMatchObject({ value: { maxCost: 1 }, seq: yield* seqOf(steer.id) })
+    expect(joined.options).toMatchObject({ maxCost: 1, seq: yield* seqOf(steer.id) })
+    expect(joined.options).not.toHaveProperty("maxSteps")
     yield* thirdStream.release
     yield* Fiber.join(run)
 
