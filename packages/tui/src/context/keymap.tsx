@@ -1,10 +1,9 @@
 import type { KeymapActive, KeymapCommand, KeymapLayer, KeymapPending } from "@orbit/plugin/tui/context"
 import { InputRenderable, TextareaRenderable, type KeyEvent, type Renderable } from "@opentui/core"
-import { stringifyKeyStroke, type Binding, type CommandContext } from "@opentui/keymap"
+import { stringifyKeyStroke, type Binding, type CommandContext, type KeyLike } from "@opentui/keymap"
 import {
   registerBackspacePopsPendingSequence,
   registerBaseLayoutFallback,
-  registerCommaBindings,
   registerEscapeClearsPendingSequence,
   registerManagedTextareaLayer,
   registerTimedLeader,
@@ -45,10 +44,51 @@ type Mode = ReturnType<typeof createMode>
 type KeymapConfig = {
   readonly keybinds: {
     get(command: string): readonly Binding<Renderable, KeyEvent>[]
+    override?: TuiKeybind.BindingLookupView["override"]
   }
   readonly leader?: { readonly timeout: number }
   readonly leader_timeout?: number
 }
+
+// Input commands bound to a text area by the managed layer, whose keys come from the config.
+const INPUT_COMMANDS = [
+  "input.move.left",
+  "input.move.right",
+  "input.move.up",
+  "input.move.down",
+  "input.select.left",
+  "input.select.right",
+  "input.select.up",
+  "input.select.down",
+  "input.line.home",
+  "input.line.end",
+  "input.select.line.home",
+  "input.select.line.end",
+  "input.visual.line.home",
+  "input.visual.line.end",
+  "input.select.visual.line.home",
+  "input.select.visual.line.end",
+  "input.buffer.home",
+  "input.buffer.end",
+  "input.select.buffer.home",
+  "input.select.buffer.end",
+  "input.delete.line",
+  "input.delete.to.line.end",
+  "input.delete.to.line.start",
+  "input.backspace",
+  "input.delete",
+  "input.newline",
+  "input.undo",
+  "input.redo",
+  "input.word.forward",
+  "input.word.backward",
+  "input.select.word.forward",
+  "input.select.word.backward",
+  "input.delete.word.forward",
+  "input.delete.word.backward",
+  "input.select.all",
+  "input.submit",
+]
 
 export const COMMAND_PALETTE_COMMAND = "command.palette.show"
 
@@ -76,74 +116,48 @@ function Provider(props: ParentProps<{ config?: KeymapConfig }>) {
     }
   }
   const dispose = [
-    registerCommaBindings(keymap),
-    keymap.appendBindingExpander((context) => {
-      const key = Object.entries({ enter: "return", esc: "escape", pgdown: "pagedown", pgup: "pageup" }).reduce(
-        (result, [alias, value]) =>
-          result.replace(new RegExp(`(^|[+,\\s>])${alias}(?=$|[+,\\s<])`, "gi"), `$1${value}`),
-        context.input,
-      )
-      if (key === context.input) return
-      return [{ key, displays: context.displays }]
-    }),
+    // Commas, spelled-out keys and chords such as `ctrl+k ctrl+s`. The latter use the same strokes as a <leader> sequence
+    // and never touch one, because a <leader> sequence has no space in it.
+    ...TuiKeybind.registerSyntax(keymap),
     registerBaseLayoutFallback(keymap),
     registerEscapeClearsPendingSequence(keymap),
     registerBackspacePopsPendingSequence(keymap),
-    registerManagedTextareaLayer(keymap, renderer, {
-      enabled: () => {
-        const editor = renderer.currentFocusedEditor
-        return editor instanceof TextareaRenderable && !(editor instanceof InputRenderable)
-      },
-      bindings: [
-        "input.move.left",
-        "input.move.right",
-        "input.move.up",
-        "input.move.down",
-        "input.select.left",
-        "input.select.right",
-        "input.select.up",
-        "input.select.down",
-        "input.line.home",
-        "input.line.end",
-        "input.select.line.home",
-        "input.select.line.end",
-        "input.visual.line.home",
-        "input.visual.line.end",
-        "input.select.visual.line.home",
-        "input.select.visual.line.end",
-        "input.buffer.home",
-        "input.buffer.end",
-        "input.select.buffer.home",
-        "input.select.buffer.end",
-        "input.delete.line",
-        "input.delete.to.line.end",
-        "input.delete.to.line.start",
-        "input.backspace",
-        "input.delete",
-        "input.newline",
-        "input.undo",
-        "input.redo",
-        "input.word.forward",
-        "input.word.backward",
-        "input.select.word.forward",
-        "input.select.word.backward",
-        "input.delete.word.forward",
-        "input.delete.word.backward",
-        "input.select.all",
-        "input.submit",
-      ].flatMap((command) => config.keybinds.get(command)),
-    }),
   ]
-  const leader = config.keybinds.get("leader")?.[0]?.key
-  if (leader) {
-    dispose.push(
+  // The leader key and the text-area keys are registered once with the keys they have, so they register again when a
+  // change to the config, such as an edit of the keybindings file, gives them other keys. A reload rewrites the objects
+  // of the config in place, which leaves nothing to tell the old keys from the new ones, so each memo holds the keys as
+  // text and the computations below read them back from it.
+  const leader = createMemo(() => JSON.stringify(config.keybinds.get("leader")?.[0]?.key))
+  createComputed(() => {
+    const written = leader()
+    if (!written) return
+    const trigger: KeyLike = JSON.parse(written)
+    onCleanup(
       registerTimedLeader(keymap, {
-        trigger: leader,
+        trigger,
         name: "leader",
         timeoutMs: config.leader?.timeout ?? ("leader_timeout" in config ? config.leader_timeout : undefined) ?? 2000,
       }),
     )
-  }
+  })
+  const inputBindings = createMemo(() =>
+    JSON.stringify(INPUT_COMMANDS.flatMap((command) => config.keybinds.get(command))),
+  )
+  createComputed(() => {
+    const bindings: Binding<Renderable, KeyEvent>[] = JSON.parse(inputBindings())
+    onCleanup(
+      registerManagedTextareaLayer(keymap, renderer, {
+        enabled: () => {
+          const editor = renderer.currentFocusedEditor
+          return editor instanceof TextareaRenderable && !(editor instanceof InputRenderable)
+        },
+        // Layers rank by priority and then by when they registered, and this one was always the oldest. Registering it
+        // again must not put it above the app's own layers, so it ranks below all of them whenever it registers.
+        priority: -1,
+        bindings,
+      }),
+    )
+  })
   onCleanup(() => {
     dispose.reverse().forEach((item) => item())
     mode.dispose()
@@ -186,8 +200,6 @@ export interface Keymap {
 function use(): Keymap {
   const value = useValue()
   const enabled = useInteractivity()
-  const leader = value.config.keybinds.get("leader")?.[0]?.key
-  const isLeader = leader ? value.keymap.createKeyMatcher(leader) : () => false
   return {
     dispatch(id, input) {
       value.dispatch(id, input)
@@ -197,7 +209,11 @@ function use(): Keymap {
       push: (mode) => value.mode.push(mode, resolveInteractivity(enabled)),
     },
     intercept: value.keymap.intercept.bind(value.keymap),
-    isLeader,
+    // Read on every call, because the keybindings file can change the leader key while the app runs.
+    isLeader(event) {
+      const leader = value.config.keybinds.get("leader")?.[0]?.key
+      return leader ? value.keymap.createKeyMatcher(leader)(event) : false
+    },
   }
 }
 
@@ -206,7 +222,12 @@ function createLayer(input: () => KeymapLayer) {
   const enabled = useInteractivity()
   useBindings(() => {
     const layer = input()
-    const { commands, bindings, mode, ...options } = layer
+    const { commands, bindings, mode, context, ...options } = layer
+    // A layer without a context, or with one that is not Orbit's, only ever gets the keys that apply everywhere.
+    const place = TuiKeybind.isContext(context) ? context : undefined
+    // What the keybindings file sets decides first: for this context, then for all of them. An empty list is a command it
+    // unbinds, which the command's own default key must not bring back.
+    const fromFile = (id: string) => value.config.keybinds.override?.(place, id)
     const grouped = (commands ?? []).reduce(
       (result, command) => {
         if (command.id !== undefined) {
@@ -259,12 +280,14 @@ function createLayer(input: () => KeymapLayer) {
         })),
         ...grouped.named.flatMap((command) => {
           if (command.bind === false) return []
+          const overridden = fromFile(command.id)
+          if (overridden) return overridden
           const configured = value.config.keybinds.get(command.id)
           if (configured.length) return configured
           if (typeof command.bind !== "string") return []
           return [{ key: command.bind, cmd: command.id }]
         }),
-        ...(bindings ?? []).flatMap((id) => value.config.keybinds.get(id)),
+        ...(bindings ?? []).flatMap((id) => fromFile(id) ?? value.config.keybinds.get(id)),
       ],
     }
   })

@@ -11,9 +11,12 @@ import { useDialog, type DialogContext } from "./dialog"
 import { Locale } from "../util/locale"
 import { getScrollAcceleration } from "../util/scroll"
 import { useConfig } from "../config"
+import type { TuiKeybind } from "../config/keybind"
 import { moveSelection, reconcileSelection } from "./select-controller"
 
 export interface DialogSelectProps<T> {
+  /** The keybindings context of the dialog's keys, for a dialog that has keys of its own. Defaults to dialog. */
+  context?: TuiKeybind.Context
   title: string
   titleView?: JSX.Element
   /** Shown between the title and the options, for a question that needs more than a title to be answered. */
@@ -416,6 +419,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     const visible = shownActions()
 
     return {
+      context: props.context ?? "dialog",
       mode: "modal",
       commands: [
         {

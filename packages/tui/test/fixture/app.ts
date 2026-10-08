@@ -12,6 +12,8 @@ export async function createAppFixture(
     height?: number
     state?: string
     config?: Config.Info
+    /** Where cli.json would be. The keybindings file is read from beside it. */
+    configPath?: string
     args?: TuiInput["args"]
     fetch?: FetchHandler
   } = {},
@@ -33,7 +35,11 @@ export async function createAppFixture(
     run({
       app: { name: "test", version: "test", channel: "test" },
       server: { endpoint: { url: server.url.toString() } },
-      config: { get: async () => input.config ?? { animations: false }, update: async () => ({}) },
+      config: {
+        path: input.configPath,
+        get: async () => input.config ?? { animations: false },
+        update: async () => ({}),
+      },
       packages: { prepare: async () => ({ directory: "" }) },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},

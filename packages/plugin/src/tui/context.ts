@@ -412,6 +412,12 @@ export interface KeymapCommand {
 export interface KeymapLayer {
   /** Limits the layer to one Orbit input mode. Use global to opt out; defaults to base. */
   readonly mode?: string
+  /**
+   * The place this layer's commands belong to, for the keybindings file, where a person can give a command other keys in one
+   * place only. Orbit's own are global, prompt, session, permission, composer, dialog, session-list, diff, which-key and mini.
+   * A layer with no context, or with any other name, gets only the keys the person set for a command everywhere.
+   */
+  readonly context?: string
   /** Enables or disables the complete layer. */
   readonly enabled?: boolean | (() => boolean)
   /** Limits the layer to a focused renderable. */

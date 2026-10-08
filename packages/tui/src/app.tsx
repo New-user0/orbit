@@ -79,6 +79,7 @@ import { clampSessionTabsWidth, sessionTabsFitVertically, SESSION_SIDEBAR_WIDTH 
 import { createPaneResize } from "./ui/pane-resize"
 import { PaneResizeHandle } from "./ui/pane-resize-handle"
 import { ThemeErrorToast } from "./component/theme-error-toast"
+import { editKeybindings, KeybindingsToast } from "./component/keybindings-toast"
 import { createThemeSource, ThemeProvider, useTheme, useThemes } from "./context/theme"
 import { Home } from "./routes/home"
 import { PromptHistoryProvider } from "./prompt/history"
@@ -103,6 +104,7 @@ import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/k
 import { DialogVariant } from "./component/dialog-variant"
 import { destroyRenderer, terminalTitle } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { KeybindingsFile } from "./config/keybindings-file"
 import { AttentionProvider } from "./context/attention"
 import { StorageProvider, useStorage } from "./context/storage"
 import { SessionTerminalsProvider } from "./context/session-terminals"
@@ -162,6 +164,7 @@ const appBindingCommands = [
   "variant.list",
   "provider.connect",
   "orbit.settings",
+  "keybindings.open",
   "orbit.status",
   "orbit.update",
   "server.pair",
@@ -212,8 +215,10 @@ export type TuiInput = {
 export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const log = input.log ?? (() => {})
   const global = yield* Global.Service
-  const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
+  const loaded = yield* Effect.tryPromise(() => Config.read(input.config))
+  const config = Config.resolve(loaded.info, {
     terminalSuspend: process.platform !== "win32",
+    keybindings: loaded.keybindings,
   })
   const options = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
   const api = Orbit.make(options)
@@ -370,6 +375,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   <ArgsProvider {...input.args}>
                                     <ConfigProvider
                                       config={config}
+                                      keybindings={loaded.keybindings}
                                       service={input.config}
                                       options={{ terminalSuspend: process.platform !== "win32" }}
                                     >
@@ -396,6 +402,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                           source={createThemeSource(global.config)}
                                                         >
                                                           <ThemeErrorToast />
+                                                          <KeybindingsToast />
                                                           <LocalProvider>
                                                             <PromptStashProvider>
                                                               <DialogProvider>
@@ -1028,6 +1035,21 @@ function App() {
         category: "System",
       },
       {
+        name: "keybindings.open",
+        title: "Edit keybindings",
+        slash: { name: "keybindings" },
+        run: async () => {
+          dialog.clear()
+          const file = config.path ? KeybindingsFile.locate(config.path) : undefined
+          if (!file) {
+            toast.show({ variant: "warning", message: "This session has no keybindings file." })
+            return
+          }
+          await editKeybindings({ file, renderer, toast })
+        },
+        category: "System",
+      },
+      {
         name: "orbit.status",
         title: "View status",
         slash: { name: "status" },
@@ -1277,32 +1299,38 @@ function App() {
   )
 
   Keymap.createLayer(() => ({
+    context: "global",
     mode: "global",
     commands: appCommands(),
   }))
 
   Keymap.createLayer(() => ({
+    context: "global",
     bindings: appBindingCommands,
   }))
 
   Keymap.createLayer(() => ({
+    context: "global",
     mode: "global",
     bindings: appGlobalBindingCommands,
   }))
 
   Keymap.createLayer(() => ({
+    context: "global",
     mode: "global",
     enabled: sessionTabs.enabled,
     bindings: sessionTabBindingCommands,
   }))
 
   Keymap.createLayer(() => ({
+    context: "global",
     mode: "global",
     enabled: () => !sessionTabs.enabled(),
     bindings: pinnedSessionBindingCommands,
   }))
 
   Keymap.createLayer(() => ({
+    context: "global",
     enabled: () => {
       const current = promptRef.current
       if (!current?.focused) return true

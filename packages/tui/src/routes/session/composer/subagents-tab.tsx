@@ -131,6 +131,7 @@ export function SubagentsTab(props: { sessionID: string }) {
   })
 
   Keymap.createLayer(() => ({
+    context: "composer",
     mode: "composer",
     enabled: () => composer.active("subagents"),
     priority: 1,
