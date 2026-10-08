@@ -1,9 +1,11 @@
 import path from "path"
+import * as fuzzysort from "fuzzysort"
 import { onMount } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
 import type { PromptInput } from "@orbit/schema"
 import type { Types } from "effect"
 import { createSimpleContext } from "../context/helper"
+import { useConfig } from "../config"
 import { useTuiPaths } from "../context/runtime"
 import { appendText, readText, writeText } from "../util/persistence"
 import { promptOffsetWidth } from "./display"
@@ -20,6 +22,10 @@ export type PastedText = {
 export type PromptInfo = Types.DeepMutable<Pick<PromptInput.Prompt, "text" | "files" | "agents" | "skills">> & {
   pasted: PastedText[]
   mode?: "normal" | "shell"
+  /** Where the prompt was sent from. Missing on entries saved before history search. */
+  directory?: string
+  /** When the prompt was saved, in epoch milliseconds. Missing on entries saved before history search. */
+  time?: number
 }
 
 export type PromptPartRef = {
@@ -57,10 +63,43 @@ export function appendPrompt(prompt: PromptInfo, following: PromptInfo): PromptI
   }
 }
 
-export const MAX_HISTORY_ENTRIES = 50
+export const DEFAULT_HISTORY_LIMIT = 500
+/** The saved file is trimmed from its oldest end to stay under this many bytes. */
+export const MAX_HISTORY_BYTES = 1024 * 1024
+/** A pasted body larger than this is not saved. */
+export const MAX_SAVED_PASTE_BYTES = 4096
+export const PASTE_NOT_SAVED = "[Pasted text was too large to keep in prompt history]"
 
-export function parsePromptHistory(text: string) {
-  return text
+/**
+ * The form of an entry that is written to disk. Pasted images are base64 data URIs and large pastes are whole files,
+ * so neither is saved: an image attachment is dropped (its mention stays in the text as plain words) and a large pasted
+ * body is replaced by a notice. The entries in memory keep their originals for the session.
+ */
+export function savedEntry(entry: PromptInfo): PromptInfo {
+  return {
+    ...entry,
+    files: entry.files?.filter((file) => !file.uri.startsWith("data:")),
+    pasted: entry.pasted.map((part) =>
+      Buffer.byteLength(part.text) > MAX_SAVED_PASTE_BYTES ? { ...part, text: PASTE_NOT_SAVED } : part,
+    ),
+  }
+}
+
+/** The newest entries that fit the count limit and the byte cap, as the lines of the history file. */
+export function savedLines(entries: PromptInfo[], limit = DEFAULT_HISTORY_LIMIT) {
+  const kept = entries.slice(-limit).map((entry) => JSON.stringify(savedEntry(entry)))
+  let bytes = 0
+  const lines: string[] = []
+  for (const line of kept.toReversed()) {
+    bytes += Buffer.byteLength(line) + 1
+    if (bytes > MAX_HISTORY_BYTES) break
+    lines.push(line)
+  }
+  return lines.toReversed()
+}
+
+export function parsePromptHistory(text: string, limit = DEFAULT_HISTORY_LIMIT) {
+  const entries = text
     .split("\n")
     .filter(Boolean)
     .map((line) => {
@@ -71,12 +110,34 @@ export function parsePromptHistory(text: string) {
       }
     })
     .filter((line): line is PromptInfo => line !== undefined)
-    .slice(-MAX_HISTORY_ENTRIES)
+  return savedLines(entries, limit).map((line) => JSON.parse(line) as PromptInfo)
+}
+
+/**
+ * The entries whose text matches the query, best place first: those sent from the given directory, then the newest.
+ * Without a query every entry matches. The same prompt sent twice shows once, in its best place.
+ */
+export function searchPromptHistory(entries: readonly PromptInfo[], query: string, directory?: string) {
+  const all = entries.map((entry, index) => ({ entry, index }))
+  const matched = query.trim()
+    ? fuzzysort.go(query.trim(), all, { key: (item) => item.entry.text }).map((result) => result.obj)
+    : all
+  const here = (entry: PromptInfo) => (directory !== undefined && entry.directory === directory ? 0 : 1)
+  const seen = new Set<string>()
+  return matched
+    .toSorted((a, b) => here(a.entry) - here(b.entry) || b.index - a.index)
+    .map((item) => item.entry)
+    .filter((entry) => {
+      const key = `${entry.mode ?? "normal"}\n${entry.text}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
 }
 
 export function isDuplicateEntry(previous: PromptInfo | undefined, next: PromptInfo): boolean {
   if (!previous) return false
-  return JSON.stringify(previous) === JSON.stringify(next)
+  return JSON.stringify({ ...previous, time: 0 }) === JSON.stringify({ ...next, time: 0 })
 }
 
 export function parsePromptInfo(value: unknown): PromptInfo | undefined {
@@ -91,18 +152,30 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
   init: () => {
     const paths = useTuiPaths()
     const historyPath = path.join(paths.state, "prompt-history.jsonl")
+    const config = useConfig().data
+    const limit = () => config.prompt?.history_limit ?? DEFAULT_HISTORY_LIMIT
+    // The size of the history file, so that an append knows when the file has outgrown its cap.
+    let fileBytes = 0
     onMount(async () => {
-      const lines = parsePromptHistory(await readText(historyPath).catch(() => ""))
+      const lines = parsePromptHistory(await readText(historyPath).catch(() => ""), limit())
       setStore("history", lines)
 
-      // Rewrite valid retained entries to self-heal corruption and enforce the limit.
-      if (lines.length > 0)
-        writeText(historyPath, lines.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
+      // Rewrite valid retained entries to self-heal corruption and enforce the limits.
+      if (lines.length > 0) rewrite(lines)
     })
 
     const [store, setStore] = createStore({ index: 0, history: [] as PromptInfo[] })
 
+    function rewrite(entries: PromptInfo[]) {
+      const lines = savedLines(entries, limit())
+      const content = lines.map((line) => line + "\n").join("")
+      fileBytes = Buffer.byteLength(content)
+      writeText(historyPath, content).catch(() => {})
+    }
+
     return {
+      entries: () => store.history,
+      search: (query: string, directory?: string) => searchPromptHistory(store.history, query, directory),
       move(direction: 1 | -1, input: string) {
         if (!store.history.length) return undefined
         const current = store.history.at(store.index)
@@ -114,8 +187,9 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         if (next === 0) return emptyPrompt()
         return store.history.at(next)
       },
-      append(item: PromptInfo) {
-        const entry = structuredClone(unwrap(item))
+      append(item: PromptInfo, directory?: string) {
+        const entry = { ...structuredClone(unwrap(item)), directory, time: Date.now() }
+        // Time is not part of what makes a prompt a repeat.
         if (isDuplicateEntry(store.history.at(-1), entry)) {
           setStore("index", 0)
           return
@@ -124,19 +198,21 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         setStore(
           produce((draft) => {
             draft.history.push(entry)
-            if (draft.history.length > MAX_HISTORY_ENTRIES) {
-              draft.history = draft.history.slice(-MAX_HISTORY_ENTRIES)
+            if (draft.history.length > limit()) {
+              draft.history = draft.history.slice(-limit())
               trimmed = true
             }
             draft.index = 0
           }),
         )
 
-        if (trimmed) {
-          writeText(historyPath, store.history.map((line) => JSON.stringify(line)).join("\n") + "\n").catch(() => {})
+        const line = JSON.stringify(savedEntry(entry)) + "\n"
+        fileBytes += Buffer.byteLength(line)
+        if (trimmed || fileBytes > MAX_HISTORY_BYTES) {
+          rewrite(store.history)
           return
         }
-        appendText(historyPath, JSON.stringify(entry) + "\n").catch(() => {})
+        appendText(historyPath, line).catch(() => {})
       },
     }
   },

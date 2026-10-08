@@ -145,6 +145,9 @@ export const Info = Schema.Struct({
       image_preview: Schema.optional(Schema.Boolean).annotate({
         description: "Show image attachment previews above the prompt input",
       }),
+      history_limit: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
+        description: "How many sent prompts to keep for the up arrow and history search (default 500)",
+      }),
       vim: Schema.optional(Schema.Boolean).annotate({
         description: "Edit the prompt with Vim keys: Escape enters normal mode, i or a returns to insert mode",
       }),

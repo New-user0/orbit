@@ -37,6 +37,7 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
+import { DialogHistorySearch } from "./dialog-history-search"
 import { type AutocompleteOption, type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { Locale } from "../../util/locale"
@@ -219,6 +220,11 @@ export function Prompt(props: PromptProps) {
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
   const history = usePromptHistory()
+  // The folder that a sent prompt is filed under in history: the session's own, or where the next session starts.
+  const historyDirectory = () =>
+    (props.sessionID ? data.session.get(props.sessionID)?.location.directory : undefined) ??
+    currentLocation.ref?.directory ??
+    data.location.default().directory
   const stash = usePromptStash()
   const keymap = Keymap.use()
   const renderer = useRenderer()
@@ -1133,6 +1139,36 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  Keymap.createLayer(() => ({
+    context: "prompt",
+    priority: 1,
+    target: inputTarget,
+    // In Vim normal mode the same key is redo, which the key handler on the textarea runs.
+    enabled: inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined && !vimNormal(),
+    commands: [
+      {
+        id: "prompt.history.search",
+        title: "Search prompt history",
+        group: "Prompt",
+        run() {
+          dialog.replace(() => (
+            <DialogHistorySearch
+              entries={history.entries()}
+              directory={historyDirectory()}
+              onSelect={(item) => {
+                input.setText(item.text)
+                setStore("prompt", item)
+                setStore("mode", item.mode ?? "normal")
+                restoreExtmarksFromPrompt(item)
+                input.gotoBufferEnd()
+              }}
+            />
+          ))
+        },
+      },
+    ],
+  }))
+
   let submitting = false
   async function submit(delivery: SessionInbox.Delivery = "steer") {
     if (disabled()) return false
@@ -1346,7 +1382,7 @@ export function Prompt(props: PromptProps) {
       })
       return true
     }
-    history.append(entry)
+    history.append(entry, historyDirectory())
     if (currentMode === "shell") {
       move.startSubmit()
       const send = () => client.api.session.shell({ sessionID: target, command: inputText })
@@ -1562,10 +1598,13 @@ export function Prompt(props: PromptProps) {
       (store.prompt.files?.length ?? 0) > 0 ||
       (store.prompt.agents?.length ?? 0) > 0
     ) {
-      history.append({
-        ...store.prompt,
-        mode: store.mode,
-      })
+      history.append(
+        {
+          ...store.prompt,
+          mode: store.mode,
+        },
+        historyDirectory(),
+      )
     }
     resetComposer()
   }
