@@ -599,3 +599,28 @@ describe("run entry body", () => {
     })
   })
 })
+
+describe("message bodies", () => {
+  const hostile = "a\u001b]0;x\u0007b\u001b[2K\u009b‮c"
+  const written = "a\\x1b]0;x\\x07b\\x1b[2K\\x9b\\u{202e}c"
+
+  test.each([
+    ["system", "text"],
+    ["assistant", "markdown"],
+    ["user", "text"],
+  ] as const)("writes control characters out of %s text", (kind, type) => {
+    const body = entryBody(commit({ kind, text: hostile, phase: "progress", source: kind === "assistant" ? "assistant" : "system" }))
+    expect(body.type).toBe(type)
+    if (body.type !== "text" && body.type !== "markdown") throw new Error("Expected text")
+    expect(body.content).toContain(written)
+    expect(body.content).not.toContain("\u001b")
+  })
+
+  test.each([true, false])("writes control characters out of reasoning text, mono %p", (mono) => {
+    const body = entryBody(commit({ kind: "reasoning", text: hostile, phase: "progress", source: "assistant" }), {
+      mono,
+    })
+    if (body.type !== "text" && body.type !== "code") throw new Error("Expected text")
+    expect(body.content).toContain(written)
+  })
+})

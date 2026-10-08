@@ -216,6 +216,13 @@ describe("TUI inline tool wrapping", () => {
     expect(genericToolSummary("demo_refresh", {})).toBe("demo_refresh")
   })
 
+  test("writes the control characters of an MCP tool title out", () => {
+    // A server names its tools and chooses their arguments; ESC ] 0 BEL would set the title of the window.
+    expect(genericToolSummary("mcp_x\u001b]0;pwned\u0007", { q: "a‮b" })).toBe(
+      "mcp_x\\x1b]0;pwned\\x07 [q=a\\u{202e}b]",
+    )
+  })
+
   test("ignores diagnostics with malformed nested ranges", () => {
     expect(
       parseDiagnostics(

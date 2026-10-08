@@ -38,6 +38,7 @@ import type {
 } from "@orbit/client"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
+import { bodyText } from "../../util/renderer"
 import { FilePath } from "../../ui/file-path"
 import { PlanDock } from "./plan-dock"
 import { WorkflowCard } from "./workflow-card"
@@ -2027,7 +2028,7 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
   const cancelled = () => props.message.status === "failed" && props.message.error.type === "aborted"
   const text = () =>
     props.message.status === "failed" ? (cancelled() ? "" : props.message.error.message) : props.message.summary
-  const content = createMemo(() => text().trim())
+  const content = createMemo(() => bodyText(text()).trim())
   const color = () => (status() === "failed" && !cancelled() ? theme.text.feedback.error.base : theme.text.muted)
   // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
   const usage = () => {
@@ -2278,7 +2279,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
               ›
             </text>
             <text fg={theme.text.base} flexGrow={1} flexShrink={1}>
-              {props.message.text}
+              {bodyText(props.message.text)}
             </text>
           </box>
           <Show when={skills().length}>
@@ -2563,7 +2564,7 @@ type ToolProps = {
 }
 function GenericTool(props: ToolProps) {
   const theme = useTheme()
-  const output = createMemo(() => props.output?.trim() ?? "")
+  const output = createMemo(() => bodyText(props.output ?? "").trim())
   const input = createMemo(() => Object.entries(props.input))
   const [expanded, setExpanded] = createSignal(false)
   const expandable = createMemo(() => input().length > 0 || output().length > 0)
@@ -2574,7 +2575,7 @@ function GenericTool(props: ToolProps) {
       <InlineTool
         icon={props.part.state.status === "error" ? "✕" : "◇"}
         complete={props.part.state.status === "completed"}
-        pending={props.tool}
+        pending={bodyText(props.tool)}
         spinner={loading()}
         part={props.part}
         onClick={expandable() ? () => setExpanded((value) => !value) : undefined}
@@ -2590,7 +2591,7 @@ function GenericTool(props: ToolProps) {
                   {key}:{" "}
                 </text>
                 <text flexGrow={1} wrapMode="word" fg={theme.text.base}>
-                  {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+                  {bodyText(typeof value === "string" ? value : JSON.stringify(value, null, 2))}
                 </text>
               </box>
             )}
@@ -2615,7 +2616,7 @@ function GenericTool(props: ToolProps) {
 
 export function genericToolSummary(tool: string, input: Record<string, unknown>) {
   const args = primitiveInputSummary(input).replace(/\s+/g, " ")
-  return `${tool}${args ? ` ${args}` : ""}`
+  return bodyText(`${tool}${args ? ` ${args}` : ""}`)
 }
 
 function useToolPermission(part: () => SessionMessageAssistantTool | undefined) {
@@ -2915,11 +2916,11 @@ function ShellDisplay(props: {
     if (props.status === "streaming") return ""
     if (props.shellID) {
       if (props.background && !expanded()) return ""
-      if (props.status === "completed" && props.output !== undefined) return stripAnsi(props.output.trim())
-      const text = stripAnsi((backgroundOutput() || props.output || "").trim())
+      if (props.status === "completed" && props.output !== undefined) return bodyText(stripAnsi(props.output.trim()))
+      const text = bodyText(stripAnsi((backgroundOutput() || props.output || "").trim()))
       return outputTruncated() ? `[earlier output omitted]\n${text}` : text
     }
-    return stripAnsi(props.output?.trim() ?? "")
+    return bodyText(stripAnsi(props.output?.trim() ?? ""))
   })
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6 - (isRunning() ? 2 : 0)))
@@ -3002,7 +3003,7 @@ function Write(props: ToolProps) {
               fg={theme.text.base}
               filetype={filetype(stringValue(props.input.path))}
               syntaxStyle={syntax()}
-              content={code()}
+              content={bodyText(code())}
             />
           </line_number>
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.path) ?? ""} />
@@ -3208,7 +3209,7 @@ function ExecuteCallView(props: { call: Accessor<ExecuteCall> }) {
                   {key}:{" "}
                 </text>
                 <text flexGrow={1} wrapMode="word" fg={theme.text.base}>
-                  {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+                  {bodyText(typeof value === "string" ? value : JSON.stringify(value, null, 2))}
                 </text>
               </box>
             )}
@@ -3251,7 +3252,7 @@ function Execute(props: ToolProps) {
   const dialog = useDialog()
   const isLoading = createMemo(() => props.part.state.status === "streaming" || props.part.state.status === "running")
   const calls = createMemo(() => executeCalls(props.metadata.toolCalls))
-  const output = createMemo(() => stripAnsi(props.output?.trim() ?? ""))
+  const output = createMemo(() => bodyText(stripAnsi(props.output?.trim() ?? "")))
   const hasRuntimeError = createMemo(() => props.metadata.error === true || props.part.state.status === "error")
   const outputPreview = createMemo(() => collapseToolOutput(output(), 4, 4 * Math.max(20, ctx.width - 6)).output)
   const showOutput = createMemo(() => output() && hasRuntimeError())

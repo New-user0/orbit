@@ -1,5 +1,71 @@
 import { expect, test } from "bun:test"
-import { destroyRenderer, terminalTitle } from "../../src/util/renderer"
+import { MarkdownRenderable, SyntaxStyle, TextRenderable, type CliRenderer } from "@opentui/core"
+import { createTestRenderer } from "@opentui/core/testing"
+import { bodyText, destroyRenderer, terminalTitle } from "../../src/util/renderer"
+
+// A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
+// a model, a tool or a stored prompt can put into a message body.
+const hostile = "a\u001b]0;x\u0007 b\u001b[2K c\u009b d‮ e"
+const written = "a\\x1b]0;x\\x07 b\\x1b[2K c\\x9b d\\u{202e} e"
+
+const syntaxStyle = SyntaxStyle.fromStyles({
+  default: { fg: "#ffffff" },
+  "markup.heading": { fg: "#ffffff" },
+  "markup.heading.1": { fg: "#ffffff" },
+  "markup.list": { fg: "#ffffff" },
+})
+
+async function frame(draw: (renderer: CliRenderer) => void) {
+  const setup = await createTestRenderer({ width: 60, height: 8, remote: true, useThread: false })
+  try {
+    draw(setup.renderer)
+    setup.renderer.start()
+    await setup.waitForFrame((drawn) => drawn.trim().length > 0)
+    await Bun.sleep(150)
+    return setup.captureCharFrame()
+  } finally {
+    setup.renderer.destroy()
+  }
+}
+
+const blocks = {
+  text: (renderer: CliRenderer, content: string) => renderer.root.add(new TextRenderable(renderer, { content })),
+  markdown: (renderer: CliRenderer, content: string) =>
+    renderer.root.add(new MarkdownRenderable(renderer, { content, syntaxStyle, streaming: false, internalBlockMode: "top-level" })),
+}
+
+test.each(["text", "markdown"] as const)("draws the control characters of a body written out in a %s block", async (kind) => {
+  const drawn = await frame((renderer) => blocks[kind](renderer, bodyText(hostile)))
+  expect(drawn).toContain(written)
+
+  // The control run: the same body drawn as it came never shows the written-out form.
+  const raw = await frame((renderer) => blocks[kind](renderer, hostile))
+  expect(raw).not.toContain("\\x1b")
+  expect(raw).not.toContain("\\u{202e}")
+})
+
+test("writes out each control, keeps line breaks and tabs, and leaves a lone carriage return visible", () => {
+  expect(bodyText("a\tb\nc\r\nd")).toBe("a\tb\nc\nd")
+  expect(bodyText("a\rb")).toBe("a\\x0db")
+  expect(bodyText("\u007f\u0085\u009d")).toBe("\\x7f\\x85\\x9d")
+  expect(bodyText("‪‮⁦⁩‏")).toBe("\\u{202a}\\u{202e}\\u{2066}\\u{2069}\\u{200f}")
+})
+
+test("draws ordinary Unicode, emoji and wide characters unchanged, and markdown still renders", async () => {
+  const ordinary = "Grüße, 世界 😀 👨‍👩‍👧 ✔️ café\n\t- **bold** `code`"
+  expect(bodyText(ordinary)).toBe(ordinary)
+
+  const text = "Grüße 世界 😀 café"
+  expect(await frame((renderer) => blocks.text(renderer, bodyText(text)))).toContain(text)
+
+  const markdown = await frame((renderer) =>
+    blocks.markdown(renderer, bodyText("Plain words\n\n- one\n- two\n\n```ts\nconst x = 1\n```")),
+  )
+  // The list becomes bullet rows and the fence is drawn without its backticks.
+  expect(markdown.split("\n").filter((row) => row.startsWith("-"))).toHaveLength(2)
+  expect(markdown).toContain("const x = 1")
+  expect(markdown).not.toContain("```")
+})
 
 test("builds the title of the terminal window from a session title and cuts a long one", () => {
   expect(terminalTitle("Fix the build")).toBe("OC | Fix the build")

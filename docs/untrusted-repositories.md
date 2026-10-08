@@ -147,7 +147,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
   step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
   thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
-  are message content, which waits for the renderer sanitizer (see Known gaps). Proof:
+  are message content, which waits for the renderer sanitizer of the terminal UI (`bodyText`, class 9). Proof:
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
@@ -775,8 +775,8 @@ runs" is a permission.
 **Rule:** Every string that came from a file, a run store or a workflow, and every session title, that reaches a person
 (stdout, stderr, JSON, a terminal UI frame, a toast, a session title, a commit subject, an exit summary, a splash)
 passes through `plain`, `progress`, `json` or `terminalTitle` at the sink. Keep a sink inventory per command. The text
-of a session's messages is not covered: `plain` trims and writes line breaks out, so it cannot be the sink for a message
-body, and only a sanitizer in the renderer closes that (Known gaps).
+of a session's messages is not `plain`'s: it trims and writes line breaks out, so it cannot be the sink for a message
+body. A body passes `bodyText` at the renderer instead (see "How to comply").
 
 **Why:** A clone can name its files and workflows with escape sequences. Printed raw, an OSC sequence sets the window
 title, an erase-line or a carriage return hides the command that a refusal asks the person to look over, and a
@@ -807,6 +807,16 @@ repository text.
   renderer.setTerminalTitle(terminalTitle(title))
   ```
 
+- A message body, which is model text, a stored prompt, tool output, a question preview or a recap, passes `bodyText`
+  (`packages/tui/src/util/renderer.ts`) where the terminal UI and Mini draw it. It is `body` in
+  `packages/flow/src/plain.ts`, so the escaping is the one `plain` uses: line breaks and tabs stay, a carriage return
+  alone, C0 controls, DEL, C1 controls and the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E and U+2066 to
+  U+2069) are written out as `\x1b` or `\u{202e}`, where the person can see them. Other format characters stay, since
+  a zero-width joiner holds an emoji sequence together. Mini passes every body through `entryBody`
+  (`packages/tui/src/mini/entry.body.ts`), including the fields of a tool snapshot; the session screen passes the text
+  and reasoning parts, the compaction summary, the user message, the output and arguments of a generic tool, shell and
+  `execute` output, the tool name and the `btw` answer through it. A new place that draws such text calls `bodyText`
+  too.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
   the Mini splash (`packages/tui/src/mini/splash.ts`), and `DialogFlowRuns` passes every store string through `plain`
@@ -827,7 +837,8 @@ repository text.
   `JSON.parse` of printed JSON equals the original value. In terminal UI tests poll `renderOnce` and `captureCharFrame`.
 - Tests: `packages/flow/test/plain.test.ts`, `packages/flow/test/agents.test.ts` (titles and commit subjects),
   `packages/cli/test/flow.test.ts`, `packages/cli/test/run/noninteractive.test.ts` (`orb run`),
-  `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts`,
+  `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts` (bodies drawn
+  with `captureCharFrame`), `packages/tui/test/mini/entry.body.test.ts`,
   `packages/tui/test/util/presentation.test.ts` and `packages/tui/test/mini/splash.test.ts`. Mutation: revert each sink
   one at a time.
 
@@ -1356,11 +1367,12 @@ fixes it or asks.
   `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
   [upgrading](upgrading.md) note. Until it is made, class 8 calls a field a permission only when it selects which rules,
   agent or mode apply.
-- **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
-  reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
-  bodies need a sanitizer in the renderer (#22 round 7). In `orb run` that is the answer, the thinking lines and the
-  tool blocks of the default format, which are written as the model and the tools made them; its JSON formats write the
-  same text out with `jsonLine`.
+- **Text that the person did not write, in `orb run`.** The terminal UI and Mini now write control characters out of
+  message bodies with `bodyText` (task `clients-ux-60`). `orb run` is still open: the answer, the thinking lines and
+  the tool blocks of its default format are written as the model and the tools made them (its JSON formats write the
+  same text out with `jsonLine`). Closing it means passing them through `body` from `@orbit/flow/plain`. The parts of
+  the session screen that `bodyText` does not reach yet, such as the file tools' own blocks and the permission
+  prompt's detail, stay open with it.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
@@ -1517,8 +1529,8 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
 **It prints or stores text** (CLI, terminal UI, titles, commit subjects, logs, JSON)
 
 - [ ] Every place where a string from a file, a store or a workflow, or a session title, can reach a person is listed,
-      and the function that escapes it at that sink is named. Message bodies wait for a sanitizer in the renderer (Known
-      gaps) (9).
+      and the function that escapes it at that sink is named. A message body passes `bodyText` in the terminal UI and
+      Mini (9).
 - [ ] The text also reaches no title, commit message, log line, toast or failure message that is built before the trust
       check without being escaped (9).
 - [ ] JSON is printed with `json()` and not `JSON.stringify`, numeric columns from a store are read with `Number()`, and

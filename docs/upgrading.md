@@ -822,6 +822,20 @@ running session. Lines written by earlier builds are read as before.
 **What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
 `prompt.history_limit` to keep more or fewer prompts.
 
+### Control characters in messages are written out on screen
+
+The terminal UI and Mini used to draw model text, a workflow node's stored prompt, tool output, question previews and
+recaps as they were. A body that carried an escape sequence, a carriage return or a right-to-left override could set the
+window title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape
+and `\u{202e}` for an override, so you can see that they were there. Line breaks, tabs, emoji and other Unicode are
+unchanged, and so is Markdown formatting. Text that the model meant to color with escape sequences shows the written-out
+form instead.
+
+**Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
+`orb run` and the stored messages are unchanged.
+
+**What to do:** nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
