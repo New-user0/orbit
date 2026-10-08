@@ -5,6 +5,7 @@ import path from "node:path"
 import { SessionID } from "@orbit/schema/session-id"
 import { isolatedEnv } from "./fixture/environment"
 import { scriptedModel, type ScriptedReply } from "./fixture/scripted-model"
+import { PrintParamFlags } from "../src/commands/commands"
 
 // `orb -p` against a real private server and a scripted model. Every run is a child process of src/index.ts, so the
 // argv classification, the Print spec and the handler are the ones a user reaches.
@@ -37,6 +38,13 @@ test("-p --resume fails with one failed result for a session that does not exist
   expect(missing.stdout.trim().split(/\r?\n/)).toHaveLength(1)
   expect(JSON.parse(missing.stdout)).toMatchObject({ type: "result", is_error: true, error: "Session not found" })
 
+  // Under stream-json no session exists to name in an init line, so the stream is the result line alone.
+  const streamed = await orb(["-p", ...base, "--resume", "ses_missing", "--output-format", "stream-json", "hello"])
+  expect(streamed.code).toBe(1)
+  expect(streamed.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line))).toEqual([
+    expect.objectContaining({ type: "result", is_error: true, sessionID: "", subtype: "error" }),
+  ])
+
   // Words that match no session are not a new session either, and neither is an empty value.
   for (const value of ["no session has these words", ""]) {
     const result = await orb(["-p", ...base, `--resume=${value}`, "--output-format", "json", "hello"])
@@ -63,12 +71,16 @@ test.each([
   [["-r", "no session has these words", "--fork"], "--fork with --resume needs the ID of an existing session"],
   [["-r", "no session has these words", "--prompt", "hi"], "--prompt cannot be combined with a --resume"],
   [["-r", "--prompt", "hi"], "--prompt cannot be combined with a --resume"],
-])("orb %j is refused before the terminal UI starts", async (flags, message) => {
-  const result = await orb([...base, ...flags])
+])(
+  "orb %j is refused before the terminal UI starts",
+  async (flags, message) => {
+    const result = await orb([...base, ...flags])
 
-  expect(result.code).toBe(1)
-  expect(result.stderr + result.stdout).toContain(message)
-}, 180_000)
+    expect(result.code).toBe(1)
+    expect(result.stderr + result.stdout).toContain(message)
+  },
+  180_000,
+)
 
 test("-p --resume continues the session that --session made", async () => {
   const id = SessionID.create()
@@ -123,11 +135,15 @@ test.each([
   [[...base, "fix it", "-p"], "fix it"],
   [["-p", ...base, "--", "--foo", "bar"], "--foo bar"],
   [["run", ...base, "a", "--", "b"], "a b"],
-])("%j sends %j to the model exactly once", async (args, text) => {
-  const run = await sent(args)
+])(
+  "%j sends %j to the model exactly once",
+  async (args, text) => {
+    const run = await sent(args)
 
-  expect(run.users).toEqual([text])
-}, 120_000)
+    expect(run.users).toEqual([text])
+  },
+  120_000,
+)
 
 test("-p prints the answer, and --output-format json prints one result object", async () => {
   const text = await sent(["-p", ...base, "say ok"])
@@ -405,14 +421,42 @@ test("-p reads a piped message, and with no message at all it fails", async () =
   expect(JSON.parse(noneJson.stdout)).toMatchObject({ type: "result", is_error: true })
 }, 180_000)
 
+// Every flag that only a printed run uses, with a value where it takes one. A new one that is not listed in the root
+// handler runs the interface with no limit and no warning, so this list is the one to extend.
+const printedRunFlags: ReadonlyArray<readonly [string, ...string[]]> = [
+  ["--output-format", "json"],
+  ["--json-schema", "schema.json"],
+  ["--file", "a.txt"],
+  ["--title", "x"],
+  ["--bare"],
+  ["--include-partial-messages"],
+  ["--verbose"],
+  ["--thinking"],
+  ["--max-steps", "2"],
+  ["--max-turns", "2"],
+  ["--max-cost", "1"],
+  ["--max-tokens", "100"],
+  ["--fallback-model", "a/b"],
+]
+
 test("a flag of a printed run without -p is a usage error", async () => {
   const before = model.requests.length
 
-  const result = await orb(["--output-format", "json"])
-
-  expect(result.code).toBe(1)
-  expect(result.stderr).toContain("--output-format can only be used with -p")
+  for (const [flag, ...value] of printedRunFlags) {
+    const result = await orb([flag, ...value])
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain(`${flag === "--max-turns" ? "--max-steps" : flag} can only be used with -p`)
+  }
   expect(model.requests.length).toBe(before)
+}, 300_000)
+
+// --model and --agent are flags of the interface too, so a plain run takes them and refuses only the rest.
+test("the flags that the interface also takes are not refused without -p", async () => {
+  const result = await orb(["--model", "a/b", "--agent", "build", "--max-steps", "2"])
+  expect(result.code).toBe(1)
+  expect(result.stderr).toContain("--max-steps can only be used with -p")
+  expect(result.stderr).not.toContain("--model")
+  expect(result.stderr).not.toContain("--agent")
 }, 60_000)
 
 // One hostile string per sink of `renderTool`: the inline title, the description, the block title and the block body.
@@ -468,3 +512,9 @@ test.each(sinks)("a hostile $name input reaches no terminal through the $sink", 
   // The same call with a plain value is printed too, so the absence above is the escaping's doing.
   expect(control.stdout + control.stderr).toContain("plain")
 }, 240_000)
+test("the list of printed-run flags covers every flag the root command refuses without -p", () => {
+  const listed = new Set(printedRunFlags.map(([flag]) => flag))
+  expect(PrintParamFlags.filter((flag) => !listed.has(flag))).toEqual([])
+  expect(PrintParamFlags).not.toContain("--model")
+  expect(PrintParamFlags).not.toContain("--agent")
+})

@@ -761,8 +761,8 @@ describe("SessionTurn.exceeded", () => {
     ["steps reached", { maxSteps: 2 }, spent, true, "limit.steps"],
     ["cost reached", { maxCost: Money.USD.make(3) }, spent, true, "limit.cost"],
     ["tokens reached", { maxTokens: 100 }, spent, true, "limit.tokens"],
-    ["cost limit, model without a price", { maxCost: Money.USD.make(50) }, spent, false, "limit.cost"],
-    ["cost limit, unknown spend", { maxCost: Money.USD.make(50) }, { ...spent, unknown: 1 }, true, "limit.cost"],
+    ["cost limit, model without a price", { maxCost: Money.USD.make(50) }, spent, false, "limit.cost-unknown"],
+    ["cost limit, unknown spend", { maxCost: Money.USD.make(50) }, { ...spent, unknown: 1 }, true, "limit.cost-unknown"],
     ["unknown spend, no cost limit", { maxTokens: 500 }, { ...spent, unknown: 1 }, false, undefined],
   ]
   for (const [name, options, usage, priced, type] of table)

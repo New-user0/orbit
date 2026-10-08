@@ -5643,7 +5643,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(spend))
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
     })
@@ -5653,7 +5653,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("cannot be counted") })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -5676,7 +5676,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(2) }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend))
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
     })

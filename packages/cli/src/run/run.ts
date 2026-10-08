@@ -30,6 +30,10 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
+  maxSteps?: number
+  maxCost?: number
+  maxTokens?: number
+  fallbackModel?: string
   auto?: boolean
   /** `orb -p`: init and result lines, the enriched result, and the schema text mode. `orb run --format` has none. */
   envelope?: boolean
@@ -101,6 +105,16 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       fetch(request, { ...init, timeout: false } as BunFetchRequestInit)) as typeof fetch,
   })
   const explicit = parseRunModel(input.model)
+  const fallback = parseSessionTargetModel(input.fallbackModel)
+  const turn =
+    input.maxSteps === undefined && input.maxCost === undefined && input.maxTokens === undefined && !fallback
+      ? undefined
+      : {
+          ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
+          ...(input.maxCost === undefined ? {} : { maxCost: input.maxCost }),
+          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+          ...(fallback ? { fallbackModel: fallback } : {}),
+        }
   const target = await resolveSessionTarget({
     client,
     location: prepared.directory ? { directory: prepared.directory } : undefined,
@@ -178,6 +192,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     partial: input.partial,
     verbose: input.verbose,
     jsonSchema: input.jsonSchema,
+    turn,
     auto: input.auto ?? false,
     attached: options.attached ?? true,
     compatibility: options.compatibility,
@@ -306,6 +321,7 @@ export function reportRunError(
         type: "result",
         sessionID: sessionID ?? "",
         is_error: true,
+        subtype: "error",
         ...(input.envelope ? { outcome: "failed", reason: "error" } : {}),
         result: "",
         error: message,
@@ -317,7 +333,10 @@ export function reportRunError(
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
               rejected: [],
             }
-          : {}),
+          : {
+              usage: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+            }),
+        truncated: false,
       }) + "\n",
     )
     return
@@ -328,6 +347,7 @@ export function reportRunError(
         type: "error",
         timestamp: Date.now(),
         sessionID: sessionID ?? "",
+        subtype: "error",
         error: { type: "unknown", message },
       }) + "\n",
     )

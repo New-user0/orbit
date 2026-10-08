@@ -163,7 +163,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `renderTool` and `renderToolError` draw in `run.ts` are closed: the title and the description of an inline tool, the
   title of a block, and the failed line go through `progress`, and a block body and the `--verbose` tool output go
   through `body`. So do the init, result and delta lines (`jsonLine`), the usage line and the summary of auto-rejected
-  requests (`progress`), and the schema text output (`jsonLine`). Proof: `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
+  requests (`progress`), and the schema text output (`jsonLine`). Proof:
+  `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
 

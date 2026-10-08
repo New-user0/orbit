@@ -31,6 +31,10 @@ type HeadlessInput = {
   readonly envelope?: boolean
   readonly partial?: boolean
   readonly verbose?: boolean
+  readonly maxSteps: Option.Option<number>
+  readonly maxCost: Option.Option<number>
+  readonly maxTokens: Option.Option<number>
+  readonly fallbackModel: Option.Option<string>
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
@@ -101,6 +105,10 @@ export function headlessInput(input: HeadlessInput) {
         envelope: input.envelope,
         partial: input.partial,
         verbose: input.verbose,
+        maxSteps: Option.getOrUndefined(input.maxSteps),
+        maxCost: Option.getOrUndefined(input.maxCost),
+        maxTokens: Option.getOrUndefined(input.maxTokens),
+        fallbackModel: Option.getOrUndefined(input.fallbackModel),
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       }),
     )
