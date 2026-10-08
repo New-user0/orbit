@@ -1226,8 +1226,10 @@ any other way (an output limit, a content filter or an unknown reason), or the s
 and the tool does not run. After an output limit the input is recorded as failed with `tool.input-truncated` and the
 response is resumed up to three times in a row (see "A response cut off by the output limit is resumed"); otherwise it
 fails with the response's own error. A call whose arguments arrived complete is not affected, and still runs when a
-later call in the same response was cut off. A call that stopped before its first argument is not caught: it cannot be
-told from a call to a tool that takes no arguments, so it still runs with empty arguments.
+later call in the same response was cut off. A call with no argument text at all is held the same way, because a call
+cut off before its first argument token cannot be told from a call to a tool that takes no arguments: it runs with empty
+arguments once the response finishes with `tool-calls` or `stop`, and is dropped after any other finish. The cost is that
+a call with no arguments starts when the response finishes, not mid-stream. Provider-executed calls are not held.
 
 A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
 `tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
