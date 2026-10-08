@@ -14,7 +14,7 @@ import { Cause, Clock, Data, Effect, Exit, Fiber, Option, Stream } from "effect"
 import { SessionError } from "@orbit/schema/session-error"
 import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
-import { ConfigTrust } from "../../config/trust.js"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { Permission } from "../../permission.js"
 import { Snapshot } from "../../snapshot.js"
 import { Tool } from "../../tool.js"
@@ -97,7 +97,7 @@ export const make = Effect.gen(function* () {
     const scheduler = ToolScheduler.make<SessionError.Error>({
       maxConcurrency:
         Config.latest(yield* config.entries(), "tool_execution")?.max_concurrency ??
-        ConfigTrust.DEFAULT_MAX_CONCURRENCY,
+        ConfigToolExecution.DEFAULT_MAX_CONCURRENCY,
       onQueued: (id) => publisher.hint(id, { queued: true }),
       onStarted: (id) => publisher.hint(id, {}),
     })
@@ -147,6 +147,7 @@ export const make = Effect.gen(function* () {
             call: event,
             fiber: yield* Effect.uninterruptibleMask((restore) => {
               const entry = scheduler.register(event.id)
+              // A forked child does not inherit the mask, so keep it: publishing the outcome must not be interrupted.
               return Effect.forkScoped(
                 restore(input.prepared.toolTraits(event)).pipe(
                   Effect.flatMap((traits) =>
@@ -177,6 +178,7 @@ export const make = Effect.gen(function* () {
                   ),
                   Effect.ensuring(scheduler.release(entry)),
                 ),
+                { uninterruptible: "inherit" },
               )
             }),
           })

@@ -1,5 +1,6 @@
 import type { ToolDefinition } from "@orbit/ai"
 import { Tool } from "@orbit/schema/tool"
+import { Permission } from "../permission.js"
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec"
 import { Cache, Effect, JsonSchema, Schema, SchemaIssue, SchemaRepresentation } from "effect"
 import { $ZodType, toJSONSchema } from "zod/v4/core"
@@ -75,6 +76,8 @@ export const decode = (tool: Tool.Info<any, any>, value: unknown) =>
 // is enforced here at the untrusted boundary. Declines tunnel through as defects and interrupts are not errors; neither
 // is touched. A failure that names no code takes `fallback`, if there is one.
 const toolError = (error: unknown, fallback?: Tool.ErrorCode) => {
+  // Keep the user's correction as the cause: the step stops its queue on it, and the model sees the feedback.
+  if (error instanceof Permission.CorrectedError) return new Tool.Error({ message: error.feedback, error })
   if (!(error instanceof Tool.Error))
     return new Tool.Error({
       message: error instanceof globalThis.Error ? error.message : String(error),

@@ -7,6 +7,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Info, type Entry, type Scope } from "@orbit/schema/config"
 import { ConfigAgent } from "@orbit/schema/config/agent"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { ConfigCommand } from "@orbit/schema/config/command"
 import { Trust } from "@orbit/schema/trust"
 
@@ -45,6 +46,7 @@ describe("ConfigTrust.sanitize", () => {
   const withheldWhole: ReadonlyArray<readonly [string, unknown, Trust.Kind]> = [
     ["shell", "/bin/zsh", "shell"],
     ["default_agent", "mine", "permissions"],
+    ["fallback_model", "acme/backup", "network"],
     ["update", "auto", "network"],
     ["share", "auto", "network"],
     ["enterprise", { url: "https://share.example.com" }, "network"],
@@ -303,8 +305,8 @@ describe("ConfigTrust.sanitize", () => {
     for (const [cap, kept] of [
       [1, true],
       [2, true],
-      [ConfigTrust.DEFAULT_MAX_CONCURRENCY, true],
-      [ConfigTrust.DEFAULT_MAX_CONCURRENCY + 1, false],
+      [ConfigToolExecution.DEFAULT_MAX_CONCURRENCY, true],
+      [ConfigToolExecution.DEFAULT_MAX_CONCURRENCY + 1, false],
       [1000, false],
     ] as const) {
       const result = sanitize({ tool_execution: { max_concurrency: cap }, model: "acme/fast" })

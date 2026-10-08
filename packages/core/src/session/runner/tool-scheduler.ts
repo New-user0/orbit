@@ -95,7 +95,7 @@ export function make<E>(options: Options) {
     return entry
   }
 
-  /** Waits for the entry's turn, then runs `work`; the wait and the work both end as `Cancelled` when it is cancelled. */
+  /** Waits for the entry's turn, then runs `work`; both the wait and the work end as `Cancelled` on cancel. */
   const run = <A, F, R>(
     entry: Entry<E>,
     traits: { readonly concurrencySafe: boolean },

@@ -5,7 +5,7 @@ import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Info, type Entry } from "@orbit/schema/config"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
-import type { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
+import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import type { ConfigWarming } from "@orbit/schema/config/warming"
 import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
@@ -67,9 +67,6 @@ export interface Place {
   /** The folder its relative paths are read from. */
   readonly directory: string
 }
-
-/** How many tool calls of one step run at once when the config does not say. */
-export const DEFAULT_MAX_CONCURRENCY = 10
 
 const inert = { type: "inert" } as const
 const withhold = (kind: Trust.Kind) => ({ type: "withhold", kind }) as const
@@ -133,7 +130,7 @@ function warming(selection: boolean | ConfigWarming.Info): Outcome<boolean | Con
 // A lower cap only slows work down, but a higher one lets a repository start more tool calls at once than the user
 // allowed. The user's own value is not visible here, so only a cap at or below the default is kept.
 function toolExecution(value: ConfigToolExecution.Info): Outcome<ConfigToolExecution.Info> {
-  if (value.max_concurrency === undefined || value.max_concurrency <= DEFAULT_MAX_CONCURRENCY)
+  if (value.max_concurrency === undefined || value.max_concurrency <= ConfigToolExecution.DEFAULT_MAX_CONCURRENCY)
     return { value, withheld: [] }
   return { value: undefined, withheld: ["settings"] }
 }
@@ -193,6 +190,8 @@ export const classification = {
     $schema: inert,
     shell: withhold("shell"),
     model: inert,
+    // Picks a model the folder would spend on, so it waits for trust (owner decision on model, provider and budget fields).
+    fallback_model: withhold("network"),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,

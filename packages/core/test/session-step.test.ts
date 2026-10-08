@@ -28,10 +28,10 @@ import { testEffect } from "./lib/effect"
 
 const it = testEffect(
   Layer.merge(
-    AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, Config.node, SessionProjector.node, ToolOutput.node]), [
-      Config.node.replace(Config.testLayer()),
-      Bus.node.replace(Bus.configured({ persist: true })),
-    ]),
+    AppNodeBuilder.build(
+      LayerNode.group([Database.node, Bus.node, Config.node, SessionProjector.node, ToolOutput.node]),
+      [Config.node.replace(Config.testLayer()), Bus.node.replace(Bus.configured({ persist: true }))],
+    ),
     TestLLM.testLayer(),
   ),
 )

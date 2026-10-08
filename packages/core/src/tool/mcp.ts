@@ -99,7 +99,12 @@ export const layer = Layer.effect(
                         messageID: context.messageID,
                         id: context.id,
                       },
-                    })
+                    }).pipe(
+                      // Keep the correction as the cause so the step sees the rejection and stops its queue.
+                      Effect.catchTag("Permission.CorrectedError", (error) =>
+                        Effect.fail(new ToolFailure({ message: error.feedback, error })),
+                      ),
+                    )
                     const result = yield* mcp
                       .callTool({
                         server: tool.server,
