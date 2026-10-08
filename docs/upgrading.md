@@ -632,6 +632,51 @@ skip the working folder too.
 **What to do:** nothing for programs on PATH. For one that you keep in the folder, write `.\server.bat` or its full
 path.
 
+### `orb run` holds a failed step back until the run is over, and joins text that the output limit cut
+
+A run can get past a step that fails: it continues after a stream that ended early, or switches to a fallback model, and
+starts another step. `orb run` used to print the error of a failed step, and set exit status 1, as soon as it saw the
+step fail, so a run that went on to answer still ended in an error. It now holds the failure back, and the next step to
+start drops it. When the execution fails, its error is printed in its place, once. A failure that is still held when the
+execution succeeds or is interrupted by someone else, or when the event stream ends, is printed then, with exit status 1.
+When `orb run` reads the stored messages at the end of a run, only the error of the last assistant message counts, so a
+failure that a later step followed is not reported. `--format json` and `stream-json` print no `error` line for a
+failure that was recovered.
+
+A step can stop at the output limit, which its `step_finish` line reports as reason `length`, and the next step can carry
+on in the middle of a word. In the default format, and with `--format result` (and so with `--json-schema`), the text of
+the next step is now joined as it is to the text that was cut, before it is written or parsed, so a word or a JSON
+string that the limit cut in two is whole again and the text is one line. It is joined only when nothing else was
+written between the two: no tool call, and no thinking line, which `--thinking` shows. A step that failed after some of
+its text is not joined to the step that continues it. `--format json` and `stream-json` still print one `text` line for
+each part: a program joins the parts of a message whose `step_finish` has reason `length` to the parts of the message
+that follows it.
+
+A session can hold an `output-escalation` notice: a hidden `session.synthetic` message whose metadata has
+`notice: "output-escalation"` and `replaces`, the ID of the assistant message that the notice replaces. `orb run` leaves
+the replaced message out of the answer, of what `--json-schema` parses and of the notes it prints. With `--format json`
+and `stream-json` it prints one line for the notice, `{"type":"notice","timestamp":…,"sessionID":"…","notice":
+"output-escalation","replaces":"msg_…"}`, and a program drops the parts whose `messageID` is the `replaces` value. A
+notice that does not name a message replaces nothing.
+
+A tool call that the model began and the output limit cut off (error type `tool.input-truncated`) prints one dim line on
+stderr, `Tool call cut off by the output limit: <tool>`, in place of the error lines. `--format json` and `stream-json`
+still print the `tool_use` line with the error.
+
+Every line of JSON that `orb run` prints (the events of `json` and `stream-json`, the `result` object, and the error
+object that it prints for a failure that is not one of the session's events) now writes DEL, the C1 controls, format
+characters such as a right-to-left override, and U+2028 and U+2029 as `\uXXXX`, and `JSON.parse` returns the same text.
+The error lines on stderr, the label of a step, the request for permission and the note about a cut-off tool call write
+control characters out as text, such as `\x1b`, as `orb flow` does. The answer and the thinking lines in the default
+format, and the tool blocks that `orb run` draws, are still written as the model and the tools made them.
+
+**Affects:** scripts and CI that read the exit status or the `error` lines of `orb run`: a run that recovered now exits 0
+and prints no error. Programs that read `--format json` or `stream-json`: there is a new `notice` line, and control
+characters in text arrive as escapes, which parse back to the same text. People who read a long answer in the terminal:
+text that the output limit cut is one line.
+
+**What to do:** nothing for most setups. A program that reads `json` or `stream-json` joins the parts of steps whose
+`step_finish` has reason `length`, and drops the parts of the message that a `notice` line replaces.
 ### A failed tool call has an error type that names what went wrong
 
 A tool call that failed used to be reported with the error type `tool.execution` whatever the reason, so a client could

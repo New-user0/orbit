@@ -5,8 +5,10 @@ import type {
   OrbitClient,
   SessionMessageAssistantTool,
   SessionMessageInfo,
+  SessionStructuredError,
   ToolContent,
 } from "@orbit/client/promise"
+import { jsonLine, progress } from "@orbit/flow/plain"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { EOL } from "node:os"
 import { Option, Schema } from "effect"
@@ -63,6 +65,12 @@ type ToolState = StartedPart & {
   content: ToolContent[]
 }
 
+// Output that is not written yet, in the order it arrived: the text parts that one answer runs across, and the notes
+// about tool calls that the output limit cut off. See `release`.
+type Held =
+  | { type: "text"; parts: { messageID: string; text: string }[] }
+  | { type: "note"; messageID: string; line: string }
+
 type V2Event = EventSubscribeOutput
 type FormRequest = Extract<V2Event, { type: "form.created" }>["data"]["form"]
 
@@ -101,18 +109,24 @@ export async function runNonInteractivePrompt(input: Input) {
   let finalizing = false
   let admission: AbortController | undefined
   let pendingStep: { timestamp: number; part: Record<string, unknown>; label: string } | undefined
+  // A step that failed, which the runner may still recover from by continuing after an early end of stream or by
+  // switching to a fallback model. The next step to start clears it. It is reported only when the run ends without one.
+  let pendingStepError: { error: SessionStructuredError; time: number } | undefined
+  let held: Held[] = []
+  // The assistant messages whose step ended at the output limit, and the ones that a notice replaced.
+  const lengthMessages = new Set<string>()
+  const replaced = new Set<string>()
 
   const streaming = input.format === "json" || input.format === "stream-json"
   const answer: string[] = []
   const emit = (type: string, timestamp: number, data: Record<string, unknown>) => {
     if (!streaming) return false
-    process.stdout.write(JSON.stringify({ type, timestamp, sessionID: input.sessionID, ...data }) + EOL)
+    process.stdout.write(jsonLine({ type, timestamp, sessionID: input.sessionID, ...data }) + EOL)
     return true
   }
 
-  const writeText = (part: { text: string; [key: string]: unknown }, timestamp: number) => {
-    if (emit("text", timestamp, { part })) return
-    const text = part.text.trim()
+  const printText = (value: string) => {
+    const text = value.trim()
     if (!text) return
     if (input.format === "result") return void answer.push(text)
     if (!process.stdout.isTTY) {
@@ -124,11 +138,82 @@ export async function runNonInteractivePrompt(input: Input) {
     UI.empty()
   }
 
+  // The text of a step is written when what comes after it shows that it is complete. A step that stops at the output
+  // limit is continued by the next one, which can start in the middle of a word, and the runner can drop that attempt
+  // and answer again from the start. So text waits until its step ends without the limit, until something else is
+  // written, or until the run ends.
+  const release = () => {
+    const items = held
+    held = []
+    items.forEach((item) => {
+      if (item.type === "text") return printText(item.parts.map((part) => part.text).join(""))
+      UI.println(UI.Style.TEXT_DIM + item.line + UI.Style.TEXT_NORMAL)
+    })
+  }
+
+  const hold = (messageID: string, text: string) => {
+    const last = held.at(-1)
+    if (last?.type === "text") {
+      // Joined as it is, with no separator and no trimming: the cut can fall inside a word or a JSON string.
+      const previous = last.parts[last.parts.length - 1].messageID
+      if (previous !== messageID && lengthMessages.has(previous)) return void last.parts.push({ messageID, text })
+    }
+    held.push({ type: "text", parts: [{ messageID, text }] })
+  }
+
+  const discard = (messageID: string) => {
+    held = held.flatMap((item): Held[] => {
+      if (item.type === "note") return item.messageID === messageID ? [] : [item]
+      const parts = item.parts.filter((part) => part.messageID !== messageID)
+      return parts.length === 0 ? [] : [{ ...item, parts }]
+    })
+  }
+
+  // The runner raised the output limit and is answering again from the start. What the cut-off attempt wrote is
+  // dropped from the answer, and a program that reads the JSON lines is told which message to drop.
+  const replace = (metadata: unknown, time: number) => {
+    const notice = Option.getOrUndefined(decodeEscalation(metadata))
+    // A notice that does not name a message replaces nothing.
+    if (!notice) return
+    discard(notice.replaces)
+    if (replaced.has(notice.replaces)) return
+    replaced.add(notice.replaces)
+    emit("notice", time, { notice: notice.notice, replaces: notice.replaces })
+  }
+
+  const endStep = (messageID: string, finish: string | undefined) => {
+    if (finish === "length") return void lengthMessages.add(messageID)
+    release()
+  }
+
+  // A tool call that the model wrote only part of is not a failure to report, because the runner tells the model and it
+  // writes the call again. The note waits with the text of its step, which can be replaced.
+  const noteTruncated = (messageID: string, tool: string) =>
+    void held.push({ type: "note", messageID, line: progress(`Tool call cut off by the output limit: ${tool}`) })
+
+  // A declined tool call ends its step with an interrupted-step error that is only a consequence of our own rejection,
+  // which was reported when the call was declined.
+  const surfaceStepError = () => {
+    const failure = pendingStepError
+    pendingStepError = undefined
+    if (!failure || emittedError || permissionRejected || formCancelled) return
+    emittedError = true
+    process.exitCode = 1
+    if (!emit("error", failure.time, { error: failure.error })) UI.error(failure.error.message)
+  }
+
+  const writeText = (part: { messageID: string; text: string; [key: string]: unknown }, timestamp: number) => {
+    if (emit("text", timestamp, { part })) return
+    if (input.compatibility === "v1") return printText(part.text)
+    hold(part.messageID, part.text)
+  }
+
   const writeReasoning = (part: { text: string; [key: string]: unknown }, timestamp: number) => {
     if (emit("reasoning", timestamp, { part })) return
     if (input.format === "result") return
     const text = part.text.trim()
     if (!text) return
+    release()
     const line = `Thinking: ${text}`
     if (!process.stdout.isTTY) return void process.stdout.write(line + EOL)
     UI.empty()
@@ -175,10 +260,11 @@ export async function runNonInteractivePrompt(input: Input) {
     const continuing = !input.auto && input.compatibility !== "v1"
     if (!input.auto) {
       if (!continuing) permissionRejected = true
+      release()
       UI.println(
         UI.Style.TEXT_WARNING_BOLD + "!",
         UI.Style.TEXT_NORMAL +
-          `permission requested: ${request.action} (${request.resources.join(", ")}); auto-rejecting`,
+          progress(`permission requested: ${request.action} (${request.resources.join(", ")}); auto-rejecting`),
       )
     }
     await input.client.permission
@@ -215,13 +301,24 @@ export async function runNonInteractivePrompt(input: Input) {
     if (input.compatibility !== "v1") process.exitCode = 1
   }
 
+  // The events can trail the history. Once the history is being read, the last steps may not have reached this loop yet,
+  // so the text that waits for a step to continue it and the failure that a step may have recovered from are left to the
+  // history, which writes them when it is done.
+  const endEvents = () => {
+    if (finalizing) return
+    release()
+    surfaceStepError()
+  }
+
   const consume = async () => {
     while (!controller.signal.aborted) {
       const next = await stream.next().catch((error) => {
-        if (!emittedError) throw error
+        // The stream ending does not hide a failure that is held back, which is reported below.
+        if (!emittedError && !pendingStepError) throw error
         return { done: true as const, value: undefined }
       })
       if (next.done) {
+        endEvents()
         if (emittedError) return
         throw new Error("Event stream disconnected during prompt execution")
       }
@@ -257,6 +354,9 @@ export async function runNonInteractivePrompt(input: Input) {
         event.data.reason === "user" &&
         (interrupted || permissionRejected || formCancelled)
       ) {
+        // The run was stopped on purpose, so a failure held back is not reported on top of it.
+        pendingStepError = undefined
+        endEvents()
         return
       }
       if (!promoted && event.type === "session.execution.failed") {
@@ -274,6 +374,8 @@ export async function runNonInteractivePrompt(input: Input) {
       if (finalizing && !event.type.startsWith("session.execution.")) continue
 
       if (event.type === "session.step.started") {
+        // Another step means that the runner recovered from the failure it held back.
+        pendingStepError = undefined
         const part = {
           id: partID(event.id),
           sessionID: input.sessionID,
@@ -281,17 +383,14 @@ export async function runNonInteractivePrompt(input: Input) {
           type: "step-start",
           snapshot: event.data.snapshot,
         }
+        const label = progress(`> ${event.data.agent} · ${event.data.model.id}`)
         if (input.compatibility === "v1") {
-          pendingStep = {
-            timestamp: time,
-            part,
-            label: `> ${event.data.agent} · ${event.data.model.id}`,
-          }
+          pendingStep = { timestamp: time, part, label }
           continue
         }
         if (!emit("step_start", time, { part }) && input.format === "default") {
           UI.empty()
-          UI.println(`> ${event.data.agent} · ${event.data.model.id}`)
+          UI.println(label)
           UI.empty()
         }
         continue
@@ -373,6 +472,8 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (event.type === "session.tool.called") {
         flushStep()
+        // A call that goes ahead ends the text before it, which nothing can continue or replace now.
+        release()
         const key = toolKey(event.data.assistantMessageID, event.data.id)
         const current = tools.get(key)
         tools.set(key, {
@@ -438,7 +539,10 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         tools.delete(key)
         renderedTools.add(key)
-        if (!emit("tool_use", time, { part })) await input.renderTool(tool)
+        if (!emit("tool_use", time, { part })) {
+          release()
+          await input.renderTool(tool)
+        }
         continue
       }
       if (event.type === "session.tool.failed") {
@@ -486,6 +590,11 @@ export async function runNonInteractivePrompt(input: Input) {
         renderedTools.add(key)
         if (input.compatibility === "v1" && (permissionRejected || formCancelled)) continue
         if (!emit("tool_use", time, { part })) {
+          if (event.data.error.type === "tool.input-truncated" && input.compatibility !== "v1") {
+            noteTruncated(event.data.assistantMessageID, current.tool)
+            continue
+          }
+          release()
           if (content && toolOutputText(current.tool, content).trim())
             await input.renderTool({
               ...tool,
@@ -504,6 +613,7 @@ export async function runNonInteractivePrompt(input: Input) {
 
       if (event.type === "session.step.ended") {
         flushStep()
+        endStep(event.data.assistantMessageID, event.data.finish)
         const part = {
           id: partID(event.id),
           sessionID: input.sessionID,
@@ -525,6 +635,11 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         if (interrupted || permissionRejected || formCancelled) continue
         flushStep()
+        release()
+        if (input.compatibility !== "v1") {
+          pendingStepError = { error: event.data.error, time }
+          continue
+        }
         emittedError = true
         process.exitCode = 1
         if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
@@ -533,6 +648,9 @@ export async function runNonInteractivePrompt(input: Input) {
       if (event.type === "session.execution.failed") {
         if (input.compatibility === "v1" && (v1InvalidOutput || permissionRejected || formCancelled)) return
         flushStep()
+        // What ended the run replaces the failure of a step that was held back.
+        pendingStepError = undefined
+        endEvents()
         if (!emittedError && !formCancelled) {
           emittedError = true
           process.exitCode = 1
@@ -542,6 +660,8 @@ export async function runNonInteractivePrompt(input: Input) {
       }
       if (event.type === "session.execution.interrupted") {
         if (input.compatibility === "v1" && (permissionRejected || formCancelled)) return
+        // The failure that was held back says more than the interruption that came after it.
+        endEvents()
         if (event.data.reason === "user" && interrupted) process.exitCode = 130
         // A declined tool call ends the step with an interruption; it was already reported above.
         if (event.data.reason !== "user" && !emittedError && !permissionRejected && !formCancelled) {
@@ -552,7 +672,14 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         return
       }
-      if (event.type === "session.execution.succeeded") return
+      if (event.type === "session.execution.succeeded") {
+        endEvents()
+        return
+      }
+      if (event.type === "session.synthetic") {
+        if (input.compatibility !== "v1") replace(event.data.metadata, time)
+        continue
+      }
     }
   }
 
@@ -577,6 +704,10 @@ export async function runNonInteractivePrompt(input: Input) {
   const reconcile = async () => {
     const projected = await projectedMessages()
     for (const message of projected.messages) {
+      if (message.type === "synthetic") {
+        replace(message.metadata, message.time.created)
+        continue
+      }
       if (message.type !== "assistant") continue
       const timestamp = message.time.completed ?? message.time.created
       let textOrdinal = 0
@@ -652,6 +783,11 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         renderedTools.add(key)
         if (emit("tool_use", timestamp, { part })) continue
+        if (item.state.status === "error" && item.state.error.type === "tool.input-truncated") {
+          noteTruncated(message.id, item.name)
+          continue
+        }
+        release()
         if (item.state.status === "completed") {
           await input.renderTool(item)
           continue
@@ -671,14 +807,15 @@ export async function runNonInteractivePrompt(input: Input) {
         UI.error(item.state.error.message)
       }
 
-      // A declined tool call ends its step with an interrupted-step error that is
-      // only a consequence of our own rejection; it was already reported above.
-      if (message.error && !emittedError && !permissionRejected && !formCancelled) {
-        emittedError = true
-        process.exitCode = 1
-        if (!emit("error", timestamp, { error: message.error })) UI.error(message.error.message)
-      }
+      endStep(message.id, message.finish)
     }
+    release()
+    // Only the last assistant message counts: a failure that a later step followed was recovered.
+    const last = projected.messages.findLast((message) => message.type === "assistant")
+    if (last) {
+      pendingStepError = last.error ? { error: last.error, time: last.time.completed ?? last.time.created } : undefined
+    }
+    surfaceStepError()
     return {
       found: projected.found,
       responded: projected.messages.some((message) => message.type === "assistant"),
@@ -795,6 +932,8 @@ export async function runNonInteractivePrompt(input: Input) {
     }
     reachedEnd = true
   } finally {
+    // Whatever way the run ends, the text that was waiting for a continuation is written, so a result holds all of it.
+    release()
     // Every way out of the run prints exactly one result, failed unless the run reached its end cleanly.
     if (input.format === "result")
       writeResult(
@@ -902,7 +1041,7 @@ function writeResult(sessionID: string, text: string, failed: boolean, schema: u
   if (failed || invalid) process.exitCode = 1
   resultWritten = true
   process.stdout.write(
-    JSON.stringify({
+    jsonLine({
       type: "result",
       sessionID,
       is_error: failed || invalid,
@@ -914,6 +1053,11 @@ function writeResult(sessionID: string, text: string, failed: boolean, schema: u
 }
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+
+// The notice that the runner publishes when it raises the output limit and answers again, with the message it replaces.
+const decodeEscalation = Schema.decodeUnknownOption(
+  Schema.Struct({ notice: Schema.Literal("output-escalation"), replaces: SessionMessage.ID }),
+)
 
 function parseJson(text: string): { value: unknown } | undefined {
   return Option.match(decodeJson(text), { onNone: () => undefined, onSome: (value) => ({ value }) })
