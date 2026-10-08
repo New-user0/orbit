@@ -363,6 +363,26 @@ describe("SessionTurn.current", () => {
     }),
   )
 
+  it.effect("reads a kind the turn holds none of as absent, whatever its name, even in a turn without notices", () =>
+    Effect.gen(function* () {
+      const s = yield* harness
+      yield* s.admit("A")
+      yield* s.promote("input")
+      const bare = (yield* s.current).notices
+      yield* s.notice("stop-hook")
+      const counted = (yield* s.current).notices
+
+      for (const notices of [bare, counted]) {
+        expect(Object.getPrototypeOf(notices)).toBeNull()
+        for (const kind of ["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__", "output-limit"]) {
+          expect(kind in notices).toBe(false)
+          expect(notices[kind]).toBeUndefined()
+        }
+      }
+      expect(counted["stop-hook"]).toBe(1)
+    }),
+  )
+
   it.effect("names the model of the latest fallback notice in the turn", () =>
     Effect.gen(function* () {
       const s = yield* harness

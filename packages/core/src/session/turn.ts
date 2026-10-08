@@ -23,8 +23,11 @@ export interface Current {
   readonly options: (Options & { readonly seq: number; readonly time: DateTime.Utc }) | undefined
   /** The model a fallback notice named in this turn, until the Session switches model again. */
   readonly fallback: Model.Ref | undefined
-  /** How many notices of each kind (`metadata.notice` of a synthetic message) the turn holds. */
-  readonly notices: Readonly<Record<string, number>>
+  /**
+   * How many notices of each kind (`metadata.notice` of a synthetic message) the turn holds. A kind the turn holds none
+   * of is absent, whatever its name: the record has no prototype, so `constructor` or `toString` are not inherited.
+   */
+  readonly notices: Readonly<Partial<Record<string, number>>>
 }
 
 const decodeModel = Schema.decodeUnknownOption(Model.Ref)
@@ -143,7 +146,11 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
         ? { ...prompt.turn, seq: read.options.seq, time: prompt.time.created }
         : undefined,
     fallback: model?._tag === "Some" ? model.value : undefined,
-    // fromEntries defines own properties, so a kind named like a prototype member is still a plain count.
-    notices: Object.fromEntries(read.counts.map((row) => [row.notice, row.count])),
+    // fromEntries defines own properties, so a kind named `__proto__` is still a plain count, and assigning them onto an
+    // object without a prototype keeps every other name from reading as an inherited member.
+    notices: Object.assign(
+      Object.create(null) as Record<string, number>,
+      Object.fromEntries(read.counts.map((row) => [row.notice, row.count])),
+    ),
   } satisfies Current
 })
