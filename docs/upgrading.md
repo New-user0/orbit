@@ -102,8 +102,8 @@ folder is trusted. Until then Orbit keeps what cannot run code, spend money or r
 rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
-  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and `disabled` on an
-  agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
+  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
+  `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
   own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
   model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
   the session's current agent, and an agent keeps the mode and visibility it has, or the ones a new agent gets. A key
@@ -1215,9 +1215,8 @@ use for the rest of a turn after the selected model is repeatedly overloaded. Th
 setting; the switch itself follows in a later change. A model that is unavailable, or is the session's own model, is
 ignored.
 
-In a folder that is not trusted yet, `fallback_model` is left out whole, like the other settings that choose where
-requests go and what they cost, so a repository cannot pick a model you pay for. Orbit uses your own setting until you
-trust the folder.
+In a folder that is not trusted yet, `fallback_model` is left out whole, so a repository cannot choose your fallback
+model. Orbit uses your own setting until you trust the folder.
 
 **Affects:** people who want a backup model, and anyone reading `config.get`, which now lists the key.
 

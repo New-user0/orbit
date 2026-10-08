@@ -23,7 +23,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Tool } from "@orbit/core/tool"
-import { Document, Info, type Entry } from "@orbit/schema/config"
+import { Document, Info } from "@orbit/schema/config"
 import { Effect, Layer, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 import { stubSnapshot } from "./lib/tool"
@@ -58,27 +58,39 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 })
 
 const empty = Instructions.empty
-let entries: Entry[] = []
+
+// One instance, shared by the app and the test, so the test can change the entries the app reads.
+const config = Config.testLayer()
 
 const it = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([Database.node, Project.node, SessionStore.node, Agent.node, SessionContext.node]),
-    [
-      Config.node.replace(Layer.mock(Config.Service, { entries: () => Effect.sync(() => entries) })),
-      SessionRunnerModel.node.replace(models),
-      InstructionBuiltIns.node.replace(Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty) })),
-      InstructionDiscovery.node.replace(
-        Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
-      ),
-      SkillInstructions.node.replace(Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(empty) })),
-      ReferenceInstructions.node.replace(
-        Layer.mock(ReferenceInstructions.Service, { load: () => Effect.succeed(empty) }),
-      ),
-      McpInstructions.node.replace(Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(empty) })),
-      PluginSupervisor.node.replace(Layer.empty),
-      Tool.node.replace(Layer.mock(Tool.Service, { snapshot: () => Effect.succeed(stubSnapshot({ definitions: [], execute: () => Effect.die(new Error("unused")) })) })),
-      Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
-    ],
+  Layer.merge(
+    config,
+    AppNodeBuilder.build(
+      LayerNode.group([Database.node, Project.node, SessionStore.node, Agent.node, SessionContext.node]),
+      [
+        Config.node.replace(config),
+        SessionRunnerModel.node.replace(models),
+        InstructionBuiltIns.node.replace(
+          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty) }),
+        ),
+        InstructionDiscovery.node.replace(
+          Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
+        ),
+        SkillInstructions.node.replace(Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(empty) })),
+        ReferenceInstructions.node.replace(
+          Layer.mock(ReferenceInstructions.Service, { load: () => Effect.succeed(empty) }),
+        ),
+        McpInstructions.node.replace(Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(empty) })),
+        PluginSupervisor.node.replace(Layer.empty),
+        Tool.node.replace(
+          Layer.mock(Tool.Service, {
+            snapshot: () =>
+              Effect.succeed(stubSnapshot({ definitions: [], execute: () => Effect.die(new Error("unused")) })),
+          }),
+        ),
+        Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
+      ],
+    ),
   ),
 )
 
@@ -87,10 +99,12 @@ const setup = (fallback: string | undefined) =>
     const db = (yield* Database.Service).db
     const projects = yield* Project.Service
     const store = yield* SessionStore.Service
-    entries =
+    const entries = yield* Config.Test
+    yield* entries.setEntries(
       fallback === undefined
         ? []
-        : [new Document({ type: "document", info: Schema.decodeUnknownSync(Info)({ fallback_model: fallback }) })]
+        : [new Document({ type: "document", info: Schema.decodeUnknownSync(Info)({ fallback_model: fallback }) })],
+    )
     yield* db
       .insert(SessionTable)
       .values({
@@ -142,5 +156,12 @@ it.effect("returns nothing for the session's own model", () =>
   Effect.gen(function* () {
     const { session, context } = yield* setup("acme/backup")
     expect(yield* context.resolveFallback({ ...session, model: Model.Ref.parse("acme/backup") })).toBeUndefined()
+  }),
+)
+
+it.effect("treats the session's own model as the same whatever the variant", () =>
+  Effect.gen(function* () {
+    const { session, context } = yield* setup("acme/backup#high")
+    expect(yield* context.resolveFallback({ ...session, model: Model.Ref.parse("acme/backup#low") })).toBeUndefined()
   }),
 )

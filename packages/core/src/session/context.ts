@@ -68,7 +68,7 @@ export interface Interface {
   >
   /**
    * Resolves the fallback model: `requested`, else the configured `fallback_model`. Undefined when neither is set,
-   * the model is unavailable, or it is the session's own model.
+   * the model is unavailable, or it is the session's own model (the same provider and model, whatever the variant).
    */
   readonly resolveFallback: (
     session: SessionSchema.Info,
@@ -98,7 +98,6 @@ const layer = Layer.effect(
     const skillInstructions = yield* SkillInstructions.Service
     const store = yield* SessionStore.Service
     const registry = yield* Tool.Service
-
     const config = yield* Config.Service
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
@@ -143,11 +142,15 @@ const layer = Layer.effect(
             ...(configured.variant ? { variant: configured.variant } : {}),
           }))
       if (!ref) return
-      const fallback = yield* resolveModel({ ...session, model: ref }).pipe(Effect.orElseSucceed(() => undefined))
-      if (!fallback) return
-      const primary = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
-      if (primary?.ref.providerID === fallback.ref.providerID && primary.ref.id === fallback.ref.id) return
-      return fallback
+      // Compare identity before resolving: the session's own ref, or else what it would default to.
+      const own = session.model ?? (yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined)))?.ref
+      if (own?.providerID === ref.providerID && own.id === ref.id) return
+      return yield* resolveModel({ ...session, model: ref }).pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("fallback model skipped", { providerID: ref.providerID, model: ref.id, error }),
+        ),
+        Effect.orElseSucceed(() => undefined),
+      )
     })
 
     const select = Effect.fn("SessionContext.select")(function* (sessionID: SessionSchema.ID) {

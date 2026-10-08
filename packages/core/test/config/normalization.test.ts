@@ -114,8 +114,9 @@ describe("ConfigNormalize", () => {
       model: "backup",
       variant: "high",
     })
-    const invalid = normalized({ fallback_model: 7 })
+    const invalid = normalized({ fallback_model: 7, share: "auto" })
     expect(invalid.encoded.fallback_model).toBeUndefined()
+    expect(invalid.encoded.share).toBe("auto")
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
