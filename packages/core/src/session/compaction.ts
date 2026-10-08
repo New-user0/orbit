@@ -31,7 +31,7 @@ import type { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
-import { toLLMMessages } from "./runner/to-llm-message.js"
+import { toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
 import { toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
 
@@ -260,7 +260,7 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      const split = splitConversation(context.messages, keep)
+      const split = splitConversation(withoutReplaced(context.messages), keep)
       if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
 
       const previous = previousCompaction(context.messages)
@@ -312,10 +312,10 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      if (!context.messages.some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
+      if (!withoutReplaced(context.messages).some(messageToText)) return yield* Effect.fail(NOTHING_TO_COMPACT)
       const unsupported = (message: string) =>
         Effect.fail<Failure>({ error: { type: "provider.unsupported-operation", message } })
-      const prepared = yield* prepare(context, context.messages, budget, "session")
+      const prepared = yield* prepare(context, withoutReplaced(context.messages), budget, "session")
 
       // History is selected before request hooks, so a hook that reroutes the request cannot be honored here.
       const provenance = SessionProviderContext.provenance(context.model)
@@ -860,9 +860,10 @@ export const estimateContext = (context: SessionContext.Loaded) => {
 
 /** The prompt size: `measured` is what the provider reported at the latest response, `estimated` is the text since. */
 export const estimatePrompt = (context: SessionContext.Loaded) => {
-  const anchorIndex = context.messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
-  const anchor = context.messages[anchorIndex]
-  const base = transcript(context, context.messages.slice(Math.max(0, anchorIndex)))
+  const messages = withoutReplaced(context.messages)
+  const anchorIndex = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
+  const anchor = messages[anchorIndex]
+  const base = transcript(context, messages.slice(Math.max(0, anchorIndex)))
   // TODO: Pass compaction history the runner has already shaped. This and `recentUserMessages` repeat the
   // runner's unsupported-media and image-budget passes; here the image budget only sees images since the anchor,
   // so image-heavy sessions can estimate high.

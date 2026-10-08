@@ -1381,6 +1381,48 @@ test("a session in a clean folder is not refused for the repository the command 
   }
 }, 240_000)
 
+test("--resume and --fork check the folder of the session they name, wherever the command starts", async () => {
+  const repository = await hooked("resume-home")
+  const away = await quiet("resume-away")
+  const blocked = path.join(repository, "blocked.txt")
+  const session = SessionID.create()
+  succeeded(await orb(repository, ["run", "--trust", "--standalone", "--model", model, "--session", session, "say ok"]))
+  const before = runs
+
+  // From a clean folder the session still lives in the untrusted repository, so nothing starts, by ID or as a fork.
+  for (const choice of [["--resume", session], ["-r", session], ["--resume", session, "--fork"]]) {
+    const refused = await orb(away, ["run", "--standalone", "--model", model, ...choice, "write blocked.txt"])
+    expect(refused.code).toBe(1)
+    expect(refused.stderr).toContain(`${repository} is not trusted`)
+  }
+  const printed = await orb(away, ["-p", "--standalone", "--model", model, "-r", session, "write blocked.txt"])
+  expect(printed.code).toBe(1)
+  expect(printed.stderr).toContain(`${repository} is not trusted`)
+  expect(runs).toBe(before)
+  expect(await Bun.file(blocked).exists()).toBe(false)
+
+  // --trust goes to the folder of the session, so the repository's hook is in force there.
+  const answered = toolAnswers.length
+  succeeded(
+    await orb(away, ["run", "--trust", "--standalone", "--model", model, "--resume", session, "write blocked.txt"]),
+  )
+  expect(toolAnswers.slice(answered).join("")).toContain("Blocked by a PreToolUse hook")
+  expect(await Bun.file(blocked).exists()).toBe(false)
+}, 360_000)
+
+test("--resume of a session in a clean folder is not refused for the repository the command starts in", async () => {
+  const repository = await hooked("resume-start")
+  const clean = await quiet("resume-lives")
+  const session = SessionID.create()
+  succeeded(await orb(clean, ["run", "--standalone", "--model", model, "--session", session, "say ok"]))
+
+  for (const choice of [["--resume", session], ["--resume", session, "--fork"]]) {
+    const resumed = await orb(repository, ["run", "--standalone", "--model", model, ...choice, "say ok"])
+    succeeded(resumed)
+    expect(resumed.stdout).toContain("ran fine")
+  }
+}, 360_000)
+
 test("--continue continues the newest session of the folder the command starts in, so that is the folder that is checked", async () => {
   const repository = await hooked("continue-home")
   const away = await quiet("continue-away")

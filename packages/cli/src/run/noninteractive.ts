@@ -1221,11 +1221,7 @@ function writeEnvelopeResult(run: {
       ...(run.reason === undefined && !invalid ? {} : { reason: run.reason ?? "invalid_output" }),
       result: run.text,
       ...(parsed === undefined ? {} : { structured_output: parsed.value }),
-      ...(run.error !== undefined
-        ? { error: run.error }
-        : invalid
-          ? { error: "The answer was not valid JSON." }
-          : {}),
+      ...(run.error !== undefined ? { error: run.error } : invalid ? { error: "The answer was not valid JSON." } : {}),
       steps: run.steps,
       duration_ms: run.duration,
       cost: run.cost,

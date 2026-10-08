@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test"
 import type { SessionMessageAssistant, SessionMessageInfo } from "@orbit/client"
+import { assistantFooterFixtures } from "../../../src/feature-plugins/system/storybook/assistant-footer.fixtures"
 import { createMemo, createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import {
   cacheReuseDrop,
+  footerOutcome,
   messageBoundaryIDs,
+  recoveredStep,
   reduceSessionRows,
   sessionRowID,
   turnDuration,
@@ -641,6 +644,105 @@ function assistant(id: string, content: SessionMessageAssistant["content"]): Ses
     time: { created: 1 },
   }
 }
+
+const failed = (id: string) => ({ ...assistant(id, []), error: { type: "provider", message: "Closed" } })
+const limited = (id: string) => ({ ...assistant(id, []), finish: "length" as const })
+const userMessage = (id: string): SessionMessageInfo => ({ type: "user", id, text: "Next", time: { created: 1 } })
+const idle = (id: string): SessionMessageInfo => ({ type: "idle", id, outcome: "succeeded", time: { created: 1 } })
+const note = (id: string, metadata: Record<string, string>): SessionMessageInfo => ({
+  type: "synthetic",
+  id,
+  text: "Notice",
+  metadata,
+  time: { created: 1 },
+})
+
+test("recoveredStep is true for an error followed by an assistant in the same turn", () => {
+  const messages = [userMessage("u"), failed("a"), assistant("b", [])]
+  expect(recoveredStep(messages, 1)).toBe(true)
+  expect(recoveredStep(messages, 2)).toBe(false)
+})
+
+test.each([
+  ["a user message", userMessage("u2")],
+  ["an idle marker", idle("i")],
+])("recoveredStep is false across %s", (_, boundary) => {
+  expect(recoveredStep([userMessage("u"), failed("a"), boundary, assistant("b", [])], 1)).toBe(false)
+})
+
+test("recoveredStep is true for a length stop followed by the resume note and an assistant, false for the last one", () => {
+  const messages = [userMessage("u"), limited("a"), note("n", { notice: "output-limit" }), limited("b")]
+  expect(recoveredStep(messages, 1)).toBe(true)
+  expect(recoveredStep(messages, 3)).toBe(false)
+  expect(recoveredStep(messages.slice(0, 2), 1)).toBe(false)
+})
+
+test("a replaced attempt is retried, not continued or truncated, and the retry keeps its own label", () => {
+  const replaced = [userMessage("u"), limited("a"), note("n", { notice: "output-escalation", replaces: "a" })]
+  expect(footerOutcome([...replaced, limited("b")], 1)).toBe("retried")
+  expect(footerOutcome(replaced, 1)).toBe("retried")
+  expect(footerOutcome([...replaced, limited("b")], 3)).toBe("truncated")
+  expect(footerOutcome([...replaced, limited("b"), assistant("c", [])], 3)).toBe("continued")
+  expect(footerOutcome([...replaced, assistant("b", [])], 3)).toBeUndefined()
+  // A notice that names another step does not relabel this one.
+  const other = [userMessage("u"), limited("a"), note("n", { notice: "output-escalation", replaces: "x" })]
+  expect(footerOutcome(other, 1)).toBe("truncated")
+})
+
+test("a resume note with nothing after it is not yet a truncation, and a closed turn is", () => {
+  const resumed = [userMessage("u"), limited("a"), note("n", { notice: "output-limit" })]
+  expect(footerOutcome(resumed, 1)).toBeUndefined()
+  expect(footerOutcome([...resumed, idle("i")], 1)).toBe("truncated")
+  expect(footerOutcome([...resumed, userMessage("u2")], 1)).toBe("truncated")
+  expect(footerOutcome([...resumed, limited("b")], 1)).toBe("continued")
+})
+
+test("a prompt that is queued but not delivered does not end the turn", () => {
+  const queued = new Set(["q"])
+  const lines = [userMessage("u"), failed("a"), userMessage("q"), assistant("b", [])]
+  expect(footerOutcome(lines, 1)).toBeUndefined()
+  expect(footerOutcome(lines, 1, queued)).toBe("continued")
+  const resumed = [userMessage("u"), limited("a"), userMessage("q"), note("n", { notice: "output-limit" })]
+  expect(footerOutcome(resumed, 1)).toBe("truncated")
+  expect(footerOutcome(resumed, 1, queued)).toBeUndefined()
+})
+
+test("a footer outcome does not subscribe to messages after its turn", () => {
+  createRoot((dispose) => {
+    try {
+      const [messages, setMessages] = createStore<SessionMessageInfo[]>([
+        userMessage("u"),
+        limited("a"),
+        idle("i"),
+        userMessage("u2"),
+        assistant("b", []),
+      ])
+      let runs = 0
+      const outcome = createMemo(() => {
+        runs++
+        return footerOutcome(messages, 1)
+      })
+      expect(outcome()).toBe("truncated")
+      setMessages(messages.length, assistant("c", []))
+      setMessages(4, "time", "created", 9)
+      expect(outcome()).toBe("truncated")
+      expect(runs).toBe(1)
+    } finally {
+      dispose()
+    }
+  })
+})
+
+test("the footer story fixtures cover each outcome", () => {
+  expect(
+    assistantFooterFixtures().map((item) =>
+      footerOutcome(
+        item.messages,
+        item.messages.findIndex((message) => message.id === item.target),
+      ),
+    ),
+  ).toEqual([undefined, "continued", "continued", "retried", "truncated", undefined, undefined])
+})
 
 function pending() {
   return { status: "streaming" as const, input: "" }

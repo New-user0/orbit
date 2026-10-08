@@ -20,6 +20,8 @@ export type RunCommandInput = {
   message: string[]
   continue?: boolean
   session?: string
+  /** `session` came from --resume: it must exist already, and a miss never creates it. */
+  mustExist?: boolean
   fork?: boolean
   model?: string
   agent?: string
@@ -79,7 +81,7 @@ export function runNonInteractiveWithOptions(input: RunCommandInput, options: Ex
 }
 
 async function run(input: RunCommandInput, options: ExecutionOptions) {
-  if (input.fork && !input.continue && !input.session) fail("--fork requires --continue or --session")
+  if (input.fork && !input.continue && !input.session) fail("--fork requires --continue, --session or --resume")
   const root = options.root ?? process.env.PWD ?? process.cwd()
   const local = localDirectory(root)
   const directory = options.useServerDirectory ? undefined : (options.directory ?? local)
@@ -104,6 +106,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     location: prepared.directory ? { directory: prepared.directory } : undefined,
     continue: input.continue,
     session: input.session,
+    mustExist: input.mustExist,
     fork: input.fork,
     model: explicit
       ? { providerID: explicit.model.providerID, id: explicit.model.modelID, variant: explicit.variant }
@@ -145,13 +148,14 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
   }
 
   // The model of the init line is the one the run asks for, or the default of the folder when it asks for none.
-  const initModel = input.envelope && input.format === "stream-json"
-    ? (model ??
-      (await client.model
-        .default({ location: { directory: target.location.directory } })
-        .then((result) => (result.data ? { providerID: result.data.providerID, modelID: result.data.id } : undefined))
-        .catch(() => undefined)))
-    : undefined
+  const initModel =
+    input.envelope && input.format === "stream-json"
+      ? (model ??
+        (await client.model
+          .default({ location: { directory: target.location.directory } })
+          .then((result) => (result.data ? { providerID: result.data.providerID, modelID: result.data.id } : undefined))
+          .catch(() => undefined)))
+      : undefined
   await runNonInteractivePrompt({
     client,
     sessionID: target.session.id,

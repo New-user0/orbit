@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import {
   BoxRenderable,
   CliRenderEvents,
@@ -384,7 +385,7 @@ function TabContextMenu(props: { state: TabContextMenuState; tabs: SessionTabsCo
   }))
   const actions = createMemo<Array<{ title: string; run?: () => void }>>(() => {
     const sessionID = props.state.sessionID
-    const title = props.state.title
+    const title = props.state.title && plain(props.state.title)
     const closed = (props.tabs.recentlyClosed?.() ?? []).slice(0, 10)
     return [
       ...(sessionID && props.tabs.add ? [{ title: NEW_SESSION_TAB_TITLE, run: () => props.tabs.add?.() }] : []),
@@ -410,7 +411,7 @@ function TabContextMenu(props: { state: TabContextMenuState; tabs: SessionTabsCo
         ? [
             { title: "Recently closed tabs" },
             ...closed.map((tab) => ({
-              title: tab.title || "Untitled session",
+              title: plain(tab.title || "Untitled session"),
               run: () => props.tabs.reopen?.(tab.sessionID),
             })),
             ...(closed.length === 0 ? [{ title: "No recently closed tabs" }] : []),
@@ -749,7 +750,7 @@ function VerticalSessionTabs(props: {
               const restingTitleWidth = () => Math.max(1, width() - prefixWidth() - 1)
               const hoveredTitleWidth = () => Math.max(1, restingTitleWidth() - 1)
               const titleWidth = () => (hovered() === tab.sessionID ? hoveredTitleWidth() : restingTitleWidth())
-              const title = () => (props.controller ? undefined : session()?.title) ?? tab.title ?? "Untitled session"
+              const title = () => plain((props.controller ? undefined : session()?.title) ?? tab.title ?? "Untitled session")
               const scrolling = () => marquee.active() === tab.sessionID
               const visibleTitleParts = createMemo(() =>
                 scrolling()
@@ -1252,9 +1253,11 @@ function VerticalSessionTabs(props: {
             <box height={2} paddingX={1} backgroundColor={background()}>
               <text fg={theme.text.base} wrapMode="none" selectable={false}>
                 {Locale.truncateWidth(
-                  data?.session.get(sessionID())?.title ??
-                    items().find((tab) => tab.sessionID === sessionID())?.title ??
-                    "Untitled session",
+                  plain(
+                    data?.session.get(sessionID())?.title ??
+                      items().find((tab) => tab.sessionID === sessionID())?.title ??
+                      "Untitled session",
+                  ),
                   tooltipWidth() - 2,
                 )}
               </text>
@@ -1577,7 +1580,7 @@ function HorizontalSessionTabs(props: {
           const glowColor = createMemo(() => tint(background(), feedbackColor() ?? unreadColor(), glowLevel()))
           const glows = () =>
             Boolean(status().attention || (!selected() && !status().busy && status().unread !== undefined))
-          const title = () => data?.session.get(tab.sessionID)?.title ?? tab.title ?? "Untitled session"
+          const title = () => plain(data?.session.get(tab.sessionID)?.title ?? tab.title ?? "Untitled session")
           const tabNumber = createMemo(() => items().findIndex((item) => item.sessionID === tab.sessionID) + 1)
           const numberWidth = () => Math.max(2, String(items().length).length)
           // Hovering reveals the close mark, so the title's right bound shifts left of it.

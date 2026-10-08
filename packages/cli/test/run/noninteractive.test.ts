@@ -1010,13 +1010,15 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
   test("the result takes the run's own outcome before the answer's validity, field by field", async () => {
     const envelope = { cwd: "/tmp", version: "test" }
     const jsonSchema = { type: "object" }
-    const answer = (text: string, ...ending: V2Event[]) => (messageID: string) => [
-      prompted(messageID),
-      stepStarted("msg_one"),
-      textEnded("msg_one", text),
-      stepEnded("msg_one"),
-      ...ending,
-    ]
+    const answer =
+      (text: string, ...ending: V2Event[]) =>
+      (messageID: string) => [
+        prompted(messageID),
+        stepStarted("msg_one"),
+        textEnded("msg_one", text),
+        stepEnded("msg_one"),
+        ...ending,
+      ]
     const rows: {
       name: string
       turn: (messageID: string) => V2Event[]
@@ -1032,7 +1034,12 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       {
         name: "invalid JSON after a success",
         turn: answer("nope", settled()),
-        expected: { is_error: true, outcome: "failed", reason: "invalid_output", error: "The answer was not valid JSON." },
+        expected: {
+          is_error: true,
+          outcome: "failed",
+          reason: "invalid_output",
+          error: "The answer was not valid JSON.",
+        },
         absent: ["structured_output"],
       },
       {
@@ -1050,7 +1057,12 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       {
         name: "interruption",
         turn: answer("nope", settled("interrupted", "shutdown")),
-        expected: { is_error: true, outcome: "interrupted", reason: "shutdown", error: "Session interrupted: shutdown" },
+        expected: {
+          is_error: true,
+          outcome: "interrupted",
+          reason: "shutdown",
+          error: "Session interrupted: shutdown",
+        },
         absent: [],
       },
       {
@@ -1262,7 +1274,11 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       }
 
       results.forEach((result) =>
-        expect(result).toMatchObject({ is_error: false, result: '{"name": "Alice"}', structured_output: { name: "Alice" } }),
+        expect(result).toMatchObject({
+          is_error: false,
+          result: '{"name": "Alice"}',
+          structured_output: { name: "Alice" },
+        }),
       )
     })
 

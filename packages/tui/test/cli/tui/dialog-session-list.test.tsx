@@ -25,7 +25,9 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 // Renders the real session list over a server that holds one session, with the keybindings file `file` applied.
-async function mountList(file: object) {
+async function mountList(file: object, options: { initialSearch?: string; title?: string } = {}) {
+  // The `search` of each session list request that carried one, first to last.
+  const searches: string[] = []
   const calls = createFetch((url) => {
     if (url.pathname === "/api/location") {
       const directory = url.searchParams.get("location[directory]") ?? process.cwd()
@@ -34,6 +36,8 @@ async function mountList(file: object) {
     if (url.pathname !== "/api/session") return undefined
     const parentID = url.searchParams.get("parentID")
     if (parentID && parentID !== "null") return json({ data: [], cursor: {} })
+    const search = url.searchParams.get("search")
+    if (search) searches.push(search)
     return json({
       data: [
         {
@@ -42,7 +46,7 @@ async function mountList(file: object) {
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           time: { created: 1, updated: 2 },
-          title: "Only session",
+          title: options.title ?? "Only session",
           location: { directory: process.cwd() },
         },
       ],
@@ -55,7 +59,7 @@ async function mountList(file: object) {
   function Probe() {
     const dialog = useDialog()
     storage = useStorage()
-    onMount(() => dialog.replace(() => <DialogSessionList />))
+    onMount(() => dialog.replace(() => <DialogSessionList initialSearch={options.initialSearch} />))
     return null
   }
 
@@ -99,9 +103,10 @@ async function mountList(file: object) {
     { width: 100, height: 30, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Only session"))
+  await app.waitForFrame((frame) => frame.includes(options.title ? "Sessions" : "Only session"))
   return {
     app,
+    searches,
     async [Symbol.asyncDispose]() {
       app.renderer.destroy()
       await storage.flush()
@@ -109,6 +114,30 @@ async function mountList(file: object) {
     },
   }
 }
+
+test("opens with the initial search typed into the filter, and the first search request carries it", async () => {
+  await using list = await mountList({}, { initialSearch: "fix the build" })
+
+  await list.app.waitForFrame((frame) => frame.includes("fix the build"))
+  expect(list.searches[0]).toBe("fix the build")
+  expect(new Set(list.searches)).toEqual(new Set(["fix the build"]))
+})
+
+test("an empty initial search shows the whole list", async () => {
+  await using list = await mountList({}, { initialSearch: "" })
+
+  expect(list.searches).toEqual([])
+})
+
+test("draws a session title without its control and format characters", async () => {
+  // An erase-line, a right-to-left override and a line break, as a repository can name a session.
+  await using list = await mountList({}, { title: "Fix\u001b[2Kbuild‮evil\nnext" })
+
+  await list.app.waitForFrame((frame) => frame.includes("Fix"))
+  const frame = list.app.captureCharFrame()
+  expect(frame).not.toContain("‮")
+  expect(frame).not.toContain("\u001b")
+})
 
 test("renames from ctrl+r in the session list, which the prompt's history search shares", async () => {
   await using list = await mountList({})

@@ -53,6 +53,7 @@ import { SessionRunner } from "@orbit/core/session/runner/index"
 import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
+import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Plugin } from "@orbit/core/plugin"
@@ -231,6 +232,9 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
     executions: new Array<string>(),
+    // Busy periods the coordinator started and settled; one continuation must stay inside one of them.
+    drains: { started: 0, settled: 0 },
+    turnEnd: ((_input: SessionTurnEnd.Input) => Effect.succeed(undefined)) as SessionTurnEnd.Check["run"],
     holds: new Map<string, { readonly started: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }>(),
     hold(text: string) {
       const existing = this.holds.get(text)
@@ -546,6 +550,7 @@ const layer = Layer.unwrap(
       PluginSupervisor.node.replace(Layer.empty),
       Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
       SessionModelTransport.node.replace(modelTransport),
+      SessionTurnEnd.node.replace(SessionTurnEnd.layerWith([{ name: "test", run: (input) => state.turnEnd(input) }])),
     ]
     const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
       ...replacements,
@@ -569,7 +574,11 @@ const layer = Layer.unwrap(
             )
         }
         const coordinator = yield* SessionRunCoordinator.make<Session.ID, SessionRunner.RunError>({
-          drain: (sessionID, force) => drain(sessionID, force),
+          drain: (sessionID, force) =>
+            Effect.sync(() => void state.drains.started++).pipe(
+              Effect.andThen(drain(sessionID, force)),
+              Effect.ensuring(Effect.sync(() => void state.drains.settled++)),
+            ),
         })
         return SessionExecution.Service.of({
           active: coordinator.active,
@@ -8440,6 +8449,167 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
+  describe("turn end", () => {
+    const keepGoing = (check: string): SessionTurnEnd.Check["run"] => () =>
+      Effect.succeed({ check, text: `The ${check} check wants more work.` })
+    const notices = (s: Scenario) =>
+      s.context.pipe(
+        Effect.map((messages) =>
+          messages.flatMap((message) => (message.type === "synthetic" && message.metadata?.notice === "turn-end" ? [message] : [])),
+        ),
+      )
+
+    scenario("continues once in the same busy period and settles it once", function* (s) {
+      // The check continues the first time it is asked and lets the second end stand.
+      let asked = 0
+      s.turnEnd = () =>
+        Effect.sync(() => {
+          asked++
+          return asked === 1 ? { check: "first", text: "Keep going." } : undefined
+        })
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("First", "text-1"), TestLLM.text("Second", "text-2"))
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(2)
+      expect(asked).toBe(2)
+      expect(s.drains).toEqual({ started: 1, settled: 1 })
+      expect(yield* notices(s)).toMatchObject([{ text: "Keep going.", metadata: { notice: "turn-end", check: "first" } }])
+      expect((yield* s.messages).filter((message) => message.type === "assistant")).toHaveLength(2)
+    })
+
+    scenario("asks at the end of each turn when a prompt is queued", function* (s) {
+      let asked = 0
+      s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
+      yield* s.admit("One")
+      yield* s.session.prompt({ sessionID, text: "Two", delivery: "queue", resume: false })
+      yield* s.llm.push(TestLLM.text("A", "text-a"), TestLLM.text("B", "text-b"))
+
+      yield* s.resume
+
+      // The queued prompt starts the next turn, which does not make the first one skip its checks.
+      expect(asked).toBe(2)
+    })
+
+    scenario("asks nothing while steered input waits, then asks once", function* (s) {
+      let asked = 0
+      s.turnEnd = () => Effect.sync(() => void asked++).pipe(Effect.as(undefined))
+      yield* s.admit("One")
+      yield* s.llm.push(TestLLM.text("A", "text-a"), TestLLM.text("B", "text-b"))
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      yield* s.admit("STEER")
+      yield* first.release
+      yield* Fiber.join(run)
+
+      expect(s.requests).toHaveLength(2)
+      expect(asked).toBe(1)
+    })
+
+    // A limit stop is not a natural end, so no check is asked and no notice is left for the next prompt's request.
+    for (const row of [
+      {
+        name: "the agent's last allowed step",
+        setup: function* (s: Scenario) {
+          const agents = yield* Agent.Service
+          yield* agents.transform((editor) =>
+            editor.update(Agent.ID.make("build"), (agent) => {
+              agent.steps = 1
+            }),
+          )
+          yield* s.admit("Work")
+          yield* s.llm.push(...Array.from({ length: 10 }, (_, index) => TestLLM.text(`A${index}`, `limit-${index}`)))
+        },
+        requests: 1,
+      },
+      {
+        name: "the output-limit cap",
+        setup: function* (s: Scenario) {
+          yield* s.admit("Never finishes")
+          yield* s.llm.push(
+            ...Array.from({ length: 12 }, (_, index) => lengthStop(`te-cap-${index}`, String(index))),
+            TestLLM.text("Done", "te-cap-done"),
+          )
+        },
+        requests: 4,
+      },
+      {
+        name: "the turn's own step limit",
+        setup: function* (s: Scenario) {
+          yield* s.session.prompt({ sessionID, text: "Work", turn: { maxSteps: 1 }, resume: false })
+          yield* s.llm.push(...Array.from({ length: 10 }, (_, index) => TestLLM.text(`A${index}`, `turn-${index}`)))
+        },
+        requests: 1,
+      },
+    ])
+      scenario(`asks no check and leaves no notice at ${row.name}`, function* (s) {
+        let asked = 0
+        s.turnEnd = () =>
+          Effect.sync(() => void asked++).pipe(Effect.as({ check: "always", text: "The check wants more work." }))
+        yield* row.setup(s)
+
+        const exit = yield* s.resume.pipe(Effect.exit)
+
+        expect(Exit.isSuccess(exit)).toBe(true)
+        expect(s.requests).toHaveLength(row.requests)
+        expect(asked).toBe(0)
+        expect(yield* notices(s)).toEqual([])
+      })
+
+    scenario("escapes the description of a continuation when it is stored", function* (s) {
+      let asked = 0
+      s.turnEnd = () =>
+        Effect.sync(() => {
+          asked++
+          return asked === 1 ? { check: "hostile", text: "More.", description: "ok\u001b]0;pwned\u0007\nnext" } : undefined
+        })
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("First", "text-1"), TestLLM.text("Second", "text-2"))
+
+      yield* s.resume
+
+      const [notice] = yield* notices(s)
+      expect(notice?.description).toBeDefined()
+      expect(notice?.description).not.toMatch(/[\u0000-\u001f\u007f]/)
+      expect(notice?.description).toContain("ok")
+    })
+
+    scenario("lets the turn end when a check dies", function* (s) {
+      s.turnEnd = () => Effect.die(new Error("check exploded"))
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("Done", "text-done"))
+
+      const exit = yield* s.resume.pipe(Effect.exit)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(s.requests).toHaveLength(1)
+      expect(yield* notices(s)).toEqual([])
+    })
+
+    scenario("stops continuing after eight in one turn", function* (s) {
+      s.turnEnd = keepGoing("always")
+      yield* s.admit("Work")
+      yield* s.llm.push(...Array.from({ length: 10 }, (_, index) => TestLLM.text(`Answer ${index}`, `text-${index}`)))
+
+      yield* s.resume
+
+      expect(yield* notices(s)).toHaveLength(SessionTurnEnd.MAX_CONTINUATIONS)
+      expect(s.requests).toHaveLength(SessionTurnEnd.MAX_CONTINUATIONS + 1)
+    })
+
+    scenario("ends the turn when no check continues", function* (s) {
+      yield* s.admit("Work")
+      yield* s.llm.push(TestLLM.text("Done", "text-done"))
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(1)
+      expect(yield* notices(s)).toEqual([])
+    })
+  })
+
   scenario("rejects malformed streamed tool input ordering", function* (s) {
     yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "read", text: "{}" })])
 
@@ -8701,16 +8871,186 @@ describe("SessionRunnerLLM", () => {
     ).toHaveLength(0)
   })
 
-  scenario("resumes a reply cut off at the configured cap", function* (s) {
+  const notices = (messages: ReadonlyArray<SessionMessage.Info>, notice: string) =>
+    messages.filter((message) => message.type === "synthetic" && message.metadata?.notice === notice)
+
+  scenario("escalates a reply cut off at the configured cap, then resumes at the maximum", function* (s) {
     yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
     s.currentModel = fittedOutputModel
-    yield* s.llm.push(lengthStop("cap-resume-1", "Part"), TestLLM.text(" rest", "cap-resume-2"))
+    yield* s.llm.push(
+      lengthStop("cap-resume-1", "FirstCut"),
+      lengthStop("cap-resume-2", "SecondCut"),
+      TestLLM.text(" rest", "cap-resume-3"),
+    )
     yield* s.runPrompt("Question")
 
-    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 8_000])
-    expect(
-      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
-    ).toHaveLength(1)
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 64_000])
+    // The retry is the same request: the cut-off attempt and the notice are left out.
+    expect(s.requests[1]?.messages).toEqual(s.requests[0]?.messages)
+    // The resume keeps the second attempt, and neither the first attempt nor the escalation notice.
+    const resumed = JSON.stringify(s.requests[2]?.messages)
+    expect(resumed).toContain("SecondCut")
+    expect(resumed).not.toContain("FirstCut")
+    expect(resumed).not.toContain("larger one")
+    const context = yield* s.context
+    const escalations = notices(context, "output-escalation")
+    expect(escalations).toHaveLength(1)
+    expect(notices(context, "output-limit")).toHaveLength(1)
+    expect(escalations[0]?.metadata).toEqual({ notice: "output-escalation", replaces: expect.any(String) })
+    expect(escalations[0]).not.toHaveProperty("description")
+    expect(context.some((message) => message.id === escalations[0]?.metadata?.replaces)).toBe(true)
+  })
+
+  scenario("answers at the maximum once escalated and returns to the cap on the next prompt", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-next-1", "Part"), TestLLM.text("Whole answer", "cap-next-2"))
+    yield* s.runPrompt("Question")
+    yield* s.llm.push(TestLLM.text("Short", "cap-next-3"))
+    yield* s.runPrompt("Another")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 64_000, 8_000])
+    expect(notices(yield* s.context, "output-limit")).toHaveLength(0)
+  })
+
+  // A reply that made any tool call before the cut-off is never repeated, a provider-hosted call included: repeating
+  // it would run and bill the call again. Only an input that never became a call escalates.
+  const capped = { reason: { normalized: "length", raw: "max_tokens" } } as const
+  for (const row of [
+    {
+      name: "a local call that ran",
+      cut: () => TestLLM.complete(capped, LLMEvent.toolCall({ id: "cap-tool", name: "echo", input: { text: "ran" } })),
+      executions: ["ran"],
+      escalates: false,
+      kept: "cap-tool",
+    },
+    {
+      name: "a hosted call with its result",
+      cut: () =>
+        TestLLM.complete(
+          capped,
+          hostedCall("cap-hosted", "weather"),
+          LLMEvent.toolResult({
+            id: "cap-hosted",
+            name: "web_search",
+            result: { type: "text", value: "HostedResultText" },
+            providerExecuted: true,
+          }),
+          LLMEvent.textStart({ id: "cap-hosted-text" }),
+          LLMEvent.textDelta({ id: "cap-hosted-text", text: "Cut" }),
+          LLMEvent.textEnd({ id: "cap-hosted-text" }),
+        ),
+      executions: [],
+      escalates: false,
+      kept: "HostedResultText",
+    },
+    {
+      name: "an input that never became a call",
+      cut: () =>
+        TestLLM.complete(
+          capped,
+          LLMEvent.toolInputStart({ id: "cap-input", name: "echo" }),
+          LLMEvent.toolInputDelta({ id: "cap-input", name: "echo", text: '{"text":' }),
+        ),
+      executions: [],
+      escalates: true,
+      kept: undefined,
+    },
+  ])
+    scenario(`escalates a capped reply only if it made no tool call: ${row.name}`, function* (s) {
+      yield* s.configControl!.setEntries([
+        new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+      ])
+      s.currentModel = fittedOutputModel
+      yield* s.llm.push(row.cut(), TestLLM.text("Done", "cap-tool-2"))
+      yield* s.runPrompt("Question")
+
+      expect(s.executions).toEqual(row.executions)
+      expect(notices(yield* s.context, "output-escalation")).toHaveLength(row.escalates ? 1 : 0)
+      expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual(
+        row.escalates ? [8_000, 64_000] : [8_000, 8_000],
+      )
+      if (row.kept) expect(JSON.stringify(s.requests[1]?.messages)).toContain(row.kept)
+    })
+
+  scenario("does not escalate at a spent turn limit", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+    yield* s.llm.push(lengthStop("esc-limit", "Part"), TestLLM.stop())
+
+    yield* s.resume.pipe(Effect.ignore)
+
+    expect(s.requests).toHaveLength(1)
+    expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+  })
+
+  scenario("delivers a waiting steer instead of escalating", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("esc-steer-1", "A"), TestLLM.text("Answer", "esc-steer-done"))
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    yield* s.admit("STEER")
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
+  })
+
+  scenario("leaves an escalated attempt out of a fork's requests", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-fork-1", "FirstCut"), TestLLM.text("Whole answer", "cap-fork-2"))
+    yield* s.runPrompt("Question")
+    yield* s.llm.push(TestLLM.text("Second answer", "cap-fork-3"))
+    const second = yield* s.runPrompt("Second")
+
+    const forked = yield* s.session.fork({ sessionID, before: second.id })
+    const copied = yield* s.session.messages({ sessionID: forked.id })
+    const notice = copied.find(
+      (message) => message.type === "synthetic" && message.metadata?.notice === "output-escalation",
+    )
+    // The copy names the copied attempt, not the parent's.
+    expect(notice?.metadata?.replaces).toBeDefined()
+    expect(copied.some((message) => message.id === notice?.metadata?.replaces)).toBe(true)
+
+    yield* s.llm.push(TestLLM.text("Fork answer", "cap-fork-4"))
+    s.requests.length = 0
+    yield* s.session.prompt({ sessionID: forked.id, text: "Forked", resume: false })
+    yield* s.session.resume(forked.id)
+    expect(JSON.stringify(s.requests[0]?.messages)).toContain("Whole answer")
+    expect(JSON.stringify(s.requests[0]?.messages)).not.toContain("FirstCut")
+  })
+
+  scenario("does not escalate when a hook set the output limit", function* (s) {
+    const hooks = yield* PluginHooks.Service
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-pin-1", "Part"), TestLLM.text(" rest", "cap-pin-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([20_000, 20_000])
+    const context = yield* s.context
+    expect(notices(context, "output-escalation")).toHaveLength(0)
+    expect(notices(context, "output-limit")).toHaveLength(1)
+  })
+
+  scenario("does not escalate without a lowered cap", function* (s) {
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-none-1", "Part"), TestLLM.text(" rest", "cap-none-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([64_000, 64_000])
+    expect(notices(yield* s.context, "output-escalation")).toHaveLength(0)
   })
 
   scenario("starts a fresh output-limit streak after a new prompt", function* (s) {
