@@ -6,6 +6,7 @@ import {
   LLMClient,
   LLMEvent,
   isContextOverflowFailure,
+  isOverloaded,
   type ProviderErrorEvent,
   type ToolCall,
 } from "@orbit/ai"
@@ -31,10 +32,16 @@ import { SessionRunnerRetry } from "./retry.js"
 
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
-  Retry: { readonly error: SessionError.Error; readonly decision: SessionRunnerRetry.Decision }
+  Retry: {
+    readonly error: SessionError.Error
+    readonly decision: SessionRunnerRetry.Decision
+    /** Whether the provider reported it was overloaded, which counts toward the fallback switch. */
+    readonly overloaded: boolean
+  }
   Continue: {
     readonly error: SessionError.Error
     readonly decision: SessionRunnerRetry.Decision
+    readonly overloaded: boolean
   }
   RecoverFull: {}
   Compacted: {}
@@ -195,7 +202,7 @@ export const make = Effect.gen(function* () {
         if (llmFailure && llmError && retry?.retry && !recorded.outputStarted) {
           // Retry state projects onto the existing assistant, even before it has produced output.
           yield* publisher.startAssistant()
-          return Outcome.Retry({ error: llmError, decision: retry })
+          return Outcome.Retry({ error: llmError, decision: retry, overloaded: isOverloaded(llmFailure) })
         }
         if (llmError) yield* publisher.failAssistant(llmError)
 
@@ -261,7 +268,7 @@ export const make = Effect.gen(function* () {
           tools.declines.length === 0 &&
           !tools.interrupted
         )
-          return Outcome.Continue({ error: llmError, decision: retry })
+          return Outcome.Continue({ error: llmError, decision: retry, overloaded: isOverloaded(llmFailure) })
 
         if (Exit.isFailure(stream)) return yield* Effect.failCause(stream.cause)
         if (tools.declines.length > 0) {

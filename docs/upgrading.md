@@ -716,7 +716,7 @@ cost that is not above zero, a `fallbackModel` that is not a model reference, or
 (`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
 fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
 message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
-turn and no fallback model is used.
+turn; a fallback model is used after repeated overloads (see the note on the fallback switch).
 
 A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
 cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
@@ -1231,9 +1231,8 @@ when the names collide both appear in autocomplete.
 ### New `fallback_model` setting
 
 The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
-use for the rest of a turn after the selected model is repeatedly overloaded. This change only adds and resolves the
-setting; the switch itself follows in a later change. A model that is unavailable, or is the session's own model, is
-ignored.
+use for the rest of a turn after the selected model is repeatedly overloaded (see the note on switching below). A
+model that is unavailable, or is the session's own model, is ignored.
 
 In a folder that is not trusted yet, `fallback_model` is left out whole, so a repository cannot choose your fallback
 model. Orbit uses your own setting until you trust the folder.
@@ -1241,3 +1240,19 @@ model. Orbit uses your own setting until you trust the folder.
 **Affects:** people who want a backup model, and anyone reading `config.get`, which now lists the key.
 
 **What to do:** nothing. Set `fallback_model` in your own config to use it.
+
+### A run switches to the fallback model after three overloads in a row
+
+When the provider reports that the model is overloaded three times in a row within one step, Orbit now switches to the
+fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
+session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
+other failure between two overloads, such as a rate limit, restarts the count. If the overloaded response had already
+produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
+`synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
+also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
+prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
+or a moved location keeps it. No new event type is added.
+
+**Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
+
+**What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.
