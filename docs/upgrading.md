@@ -659,6 +659,47 @@ message is not affected.
 
 **What to do:** Nothing for code that does not read the type. If you match on `tool.execution`, also match the types
 above, or match the type of the failure you care about.
+### Messages say how they were delivered, and a prompt can carry turn options
+
+A `user` message and a `synthetic` message now carry a `delivery` field, `steer` or `queue`: the delivery that the input
+left the inbox with. A queued input waits until the previous work ended and then starts a new turn, while a steer joins
+the turn in progress, so the field tells where a turn begins. A message that Orbit records directly, such as a note
+from the agent loop, has no `delivery` and never starts a turn, and neither does a message stored before this change,
+which counts as a steer. The `session.prompt` request also takes a `turn` object, with `maxSteps`, `maxCost` (in US
+dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count that is not a whole number above zero, a
+cost that is not above zero, a `fallbackModel` that is not a model reference, or a key that `turn` does not define
+(`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
+fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
+message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
+turn and no fallback model is used.
+
+A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
+cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
+notices, whenever the history in front of it does not end in an idle mark. That is so for:
+
+- the first prompt after a fork that stops before an idle mark, such as a fork before a queued prompt;
+- the first prompt after a revert, which removes the idle mark that followed the history it keeps, such as a revert to a
+  queued prompt;
+- the first prompt after an import of a session that was exported in the middle of a turn;
+- the first prompt to a subagent's session that a crash cut off, or that a shutdown interrupted without recording an idle
+  mark. The next start resumes only top-level sessions and background subagents, and it forgets that any other session
+  was in the middle of work, again without an idle mark. The prompt can come from a client or from the parent agent
+  continuing the subagent with its `sessionID`;
+- a steer that arrives after the agent loop has finished its last response but before the idle mark;
+- a steer that arrives while a manual compaction (sent with either delivery, and the TUI's `/compact` sends none), a
+  move or a location reload runs after the turn's last response. It holds the idle mark back until it ends, and the
+  steer is promoted in the same run.
+
+A prompt sent with `queue` delivery starts a new turn in each of these cases.
+
+**Affects:** programs that read messages through the HTTP API, the client libraries or an exported session, and code
+that checks them against the old shape: `user` messages gain optional `turn` and `delivery`, `synthetic` messages gain
+optional `delivery`, and the `session.inbox.enqueued` event carries `turn` on a prompt that had it. The generated client
+types add `SessionTurnOptions` and the new fields.
+
+**What to do:** nothing. Every new field is optional, and a prompt without `turn` behaves as before. A client that sets
+`turn` and wants the first prompt after a fork, a revert, an import or a cut-off subagent session to start a new turn
+sends it with `delivery: "queue"`.
 
 ### Keys can be set in `keybindings.json`, per place, and as two-step chords
 

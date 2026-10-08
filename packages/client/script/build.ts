@@ -31,6 +31,7 @@ import { AbsolutePath, PositiveInt, RelativePath } from "@orbit/schema/schema"
 import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { SessionInbox } from "@orbit/schema/session-inbox"
+import { SessionTurn } from "@orbit/schema/session-turn"
 import { Shell } from "@orbit/schema/shell"
 import { Skill } from "@orbit/schema/skill"
 import { Vcs } from "@orbit/schema/vcs"
@@ -70,6 +71,7 @@ const effectTypeReferences = [
   ...namespaceTypes("Session", "@orbit/schema/session", Session),
   ...namespaceTypes("SessionMessage", "@orbit/schema/session-message", SessionMessage),
   ...namespaceTypes("SessionInbox", "@orbit/schema/session-inbox", SessionInbox),
+  ...namespaceTypes("SessionTurn", "@orbit/schema/session-turn", SessionTurn),
   ...namespaceTypes("Shell", "@orbit/schema/shell", Shell),
   ...namespaceTypes("Skill", "@orbit/schema/skill", Skill),
   ...namespaceTypes("Vcs", "@orbit/schema/vcs", Vcs),
