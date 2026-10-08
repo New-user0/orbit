@@ -111,6 +111,7 @@ export const make = Effect.gen(function* () {
       model: input.model.ref,
       providerMetadataKey: input.model.model.route.providerMetadataKey ?? input.model.model.provider,
       snapshot: startSnapshot,
+      displayName: (name) => input.prepared.describeTool(name)?.displayName,
       started: yield* Clock.currentTimeMillis,
     })
     const scheduler = ToolScheduler.make<SessionError.Error>({

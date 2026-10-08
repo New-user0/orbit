@@ -13,8 +13,11 @@ import { SessionError } from "@orbit/schema/session-error"
 import { Money } from "@orbit/schema/money"
 import { SessionUsage } from "../usage.js"
 import { Tool } from "../../tool.js"
+import { plain } from "@orbit/util/plain"
 
 type Input = {
+  /** The user-facing name a tool declares, if any. It is not asked for a provider-hosted tool. */
+  readonly displayName?: (name: string) => string | undefined
   readonly sessionID: SessionSchema.ID
   readonly agent: Agent.ID
   readonly model: Model.Ref
@@ -291,11 +294,15 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     tools.set(event.id, tool)
     yield* toolInput.start(event.id)
     yield* publishPendingDeltas()
+    // The event is durable and outlives the tool that declared the name, which a server or a plugin chose, so it is
+    // stored with its control and format characters written out.
+    const displayName = tool.providerExecuted ? undefined : input.displayName?.(event.name)
     yield* bus.publish(SessionEvent.Tool.Input.Started, {
       sessionID: input.sessionID,
       assistantMessageID,
       id: event.id,
       name: event.name,
+      ...(displayName === undefined ? {} : { displayName: plain(displayName) }),
     })
     return tool
   })

@@ -19,6 +19,7 @@ import {
   FinishReason,
   LLMEvent,
   AIError,
+  certificateFailureCode,
   LanguageModel,
   ProviderID,
   ProviderMetadata,
@@ -1006,6 +1007,8 @@ function networkFailure(error: unknown, depth = 0): { message: string; code?: st
   if (cause) return cause
   if (shape.code !== undefined && (NETWORK_ERROR_CODES.has(shape.code) || shape.code.startsWith("UND_ERR")))
     return { message: shape.message, code: shape.code }
+  const certificate = certificateFailureCode(shape)
+  if (certificate !== undefined) return { message: shape.message, code: certificate }
   const message = shape.message.trim().toLowerCase()
   if (TIMEOUT_ERROR_MESSAGES.has(message)) return { message: shape.message, code: "Timeout" }
   if (NETWORK_ERROR_MESSAGES.has(message)) return { message: shape.message, code: shape.code }

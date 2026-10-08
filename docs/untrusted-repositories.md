@@ -86,9 +86,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`.
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
-  with control and format characters written out. Only this source escapes; a plugin or a simulated tool supplies its
-  `displayName` raw, so a client that draws any `displayName` still passes it through `plain` (escaping text that is
-  already escaped changes nothing) and never unescapes it. The hints beside it (`readOnlyHint`, `destructiveHint`,
+  with control and format characters written out. A plugin or a simulated tool supplies its `displayName` raw, but the
+  publisher writes every declared name through `plain` (`@orbit/util/plain`) onto the durable `session.tool.input.started`
+  event, and `SessionTransfer.import` (`orb session import`, `POST /api/experimental/session/import`) writes an imported tool part's `displayName` through it too, so the stored and projected `displayName` is always escaped; a client that draws it still passes it through
+  `plain` (escaping text that is already escaped changes nothing) and never unescapes it. Proof:
+  `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
   hints and permissions` in `core/test/mcp.test.ts`.
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
@@ -152,14 +154,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `Git.worktree` accept one plain name only. Proof: `packages/flow/test/store.test.ts`,
   `packages/flow/test/git.test.ts`, `packages/cli/test/flow.test.ts`.
 - Text printed to a terminal or stored in a title or a commit: `plain`, `progress` and `json` from `@orbit/flow/plain`.
-  Proof: `packages/flow/test/plain.test.ts`, `packages/cli/test/flow.test.ts`.
+  Proof: `packages/util/src/plain.test.ts`, `packages/cli/test/flow.test.ts`.
 - What `orb run` prints (`packages/cli/src/run`): every line of JSON, which is each event of `json` and `stream-json`,
   the `result` object and the error that `reportRunError` prints, goes through `jsonLine` from `@orbit/flow/plain`.
   Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
   step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
   thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
   are message content and still open (see Known gaps; close them with `body` from `@orbit/flow/plain`). Proof:
-  `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
+  `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
 
@@ -765,8 +767,8 @@ runs" is a permission.
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
   receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
   `withhold("providers")`.
-  `fallback_model` is withheld the same way. There is no `output_token_cap` field in the config today; when it is
-  added, classify it the same way. Never classify such a field as inert.
+  `fallback_model` and `output_token_cap` are withheld the same way (`test/config/trust.test.ts` pins each row). Never
+  classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
   enforced, as `hooks.disabled` has yet to be, read it in policy-authority order and not by value precedence, or a
   repository could switch off the user's guard hooks (#7).
@@ -819,8 +821,8 @@ repository text.
 
 **How to comply:**
 
-- `plain(text)`, `progress(line)` and `json(value)` come from `@orbit/flow/plain` (`packages/flow/src/plain.ts`, which
-  loads no other module). `plain` trims, writes control and format characters out and puts a line break on one line.
+- `plain(text)`, `progress(line)` and `json(value)` live in `@orbit/util/plain` (`packages/util/src/plain.ts`, which
+  loads no other module, so core reaches it too) and `@orbit/flow/plain` re-exports them. `plain` trims, writes control and format characters out and puts a line break on one line.
   `progress` keeps indentation and takes any value. `json` writes every character of Unicode category C as `\uXXXX`, so
   `JSON.parse` returns the original value. Never `JSON.stringify` a string from a file for a terminal. `jsonLine` is
   `json` on one line, and it writes U+2028 and U+2029 out as well, for output that a program reads line by line, as it
@@ -871,7 +873,7 @@ repository text.
   session title in the server's database, a git log subject, the exit summary), assert that no character of Unicode
   category C remains on any line apart from real line breaks, that the written-out text is present, and that
   `JSON.parse` of printed JSON equals the original value. In terminal UI tests poll `renderOnce` and `captureCharFrame`.
-- Tests: `packages/flow/test/plain.test.ts`, `packages/flow/test/agents.test.ts` (titles and commit subjects),
+- Tests: `packages/util/src/plain.test.ts`, `packages/flow/test/agents.test.ts` (titles and commit subjects),
   `packages/cli/test/flow.test.ts`, `packages/cli/test/run/noninteractive.test.ts` (`orb run`),
   `packages/tui/test/component/dialog-flow-runs.test.tsx`, `packages/tui/test/util/renderer.test.ts` (bodies drawn
   with `captureCharFrame`), `packages/tui/test/mini/entry.body.test.ts`,
@@ -1403,8 +1405,8 @@ fixes it or asks.
   trust the folder." `ConfigTrust.classification` therefore withholds, as `providers`, the top-level `model`, the
   `model` and `steps` of every agent (so also `agents.title.model` and `agents.side.model`) and the `model` of
   every command, from the config and from agent and command files (`test/config/trust.test.ts`,
-  `test/config/agent.test.ts`), and `fallback_model` the same way. The config has no `output_token_cap` field yet;
-  the task that adds it classifies it the same way. No command-file test pins the `model` of a command: `sanitizeCommands` is tested
+  `test/config/agent.test.ts`), and `fallback_model` and `output_token_cap` the same way (the
+  `output_token_cap` row in `test/config/trust.test.ts`). No command-file test pins the `model` of a command: `sanitizeCommands` is tested
   on a command record only.
 - **Text that the person did not write: sinks without a frame test, and what is still open.** The terminal UI and
   Mini write control characters out of message bodies with `bodyText` or `outputText` (task `clients-ux-60`), and the

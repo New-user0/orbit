@@ -308,6 +308,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
                 type: "tool",
                 id: event.data.id,
                 name: event.data.name,
+                ...(event.data.displayName === undefined ? {} : { displayName: event.data.displayName }),
                 time: { created },
                 state: SessionMessage.ToolStateStreaming.make({ status: "streaming", input: "" }),
               }),

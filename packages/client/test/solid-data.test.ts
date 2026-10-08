@@ -1071,6 +1071,45 @@ test("projects background user shell metadata from durable shell data", () => {
   }
 })
 
+test("copies a declared display name onto the streaming tool part and leaves it off otherwise", () => {
+  const setup = activityFixture(() => Response.json({ data: {} }))
+  try {
+    setup.emit({
+      id: "evt_step",
+      created: 1,
+      type: "session.step.started",
+      durable: { aggregateID: "ses_name", seq: 1, version: 1 },
+      data: {
+        sessionID: "ses_name",
+        assistantMessageID: "msg_name",
+        agent: "build",
+        model: { providerID: "provider", id: "model" },
+        started: 1,
+      },
+    } as OrbitEvent)
+    ;[
+      ["call_named", { displayName: "Search issues" }],
+      ["call_plain", {}],
+    ].forEach(([id, extra], index) =>
+      setup.emit({
+        id: `evt_tool_${id}`,
+        created: 2,
+        type: "session.tool.input.started",
+        durable: { aggregateID: "ses_name", seq: index + 2, version: 1 },
+        data: { sessionID: "ses_name", assistantMessageID: "msg_name", id, name: "search", ...(extra as object) },
+      } as OrbitEvent),
+    )
+    const tools = setup.data.session.message.get("ses_name", "msg_name")?.content
+    expect(tools).toMatchObject([
+      { type: "tool", id: "call_named", displayName: "Search issues", state: { status: "streaming" } },
+      { type: "tool", id: "call_plain", state: { status: "streaming" } },
+    ])
+    expect(tools?.[1] && "displayName" in tools[1]).toBe(false)
+  } finally {
+    setup.dispose()
+  }
+})
+
 function modelInfo(name: string): ModelInfo {
   return {
     id: "chat",

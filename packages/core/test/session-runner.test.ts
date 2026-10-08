@@ -603,7 +603,10 @@ const layer = Layer.unwrap(
       ],
     )
   }),
-).pipe(Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)), Layer.provideMerge(testLLM))
+).pipe(
+  Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
+  Layer.provideMerge(testLLM),
+)
 const it = testEffect(layer)
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
@@ -1270,6 +1273,49 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.tools.map((tool) => tool.name)).toContain("renamed_echo")
     expect(s.requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
     expect(s.executions).toEqual(["renamed"])
+  })
+
+  scenario("projects a declared display name, escaped, onto the assistant tool and keeps it on replay", function* (s) {
+    const registry = yield* Tool.Service
+    yield* transformTools(
+      registry,
+      {
+        named: {
+          name: "named",
+          description: "A tool that declares a display name",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          traits: { displayName: "Named\u001b]0;x\u0007\u001b[2K\u009b\u202e" },
+          execute: () => Effect.succeed({ output: {} }),
+        },
+      },
+      { codemode: false },
+    )
+    yield* s.admit("Use the named tool")
+    yield* s.llm.push(
+      TestLLM.tool("call-named", "named", {}),
+      TestLLM.tool("call-echo", "echo", { text: "plain" }),
+      [],
+    )
+
+    yield* s.resume
+
+    const shown = "Named\\x1b]0;x\\x07\\x1b[2K\\x9b\\u{202e}"
+    const tools = () =>
+      Effect.map(s.context, (context) =>
+        context.flatMap((message) =>
+          message.type === "assistant" ? message.content.flatMap((part) => (part.type === "tool" ? [part] : [])) : [],
+        ),
+      )
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
+    yield* replaySessionProjection(sessionID)
+    expect((yield* tools()).map((tool) => [tool.name, tool.displayName])).toEqual([
+      ["named", shown],
+      ["echo", undefined],
+    ])
   })
 
   scenario("executes the tool advertised before a registry reload", function* (s) {
@@ -3697,6 +3743,41 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.generation?.maxTokens).toBe(256_000)
   })
 
+  scenario("lowers the output limit to the configured cap and never raises it", function* (s) {
+    const config = s.configControl!
+    const setCap = (cap: number) =>
+      config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: cap }) })])
+    s.currentModel = fittedOutputModel
+    yield* setCap(8_000)
+    yield* s.llm.push(TestLLM.text("Capped", "text-cap-low"))
+    yield* s.runPrompt("Question")
+    yield* setCap(500_000)
+    yield* s.llm.push(TestLLM.text("Above the maximum", "text-cap-high"))
+    yield* s.runPrompt("Again")
+
+    expect(s.requests[0]?.generation?.maxTokens).toBe(8_000)
+    expect(s.requests[1]?.generation?.maxTokens).toBe(64_000)
+  })
+
+  scenario("applies the configured cap before session context hooks run", function* (s) {
+    const config = s.configControl!
+    const hooks = yield* PluginHooks.Service
+    const seen: (number | undefined)[] = []
+    yield* config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        seen.push(event.options.maxTokens)
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(TestLLM.text("Hooked", "text-cap-hook"))
+    yield* s.runPrompt("Question")
+
+    expect(seen).toEqual([8_000])
+    expect(s.requests[0]?.generation?.maxTokens).toBe(20_000)
+  })
+
   scenario("gives the summary its full output limit when the conversation overshot the threshold", function* (s) {
     // The conversation overshot the threshold, so the prepared summary request exceeds the budget and `deliver`
     // shrinks it before sending. The output limit must follow the budget, not the oversized prepared request.
@@ -4786,6 +4867,16 @@ describe("SessionRunnerLLM", () => {
             execute: ({ text }) =>
               waitFor(text).pipe(Effect.as({ output: { text }, content: text, metadata: { error: true } })),
           },
+          // Fails with `metadata.error` through `Tool.Error` but does not ask for the siblings to be cancelled.
+          throwing_plain: {
+            ...base,
+            name: "throwing_plain",
+            traits: { concurrencySafe: true },
+            execute: ({ text }) =>
+              waitFor(text).pipe(
+                Effect.andThen(Effect.fail(new Tool.Error({ message: "plain failure", metadata: { error: true } }))),
+              ),
+          },
         },
         { codemode: false },
       )
@@ -4861,7 +4952,7 @@ describe("SessionRunnerLLM", () => {
     })
   }
 
-  for (const failing of ["denied_shell", "corrected_shell", "failing_plain"] as const) {
+  for (const failing of ["denied_shell", "corrected_shell", "failing_plain", "throwing_plain"] as const) {
     scenario(`cancels no sibling of a ${failing} call`, function* (s) {
       yield* failingTools(s)
       yield* s.admit("Fail, hold")

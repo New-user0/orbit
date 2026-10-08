@@ -103,30 +103,56 @@ describe("OpenAIPlugin", () => {
     }),
   )
 
-  it.effect("omits the default output limit from OpenAI steps and compaction", () =>
-    Effect.gen(function* () {
-      yield* addPlugin()
-      const hooks = yield* PluginHooks.Service
-      const maxTokens = (providerID: Provider.ID) =>
-        Effect.gen(function* () {
-          const draft = {
-            sessionID: Session.ID.make("ses_test"),
-            model: Model.Ref.make({ providerID, id: Model.ID.make("gpt-5.5") }),
-            system: [],
-            messages: [],
-            options: { maxTokens: 128_000 },
-          }
-          const events = [
-            yield* hooks.trigger("session", "context", { ...draft, agent: Agent.ID.make("build"), tools: {} }),
-            yield* hooks.trigger("session", "compaction", { ...draft, agent: Agent.ID.make("build"), tools: {} }),
-          ]
-          return events.map((event) => event.options.maxTokens)
+  // OpenAI omits its default output limit, but a configured output_token_cap is the user's own request and stays.
+  const limitCases = [
+    { provider: Provider.ID.openai, kind: "primary", cap: undefined, expected: undefined },
+    { provider: Provider.ID.openai, kind: "primary", cap: 8000, expected: 8000 },
+    // A cap above the model's own 128,000-token maximum lowers nothing, so the default stays omitted.
+    { provider: Provider.ID.openai, kind: "primary", cap: 200_000, expected: undefined },
+    { provider: Provider.ID.openai, kind: "compaction", cap: 8000, expected: undefined },
+    { provider: Provider.ID.azure, kind: "primary", cap: undefined, expected: 32_000 },
+    { provider: Provider.ID.azure, kind: "primary", cap: 8000, expected: 8000 },
+    { provider: Provider.ID.azure, kind: "compaction", cap: undefined, expected: 32_000 },
+  ] as const
+  for (const row of limitCases)
+    it.effect(`${row.provider} ${row.kind} with cap ${row.cap ?? "unset"} asks for ${row.expected ?? "no limit"}`, () =>
+      Effect.gen(function* () {
+        yield* addPlugin()
+        const requests = yield* SessionModelRequest.Service
+        const prepared = yield* requests[row.kind]({
+          session: Session.Info.make({
+            id: Session.ID.make("ses_limit"),
+            projectID: Project.ID.global,
+            cost: Money.USD.zero,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+            location: Location.Ref.make({ directory: AbsolutePath.make("/project") }),
+          }),
+          agent: Agent.ID.make("build"),
+          model: SessionRunnerModel.resolved(
+            OpenAIResponses.route.with({ id: `${row.provider}-responses`, provider: row.provider }).model({
+              id: "gpt-5.5",
+            }),
+            {
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              cost: [],
+              limit: { context: 200_000, output: 32_000 },
+            },
+          ),
+          system: [],
+          messages: [],
+          outputTokenCap: row.cap,
         })
-
-      expect(yield* maxTokens(Provider.ID.openai)).toEqual([undefined, undefined])
-      expect(yield* maxTokens(Provider.ID.azure)).toEqual([128_000, 128_000])
-    }),
-  )
+        expect(prepared.request.generation?.maxTokens).toBe(row.expected)
+      }).pipe(
+        Effect.provide(SessionModelRequest.layer),
+        Effect.provideService(SessionModelTransport.Service, {
+          bind: () => ({ execute: () => Effect.die("unused WebSocket execution") }),
+          close: () => Effect.void,
+          closeAll: Effect.void,
+        }),
+      ),
+    )
 
   it.effect("selects WebSocket only from explicit policy", () =>
     Effect.gen(function* () {
