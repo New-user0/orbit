@@ -746,6 +746,21 @@ const recordedEventTypes = (id: Session.ID) =>
       )
   })
 
+const batchBoundaryEvents = (id: Session.ID) =>
+  recordedEventTypes(id).pipe(
+    Effect.map((types) => {
+      const relevant = types.filter((type) =>
+        [
+          "session.tool.success.2",
+          "session.step.started.1",
+          "session.step.ended.1",
+          "session.inbox.delivered.1",
+        ].includes(type),
+      )
+      return relevant.slice(relevant.indexOf("session.tool.success.2"))
+    }),
+  )
+
 const recordedStepSettlementEvents = (id: Session.ID, assistantMessageID: SessionMessage.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -1248,6 +1263,96 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests).toHaveLength(3)
     expect(userTexts(s.requests[2])).toContain("Background work completed")
+  })
+
+  scenario("delivers a notice admitted during a tool batch once, after the tool results", function* (s) {
+    yield* s.admit("Start background work")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "job started" }),
+      TestLLM.text("Handled notice", "text-notice"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    yield* s.session.synthetic({
+      sessionID,
+      text: "Shell job finished",
+      description: "job",
+      metadata: { source: "shell", state: "completed" },
+    })
+    expect(s.requests).toHaveLength(1)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "user"])
+    expect(userTexts(s.requests[1])).toEqual(["Start background work", "Shell job finished"])
+    expect(userTexts(s.requests[0])).toEqual(["Start background work"])
+    expect((yield* s.context).map((message) => message.type)).toEqual(["user", "assistant", "synthetic", "assistant"])
+    expect(yield* s.inbox).toEqual([])
+    expect(yield* batchBoundaryEvents(sessionID)).toEqual([
+      "session.tool.success.2",
+      "session.step.ended.1",
+      "session.inbox.delivered.1",
+      "session.step.started.1",
+      "session.step.ended.1",
+    ])
+  })
+
+  scenario("delivers a notice only after every tool in the batch has joined", function* (s) {
+    yield* s.admit("Echo twice in parallel")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-echo-0", name: "echo", input: { text: "0" } }),
+        LLMEvent.toolCall({ id: "call-echo-1", name: "echo", input: { text: "1" } }),
+      ),
+      TestLLM.text("Handled notice", "text-notice"),
+    )
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(yield* tools.maxActive).toBe(2)
+    yield* s.session.synthetic({ sessionID, text: "Shell job finished" })
+    expect(s.requests).toHaveLength(1)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "tool", "user"])
+    expect(userTexts(s.requests[1])).toEqual(["Echo twice in parallel", "Shell job finished"])
+    expect(yield* s.inbox).toEqual([])
+    expect(yield* batchBoundaryEvents(sessionID)).toEqual([
+      "session.tool.success.2",
+      "session.tool.success.2",
+      "session.step.ended.1",
+      "session.inbox.delivered.1",
+      "session.step.started.1",
+      "session.step.ended.1",
+    ])
+  })
+
+  scenario("keeps a queued prompt admitted during a tool batch out of the tool continuation", function* (s) {
+    yield* s.admit("Echo before queue")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "working" }),
+      TestLLM.text("Finished first", "text-first"),
+      TestLLM.text("Handled queue", "text-queue"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    yield* s.session.prompt({ sessionID, text: "Queued for later", delivery: "queue" })
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1])).toEqual(["Echo before queue"])
+    expect(userTexts(s.requests[2])).toEqual(["Echo before queue", "Queued for later"])
+    expect(messageRoles(s.requests[2])).toEqual(["user", "assistant", "tool", "assistant", "user"])
+    expect(yield* s.inbox).toEqual([])
   })
 
   scenario("streams one request with registry definitions from chronological user history", function* (s) {
@@ -3509,6 +3614,25 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[1]?.generation?.maxTokens).toBe(64_000)
   })
 
+  scenario("applies the configured cap before session context hooks run", function* (s) {
+    const config = yield* Config.Test
+    const hooks = yield* PluginHooks.Service
+    const seen: (number | undefined)[] = []
+    yield* config.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        seen.push(event.options.maxTokens)
+        event.options.maxTokens = 20_000
+      }),
+    )
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(TestLLM.text("Hooked", "text-cap-hook"))
+    yield* s.runPrompt("Question")
+
+    expect(seen).toEqual([8_000])
+    expect(s.requests[0]?.generation?.maxTokens).toBe(20_000)
+  })
+
   scenario("gives the summary its full output limit when the conversation overshot the threshold", function* (s) {
     // The conversation overshot the threshold, so the prepared summary request exceeds the budget and `deliver`
     // shrinks it before sending. The output limit must follow the budget, not the oversized prepared request.
@@ -4584,10 +4708,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({
-        type: "limit.cost",
-        message: expect.stringContaining("cannot be counted"),
-      })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -4596,10 +4717,7 @@ describe("SessionRunnerLLM", () => {
       s.currentModel = compactModel
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 1_000 }, resume: false })
       // The first response alone fills the small window and passes the token limit.
-      yield* s.llm.push(
-        toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }),
-        TestLLM.text("## Objective\n- Summary", "limit-summary"),
-      )
+      yield* s.llm.push(toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }), TestLLM.text("## Objective\n- Summary", "limit-summary"))
 
       expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
@@ -4657,40 +4775,37 @@ describe("SessionRunnerLLM", () => {
   })
 
   for (const delivery of ["steer", "queue"] as const)
-    scenario(
-      `joins a steer that arrives during a ${delivery} compaction after the last response to that turn`,
-      function* (s) {
-        s.currentModel = recoveryModel
-        yield* s.llm.push(
-          TestLLM.text("Active complete", "text-active"),
-          [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
-          TestLLM.text("Reply to the new request", "text-new"),
-        )
-        yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
-        const first = yield* s.llm.gate
-        const run = yield* s.resume.pipe(Effect.forkChild)
-        yield* first.started
-        // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
-        yield* s.session.compact({ sessionID, delivery })
-        const summary = yield* s.llm.gate
-        yield* first.release
-        yield* summary.started
-        // The drain has not settled between the response and the compaction, so no idle mark separates them.
-        expect(run.pollUnsafe()).toBeUndefined()
-        yield* s.session.prompt({ sessionID, text: "New request during compaction" })
-        const third = yield* s.llm.gate
-        yield* summary.release
-        yield* third.started
+    scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
+      s.currentModel = recoveryModel
+      yield* s.llm.push(
+        TestLLM.text("Active complete", "text-active"),
+        [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
+        TestLLM.text("Reply to the new request", "text-new"),
+      )
+      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
+      yield* s.session.compact({ sessionID, delivery })
+      const summary = yield* s.llm.gate
+      yield* first.release
+      yield* summary.started
+      // The drain has not settled between the response and the compaction, so no idle mark separates them.
+      expect(run.pollUnsafe()).toBeUndefined()
+      yield* s.session.prompt({ sessionID, text: "New request during compaction" })
+      const third = yield* s.llm.gate
+      yield* summary.release
+      yield* third.started
 
-        // The steer joined the finished turn and inherits its options.
-        expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
-          boundary: undefined,
-          options: { maxSteps: 2 },
-        })
-        yield* third.release
-        yield* Fiber.join(run)
-      },
-    )
+      // The steer joined the finished turn and inherits its options.
+      expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+        boundary: undefined,
+        options: { maxSteps: 2 },
+      })
+      yield* third.release
+      yield* Fiber.join(run)
+    })
 
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
     const execution = yield* SessionExecution.Service

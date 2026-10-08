@@ -93,7 +93,7 @@ export interface Input {
   readonly outputTokenCap?: number
 }
 
-/** The default output limit: the catalog limit, fitted to the room the prompt leaves in the context window. */
+/** The default output limit: the catalog limit, lowered to the configured cap and fitted to the room the prompt leaves. */
 const outputLimit = (
   limit: Model.Info["limit"],
   kind: "primary" | "compaction",
@@ -101,8 +101,7 @@ const outputLimit = (
   cap?: number,
 ) => {
   const model = Math.min(limit.output > 0 ? limit.output : OUTPUT_TOKEN_FALLBACK, OUTPUT_TOKEN_MAX)
-  const requested =
-    kind === "compaction" ? Math.min(model, SUMMARY_OUTPUT_MAX) : cap === undefined ? model : Math.min(model, cap)
+  const requested = kind === "compaction" ? Math.min(model, SUMMARY_OUTPUT_MAX) : Math.min(model, cap ?? model)
   if (inputTokens === undefined || limit.context <= 0) return requested
   const room = limit.context - inputTokens.measured - Math.ceil(inputTokens.estimated * (1 + ESTIMATE_ERROR))
   return Math.min(requested, Math.max(OUTPUT_TOKEN_MIN, room))
