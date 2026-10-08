@@ -44,6 +44,8 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { SessionModelTransport } from "@orbit/core/session/model-transport"
 import { SessionProviderContext } from "@orbit/core/session/provider-context"
 import { Money } from "@orbit/schema/money"
+import type { SessionError } from "@orbit/schema/session-error"
+import { StepFailedError } from "@orbit/core/session/error"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionRunCoordinator } from "@orbit/core/session/run-coordinator"
@@ -131,6 +133,12 @@ const recoveryModel = testModel("recovery", { context: 200_000, output: 1_000 })
 const fittedOutputModel = testModel("fitted-output", { context: 100_000, output: 64_000 })
 const smallWindowModel = testModel("small-window", { context: 64_000, output: 16_000 })
 const largeOutputModel = testModel("large-output", { context: 1_000_000, output: 1_000_000 })
+// A price of $0.50 per token, so one token in and one out cost $1. Limits on cost refuse a model that has none.
+const price = {
+  input: Money.USDPerMillionTokens.make(500_000),
+  output: Money.USDPerMillionTokens.make(500_000),
+  cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.zero },
+}
 
 test("calculates step cost using the matching context tier", () => {
   expect(
@@ -211,6 +219,7 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     }).pipe(Effect.andThen(Deferred.succeed(barrier.release, undefined)), Effect.asVoid)
   return {
     currentModel: model,
+    modelCost: [] as Model.Info["cost"],
     compaction,
     modelResolveHook: resolvesModel,
     systemBaseline: "Initial context",
@@ -328,7 +337,7 @@ const layer = Layer.unwrap(
             const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
             return SessionRunnerModel.resolved(selected, {
               capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
-              cost: [],
+              cost: state.modelCost,
               limit: modelLimits.get(String(selected.id)) ?? defaultModelLimit,
               variant: session.model?.variant,
               compaction: state.compaction,
@@ -4331,6 +4340,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("starts a turn at a queued prompt it promotes and joins steers to the turn in progress", function* (s) {
+    s.modelCost = [price]
     yield* s.session.prompt({ sessionID, text: "Start working", turn: { maxSteps: 4 }, resume: false })
     yield* s.llm.push(TestLLM.stop(), TestLLM.stop(), TestLLM.stop())
     const seqOf = (id: SessionMessage.ID) =>
@@ -4384,6 +4394,175 @@ describe("SessionRunnerLLM", () => {
     ).toEqual(["Start working: steer", "Queued: queue", "Steer: steer"])
   })
 
+  describe("turn limits", () => {
+    // A response that asks for the echo tool, so the runner continues. One token in and one out cost $1 and 2 tokens.
+    let calls = 0
+    const toolStep = (usage?: { nonCachedInputTokens: number; outputTokens: number }) =>
+      TestLLM.complete(
+        { reason: { normalized: "tool-calls" }, usage },
+        LLMEvent.toolCall({ id: `limit-call-${calls++}`, name: "echo", input: { text: "x" } }),
+      )
+    const spend = { nonCachedInputTokens: 1, outputTokens: 1 }
+    const limited = (s: Scenario) =>
+      s.resume.pipe(
+        Effect.flip,
+        Effect.flatMap((error) => (error instanceof StepFailedError ? Effect.succeed(error.error) : Effect.die(error))),
+      )
+    // This harness drains without SessionExecution, which is what publishes the terminal and so writes the idle marker
+    // that ends a turn. Publish what it publishes for a failed busy period.
+    const failTerminal = (s: Scenario, error: SessionError.Error) =>
+      s.bus.publish(SessionEvent.Execution.Failed, { sessionID, error })
+    const noOpenTools = (s: Scenario) =>
+      s.context.pipe(
+        Effect.map((messages) =>
+          messages.flatMap((message) =>
+            message.type === "assistant"
+              ? message.content.flatMap((part) =>
+                  part.type === "tool" && (part.state.status === "running" || part.state.status === "streaming")
+                    ? [part.id]
+                    : [],
+                )
+              : [],
+          ),
+        ),
+      )
+
+    scenario("stops at the step limit with a clean terminal", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxSteps: 2 }, resume: false })
+      yield* s.llm.push(toolStep(), toolStep(), toolStep())
+      const error = yield* limited(s)
+      expect(error).toMatchObject({ type: "limit.steps" })
+      yield* failTerminal(s, error)
+
+      expect(s.requests).toHaveLength(2)
+      expect(s.executions).toEqual(["x", "x"])
+      expect(yield* noOpenTools(s)).toEqual([])
+      expect((yield* s.messages).filter((message) => message.type === "idle")).toMatchObject([{ outcome: "failed" }])
+      expect((yield* s.context).filter((message) => message.type === "assistant")).toHaveLength(2)
+    })
+
+    scenario("counts neither a pre-output retry nor a failed partial response as a step", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxSteps: 2 }, resume: false })
+      const failure = incompleteStream()
+      yield* s.llm.push(
+        Stream.fail(failure),
+        TestLLM.failAfter(
+          failure,
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "limit-partial" }),
+          LLMEvent.textDelta({ id: "limit-partial", text: "Partial" }),
+        ),
+        toolStep(),
+        toolStep(),
+        toolStep(),
+      )
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* limited(s).pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[0]!)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(RETRY_GAPS_MAX[1]!)
+
+      expect(yield* Fiber.join(run)).toMatchObject({ type: "limit.steps" })
+
+      // The retry, the partial response and the two counted responses made four requests.
+      expect(s.requests).toHaveLength(4)
+      expect(s.executions).toEqual(["x", "x"])
+    })
+
+    scenario("stops at the cost limit, counting compaction spend recorded as usage", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(2) }, resume: false })
+      yield* s.llm.push(toolStep(spend), toolStep(spend), toolStep(spend))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost" })
+
+      expect(s.requests).toHaveLength(2)
+    })
+
+    scenario("counts a compaction's usage record toward the cost limit", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(toolStep(spend), toolStep(spend))
+      const first = yield* s.resumePaused
+      yield* s.bus.publish(SessionEvent.UsageRecorded, {
+        sessionID,
+        source: "compaction",
+        cost: Money.USD.make(5),
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+
+      expect(yield* first.finish.pipe(Effect.flip)).toMatchObject({ error: { type: "limit.cost" } })
+
+      expect(s.requests).toHaveLength(1)
+    })
+
+    scenario("stops at the token limit", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 3 }, resume: false })
+      yield* s.llm.push(toolStep(spend), toolStep(spend), toolStep(spend))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
+
+      expect(s.requests).toHaveLength(2)
+    })
+
+    scenario("refuses a cost limit up front when the model has no price", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(toolStep(spend))
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+
+      expect(s.requests).toHaveLength(0)
+    })
+
+    scenario("stops a cost limit when a response reported no usage instead of reading it as free", function* (s) {
+      s.modelCost = [price]
+      yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
+      yield* s.llm.push(toolStep(), toolStep())
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
+
+      expect(s.requests).toHaveLength(1)
+    })
+
+    scenario("runs a queued prompt without options unlimited in the same busy period", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
+      yield* s.session.prompt({ sessionID, text: "B", delivery: "queue", resume: false })
+      yield* s.llm.push(TestLLM.stop(), toolStep(), toolStep(), TestLLM.stop())
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(4)
+    })
+
+    scenario("lets a later prompt run unlimited once the terminal ended the turn", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
+      yield* s.llm.push(toolStep(), toolStep(), toolStep(), TestLLM.stop())
+      const error = yield* limited(s)
+      expect(error).toMatchObject({ type: "limit.steps" })
+      expect(s.requests).toHaveLength(1)
+
+      // Until the terminal ends the busy period, a prompt still belongs to the turn.
+      yield* failTerminal(s, error)
+      yield* s.session.prompt({ sessionID, text: "Later", resume: false })
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(4)
+    })
+
+    scenario("restarts the window at a steered prompt that brings its own options", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
+      yield* s.llm.push(toolStep(), toolStep(), toolStep())
+      const first = yield* s.resumePaused
+      yield* s.session.prompt({ sessionID, text: "Steer", turn: { maxSteps: 1 } })
+
+      expect(yield* first.finish.pipe(Effect.flip)).toMatchObject({ error: { type: "limit.steps" } })
+
+      // The first prompt's limit was spent by its own response, so the second request ran inside the steer's window.
+      expect(s.requests).toHaveLength(2)
+    })
+  })
+
   for (const delivery of ["steer", "queue"] as const)
     scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
       s.currentModel = recoveryModel
@@ -4392,7 +4571,7 @@ describe("SessionRunnerLLM", () => {
         [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
         TestLLM.text("Reply to the new request", "text-new"),
       )
-      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 1 }, resume: false })
+      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
       const first = yield* s.llm.gate
       const run = yield* s.resume.pipe(Effect.forkChild)
       yield* first.started
@@ -4411,7 +4590,7 @@ describe("SessionRunnerLLM", () => {
       // The steer joined the finished turn and inherits its options.
       expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
         boundary: undefined,
-        options: { maxSteps: 1 },
+        options: { maxSteps: 2 },
       })
       yield* third.release
       yield* Fiber.join(run)

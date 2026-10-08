@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { asc, eq, sql } from "drizzle-orm"
 import { DateTime, Effect } from "effect"
 import { TestClock } from "effect/testing"
+import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -540,4 +541,192 @@ describe("SessionTurn.current", () => {
       expect(plain(yield* s.current)).toEqual(plain(before))
     }),
   )
+})
+
+describe("SessionTurn.usage", () => {
+  const childID = Session.ID.make("ses_turn_child")
+  const grandchildID = Session.ID.make("ses_turn_grandchild")
+  const strangerID = Session.ID.make("ses_turn_stranger")
+  const noTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+
+  // A response, written the way the runner writes one: started, then ended, at `at` milliseconds.
+  const respond = (
+    id: Session.ID,
+    at: number,
+    spend: { cost?: number; tokens?: typeof noTokens; finish?: "stop" | "tool-calls" | "error" | "length" | "content-filter" } = {},
+  ) =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.Step.Started, {
+        sessionID: id,
+        assistantMessageID,
+        agent: Agent.ID.make("build"),
+        model: primary,
+        started: at,
+      })
+      yield* bus.publish(SessionEvent.Step.Ended, {
+        sessionID: id,
+        assistantMessageID,
+        finish: spend.finish ?? "stop",
+        cost: Money.USD.make(spend.cost ?? 1),
+        tokens: spend.tokens ?? { input: 10, output: 4, reasoning: 2, cache: { read: 100, write: 8 } },
+      })
+    })
+  const record = (id: Session.ID, source: "title" | "compaction", cost: number) =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      yield* bus.publish(SessionEvent.UsageRecorded, {
+        sessionID: id,
+        source,
+        cost: Money.USD.make(cost),
+        tokens: { input: 5, output: 3, reasoning: 1, cache: { read: 50, write: 2 } },
+      })
+    })
+  const children = Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(SessionTable)
+      .values(
+        [
+          [childID, sessionID],
+          [grandchildID, childID],
+          [strangerID, otherSessionID],
+        ].map(([id, parent_id]) => ({
+          id: id!,
+          parent_id,
+          project_id: Project.ID.global,
+          slug: id!,
+          directory: "/project",
+          title: "child",
+          version: "test",
+        })),
+      )
+      .run()
+  })
+  const since = (turn: SessionTurn.Current) => ({ seq: turn.options!.seq, time: turn.options!.time })
+
+  it.effect("sums responses and usage records after the window and leaves earlier turns out", () =>
+    Effect.gen(function* () {
+      const s = yield* harness
+      yield* s.admit("Earlier", { turn: { maxSteps: 9 } })
+      yield* s.promote("input")
+      yield* respond(sessionID, 1_000, { cost: 100 })
+      yield* record(sessionID, "compaction", 100)
+      yield* s.idle
+      yield* s.admit("Now", { delivery: "queue", turn: { maxSteps: 9 } })
+      yield* s.promote("input")
+      yield* respond(sessionID, 2_000, { cost: 1, finish: "tool-calls" })
+      yield* respond(sessionID, 2_100, { cost: 2, finish: "length" })
+      yield* respond(sessionID, 2_200, { cost: 4, finish: "content-filter" })
+      yield* respond(sessionID, 2_300, { cost: 8 })
+      // A mid-stream failure is no step, but what it spent still counts.
+      yield* respond(sessionID, 2_400, { cost: 16, finish: "error" })
+      yield* record(sessionID, "compaction", 32)
+      yield* record(sessionID, "title", 64)
+      yield* respond(otherSessionID, 2_500, { cost: 1_000 })
+
+      const turn = yield* s.current
+
+      // Per response: input 10 + cache write 8 + output 4 + reasoning 2, and 5 + 2 + 3 + 1 per record. Cache reads never count.
+      expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toEqual({
+        steps: 4,
+        cost: 1 + 2 + 4 + 8 + 16 + 32 + 64,
+        tokens: 5 * 24 + 2 * 11,
+        unknown: 0,
+      })
+    }),
+  )
+
+  it.effect("includes a subagent and its own subagents created inside the window, and nothing before it", () =>
+    Effect.gen(function* () {
+      const s = yield* harness
+      yield* children
+      yield* TestClock.adjust("1 second")
+      yield* s.admit("Now", { turn: { maxSteps: 9 } })
+      yield* s.promote("input")
+      // A subagent that was already running spends before this turn began.
+      yield* respond(childID, 500, { cost: 1_000 })
+      const turn = yield* s.current
+      yield* respond(sessionID, 1_000, { cost: 1 })
+      yield* respond(childID, 1_500, { cost: 2 })
+      yield* respond(grandchildID, 1_600, { cost: 4 })
+      yield* record(grandchildID, "title", 8)
+      yield* respond(strangerID, 1_700, { cost: 1_000 })
+
+      // A subagent's responses are no steps of this Session.
+      expect(yield* SessionTurn.usage(s.db, sessionID, since(turn))).toEqual({
+        steps: 1,
+        cost: 1 + 2 + 4 + 8,
+        tokens: 24 * 3 + 11,
+        unknown: 0,
+      })
+    }),
+  )
+
+  it.effect("counts what cannot be priced as unknown instead of free", () =>
+    Effect.gen(function* () {
+      const s = yield* harness
+      yield* children
+      yield* s.admit("Now", { turn: { maxCost: Money.USD.make(5) } })
+      yield* s.promote("input")
+      const turn = yield* s.current
+      yield* respond(sessionID, 1_000)
+      expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(0)
+
+      // A subagent whose response carried no usage at all.
+      yield* respond(childID, 1_100, { cost: 0, tokens: noTokens })
+      expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(1)
+
+      // A usage record that no longer decodes.
+      yield* record(childID, "compaction", 1)
+      yield* s.db
+        .update(EventTable)
+        .set({ data: { sessionID: childID, source: "compaction" } })
+        .where(sql`${EventTable.type} like 'session.usage.recorded%'`)
+        .run()
+      expect((yield* SessionTurn.usage(s.db, sessionID, since(turn))).unknown).toBe(2)
+    }),
+  )
+
+  it.effect("is the same after the session's events are replayed", () =>
+    Effect.gen(function* () {
+      const s = yield* harness
+      yield* s.admit("Now", { turn: { maxSteps: 9 } })
+      yield* s.promote("input")
+      yield* respond(sessionID, 1_000, { cost: 3 })
+      yield* record(sessionID, "compaction", 5)
+      yield* respond(sessionID, 2_000, { cost: 7, finish: "error" })
+      yield* respond(sessionID, 3_000, { cost: 11, finish: "tool-calls" })
+      const turn = yield* s.current
+      const before = yield* SessionTurn.usage(s.db, sessionID, since(turn))
+      expect(before.steps).toBe(2)
+
+      yield* s.replay
+
+      const replayed = yield* s.current
+      expect(replayed.options?.seq).toBe(turn.options?.seq)
+      expect(yield* SessionTurn.usage(s.db, sessionID, since(replayed))).toEqual(before)
+    }),
+  )
+})
+
+describe("SessionTurn.exceeded", () => {
+  const spent = { steps: 2, cost: 3, tokens: 100, unknown: 0 }
+  const table: ReadonlyArray<readonly [string, SessionTurn.Options, SessionTurn.Usage, boolean, string | undefined]> = [
+    ["no limit", {}, spent, true, undefined],
+    ["under every limit", { maxSteps: 3, maxCost: Money.USD.make(4), maxTokens: 101 }, spent, true, undefined],
+    ["steps reached", { maxSteps: 2 }, spent, true, "limit.steps"],
+    ["cost reached", { maxCost: Money.USD.make(3) }, spent, true, "limit.cost"],
+    ["tokens reached", { maxTokens: 100 }, spent, true, "limit.tokens"],
+    ["cost limit, model without a price", { maxCost: Money.USD.make(50) }, spent, false, "limit.cost"],
+    ["cost limit, unknown spend", { maxCost: Money.USD.make(50) }, { ...spent, unknown: 1 }, true, "limit.cost"],
+    ["unknown spend, no cost limit", { maxTokens: 500 }, { ...spent, unknown: 1 }, false, undefined],
+  ]
+  for (const [name, options, usage, priced, type] of table)
+    it.effect(name, () =>
+      Effect.sync(() => {
+        expect(SessionTurn.exceeded(options, usage, priced)?.type).toBe(type)
+      }),
+    )
 })

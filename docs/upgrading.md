@@ -979,3 +979,21 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+
+### A prompt's step, cost and token limits are enforced
+
+A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the options were recorded but ignored. The
+runner now checks them before every model request and before every automatic compaction. When the turn has reached a
+limit, the busy period ends as failed with the session error type `limit.steps`, `limit.cost` or `limit.tokens`, after
+the tools of the last response have settled and with no partial response left behind. The window starts at the prompt
+that set the options, so a queued prompt without options, or a prompt sent after the busy period ended, runs without
+limits, and a steered prompt with its own options starts a new window. Only responses that ended count as steps: a
+retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's responses and its
+compaction and title usage, and the responses and usage of every subagent it started in the window. A response is
+priced after it arrives, so a turn can overshoot a cost or token limit by one response. A cost limit never reads missing
+spend as free: it fails when the model has no price, or when a finished response carries no cost or no tokens.
+
+**Affects:** SDK and HTTP callers that send `turn` limits and clients that show session errors.
+
+**What to do:** Nothing unless you send limits. Handle the three `limit.*` error types, and give models that you run
+with a cost limit a price.

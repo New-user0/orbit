@@ -20,6 +20,7 @@ import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
 import { SessionMessageTable } from "../sql.js"
 import { SessionTitle } from "../title.js"
+import { SessionTurn } from "../turn.js"
 import { toSessionError } from "../to-session-error.js"
 import { DrainResult, Service, type Interface } from "./index.js"
 import { Snapshot } from "../../snapshot.js"
@@ -214,6 +215,16 @@ const layer = Layer.effect(
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
         initial = undefined
+        // Before compaction, so no compaction or request starts once the turn is over a limit it set.
+        const turn = (yield* SessionTurn.current(db, sessionID)).options
+        if (turn && (turn.maxSteps !== undefined || turn.maxCost !== undefined || turn.maxTokens !== undefined)) {
+          const limit = SessionTurn.exceeded(
+            turn,
+            yield* SessionTurn.usage(db, sessionID, turn),
+            loaded.model.cost.some((cost) => cost.tier === undefined),
+          )
+          if (limit) return yield* new StepFailedError({ error: limit })
+        }
         const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
         if (compacted.status === "completed") {
