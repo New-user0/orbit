@@ -40,6 +40,7 @@ import { SessionRunnerLLM } from "./session/runner/llm.js"
 import { SessionRunnerModel } from "./session/runner/model.js"
 import { SessionCompaction } from "./session/compaction.js"
 import { SessionTitle } from "./session/title.js"
+import { SessionTurnEnd } from "./session/turn-end.js"
 import { SessionContext } from "./session/context.js"
 import { Skill } from "./skill.js"
 import { SkillInstructions } from "./skill/instructions.js"
@@ -105,6 +106,7 @@ const nodes = [
   SessionRunnerModel.node,
   SessionCompaction.node,
   SessionTitle.node,
+  SessionTurnEnd.node,
   SessionContext.node,
   Snapshot.node,
   SessionRunnerLLM.node,
