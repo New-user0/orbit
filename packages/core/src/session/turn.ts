@@ -1,13 +1,16 @@
 export * as SessionTurn from "./turn.js"
 
 import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm"
-import { Effect, Schema, type DateTime } from "effect"
+import { DateTime, Effect, Option, Schema } from "effect"
 import { Model } from "@orbit/schema/model"
 import { Options } from "@orbit/schema/session-turn"
 import { Database } from "../database/database.js"
+import { Event } from "@orbit/schema/event"
+import { EventTable } from "../event/sql.js"
+import { SessionEvent } from "@orbit/schema/session-event"
 import { SessionHistory } from "./history.js"
 import { SessionSchema } from "./schema.js"
-import { SessionMessageTable } from "./sql.js"
+import { SessionMessageTable, SessionTable } from "./sql.js"
 
 export { Options }
 
@@ -170,3 +173,128 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
     ),
   } satisfies Current
 })
+
+const decodeUsage = Schema.decodeUnknownOption(SessionEvent.UsageRecorded.data)
+const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+
+export interface Usage {
+  /** Responses in the Session that ended with finish `stop`, `length`, `tool-calls` or `content-filter`. */
+  readonly steps: number
+  readonly cost: number
+  /** Input, cache write, output and reasoning tokens. */
+  readonly tokens: number
+  /**
+   * Responses and usage records, the Session's own or a subagent's, whose price is unknown: a finished response with
+   * no recorded cost or no tokens at all, any response or record with tokens and a cost of zero, a response that failed
+   * with no recorded cost, and usage records that do not decode. They add nothing (or nothing real) to `cost`, so a
+   * cost limit must not read them as free.
+   */
+  readonly unknown: number
+}
+
+/**
+ * What the turn spent since `since`: the Session's own responses and usage records after `since.seq`, plus those of
+ * every descendant Session (a subagent, however deep) written at or after `since.time`. Pre-output retries leave no
+ * response, and a response that failed mid-stream (finish `error`) is not a step, though its spend still counts. Usage
+ * records carry the compaction and title spend, which a crash can leave without a row on the message.
+ */
+export const usage = Effect.fn("SessionTurn.usage")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  since: { readonly seq: number; readonly time: DateTime.Utc },
+) {
+  const time = DateTime.toEpochMillis(since.time)
+  const descendants = sql`WITH RECURSIVE descendants(id) AS (
+    SELECT id FROM session_v2 WHERE parent_id = ${sessionID}
+    UNION
+    SELECT child.id FROM session_v2 AS child JOIN descendants ON child.parent_id = descendants.id
+  )`
+  const ended = sql`json_extract(data, '$.finish') IN ('stop', 'length', 'tool-calls', 'content-filter')`
+  const tokens = sql`coalesce(json_extract(data, '$.tokens.input'), 0) + coalesce(json_extract(data, '$.tokens.cache.write'), 0) + coalesce(json_extract(data, '$.tokens.output'), 0) + coalesce(json_extract(data, '$.tokens.reasoning'), 0)`
+  const read = sql`${tokens} + coalesce(json_extract(data, '$.tokens.cache.read'), 0)`
+  // Spend whose price is unknown: a finished response with no cost or no tokens, any response with tokens and a zero
+  // cost (a model with no price, or a free one), and a failed one that recorded no cost.
+  const unpriced = sql`(${ended} AND (json_extract(data, '$.cost') IS NULL OR ${read} = 0))
+    OR (${read} > 0 AND coalesce(json_extract(data, '$.cost'), 0) = 0)
+    OR (json_extract(data, '$.finish') = 'error' AND json_extract(data, '$.cost') IS NULL)`
+  const messages = yield* db
+    .get<{ steps: number | null; cost: number | null; tokens: number | null; unknown: number | null }>(
+      sql`${descendants}
+        SELECT
+          sum(CASE WHEN session_id = ${sessionID} AND ${ended} THEN 1 ELSE 0 END) AS steps,
+          sum(coalesce(json_extract(data, '$.cost'), 0)) AS cost,
+          sum(${tokens}) AS tokens,
+          sum(CASE WHEN ${unpriced} THEN 1 ELSE 0 END) AS unknown
+        FROM session_message
+        WHERE type = 'assistant'
+          AND ((session_id = ${sessionID} AND seq > ${since.seq})
+            OR (session_id IN (SELECT id FROM descendants) AND time_created >= ${time}))`,
+    )
+    .pipe(Effect.orDie)
+  const records = yield* db
+    .all<{ data: string }>(
+      sql`${descendants}
+        SELECT data FROM event
+        WHERE type = ${Event.versionedType(SessionEvent.UsageRecorded.type, SessionEvent.UsageRecorded.durable.version)}
+          AND ((aggregate_id = ${sessionID} AND seq > ${since.seq})
+            OR (aggregate_id IN (SELECT id FROM descendants) AND created >= ${time}))`,
+    )
+    .pipe(Effect.orDie)
+  // The raw read returns the stored text, so a row that is not JSON is a record that cannot be counted.
+  const decoded = records.map((row) => Option.flatMap(parseJson(row.data), decodeUsage))
+  const recorded = decoded.flatMap((item) => (Option.isSome(item) ? [item.value] : []))
+  return {
+    steps: messages?.steps ?? 0,
+    cost: (messages?.cost ?? 0) + recorded.reduce((total, item) => total + item.cost, 0),
+    tokens:
+      (messages?.tokens ?? 0) +
+      recorded.reduce(
+        (total, item) =>
+          total + item.tokens.input + item.tokens.cache.write + item.tokens.output + item.tokens.reasoning,
+        0,
+      ),
+    unknown:
+      (messages?.unknown ?? 0) +
+      decoded.length -
+      recorded.length +
+      recorded.filter(
+        (item) =>
+          item.cost === 0 &&
+          item.tokens.input + item.tokens.cache.read + item.tokens.cache.write + item.tokens.output + item.tokens.reasoning > 0,
+      ).length,
+  } satisfies Usage
+})
+
+/**
+ * The limit the turn has reached, as the error that ends it, or undefined when it may go on. A cost limit that cannot
+ * be checked against a price fails here instead of reading missing spend as free: `priced` says whether the model about
+ * to run has a price, and `spent.unknown` whether anything already spent lacks one.
+ */
+export function exceeded(options: Options, spent: Usage, priced: boolean) {
+  if (options.maxSteps !== undefined && spent.steps >= options.maxSteps)
+    return {
+      type: "limit.steps",
+      message: `The turn reached its limit of ${options.maxSteps} ${options.maxSteps === 1 ? "step" : "steps"}.`,
+    }
+  if (options.maxCost !== undefined && !priced)
+    return {
+      type: "limit.cost",
+      message: `The turn has a cost limit of $${options.maxCost}, but the model has no price, so its spend cannot be counted.`,
+    }
+  if (options.maxCost !== undefined && spent.unknown > 0)
+    return {
+      type: "limit.cost",
+      message: `The turn has a cost limit of $${options.maxCost}, but ${spent.unknown} of its responses or usage records carried no usable cost, so its spend cannot be counted.`,
+    }
+  if (options.maxCost !== undefined && spent.cost >= options.maxCost)
+    return {
+      type: "limit.cost",
+      message: `The turn reached its cost limit of $${options.maxCost} after spending $${spent.cost.toFixed(4)}.`,
+    }
+  if (options.maxTokens !== undefined && spent.tokens >= options.maxTokens)
+    return {
+      type: "limit.tokens",
+      message: `The turn reached its limit of ${options.maxTokens} tokens after using ${spent.tokens}.`,
+    }
+  return undefined
+}

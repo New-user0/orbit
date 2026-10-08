@@ -1052,6 +1052,38 @@ retries do not change.
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
 
+### A prompt's step, cost and token limits are enforced
+
+A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the options were recorded but ignored. The
+runner now checks them at the start of every model step, before the automatic compaction and the request of that step,
+and again before each retry of a step. When the turn has reached a limit, the busy period ends as failed with the
+session error type `limit.steps`, `limit.cost` or `limit.tokens`, after the tools of the last response have settled and
+with no partial response left behind.
+
+Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
+compaction start without the check, and their spend counts at the next one. A subagent is checked only at the parent's
+step boundaries: it runs all its own steps between two checks, so a turn can overshoot by a whole subagent run, and a
+background subagent that is still running when a limit ends the turn keeps running. Its completion notice then wakes
+the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
+a cost or token limit by one response.
+
+The window starts at the prompt that set the options. A queued prompt without options, or a prompt sent after the busy
+period ended, runs without limits, and a steered prompt with its own options starts a new window. A prompt sent while a
+limited turn is finishing joins that turn, and fails at once if the limit is already spent. Only responses that ended
+count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
+responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
+
+A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It fails with `limit.cost`
+when the model has no tier-less price above zero (a catalog model without a price is listed as zero), and when anything
+in the window, the Session's own or a subagent's, carries tokens with a cost of zero, a finished response carries no
+cost or no tokens, or a response failed mid-stream with no cost. So a free model cannot run under a cost limit; use a
+step or token limit for it.
+
+**Affects:** SDK and HTTP callers that send `turn` limits and clients that show session errors.
+
+**What to do:** Nothing unless you send limits. Handle the three `limit.*` error types, and give models that you run
+with a cost limit a price.
+
 ### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
 
 The extension could not trust a folder, and it started whatever `orbit.executable` named, a setting that a repository's
