@@ -891,9 +891,15 @@ a lone carriage return, which progress meters use to redraw a line, is drawn as 
 the color sequences of shell output are removed rather than written out. In a command line, an approval prompt or any
 other text, a carriage return is written out as `\x0d`, because a shell treats it as an ordinary character.
 
-A few places also write controls out but have no test of their own yet: the tool list of the token-usage view, the
-details dialog of `execute`, the timeline and fork lists, and the Mini subagent picker. Known gaps in
-[untrusted-repositories.md](untrusted-repositories.md) names them, and `orb run` is unchanged.
+The background shell views follow the same rule: the command in the shell tab of the composer, and the command and the
+output in the output dialog, show `\x1b` and `\x07` where a program wrote them. So do toasts, the error text of the
+details dialog, the queued-prompt dialog and Mini's queued-prompt picker.
+
+A few places also write controls out but have no frame test of their own yet: the tool list of the token-usage view, the
+details dialog of `execute`, the timeline and fork lists, the `/btw` answer, the Mini subagent picker and the
+composer's terminal and subagent rows. Three places do not write them out yet: the desktop notification text, the
+markdown export, and the prompt history and stash lists. Known gaps in
+[untrusted-repositories.md](untrusted-repositories.md) names all of them, and `orb run` is unchanged.
 
 **Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
 `orb run` and the stored messages are unchanged.

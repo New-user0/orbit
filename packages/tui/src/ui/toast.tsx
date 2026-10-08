@@ -85,7 +85,7 @@ function ToastSurface(props: {
         >
           <box flexDirection="row" width="100%" marginBottom={1}>
             <text attributes={TextAttributes.BOLD} fg={theme.text.base}>
-              {bodyText(props.toast.title)}
+              {bodyText(props.toast.title ?? "")}
             </text>
             <box flexGrow={1} />
             {affordance()}
