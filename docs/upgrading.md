@@ -658,7 +658,10 @@ notices, whenever the history in front of it does not end in an idle mark. That 
   mark. The next start resumes only top-level sessions and background subagents, and it forgets that any other session
   was in the middle of work, again without an idle mark. The prompt can come from a client or from the parent agent
   continuing the subagent with its `sessionID`;
-- a steer that arrives after the agent loop has finished its last response but before the idle mark.
+- a steer that arrives after the agent loop has finished its last response but before the idle mark;
+- a steer that arrives while a manual compaction (sent with either delivery, and the TUI's `/compact` sends none), a
+  move or a location reload runs after the turn's last response. It holds the idle mark back until it ends, and the
+  steer is promoted in the same run.
 
 A prompt sent with `queue` delivery starts a new turn in each of these cases.
 

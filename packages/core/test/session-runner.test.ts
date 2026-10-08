@@ -4353,6 +4353,9 @@ describe("SessionRunnerLLM", () => {
     const secondStream = yield* s.llm.gate
     yield* firstStream.release
     yield* secondStream.started
+    const execution = yield* SessionExecution.Service
+    // The busy period has not settled between the turns, so no idle marker can separate them.
+    expect(yield* execution.isActive(sessionID)).toBe(true)
 
     // The queued prompt waited for the first response to end: it began a turn, and nothing it set before it applies.
     expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
@@ -4363,6 +4366,7 @@ describe("SessionRunnerLLM", () => {
     const thirdStream = yield* s.llm.gate
     yield* secondStream.release
     yield* thirdStream.started
+    expect(yield* execution.isActive(sessionID)).toBe(true)
 
     // The steer joined that turn, and its options replaced the queued prompt's.
     const joined = yield* SessionTurn.current(s.db, sessionID)
@@ -4372,13 +4376,46 @@ describe("SessionRunnerLLM", () => {
     yield* thirdStream.release
     yield* Fiber.join(run)
 
-    // One drain promoted all three, with no idle marker between the turns: the queue delivery tells them apart.
+    // One drain promoted all three: the queue delivery tells the turns apart.
     const messages = yield* s.session.messages({ sessionID, order: "asc" })
     expect(
       messages.flatMap((message) => (message.type === "user" ? [`${message.text}: ${message.delivery}`] : [])),
     ).toEqual(["Start working: steer", "Queued: queue", "Steer: steer"])
-    expect(messages.some((message) => message.type === "idle")).toBe(false)
   })
+
+  for (const delivery of ["steer", "queue"] as const)
+    scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
+      s.currentModel = recoveryModel
+      yield* s.llm.push(
+        TestLLM.text("Active complete", "text-active"),
+        [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
+        TestLLM.text("Reply to the new request", "text-new"),
+      )
+      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 1 }, resume: false })
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      // The compaction is admitted while the turn's last response streams, so it runs at the end of the turn.
+      yield* s.session.compact({ sessionID, delivery })
+      const summary = yield* s.llm.gate
+      yield* first.release
+      yield* summary.started
+      // The busy period has not settled, so no idle marker was written between the response and the compaction.
+      const execution = yield* SessionExecution.Service
+      expect(yield* execution.isActive(sessionID)).toBe(true)
+      yield* s.session.prompt({ sessionID, text: "New request during compaction" })
+      const third = yield* s.llm.gate
+      yield* summary.release
+      yield* third.started
+
+      // The steer joined the finished turn and inherits its options.
+      expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+        boundary: undefined,
+        options: { maxSteps: 1 },
+      })
+      yield* third.release
+      yield* Fiber.join(run)
+    })
 
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
     const execution = yield* SessionExecution.Service
