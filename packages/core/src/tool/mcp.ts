@@ -87,24 +87,26 @@ export const layer = Layer.effect(
                 output: (tool.outputSchema ?? {}) as JsonSchema.JsonSchema,
                 execute: (input, context) =>
                   Effect.gen(function* () {
-                    yield* permission.assert({
-                      action: name(tool.server, tool.name),
-                      resources: ["*"],
-                      save: ["*"],
-                      metadata: {},
-                      sessionID: context.sessionID,
-                      agent: context.agent,
-                      source: {
-                        type: "tool",
-                        messageID: context.messageID,
-                        id: context.id,
-                      },
-                    }).pipe(
-                      // Keep the correction as the cause so the step sees the rejection and stops its queue.
-                      Effect.catchTag("Permission.CorrectedError", (error) =>
-                        Effect.fail(new ToolFailure({ message: error.feedback, error })),
-                      ),
-                    )
+                    yield* permission
+                      .assert({
+                        action: name(tool.server, tool.name),
+                        resources: ["*"],
+                        save: ["*"],
+                        metadata: {},
+                        sessionID: context.sessionID,
+                        agent: context.agent,
+                        source: {
+                          type: "tool",
+                          messageID: context.messageID,
+                          id: context.id,
+                        },
+                      })
+                      .pipe(
+                        // Keep the correction as the cause so the step sees the rejection and stops its queue.
+                        Effect.catchTag("Permission.CorrectedError", (error) =>
+                          Effect.fail(new ToolFailure({ message: error.feedback, error })),
+                        ),
+                      )
                     const result = yield* mcp
                       .callTool({
                         server: tool.server,

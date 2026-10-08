@@ -120,7 +120,9 @@ describe("Permission", () => {
 
       yield* Fiber.interrupt(waiting.fiber)
 
-      expect(replies).toEqual([{ sessionID: waiting.request.sessionID, requestID: waiting.request.id, reply: "reject" }])
+      expect(replies).toEqual([
+        { sessionID: waiting.request.sessionID, requestID: waiting.request.id, reply: "reject" },
+      ])
       expect(yield* waiting.service.list()).toEqual([])
     }),
   )

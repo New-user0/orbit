@@ -4495,13 +4495,16 @@ describe("SessionRunnerLLM", () => {
   scenario("settles a finished call whose outcome waits on the session when it is interrupted", function* (s) {
     yield* s.admit("Hold two")
     const gate = yield* Deferred.make<void>()
+    const holding = yield* Deferred.make<void>()
     const successes = new Array<string>()
     // The first success holds the session's durable lock, so the second call's outcome has to wait for it.
     const unsubscribe = yield* s.bus.listen((event) =>
       event.type === "session.tool.success"
         ? Effect.suspend(() => {
             successes.push(event.type)
-            return successes.length === 1 ? Deferred.await(gate) : Effect.void
+            return successes.length === 1
+              ? Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void
           })
         : Effect.void,
     )
@@ -4511,16 +4514,24 @@ describe("SessionRunnerLLM", () => {
     yield* Deferred.await(s.hold("h1").started)
     yield* Deferred.await(s.hold("h2").started)
     yield* Deferred.succeed(s.hold("h1").release, undefined)
-    for (let i = 0; i < 50; i++) yield* Effect.yieldNow
+    yield* Deferred.await(holding)
     yield* Deferred.succeed(s.hold("h2").release, undefined)
+    // The second call has no signal of its own while it waits for the lock, so give it time to reach the wait.
     for (let i = 0; i < 50; i++) yield* Effect.yieldNow
     yield* s.session.interrupt(sessionID)
     yield* Deferred.succeed(gate, undefined)
     yield* Fiber.await(run)
     yield* unsubscribe
 
-    // Both calls finished, so both are recorded as successes and none is left running.
+    // Both calls finished, so both are recorded as completed, each with one terminal event, and none is left running.
     expect(successes).toHaveLength(2)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Hold two"),
+      Expected.assistant({}, [
+        Expected.completedTool({ id: "call-h1" }, {}),
+        Expected.completedTool({ id: "call-h2" }, {}),
+      ]),
+    ])
   })
 
   scenario("stops the queue on a correction that a tool lets through unwrapped", function* (s) {
@@ -5188,7 +5199,10 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
+      expect(yield* limited(s)).toMatchObject({
+        type: "limit.cost",
+        message: expect.stringContaining("cannot be counted"),
+      })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -5197,7 +5211,10 @@ describe("SessionRunnerLLM", () => {
       s.currentModel = compactModel
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 1_000 }, resume: false })
       // The first response alone fills the small window and passes the token limit.
-      yield* s.llm.push(toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }), TestLLM.text("## Objective\n- Summary", "limit-summary"))
+      yield* s.llm.push(
+        toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }),
+        TestLLM.text("## Objective\n- Summary", "limit-summary"),
+      )
 
       expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
@@ -5255,37 +5272,40 @@ describe("SessionRunnerLLM", () => {
   })
 
   for (const delivery of ["steer", "queue"] as const)
-    scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
-      s.currentModel = recoveryModel
-      yield* s.llm.push(
-        TestLLM.text("Active complete", "text-active"),
-        [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
-        TestLLM.text("Reply to the new request", "text-new"),
-      )
-      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
-      const first = yield* s.llm.gate
-      const run = yield* s.resume.pipe(Effect.forkChild)
-      yield* first.started
-      // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
-      yield* s.session.compact({ sessionID, delivery })
-      const summary = yield* s.llm.gate
-      yield* first.release
-      yield* summary.started
-      // The drain has not settled between the response and the compaction, so no idle mark separates them.
-      expect(run.pollUnsafe()).toBeUndefined()
-      yield* s.session.prompt({ sessionID, text: "New request during compaction" })
-      const third = yield* s.llm.gate
-      yield* summary.release
-      yield* third.started
+    scenario(
+      `joins a steer that arrives during a ${delivery} compaction after the last response to that turn`,
+      function* (s) {
+        s.currentModel = recoveryModel
+        yield* s.llm.push(
+          TestLLM.text("Active complete", "text-active"),
+          [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
+          TestLLM.text("Reply to the new request", "text-new"),
+        )
+        yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
+        const first = yield* s.llm.gate
+        const run = yield* s.resume.pipe(Effect.forkChild)
+        yield* first.started
+        // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
+        yield* s.session.compact({ sessionID, delivery })
+        const summary = yield* s.llm.gate
+        yield* first.release
+        yield* summary.started
+        // The drain has not settled between the response and the compaction, so no idle mark separates them.
+        expect(run.pollUnsafe()).toBeUndefined()
+        yield* s.session.prompt({ sessionID, text: "New request during compaction" })
+        const third = yield* s.llm.gate
+        yield* summary.release
+        yield* third.started
 
-      // The steer joined the finished turn and inherits its options.
-      expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
-        boundary: undefined,
-        options: { maxSteps: 2 },
-      })
-      yield* third.release
-      yield* Fiber.join(run)
-    })
+        // The steer joined the finished turn and inherits its options.
+        expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+          boundary: undefined,
+          options: { maxSteps: 2 },
+        })
+        yield* third.release
+        yield* Fiber.join(run)
+      },
+    )
 
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
     const execution = yield* SessionExecution.Service

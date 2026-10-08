@@ -104,22 +104,17 @@ rest:
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's
- own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the
- model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as
- the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key
- that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours,
- so it would otherwise replace the one in your own config.
+  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours, so it would otherwise replace the one in your own config.
 - **Cut down:** `permissions`, and the `permissions` of each agent, keep only their `deny` rules, so a repository can
   add a block but never an approval. An agent's `request` is dropped, and so is every URL in `instructions` and every
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for. `tool_execution` keeps a `max_concurrency` of
-  10 or less, so a repository can slow tool calls down but cannot raise the limit above 10.
+  10 or less, so a repository cannot raise the limit above 10.
 - **Kept as written:** everything else, such as `model`, `output_style`, `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
@@ -1241,12 +1236,16 @@ the model wrote them, and each waits for its turn. A call that a tool declares c
 runs beside other safe calls, up to `tool_execution.max_concurrency` at a time (default 10). A call that is not safe
 (an edit, a shell command, a Code Mode `execute` call) runs alone, after the calls before it have finished, and the calls
 after it wait for it. Calls start while the model is still writing later ones, and results still reach the model in
-the order of the calls. A call that is waiting shows as queued in clients until it starts.
+the order of the calls. A call that is waiting reports `{ "queued": true }` in its metadata until it starts; the bundled
+clients do not show it yet.
 
 A decline stops the queue. When you decline a call, the calls that have not started are not run and finish as
 "aborted", as the declined call does. When you reject a call with feedback, the calls that have not started finish as
 `tool.cancelled`, and the model sees your feedback and carries on. Calls that are already running are left to finish.
-A permission prompt whose call is interrupted now closes in every client, instead of staying on screen.
+This holds for a call the model makes directly, including a direct MCP tool. It does not yet hold when the rejected call
+is inside a Code Mode program: that program receives the feedback as an error result, and the calls queued behind it
+still start and can ask. A permission prompt whose call is interrupted now closes in the terminal UI and the other
+clients that follow permission events; the ACP client does not close it yet.
 
 Subagents are tool calls too, so one step starts at most `max_concurrency` of them at once.
 
@@ -1255,8 +1254,7 @@ which used to overlap and now take turns; anyone who set no limit and relied on 
 together; clients that show tool progress, which may now see `{ "queued": true }` on a call that has not started.
 
 **What to do:** nothing in most setups. To change how many safe calls run together, set `tool_execution.max_concurrency`
-to a positive whole number in your own config. A project's config can lower it but not raise it above 10 until you
-trust the folder.
+to a positive whole number in your own config. A project's config cannot raise it above 10 until you trust the folder.
 
 ### New `fallback_model` setting
 

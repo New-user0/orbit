@@ -35,10 +35,9 @@ const harness = (maxConcurrency = 10) =>
         Effect.ensuring(Effect.sync(() => finalized.push(id))),
       )
     const run = (entry: ToolScheduler.Entry<string>, safe: boolean) =>
-      scheduler.run(entry, { concurrencySafe: safe }, work(entry.id)).pipe(
-        Effect.ensuring(scheduler.release(entry)),
-        Effect.forkChild({ startImmediately: true }),
-      )
+      scheduler
+        .run(entry, { concurrencySafe: safe }, work(entry.id))
+        .pipe(Effect.ensuring(scheduler.release(entry)), Effect.forkChild({ startImmediately: true }))
     return {
       scheduler,
       log,
