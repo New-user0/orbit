@@ -28,6 +28,10 @@ type HeadlessInput = {
   readonly file: ReadonlyArray<string>
   readonly title: Option.Option<string>
   readonly thinking: boolean
+  readonly maxSteps: Option.Option<number>
+  readonly maxCost: Option.Option<number>
+  readonly maxTokens: Option.Option<number>
+  readonly fallbackModel: Option.Option<string>
   readonly auto: boolean
   readonly yolo: boolean
   readonly dangerouslySkipPermissions: boolean
@@ -91,6 +95,10 @@ export function headlessInput(input: HeadlessInput) {
         file: [...input.file],
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,
+        maxSteps: Option.getOrUndefined(input.maxSteps),
+        maxCost: Option.getOrUndefined(input.maxCost),
+        maxTokens: Option.getOrUndefined(input.maxTokens),
+        fallbackModel: Option.getOrUndefined(input.fallbackModel),
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       }),
     )

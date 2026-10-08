@@ -1268,7 +1268,8 @@ A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the o
 runner now checks them at the start of every model step, before the automatic compaction and the request of that step,
 and again before each retry of a step. When the turn has reached a limit, the busy period ends as failed with the
 session error type `limit.steps`, `limit.cost` or `limit.tokens`, after the tools of the last response have settled and
-with no partial response left behind.
+with no partial response left behind. A cost limit that cannot be checked is refused with `limit.cost-unknown`
+instead, as described below.
 
 Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
 compaction start without the check, and their spend counts at the next one. A subagent is checked only at the parent's
@@ -1283,15 +1284,15 @@ limited turn is finishing joins that turn, and fails at once if the limit is alr
 count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
 responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
 
-A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It fails with `limit.cost`
-when the model has no tier-less price above zero (a catalog model without a price is listed as zero), and when anything
-in the window, the Session's own or a subagent's, carries tokens with a cost of zero, a finished response carries no
-cost or no tokens, or a response failed mid-stream with no cost. So a free model cannot run under a cost limit; use a
-step or token limit for it.
+A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It is refused with
+`limit.cost-unknown`, a refusal and not a limit that was reached, when the model has no tier-less price above zero (a
+catalog model without a price is listed as zero), and when anything in the window, the Session's own or a subagent's,
+carries tokens with a cost of zero, a finished response carries no cost or no tokens, or a response failed mid-stream
+with no cost. So a free model cannot run under a cost limit; use a step or token limit for it.
 
 **Affects:** SDK and HTTP callers that send `turn` limits and clients that show session errors.
 
-**What to do:** Nothing unless you send limits. Handle the three `limit.*` error types, and give models that you run
+**What to do:** Nothing unless you send limits. Handle the four `limit.*` error types, and give models that you run
 with a cost limit a price.
 
 ### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
@@ -1557,3 +1558,29 @@ output limit keeps the limit it chose, and a request already at the model's maxi
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
 
 **What to do:** nothing. Unset `output_token_cap` to avoid the extra request.
+
+### `orb run` takes limits and a fallback model, and its result says why it stopped
+
+`orb run` and `orb -p` take `--max-steps` (alias `--max-turns`), `--max-cost` (US dollars), `--max-tokens` and
+`--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
+them. A run that reaches a limit exits 1 and says which: the result object of `--format result` and `--json-schema`
+gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
+(the steps, cost and tokens of this session's own responses to the prompt, read from the stored messages when the run
+ends, so a subagent's spend is not in it; a response that failed part way adds its spend but is not a step) and
+`truncated` (the last step stopped at the output limit, even when a limit then ended the run, which also prints a
+warning). With `--format json` and `stream-json` every `error` line of a printed run carries the same
+`subtype`. A `--max-cost` that the model's missing price cannot check fails the run with the session error type
+`limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
+turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
+of a printed run. If the server does not echo the limits back, because it is an older version that drops fields it does
+not know, the run asks the server to interrupt its session and fails with a version error. That interruption does
+nothing for a session that is idle or not yet running, so on such a server the prompt can still run without its limits.
+
+Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
+now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and
+`stream-json`. Over ACP, a turn that reached a limit stops with `max_turn_requests` instead of failing, and every
+notice is sent as a `session_info_update` with `orbit/notice` in `_meta`.
+
+**Affects:** scripts that call `orb run` and read its result object or exit code, and ACP clients.
+
+**What to do:** nothing; the new fields are additive. A script that passes a limit should check `subtype`.

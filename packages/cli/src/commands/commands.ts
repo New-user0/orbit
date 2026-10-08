@@ -65,6 +65,28 @@ const HeadlessParams = {
   ),
   title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
   thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
+  maxSteps: Flag.integer("max-steps").pipe(
+    Flag.withAlias("max-turns"),
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription("Stop after this many model calls; the result then has subtype error_max_steps"),
+    Flag.optional,
+  ),
+  maxCost: Flag.float("max-cost").pipe(
+    Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0))),
+    Flag.withDescription("Stop once the run has cost this many US dollars; needs a model with a known price"),
+    Flag.optional,
+  ),
+  maxTokens: Flag.integer("max-tokens").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription("Stop once the run has used this many tokens"),
+    Flag.optional,
+  ),
+  fallbackModel: Flag.string("fallback-model").pipe(
+    Flag.withDescription(
+      "Model to switch to when the main model stays overloaded, in the format provider/model#variant",
+    ),
+    Flag.optional,
+  ),
 }
 
 // The flags that only `orb -p` takes, which the root command lists so that --help shows them.
@@ -74,6 +96,10 @@ const PrintParams = {
     Flag.withDescription('Output format with -p: "text" prints the answer, "json" prints one JSON result object'),
     Flag.optional,
   ),
+}
+
+// What the interface takes as well as `orb -p`, so a plain `orb` run does not refuse them.
+const ModelParams = {
   model: Flag.string("model").pipe(
     Flag.withAlias("m"),
     Flag.withDescription("Model to use in the format provider/model#variant"),
@@ -81,6 +107,14 @@ const PrintParams = {
   ),
   agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
 }
+
+/** The flags that only `orb -p` takes, as the camelCase names of the parsed input, which the root command refuses. */
+export const PrintParamKeys = Object.keys(PrintParams) as ReadonlyArray<keyof typeof PrintParams>
+
+/** The same flags as they are typed, for the message that refuses them and the tests that pin it. */
+export const PrintParamFlags = PrintParamKeys.map(
+  (key) => `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+)
 
 // A bare -r or --resume is rewritten to `--resume=` by framework/argv.ts, because the parser has no optional values.
 const ResumeParams = {
@@ -139,6 +173,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
     print: PrintFlag,
     ...SessionParams,
     ...PrintParams,
+    ...ModelParams,
     prompt: Flag.string("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
@@ -843,6 +878,7 @@ export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NA
     ...SessionParams,
     ...HeadlessResumeParams,
     ...PrintParams,
+    ...ModelParams,
     print: PrintFlag,
     message: Argument.string("message").pipe(
       Argument.withDescription("Message to send"),
@@ -862,6 +898,11 @@ export const RootValueFlags = {
     "agent",
     "output-format",
     "json-schema",
+    "max-steps",
+    "max-turns",
+    "max-cost",
+    "max-tokens",
+    "fallback-model",
     "file",
     "title",
     "completions",
