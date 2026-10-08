@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm"
 import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect"
 import { map } from "effect/Array"
 import path from "path"
+import { plain } from "@orbit/util/plain"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { App } from "../app.js"
 import { Bus } from "../bus.js"
@@ -75,7 +76,7 @@ const layer = Layer.effect(
         yield* upsertProject(db, project).pipe(Effect.orDie)
         const importedAt = yield* Clock.currentTimeMillis
         const messages = input.data.messages.filter(isSettled).map((message, index) => {
-          const encoded = encodeMessage(message)
+          const encoded = encodeMessage(escapeToolNames(message))
           const { id: _, type, ...data } = encoded
           return {
             id: message.id,
@@ -161,6 +162,18 @@ export const node = makeGlobalNode({
   layer,
   deps: [App.node, Bus.node, Database.node, Project.node, Session.node],
 })
+
+// An imported file is as untrusted as a clone, and the schema keeps a tool part's display name, so the import writes it
+// through the same escaper as the live publisher: the stored name never holds a control or format character.
+function escapeToolNames(message: SessionMessage.Info): SessionMessage.Info {
+  if (message.type !== "assistant") return message
+  return {
+    ...message,
+    content: message.content.map((part) =>
+      part.type === "tool" && part.displayName !== undefined ? { ...part, displayName: plain(part.displayName) } : part,
+    ),
+  }
+}
 
 function isSettled(message: SessionMessage.Info) {
   if (message.type === "assistant") return message.time.completed !== undefined

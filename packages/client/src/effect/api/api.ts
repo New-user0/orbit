@@ -1100,6 +1100,7 @@ export type SessionLogOutput =
             readonly assistantMessageID: SessionMessage.ID
             readonly id: string
             readonly name: string
+            readonly displayName?: string | undefined
           }
         }
       | {

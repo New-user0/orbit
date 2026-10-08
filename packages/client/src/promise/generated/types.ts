@@ -841,7 +841,7 @@ export type SessionToolInputStarted = {
   type: "session.tool.input.started"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; assistantMessageID: string; id: string; name: string }
+  data: { sessionID: string; assistantMessageID: string; id: string; name: string; displayName?: string }
 }
 
 export type SessionToolInputEnded = {
@@ -2154,6 +2154,7 @@ export type SessionMessageAssistantTool = {
   type: "tool"
   id: string
   name: string
+  displayName?: string
   executed?: boolean
   providerState?: SessionMessageProviderState
   providerResultState?: SessionMessageProviderState
@@ -2174,6 +2175,7 @@ export type SessionMessageAssistantTool1 = {
   type: "tool"
   id: string
   name: string
+  displayName?: string
   executed?: boolean
   providerState?: SessionMessageProviderState1
   providerResultState?: SessionMessageProviderState1
@@ -3375,6 +3377,7 @@ export type SessionImportInput = {
                 readonly type: "tool"
                 readonly id: string
                 readonly name: string
+                readonly displayName?: string
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
@@ -3720,6 +3723,7 @@ export type SessionImportInput = {
                 readonly type: "tool"
                 readonly id: string
                 readonly name: string
+                readonly displayName?: string
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
@@ -4065,6 +4069,7 @@ export type SessionImportInput = {
                 readonly type: "tool"
                 readonly id: string
                 readonly name: string
+                readonly displayName?: string
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }

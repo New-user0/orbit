@@ -1159,6 +1159,21 @@ protocol, which accepts one more optional field.
 
 **What to do:** Nothing.
 
+### A tool's display name on its input event
+
+When a tool declares a `displayName`, the `session.tool.input.started` event now carries it, and the projected assistant
+tool message (`Session.Message.Assistant.Tool`) exposes it, so a client can show the name a tool chose for people. The
+name is stored with control and format characters written out (`ESC` as `\x1b`, a right-to-left override as `\u{202e}`),
+because the event is durable and outlives its source. A session file imported with `orb session import` is escaped the same
+way. A tool that declares none, and a provider-hosted tool, leave the
+field out, and events written before this change decode as they did.
+
+**Affects:** SDK and client callers that read `session.tool.input.started` or assistant tool content, and the generated
+client types, which gain one optional field. `@orbit/flow/plain` still exports the same escapers, which now live in
+`@orbit/util/plain`.
+
+**What to do:** Nothing. Show `displayName` when it is present and fall back to `name`.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
