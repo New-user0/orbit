@@ -6,6 +6,7 @@ import stripAnsi from "strip-ansi"
 import { useClient } from "../context/client"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
+import { bodyText, outputText } from "../util/renderer"
 import { useDialog } from "../ui/dialog"
 
 const PAGE_BYTES = 64 * 1024
@@ -19,7 +20,7 @@ export function DialogShellOutput(props: { shell: ShellInfo; location: LocationR
   const [output, setOutput] = createSignal<string>()
   const [omitted, setOmitted] = createSignal(false)
   const [error, setError] = createSignal("")
-  const text = createMemo(() => stripAnsi(output() ?? "").replace(/\r\n?/g, "\n"))
+  const text = createMemo(() => outputText(stripAnsi(output() ?? "")))
   const height = () => Math.max(3, Math.floor(dimensions().height * 0.6) - 6)
   let scroll: ScrollBoxRenderable | undefined
 
@@ -111,7 +112,7 @@ export function DialogShellOutput(props: { shell: ShellInfo; location: LocationR
         </text>
       </box>
       <text fg={theme.text.muted} maxHeight={3} wrapMode="word">
-        {props.shell.command}
+        {bodyText(props.shell.command)}
       </text>
       <Show when={omitted()}>
         <text fg={theme.text.muted}>Earlier output omitted · showing recent output</text>

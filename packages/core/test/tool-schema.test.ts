@@ -6,7 +6,8 @@ import { Session } from "@orbit/schema/session"
 import { SessionMessage } from "@orbit/schema/session-message"
 import type { Info } from "@orbit/schema/tool"
 import { Tool } from "../src/tool"
-import { definition, execute } from "../src/tool/runtime"
+import { definition } from "../src/tool/runtime"
+import { runTool } from "./lib/tool"
 import { ToolTraits } from "../src/tool/traits"
 
 const context = {
@@ -151,7 +152,7 @@ test("portable schemas validate and describe typed tools", async () => {
     inputSchema: { type: "object", properties: { count: { type: "string" } } },
     outputSchema: { type: "string" },
   })
-  const result = await Effect.runPromise(execute(tool, { count: "41" }, context))
+  const result = await Effect.runPromise(runTool(tool, { count: "41" }, context))
   expect(result.output).toBe("42")
 })
 
@@ -182,10 +183,10 @@ test("Zod schemas validate, transform, and describe typed tools", async () => {
       additionalProperties: false,
     },
   })
-  expect(await Effect.runPromise(execute(tool, { count: "41" }, context))).toMatchObject({
+  expect(await Effect.runPromise(runTool(tool, { count: "41" }, context))).toMatchObject({
     output: { count: 42 },
   })
-  expect(await Effect.runPromise(Effect.flip(execute(tool, { count: 41 }, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, { count: 41 }, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
@@ -214,7 +215,7 @@ test("portable schema failures become tool failures", async () => {
 
   const error = await Effect.runPromise(
     Effect.flip(
-      execute(
+      runTool(
         {
           name: "invalid",
           description: "Invalid",
@@ -246,7 +247,7 @@ test("Effect schema failures use normalized input issues", async () => {
     execute: () => Effect.succeed({ content: "unused" }),
   }
 
-  expect(await Effect.runPromise(Effect.flip(execute(tool, { value: 1, nested: { count: 0 } }, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, { value: 1, nested: { count: 0 } }, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
@@ -276,7 +277,7 @@ test("input error prompts limit normalized issues", async () => {
     execute: () => Effect.succeed({ content: "unused" }),
   }
 
-  expect(await Effect.runPromise(Effect.flip(execute(tool, {}, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, {}, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
@@ -331,32 +332,32 @@ test("raw JSON schemas validate and decode tool input", async () => {
     description: "Raw tool",
     inputSchema: input,
   })
-  expect(await Effect.runPromise(execute(tool, { value: "ok", extra: true }, context))).toEqual({
+  expect(await Effect.runPromise(runTool(tool, { value: "ok", extra: true }, context))).toEqual({
     output: undefined,
     content: [{ type: "text", text: '{"value":"ok"}' }],
   })
-  expect(await Effect.runPromise(Effect.flip(execute(tool, { value: 1 }, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, { value: 1 }, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
         'Invalid arguments for tool "raw":\n- value: Expected string\n\nArguments provided:\n{\n  "value": 1\n}\n\nUpdate the arguments and call the tool again.',
     }),
   )
-  expect(await Effect.runPromise(Effect.flip(execute(tool, {}, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, {}, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
         'Invalid arguments for tool "raw":\n- value: Missing key\n\nArguments provided:\n{}\n\nUpdate the arguments and call the tool again.',
     }),
   )
-  expect(await Effect.runPromise(Effect.flip(execute(tool, { value: "ok", nested: { count: 0 } }, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, { value: "ok", nested: { count: 0 } }, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
         'Invalid arguments for tool "raw":\n- nested.count: Expected a value greater than or equal to 1\n\nArguments provided:\n{\n  "value": "ok",\n  "nested": {\n    "count": 0\n  }\n}\n\nUpdate the arguments and call the tool again.',
     }),
   )
-  expect(await Effect.runPromise(Effect.flip(execute(tool, { value: 1, nested: { count: 0 } }, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, { value: 1, nested: { count: 0 } }, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
@@ -378,10 +379,10 @@ test("raw JSON schemas resolve draft-07 definitions", async () => {
     execute: (input) => Effect.succeed({ content: JSON.stringify(input) }),
   }
 
-  expect(await Effect.runPromise(execute(tool, { value: "ok" }, context))).toMatchObject({
+  expect(await Effect.runPromise(runTool(tool, { value: "ok" }, context))).toMatchObject({
     content: [{ type: "text", text: '{"value":"ok"}' }],
   })
-  expect(await Effect.runPromise(Effect.flip(execute(tool, { value: 1 }, context)))).toEqual(
+  expect(await Effect.runPromise(Effect.flip(runTool(tool, { value: 1 }, context)))).toEqual(
     new Tool.Error({
       code: Tool.ErrorCode.InputInvalid,
       message:
@@ -401,7 +402,7 @@ test("raw JSON schemas pass input through when they cannot be imported", async (
     execute: (input) => Effect.succeed({ content: JSON.stringify(input) }),
   }
 
-  expect(await Effect.runPromise(execute(tool, { value: 1, extra: true }, context))).toMatchObject({
+  expect(await Effect.runPromise(runTool(tool, { value: 1, extra: true }, context))).toMatchObject({
     content: [{ type: "text", text: '{"value":1,"extra":true}' }],
   })
 })

@@ -5,6 +5,7 @@ import { SPINNER_FRAMES } from "../../component/spinner-frames"
 import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { Locale } from "../../util/locale"
+import { bodyText } from "../../util/renderer"
 import { workflowPhases, type WorkflowAgent } from "../../util/tool-display"
 
 /**
@@ -77,7 +78,7 @@ export function WorkflowCard(props: {
                   onMouseUp={() => setToggled((value) => ({ ...value, [phase.name]: !open(phase.name, phase.agents) }))}
                 >
                   <text fg={theme.text.base} flexShrink={0}>
-                    {phase.name}
+                    {bodyText(phase.name)}
                   </text>
                   <text flexShrink={0}>
                     <For each={phase.agents}>
@@ -129,11 +130,11 @@ export function WorkflowCard(props: {
                             : "●"}
                       </text>
                       <text fg={theme.text.base} flexGrow={1} flexShrink={1} wrapMode="none">
-                        {agent.description}
+                        {bodyText(agent.description)}
                       </text>
                       <Show when={columns().model}>
                         <text fg={theme.text.muted} width={18} flexShrink={0} wrapMode="none">
-                          {agent.model ?? Locale.titlecase(agent.agent)}
+                          {bodyText(agent.model ?? Locale.titlecase(agent.agent))}
                         </text>
                       </Show>
                       <Show when={columns().tokens}>

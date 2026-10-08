@@ -4,6 +4,7 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/sp
 import { Cache, Effect, JsonSchema, Schema, SchemaIssue, SchemaRepresentation } from "effect"
 import { $ZodType, toJSONSchema } from "zod/v4/core"
 import { ToolTraits } from "./traits.js"
+import { Permission } from "../permission.js"
 
 const formatEffectIssues = SchemaIssue.makeFormatterStandardSchemaV1()
 
@@ -26,13 +27,27 @@ export const definition = (tool: Tool.Info<any, any>): ToolDefinition => ({
   ...(tool.output === undefined ? {} : { outputSchema: outputJsonSchema(tool.output) }),
 })
 
+/** The registry gate: asks about a call of a tool that does not ask for itself, or fails it. */
+export type Authorize = (
+  tool: Tool.Info<any, any>,
+  decoded: unknown,
+  context: Tool.Context,
+) => Effect.Effect<void, unknown>
+
 /**
  * Runs a tool on raw input: decode it, resolve the traits of the call, let the tool refuse the call in `validate`, then
  * run it. The traits are resolved on the decoded input and handed to the tool in its context, so every path that
  * executes a tool, Code Mode inner calls included, passes its own tool's traits. The `execute.before` hooks have run
- * before this, and a tool asks for its own permissions in `execute`, so a call that `validate` refuses asks nobody.
+ * before this. `authorize` is the registry gate: it runs after `validate` and before `execute`, so a call that
+ * `validate` refuses asks nobody. A failure of it ends the call like a failure of `execute`, and a decline travels as a
+ * defect and ends it too.
  */
-export const execute = (tool: Tool.Info<any, any>, input: unknown, context: Omit<Tool.Context, "traits">) =>
+export const execute = (
+  tool: Tool.Info<any, any>,
+  input: unknown,
+  context: Omit<Tool.Context, "traits">,
+  authorize: Authorize,
+) =>
   Effect.gen(function* () {
     const decoded = yield* decode(tool, input)
     const resolved = { ...context, traits: yield* ToolTraits.resolve(tool, decoded) }
@@ -40,6 +55,7 @@ export const execute = (tool: Tool.Info<any, any>, input: unknown, context: Omit
       yield* tool
         .validate(decoded, resolved)
         .pipe(Effect.mapError((error: unknown) => toolError(error, Tool.ErrorCode.Validation)))
+    yield* authorize(tool, decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
     const result = yield* tool.execute(decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
     if (tool.output === undefined) {
       if ("output" in result) return yield* Effect.die("Tool result declared output without an output schema")
@@ -75,6 +91,12 @@ export const decode = (tool: Tool.Info<any, any>, value: unknown) =>
 // is enforced here at the untrusted boundary. Declines tunnel through as defects and interrupts are not errors; neither
 // is touched. A failure that names no code takes `fallback`, if there is one.
 const toolError = (error: unknown, fallback?: Tool.ErrorCode) => {
+  // A refusal keeps its cause so the session error is `permission.rejected`, not a crash.
+  if (error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError)
+    return new Tool.Error({
+      message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+      error,
+    })
   if (!(error instanceof Tool.Error))
     return new Tool.Error({
       message: error instanceof globalThis.Error ? error.message : String(error),

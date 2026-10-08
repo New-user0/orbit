@@ -896,6 +896,37 @@ running session. Lines written by earlier builds are read as before.
 **What to do:** nothing, unless you want another key: set `prompt.history.search` or `dialog.session.rename`. Set
 `prompt.history_limit` to keep more or fewer prompts.
 
+### Control characters in messages are written out on screen
+
+The terminal UI and Mini used to draw model text, tool output, tool errors, approval prompts, shell commands and the
+labels of tools as they were. A body that carried an escape sequence or a right-to-left override could set the window
+title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape and
+`\u{202e}` for an override, so you can see that they were there. The places include the text of questions and their
+answers, the plan, the notices that a background shell or subagent finished, skill names, the paths that a read loaded,
+the queued-prompt line, the cards of a workflow, the call lines of `execute`, the external link and the review rows of
+a form. Line breaks, tabs, emoji and other Unicode are unchanged, and so is Markdown formatting. Text that the model
+meant to color with escape sequences shows the written-out form instead.
+
+A carriage return is handled by where it is drawn. In program output (shell, `execute` and the output of other tools)
+a lone carriage return, which progress meters use to redraw a line, is drawn as a line break, as Mini already did, and
+the color sequences of shell output are removed rather than written out. In a command line, an approval prompt or any
+other text, a carriage return is written out as `\x0d`, because a shell treats it as an ordinary character.
+
+The background shell views follow the same rule: the command in the shell tab of the composer, and the command and the
+output in the output dialog, show `\x1b` and `\x07` where a program wrote them. So do toasts, the error text of the
+details dialog, the queued-prompt dialog and Mini's queued-prompt picker.
+
+A few places also write controls out but have no frame test of their own yet: the tool list of the token-usage view, the
+details dialog of `execute`, the timeline and fork lists, the `/btw` answer, the Mini subagent picker and the
+composer's terminal and subagent rows. Three places do not write them out yet: the desktop notification text, the
+markdown export, and the prompt history and stash lists. Known gaps in
+[untrusted-repositories.md](untrusted-repositories.md) names all of them, and `orb run` is unchanged.
+
+**Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
+`orb run` and the stored messages are unchanged.
+
+**What to do:** nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -1007,6 +1038,14 @@ rule that denies `edit`, whose bad edits get the specific failure first. The fai
 the note on error types describes.
 
 **What to do:** Nothing.
+
+### Tools that do not ask for themselves are now asked about
+
+Ask and deny rules now govern a tool that does not take care of its own permission question, and nothing changes under the default rules (`* * allow`). Tools that plugins and the SDK add used to run unasked unless they asked for themselves; they now ask on their permission action (or their name), on every resource, once per call, and "always" saves `*` for that action. The same goes for Code Mode: a program that calls such a tool is asked for each call. A tool opts out by setting `options.authorizes` to `true`, or to a function of the decoded input that answers `true` (a Promise plugin's function may answer with a Promise); a function that throws, fails, rejects or answers with anything else counts as not opting out. The desktop browser tools pass the same gate on `browser`, and the browser plugin's own rules (`browser * deny` for every agent, `browser * allow` for a session it is attached to) decide, so they never prompt. Orbit's own tools that check each file, command or address (`read`, `edit`, `shell`, `webfetch`, the MCP tools and the like) and MCP tools are unchanged, and annotations from an MCP server never relax anything. Orbit's tools that never asked are now governed by rules on their own name, and ask once per call when a rule says `ask`: `memory`, `enter_worktree`, `exit_worktree`, `orbit_session_rename`, `orbit_session_move`, `orbit_models`, `task_create`, `task_update`, `task_list`, `todo`, `shell_output`, `shell_watch`, `shell_stop`, `enter_plan_mode` and `exit_plan_mode`. Under the default rules (`* * allow`) none of them asks, but an `ask` or `deny` rule, or an agent whose rules deny everything it does not name, now reaches them. The tool's name is also its action, so a tool that names a shared action, such as `edit`, `read` or `shell`, asks for the whole action, and "always" saves `<action> *`; saved rules are evaluated after the configured ones, so that saved rule outranks a configured narrower `ask` such as `read *.env ask`. Answer "once" for these tools if you want the narrower rule to keep applying.
+
+**Affects:** plugin and SDK authors whose tools did not ask, and people whose rules ask or deny for these tools: an `ask` rule now prompts, and a `deny` rule now applies. A refusal reaches clients as a `permission.rejected` error, as it does for the built-in tools.
+
+**What to do:** approve the prompt, or add an allow rule for the tool's action. Authors of a tool that asks in `execute` set `options.authorizes: true` to avoid the second question.
 
 ## Plugins and SDK
 
