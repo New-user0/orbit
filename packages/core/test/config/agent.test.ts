@@ -229,7 +229,7 @@ permissions:
       const mcpAuth = path.join(global.home, ".local", "share", "orbit", "mcp-auth.json")
       expect(build.permissions).toEqual([
         ...defaultPermissions(global),
-        { action: "question", resource: "*", effect: "allow" },
+        { action: "AskUserQuestion", resource: "*", effect: "allow" },
         { action: "shell", resource: "*", effect: "ask" },
         { action: "edit", resource: "*", effect: "ask" },
         { action: "webfetch", resource: "*", effect: "ask" },

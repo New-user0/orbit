@@ -71,10 +71,10 @@ const capture = (
   }
 }
 
-const call = LLMEvent.toolCall({ id: "call-image", name: "read", input: { path: "pixel.png" } })
+const call = LLMEvent.toolCall({ id: "call-image", name: "Read", input: { path: "pixel.png" } })
 const hostedResult = LLMEvent.toolResult({
   id: "call-image",
-  name: "read",
+  name: "Read",
   result: {
     type: "content",
     value: [
@@ -235,7 +235,7 @@ test("interrupted subagent failures expose their existing child session to the m
   const { published, publisher } = capture("anthropic", { interruptProgress: true })
   const subagent = LLMEvent.toolCall({
     id: "call-subagent",
-    name: "subagent",
+    name: "Agent",
     input: { agent: "general", description: "Recover child", prompt: "Continue working" },
   })
   await Effect.runPromise(publisher.publish(subagent))
@@ -428,7 +428,7 @@ it.effect("publishes batched deltas before the next block starts", () =>
         LLMEvent.reasoningDelta({ id: "reasoning", text: "Plan the edits." }),
         LLMEvent.textStart({ id: "text" }),
         LLMEvent.textDelta({ id: "text", text: "Now the edits:" }),
-        LLMEvent.toolInputStart({ id: "call", name: "edit" }),
+        LLMEvent.toolInputStart({ id: "call", name: "Edit" }),
       ],
       publisher.publish,
       { discard: true },
@@ -531,7 +531,7 @@ test("authoritative end values replace accumulated deltas in the durable ended e
 
 const startedData = async (
   displayName: ((name: string) => string | undefined) | undefined,
-  event = LLMEvent.toolInputStart({ id: "call", name: "read" }),
+  event = LLMEvent.toolInputStart({ id: "call", name: "Read" }),
 ) => {
   const { published, publisher } = capture("anthropic", { displayName })
   await Effect.runPromise(publisher.publish(event))
@@ -551,7 +551,7 @@ test("tool input started carries the declared display name, escaped, and only wh
   ]
   for (const [label, lookup, expected] of cases) {
     const data = await startedData(lookup)
-    expect(data, label).toMatchObject({ name: "read" })
+    expect(data, label).toMatchObject({ name: "Read" })
     if (expected === undefined) expect("displayName" in data, label).toBe(false)
     else expect((data as { displayName?: string }).displayName, label).toBe(expected as string)
   }
@@ -560,7 +560,7 @@ test("tool input started carries the declared display name, escaped, and only wh
 test("a provider-hosted tool is given no display name", async () => {
   const data = await startedData(
     () => "Read file",
-    LLMEvent.toolInputStart({ id: "call", name: "read", providerExecuted: true }),
+    LLMEvent.toolInputStart({ id: "call", name: "Read", providerExecuted: true }),
   )
   expect("displayName" in data).toBe(false)
 })
@@ -570,10 +570,10 @@ test("tool input deltas are accumulated without being published", async () => {
   await Effect.runPromise(
     Effect.forEach(
       [
-        LLMEvent.toolInputStart({ id: "call", name: "read" }),
-        LLMEvent.toolInputDelta({ id: "call", name: "read", text: '{"path":' }),
-        LLMEvent.toolInputDelta({ id: "call", name: "read", text: '"file.txt"}' }),
-        LLMEvent.toolInputEnd({ id: "call", name: "read" }),
+        LLMEvent.toolInputStart({ id: "call", name: "Read" }),
+        LLMEvent.toolInputDelta({ id: "call", name: "Read", text: '{"path":' }),
+        LLMEvent.toolInputDelta({ id: "call", name: "Read", text: '"file.txt"}' }),
+        LLMEvent.toolInputEnd({ id: "call", name: "Read" }),
       ],
       publisher.publish,
       { discard: true },

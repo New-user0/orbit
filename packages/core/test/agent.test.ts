@@ -194,7 +194,7 @@ describe("Agent", () => {
       expect(compaction?.system).toBeUndefined()
       expect(compaction?.model).toBeUndefined()
       expect(compaction?.request).toEqual(Agent.Info.default(Agent.ID.make("compaction")).request)
-      expect(compaction?.permissions).toEqual(permissions.filter((rule) => rule.action !== "question"))
+      expect(compaction?.permissions).toEqual(permissions.filter((rule) => rule.action !== "AskUserQuestion"))
       expect(
         Permission.evaluate("external_directory", path.join(global.data, "shell", "*", "*"), permissions).effect,
       ).toBe("allow")
@@ -228,7 +228,7 @@ describe("Agent", () => {
           const info = yield* agent.get(Agent.ID.make(id))
           if (!info) throw new Error(`expected built-in agent: ${id}`)
           expect(info.mode).toBe("subagent")
-          expect(info.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "deny" })
+          expect(info.permissions).toContainEqual({ action: "Agent", resource: "*", effect: "deny" })
           expect(Permission.evaluate("subagent", "*", info.permissions).effect).toBe("deny")
         }),
       )

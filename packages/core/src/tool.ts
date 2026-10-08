@@ -39,7 +39,6 @@ import {
   normalizeContent,
 } from "./tool/runtime.js"
 import { ToolTraits } from "./tool/traits.js"
-import { Wildcard } from "./util/wildcard.js"
 
 /** The call that is executing; see `ToolCurrentCall`. */
 export const CurrentCall = ToolCurrentCall.Current
@@ -278,7 +277,7 @@ const layer = Layer.effect(
         Effect.flatMap((web) =>
           permission
             .assert({
-              action: "webfetch",
+              action: "WebFetch",
               ...web,
               sessionID: context.sessionID,
               agent: context.agent,
@@ -492,7 +491,7 @@ const layer = Layer.effect(
 )
 
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {
-  const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
+  const rule = rules.findLast((rule) => Permission.actionMatches(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
 }
 

@@ -13,11 +13,11 @@ function readingModel(file: () => string) {
 }
 
 function toolCall(file: string) {
-  const call = { index: 0, id: "call_read", type: "function", function: { name: "read", arguments: "" } }
+  const call = { index: 0, id: "call_read", type: "function", function: { name: "Read", arguments: "" } }
   const chunks = [
     { choices: [{ delta: { role: "assistant", tool_calls: [call] }, finish_reason: null }], usage: null },
     {
-      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ path: file }) } }] } }],
+      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ file_path: file }) } }] } }],
       usage: null,
     },
     { choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: null },

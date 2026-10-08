@@ -81,20 +81,20 @@ describe("SkillTool", () => {
 
           return yield* Effect.gen(function* () {
             const registry = yield* Tool.Service
-            expect(yield* toolTraits(registry, "skill")).toMatchObject({
+            expect(yield* toolTraits(registry, "Skill")).toMatchObject({
               readOnly: true,
               concurrencySafe: true,
               destructive: false,
             })
             expect((yield* toolDefinitions(registry))[0]).toMatchObject({
-              name: "skill",
+              name: "Skill",
               description: SkillTool.description,
             })
             expect(
               yield* executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: { type: "tool-call", id: "call-skill", name: "skill", input: { id: "effect" } },
+                call: { type: "tool-call", id: "call-skill", name: "Skill", input: { id: "effect" } },
               }),
             ).toMatchObject({
               status: "completed",
@@ -105,7 +105,7 @@ describe("SkillTool", () => {
               yield* executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: { type: "tool-call", id: "call-skill-overflow", name: "skill", input: { id: "effect" } },
+                call: { type: "tool-call", id: "call-skill-overflow", name: "Skill", input: { id: "effect" } },
               }),
             ).toEqual({
               status: "completed",
@@ -114,14 +114,14 @@ describe("SkillTool", () => {
               metadata: { name: "Effect", directory },
             })
             expect(assertions).toMatchObject([
-              { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
-              { sessionID, action: "skill", resources: ["effect"], save: ["effect"] },
+              { sessionID, action: "Skill", resources: ["effect"], save: ["effect"] },
+              { sessionID, action: "Skill", resources: ["effect"], save: ["effect"] },
             ])
             expect(
               yield* executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: { type: "tool-call", id: "call-missing-skill", name: "skill", input: { id: "missing" } },
+                call: { type: "tool-call", id: "call-missing-skill", name: "Skill", input: { id: "missing" } },
               }),
             ).toEqual({
               status: "error",
@@ -132,11 +132,11 @@ describe("SkillTool", () => {
               yield* executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: { type: "tool-call", id: "call-denied-skill", name: "skill", input: { id: "effect" } },
+                call: { type: "tool-call", id: "call-denied-skill", name: "Skill", input: { id: "effect" } },
               }),
             ).toEqual({
               status: "error",
-              error: { type: "permission.rejected", message: "Permission denied: skill" },
+              error: { type: "permission.rejected", message: "Permission denied: Skill" },
             })
             deny = false
             const flat = Skill.Info.make({
@@ -157,7 +157,7 @@ describe("SkillTool", () => {
               yield* executeTool(registry, {
                 sessionID,
                 ...toolIdentity,
-                call: { type: "tool-call", id: "call-flat-skill", name: "skill", input: { id: "public" } },
+                call: { type: "tool-call", id: "call-flat-skill", name: "Skill", input: { id: "public" } },
               }),
             ).toMatchObject({
               status: "completed",

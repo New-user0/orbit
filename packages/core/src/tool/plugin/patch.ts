@@ -17,7 +17,7 @@ import { Permission } from "../../permission.js"
 import DESCRIPTION from "../patch.txt"
 import { fileDiff } from "./file-diff.js"
 
-export const name = "patch"
+export const name = "Patch"
 
 export const Input = Schema.Struct({
   patchText: Schema.String.annotate({
@@ -80,7 +80,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { authorizes: true, codemode: false, permission: "edit" },
+          options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: {
             readOnly: false,
             concurrencySafe: false,
@@ -212,7 +212,7 @@ export const Plugin = {
                 ...(change.type === "update" && change.moveTarget ? [change.moveTarget] : []),
               ])
               yield* permission.assert({
-                action: "edit",
+                action: "Edit",
                 resources: [...new Set(targets.map((target) => target.resource))],
                 save: ["*"],
                 metadata: {
@@ -317,11 +317,11 @@ export const Plugin = {
         const usePatch =
           event.model.id.includes("gpt-") && !event.model.id.includes("oss") && !event.model.id.includes("gpt-4")
         if (usePatch) {
-          delete event.tools.edit
-          delete event.tools.write
+          delete event.tools.Edit
+          delete event.tools.Write
           return
         }
-        delete event.tools.patch
+        delete event.tools.Patch
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

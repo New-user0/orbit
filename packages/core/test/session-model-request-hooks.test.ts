@@ -256,7 +256,7 @@ describe("SessionModelRequest without tools", () => {
           sessionID: session.id,
           agent: Agent.ID.make("build"),
           messageID: SessionMessage.ID.make("msg_no_tools"),
-          call: { type: "tool-call", id: "call_no_tools", name: "edit", input: {} },
+          call: { type: "tool-call", id: "call_no_tools", name: "Edit", input: {} },
         })
         .pipe(Effect.flip)
       expect(toSessionError(error)).toEqual({

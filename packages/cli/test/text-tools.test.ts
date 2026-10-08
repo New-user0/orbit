@@ -35,12 +35,12 @@ const ollama = Bun.serve({
     if (pathname === "/api/ps") return Response.json({ models: [] })
     const body = await request.json()
     const system = String(body.messages?.find((message: { role: string }) => message.role === "system")?.content ?? "")
-    const agent = system.includes("### write")
+    const agent = system.includes("### Write")
     if (agent) agentRequests.push({ tools: body.tools, system })
     const text = !agent
       ? "Hello file"
       : agentRequests.length === 1
-        ? 'Creating it.\n<tool_call>\n{"name": "write", "arguments": {"path": "hello.py", "content": "print(\\"hi\\")\\n"}}\n</tool_call>'
+        ? 'Creating it.\n<tool_call>\n{"name": "Write", "arguments": {"file_path": "hello.py", "content": "print(\\"hi\\")\\n"}}\n</tool_call>'
         : "Created hello.py."
     const chunks = [
       { choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }] },

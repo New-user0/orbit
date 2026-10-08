@@ -27,7 +27,7 @@ const llm = Bun.serve({
                   index: 0,
                   id: "call_1",
                   type: "function",
-                  function: { name: "write", arguments: JSON.stringify({ path: "hello.txt", content: "hi\n" }) },
+                  function: { name: "Write", arguments: JSON.stringify({ file_path: "hello.txt", content: "hi\n" }) },
                 },
               ],
             },
@@ -116,7 +116,7 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
 
   await controller.send("Create hello.txt containing hi")
   const permission = await until(() => [...items.values()].find((item) => item.type === "permission"))
-  expect(permission).toMatchObject({ action: "edit", status: "pending" })
+  expect(permission).toMatchObject({ action: "Edit", status: "pending" })
   if (permission?.type !== "permission") throw new Error("Expected a permission")
   expect(permission.files[0]?.patch).toContain("+hi")
 
@@ -125,7 +125,7 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
 
   expect(await Bun.file(path.join(workspace, "hello.txt")).text()).toBe("hi\n")
   const tool = [...items.values()].find((item) => item.type === "tool")
-  expect(tool).toMatchObject({ name: "write", status: "completed", input: { path: "hello.txt" } })
+  expect(tool).toMatchObject({ name: "Write", status: "completed", input: { file_path: "hello.txt" } })
   expect([...items.values()].find((item) => item.type === "text")).toMatchObject({ text: "Wrote hello.txt." })
   expect(items.get(permission.id)).toMatchObject({ status: "once" })
 
@@ -144,9 +144,9 @@ test("a chat shows the reply, surfaces the edit with its patch, and applies it o
   expect(await other.open(sessions[0]?.id ?? "")).toBe("build")
   expect([...replayed.values()].map((item) => item.type)).toEqual(["user", "tool", "text"])
   expect([...replayed.values()].find((item) => item.type === "tool")).toMatchObject({
-    name: "write",
+    name: "Write",
     status: "completed",
-    input: { path: "hello.txt", content: "hi\n" },
+    input: { file_path: "hello.txt", content: "hi\n" },
   })
   other.dispose()
   controller.dispose()

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   canonicalToolName,
   finiteNumber,
+  legacyToolInput,
   primitiveInputSummary,
   toolDisplayMetadata,
   webSearchProviderLabel,
@@ -17,6 +18,28 @@ test("normalizes shared tool primitives", () => {
   expect([finiteNumber(-1.5), finiteNumber(Number.NaN), finiteNumber("1")]).toEqual([-1.5, undefined, undefined])
   expect(primitiveInputSummary({ command: "pwd", count: 2, nested: {} })).toBe("[command=pwd, count=2]")
   expect(primitiveInputSummary({ path: "src/a.ts", line: 2 }, ["path"])).toBe("[line=2]")
+})
+
+test("reads a call recorded under the reference tool names as the views expect", () => {
+  expect(["Bash", "Read", "Edit", "Write", "NotebookEdit", "Agent", "WebFetch", "TaskStop"].map(canonicalToolName)).toEqual([
+    "shell",
+    "read",
+    "edit",
+    "write",
+    "notebook_edit",
+    "subagent",
+    "webfetch",
+    "shell_stop",
+  ])
+  expect(legacyToolInput("Edit", { file_path: "a.ts", old_string: "a", new_string: "b", replace_all: true })).toEqual({
+    path: "a.ts",
+    oldString: "a",
+    newString: "b",
+    replaceAll: true,
+  })
+  expect(legacyToolInput("edit", { path: "a.ts" })).toEqual({ path: "a.ts" })
+  expect(legacyToolInput("NotebookEdit", { notebook_path: "n.ipynb" })).toEqual({ path: "n.ipynb" })
+  expect(legacyToolInput("Bash", { command: "ls", run_in_background: true })).toEqual({ command: "ls", background: true })
 })
 
 describe("webSearchProviderLabel", () => {

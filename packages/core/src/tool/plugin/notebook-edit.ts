@@ -14,19 +14,19 @@ import { NonNegativeInt } from "../../schema.js"
 import { Notebook } from "../notebook.js"
 import { fileDiff } from "./file-diff.js"
 
-export const name = "notebook_edit"
+export const name = "NotebookEdit"
 
 export const Input = Schema.Struct({
-  path: Schema.String.annotate({ description: "Jupyter notebook (.ipynb) to edit" }),
+  notebook_path: Schema.String.annotate({ description: "Jupyter notebook (.ipynb) to edit" }),
   mode: Schema.Literals(["replace", "insert", "delete"]).annotate({
     description:
       '"replace" changes a cell\'s source, "insert" adds a new cell before the given position (or at the end), and "delete" removes a cell.',
   }),
   cellId: Schema.optionalKey(Schema.String).annotate({
-    description: "Id of the cell to change, as shown by the read tool. Use this or `index`.",
+    description: "Id of the cell to change, as shown by the Read tool. Use this or `index`.",
   }),
   index: Schema.optionalKey(NonNegativeInt).annotate({
-    description: "0-based position of the cell, as shown by the read tool. Use this or `cellId`.",
+    description: "0-based position of the cell, as shown by the Read tool. Use this or `cellId`.",
   }),
   source: Schema.optionalKey(Schema.String).annotate({
     description: 'New cell source. Required for "replace" and "insert".',
@@ -52,7 +52,7 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { authorizes: true, codemode: false, permission: "edit" },
+          options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
             "Replace, insert, or delete a cell in a Jupyter notebook (.ipynb). Read the notebook first to see cell ids and positions. Editing a code cell clears its outputs.",
@@ -60,24 +60,24 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              if (!Notebook.isNotebook(input.path))
-                return yield* new ToolFailure({ message: `${input.path} is not a Jupyter notebook (.ipynb).` })
-              const target = yield* access.resolve({ path: input.path, kind: "file" })
+              if (!Notebook.isNotebook(input.notebook_path))
+                return yield* new ToolFailure({ message: `${input.notebook_path} is not a Jupyter notebook (.ipynb).` })
+              const target = yield* access.resolve({ path: input.notebook_path, kind: "file" })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.path)
+              yield* ledger.assertFresh(context.sessionID, target.absolute, input.notebook_path)
               const original = yield* FileMutation.readText(environment.files, target.absolute).pipe(
                 Effect.catchTag("Environment.NotFound", () =>
-                  Effect.fail(new ToolFailure({ message: `File not found: ${input.path}` })),
+                  Effect.fail(new ToolFailure({ message: `File not found: ${input.notebook_path}` })),
                 ),
               )
               const notebook = Notebook.parse(original.text)
-              if (!notebook) return yield* new ToolFailure({ message: `${input.path} is not a valid notebook.` })
+              if (!notebook) return yield* new ToolFailure({ message: `${input.notebook_path} is not a valid notebook.` })
               const edit = yield* resolveEdit(input, notebook)
               const next = Notebook.apply(notebook, edit)
               const after = Notebook.serialize(next, original.text)
               const preview = fileDiff(target.resource, original.text, after)
               yield* permission.assert({
-                action: "edit",
+                action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
                 metadata: { files: [preview] },
@@ -93,7 +93,7 @@ export const Plugin = {
                 cells: NonNegativeInt.make(next.cells.length),
               }
             }).pipe(
-              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.path)]),
+              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.notebook_path)]),
               Effect.map((output) => ({
                 output,
                 content: `Edited ${output.files[0]?.file} (${input.mode}; ${output.cells} cells)`,
@@ -102,7 +102,7 @@ export const Plugin = {
               Effect.mapError((error) =>
                 error instanceof ToolFailure
                   ? error
-                  : new ToolFailure({ message: `Unable to edit ${input.path}`, error }),
+                  : new ToolFailure({ message: `Unable to edit ${input.notebook_path}`, error }),
               ),
             ),
         }),

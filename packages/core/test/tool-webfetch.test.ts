@@ -71,7 +71,7 @@ const reset = () => {
 const call = (input: typeof WebFetchTool.Input.Type, id = "call-webfetch") => ({
   sessionID,
   ...toolIdentity,
-  call: { type: "tool-call" as const, id, name: "webfetch", input },
+  call: { type: "tool-call" as const, id, name: "WebFetch", input },
 })
 
 describe("WebFetchTool helpers", () => {
@@ -426,7 +426,7 @@ describe("WebFetchTool registration", () => {
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
-      expect(yield* toolTraits(registry, "webfetch")).toMatchObject({
+      expect(yield* toolTraits(registry, "WebFetch")).toMatchObject({
         readOnly: true,
         concurrencySafe: true,
         openWorld: true,
@@ -434,7 +434,7 @@ describe("WebFetchTool registration", () => {
       })
       const url = "http://example.com/public"
 
-      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["webfetch", "execute"])
+      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["WebFetch", "execute"])
       expect(yield* executeTool(registry, call({ url, format: "text", timeout: 4 }))).toEqual({
         status: "completed",
         output: { url, contentType: "text/plain", format: "text", output: "hello" },
@@ -444,7 +444,7 @@ describe("WebFetchTool registration", () => {
       expect(assertions).toMatchObject([
         {
           sessionID,
-          action: "webfetch",
+          action: "WebFetch",
           resources: [url],
           aliases: { [url]: ["example.com"] },
           save: ["http://example.com/*"],
@@ -478,7 +478,7 @@ describe("WebFetchTool registration", () => {
       expect(assertions).toMatchObject([
         {
           sessionID,
-          action: "webfetch",
+          action: "WebFetch",
           resources: [url],
           aliases: { [url]: ["localhost"] },
           save: ["http://localhost/*"],
@@ -499,7 +499,7 @@ describe("WebFetchTool registration", () => {
       expect(assertions).toHaveLength(1)
       expect(assertions[0]).toMatchObject({
         sessionID,
-        action: "webfetch",
+        action: "WebFetch",
         resources: ["https://example.com/a"],
         aliases: { "https://example.com/a": ["example.com"] },
         save: ["https://example.com/*"],
@@ -609,7 +609,7 @@ describe("WebFetchTool registration", () => {
           expect(assertions).toMatchObject([
             {
               sessionID,
-              action: "webfetch",
+              action: "WebFetch",
               resources: [url],
               aliases: { [url]: [new URL(url).hostname] },
               save: [`${new URL(url).origin}/*`],

@@ -1,8 +1,20 @@
+import { ToolNames } from "@orbit/schema/tool-names"
+
+// The views are written against the names and input fields the tools had before they took the reference interface,
+// so a call is read under those whichever name it was recorded with.
 export function canonicalToolName(name: string) {
-  if (name === "bash") return "shell"
-  if (name === "task") return "subagent"
-  if (name === "apply_patch") return "patch"
-  return name
+  const named = ToolNames.legacy(name)
+  if (named === "bash") return "shell"
+  if (named === "task") return "subagent"
+  if (named === "apply_patch") return "patch"
+  return named
+}
+
+/** The input of a call under the field names the views read: a call recorded after the rename carries the new ones. */
+export function legacyToolInput(tool: string, input: Record<string, unknown>): Record<string, unknown>
+export function legacyToolInput(tool: string, input: unknown): unknown
+export function legacyToolInput(tool: string, input: unknown) {
+  return ToolNames.raiseInput(tool, input)
 }
 
 export function finiteNumber(value: unknown): number | undefined {

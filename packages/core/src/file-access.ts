@@ -164,7 +164,7 @@ const layer = Layer.effect(
       // Filename recovery shares the directory approval, but checks the recovered file's own read rules.
       if (!sibling) yield* authorizeExternal([target], context)
       yield* permission.assert({
-        action: "read",
+        action: "Read",
         resources: [target.resource],
         save: ["*"],
         ...invocation(context),

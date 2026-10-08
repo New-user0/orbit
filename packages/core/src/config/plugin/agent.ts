@@ -14,12 +14,13 @@ import { ProjectTrust } from "../../project-trust.js"
 import type { FileAccess } from "../../file-access.js"
 import type { ReadTool } from "../../tool/plugin/read.js"
 import type { EditTool } from "../../tool/plugin/edit.js"
+import { ToolNames } from "../../tool/names.js"
 import { AgentFile } from "./agent-file.js"
 
 // Keep in sync with the scan patterns and the name-strip regex in agent-file.ts.
 const sourceDirectories = ["agent", "agents", "mode", "modes"] as const
 type PathAction = FileAccess.ExternalDirectoryAuthorization["action"] | typeof ReadTool.name | typeof EditTool.name
-const pathActions = ["external_directory", "read", "edit"] as const satisfies readonly PathAction[]
+const pathActions = ["external_directory", "Read", "Edit"] as const satisfies readonly PathAction[]
 
 export const Plugin = define({
   id: "orbit.config.agent",
@@ -133,8 +134,8 @@ function expandPermissions(rules: Permission.Ruleset, home: string): Permission.
   )
 }
 
-function isPathAction(action: string): action is PathAction {
-  return pathActions.some((item) => item === action)
+function isPathAction(action: string) {
+  return pathActions.some((item) => item === ToolNames.canonical(action))
 }
 
 function expandHome(resource: string, home: string) {

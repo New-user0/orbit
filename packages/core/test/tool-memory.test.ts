@@ -26,7 +26,7 @@ const node = makeLocationNode({
 const call = (input: unknown) => ({
   ...toolIdentity,
   sessionID: Session.ID.make("ses_memory_test"),
-  call: { type: "tool-call" as const, id: "call-memory", name: "memory", input },
+  call: { type: "tool-call" as const, id: "call-memory", name: "Memory", input },
 })
 const text = (result: { content?: readonly { type: string; text?: string }[] }) =>
   result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
@@ -37,19 +37,19 @@ describe("memory tool", () => {
       const data = (yield* tmpdirScoped()).path
       yield* Effect.gen(function* () {
         const registry = yield* Tool.Service
-        yield* expectRegistryAsks(registry, ["memory"])
+        yield* expectRegistryAsks(registry, ["Memory"])
         for (const action of ["read", "list"])
-          expect(yield* toolTraits(registry, "memory", { action, name: "notes" })).toMatchObject({
+          expect(yield* toolTraits(registry, "Memory", { action, name: "notes" })).toMatchObject({
             readOnly: true,
             concurrencySafe: true,
             destructive: false,
           })
-        expect(yield* toolTraits(registry, "memory", { action: "delete", name: "notes" })).toMatchObject({
+        expect(yield* toolTraits(registry, "Memory", { action: "delete", name: "notes" })).toMatchObject({
           readOnly: false,
           concurrencySafe: false,
           destructive: true,
         })
-        expect(yield* toolTraits(registry, "memory", { action: "save", name: "notes", content: "x" })).toMatchObject({
+        expect(yield* toolTraits(registry, "Memory", { action: "save", name: "notes", content: "x" })).toMatchObject({
           readOnly: false,
           concurrencySafe: false,
           destructive: false,

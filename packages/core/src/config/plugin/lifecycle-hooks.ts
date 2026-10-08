@@ -11,7 +11,9 @@ import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../../config.js"
 import { Location } from "../../location.js"
+import { isRecord } from "@orbit/ai/utils/record"
 import { Mcp } from "../../mcp/index.js"
+import { ToolNames } from "../../tool/names.js"
 import { ShellSelect } from "../../shell/select.js"
 import type { PluginInternal } from "../../plugin/internal.js"
 
@@ -22,6 +24,10 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * `{"decision":"block","reason":...}` on stdout blocks a tool call, and other stdout becomes context for the model.
  * When several hooks block, the reason of the one in the highest-ranked document is reported. A hook that fails to
  * run is logged and skipped, so a broken script never stops the session.
+ *
+ * A matcher accepts every spelling of a built-in tool's name (`ToolNames`), so a hook written for `shell` still fires
+ * for `Bash`. A hook whose matcher accepts only an old name is told that name as `tool_name`, and its `tool_input`
+ * carries the old field names beside the current ones, so a guard keyed on either keeps blocking.
  *
  * While compatibility is on, a matcher also accepts the names other products give a tool, so a hook written for
  * `Bash` fires for `shell`, and a hook that comes from another product's settings file is told that product's name
@@ -89,7 +95,8 @@ export const Plugin = define({
     // name only splits into server and tool by the connected tools, which say which pair registered it.
     const foreignNames = Effect.fn("LifecycleHooksPlugin.foreignNames")(function* (target: string | undefined) {
       if (target === undefined || !(yield* config.compatEnabled())) return []
-      return CompatAliases.toForeign(target, yield* mcp.tools())
+      // The compatibility table is keyed by the names the tools had before the rename.
+      return CompatAliases.toForeign(ToolNames.legacy(target), yield* mcp.tools())
     })
 
     const commands = Effect.fn("LifecycleHooksPlugin.commands")(function* (
@@ -124,9 +131,13 @@ export const Plugin = define({
             // A hook from another product's settings file is told that product's name for the tool: the first of the
             // tool's names that the hook's own matcher accepts, so a hook for `Write` that runs for `patch` is told
             // `Write`. One whose matcher accepts none of them, as it names the tool the Orbit way, is told the first.
+            // A hook of the user's own is told the spelling its matcher accepts, so a guard written for `shell` that
+            // checks the name it is told still sees `shell` after the tool became `Bash`.
             const tool = document.foreign
-              ? (aliases.find((alias) => matches(group.matcher, alias, [])) ?? aliases.at(0))
-              : undefined
+              ? (aliases.find((alias) => accepts(group.matcher, [alias])) ?? aliases.at(0))
+              : target === undefined
+                ? undefined
+                : ToolNames.spellings(target).find((spelling) => accepts(group.matcher, [spelling]))
             return group.hooks.map((hook) => ({ hook, rank, directory: document.directory, tool }))
           }),
       )
@@ -170,6 +181,11 @@ export const Plugin = define({
           ...payload,
           // The tool is named the way the hook's own product names it.
           ...(tool === undefined ? {} : { tool_name: tool }),
+          // A hook told an old tool name also reads the old field names, so a guard keyed on `path` or `oldString`
+          // does not see an empty input. The current fields stay beside them.
+          ...(tool === undefined || ToolNames.canonical(tool) === tool || !isRecord(payload.tool_input)
+            ? {}
+            : { tool_input: { ...ToolNames.raiseInput(tool, payload.tool_input), ...payload.tool_input } }),
         })
       const outcomes = yield* Effect.forEach(
         configured,
@@ -304,10 +320,15 @@ function lifecycle(event: Lifecycle) {
   }
 }
 
-// A tool also answers to the names that `aliases` lists, which are empty unless compatibility is on.
+// A tool answers to every spelling of its own name, and to the names that `aliases` lists, which are empty unless
+// compatibility is on.
 function matches(matcher: string | undefined, target: string | undefined, aliases: readonly string[]) {
-  if (!matcher || matcher === "*" || target === undefined) return true
-  const names = [target, ...aliases]
+  if (target === undefined) return true
+  return accepts(matcher, [...ToolNames.spellings(target), ...aliases])
+}
+
+function accepts(matcher: string | undefined, names: readonly string[]) {
+  if (!matcher || matcher === "*") return true
   return Option.match(Option.liftThrowable(() => new RegExp(`^(?:${matcher})$`))(), {
     onNone: () => names.includes(matcher),
     onSome: (pattern) => names.some((name) => pattern.test(name)),

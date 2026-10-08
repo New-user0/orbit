@@ -33,6 +33,7 @@ import { SessionRunnerRetry } from "./retry.js"
 import { SessionStep } from "./step.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
+import { ToolNames } from "../../tool/names.js"
 import { MAX_STEPS_PROMPT } from "./max-steps.js"
 
 const CONTINUE_AFTER_INCOMPLETE_STREAM =
@@ -383,7 +384,7 @@ const layer = Layer.effect(
           if (tool.type !== "tool" || (tool.state.status !== "streaming" && tool.state.status !== "running")) continue
           const metadata = tool.state.status === "running" ? tool.state.metadata : undefined
           const childID =
-            tool.name === "subagent" && typeof metadata?.sessionID === "string" ? metadata.sessionID : undefined
+            ToolNames.canonical(tool.name) === "Agent" && typeof metadata?.sessionID === "string" ? metadata.sessionID : undefined
           yield* bus.publish(SessionEvent.Tool.Failed, {
             sessionID,
             assistantMessageID: message.id,

@@ -512,10 +512,10 @@ it.live(
         let toolIssued = false
         const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer()))
         yield* llm.serve((request) => {
-          const wantsTool = !toolIssued && request.tools.some((tool) => tool.name === "shell")
+          const wantsTool = !toolIssued && request.tools.some((tool) => tool.name === "Bash")
           if (!wantsTool) return TestLLM.text("done", "answer")
           toolIssued = true
-          return TestLLM.tool("call-shell", "shell", { command: "echo hi" })
+          return TestLLM.tool("call-shell", "Bash", { command: "echo hi" })
         })
         const models = Layer.mock(SessionRunnerModel.Service, {
           resolve: () =>

@@ -38,7 +38,7 @@ describe("shell control tools", () => {
   it.effect("leaves all three tools to the registry gate", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      yield* expectRegistryAsks(registry, ["shell_output", "shell_watch", "shell_stop"])
+      yield* expectRegistryAsks(registry, ["TaskOutput", "TaskWatch", "TaskStop"])
     }),
   )
 
@@ -47,13 +47,13 @@ describe("shell control tools", () => {
     Effect.gen(function* () {
       const shell = yield* Shell.Service
       const registry = yield* Tool.Service
-      for (const name of ["shell_output", "shell_watch"])
+      for (const name of ["TaskOutput", "TaskWatch"])
         expect(yield* toolTraits(registry, name, { id: "x", pattern: "x" })).toMatchObject({
           readOnly: true,
           concurrencySafe: true,
           interruptBehavior: "cancel",
         })
-      expect(yield* toolTraits(registry, "shell_stop", { id: "x" })).toMatchObject({
+      expect(yield* toolTraits(registry, "TaskStop", { id: "x" })).toMatchObject({
         readOnly: false,
         concurrencySafe: false,
         interruptBehavior: "block",
@@ -66,18 +66,18 @@ describe("shell control tools", () => {
 
       const foreign = yield* executeTool(
         registry,
-        call("shell_output", { shellID: info.id }, Session.ID.make("ses_other")),
+        call("TaskOutput", { shellID: info.id }, Session.ID.make("ses_other")),
       )
       expect(foreign.status).toBe("error")
 
-      const watched = yield* executeTool(registry, call("shell_watch", { shellID: info.id, pattern: "^ready$" }))
+      const watched = yield* executeTool(registry, call("TaskWatch", { shellID: info.id, pattern: "^ready$" }))
       expect(watched.output).toMatchObject({ status: "running", matched: true })
       expect(text(watched)).toContain("start\nready")
 
-      const output = yield* executeTool(registry, call("shell_output", { shellID: info.id }))
+      const output = yield* executeTool(registry, call("TaskOutput", { shellID: info.id }))
       expect(text(output)).toContain("(no new output)")
 
-      const stopped = yield* executeTool(registry, call("shell_stop", { shellID: info.id }))
+      const stopped = yield* executeTool(registry, call("TaskStop", { shellID: info.id }))
       expect(stopped.output).toEqual({ status: "killed" })
       expect((yield* shell.get(info.id)).status).toBe("killed")
       expect((yield* shell.output(info.id)).output).toContain("ready")

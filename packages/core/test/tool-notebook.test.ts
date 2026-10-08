@@ -90,7 +90,7 @@ const withTool = <A, E, R>(
 const call = (input: typeof NotebookEditTool.Input.Type) => ({
   sessionID,
   ...toolIdentity,
-  call: { type: "tool-call" as const, id: "call-notebook", name: "notebook_edit", input },
+  call: { type: "tool-call" as const, id: "call-notebook", name: "NotebookEdit", input },
 })
 
 describe("Notebook", () => {
@@ -122,7 +122,7 @@ describe("NotebookEditTool", () => {
   it.effect("changes notebooks, so it is neither read-only nor safe beside other calls", () =>
     withTool(import.meta.dir, (registry) =>
       Effect.gen(function* () {
-        expect(yield* toolTraits(registry, "notebook_edit", {})).toMatchObject({
+        expect(yield* toolTraits(registry, "NotebookEdit", {})).toMatchObject({
           readOnly: false,
           concurrencySafe: false,
           destructive: false,
@@ -141,7 +141,7 @@ describe("NotebookEditTool", () => {
             Effect.gen(function* () {
               const replaced = yield* executeTool(
                 registry,
-                call({ path: "analysis.ipynb", mode: "replace", cellId: "calc", source: "print(2 + 2)\nprint(3)" }),
+                call({ notebook_path: "analysis.ipynb", mode: "replace", cellId: "calc", source: "print(2 + 2)\nprint(3)" }),
               )
               expect(replaced.status).toBe("completed")
               const afterReplace = yield* read()
@@ -156,7 +156,7 @@ describe("NotebookEditTool", () => {
 
               yield* executeTool(
                 registry,
-                call({ path: "analysis.ipynb", mode: "insert", index: 1, cellType: "markdown", source: "Next" }),
+                call({ notebook_path: "analysis.ipynb", mode: "insert", index: 1, cellType: "markdown", source: "Next" }),
               )
               const afterInsert = yield* read()
               expect(afterInsert.cells.map((cell: { source: string[] }) => cell.source.join(""))).toEqual([
@@ -166,12 +166,12 @@ describe("NotebookEditTool", () => {
               ])
               expect(afterInsert.cells[1].id).toMatch(/^[0-9a-f]{8}$/)
 
-              yield* executeTool(registry, call({ path: "analysis.ipynb", mode: "delete", index: 0 }))
+              yield* executeTool(registry, call({ notebook_path: "analysis.ipynb", mode: "delete", index: 0 }))
               expect((yield* read()).cells).toHaveLength(2)
 
               const missing = yield* executeTool(
                 registry,
-                call({ path: "analysis.ipynb", mode: "replace", cellId: "nope", source: "x" }),
+                call({ notebook_path: "analysis.ipynb", mode: "replace", cellId: "nope", source: "x" }),
               )
               expect(missing.status).toBe("error")
             }),
@@ -184,7 +184,7 @@ describe("NotebookEditTool", () => {
   it.live("names a notebook the session has not read, and one that changed since, with the ledger's codes", () =>
     withTempDir((tmp) => {
       const target = path.join(tmp.path, "analysis.ipynb")
-      const input = { path: "analysis.ipynb", mode: "delete", index: 0 } as const
+      const input = { notebook_path: "analysis.ipynb", mode: "delete", index: 0 } as const
       return Effect.promise(() => fs.writeFile(target, `${JSON.stringify(notebook, null, 1)}\n`)).pipe(
         Effect.andThen(
           withTool(

@@ -328,7 +328,7 @@ describe("CodeMode fetch permission", () => {
       const request = yield* nextRequest()
       expect(request).toMatchObject({
         sessionID,
-        action: "webfetch",
+        action: "WebFetch",
         resources: [`${origin}/page?x=1`],
         save: [`${origin}/*`],
         // Every call in the program shares the execute call's ID, so the metadata tells them apart.
@@ -412,7 +412,7 @@ describe("CodeMode fetch permission", () => {
 
       const request = yield* nextRequest()
       expect(request).toMatchObject({
-        action: "webfetch",
+        action: "WebFetch",
         resources: [`${origin}/a`, `POST ${origin}/a`],
         save: [`${origin}/*`, `POST ${origin}/*`],
         metadata: { method: "POST", url: `${origin}/a` },
@@ -424,8 +424,8 @@ describe("CodeMode fetch permission", () => {
       expect(hits).toEqual(["POST /a"])
       const saved = yield* PermissionSaved.Service.use((rules) => rules.list({ projectID: Project.ID.global }))
       expect(saved.map((rule) => `${rule.action} ${rule.resource}`).toSorted()).toEqual([
-        `webfetch POST ${origin}/*`,
-        `webfetch ${origin}/*`,
+        `WebFetch POST ${origin}/*`,
+        `WebFetch ${origin}/*`,
       ])
 
       // The saved patterns cover that origin from now on, for reads and for writes.
@@ -450,7 +450,7 @@ describe("CodeMode fetch permission", () => {
       )
 
       expect(result.output).toMatchObject({
-        output: "Permission denied: webfetch",
+        output: "Permission denied: WebFetch",
         toolCalls: [{ tool: "fetch", status: "error", input: { method: "POST", url: `${origin}/a` } }],
       })
       expect(hits).toEqual([])
@@ -510,7 +510,7 @@ describe("CodeMode fetch permission", () => {
         const result = yield* run(
           `try { await fetch("${origin}/a", ${init}) } catch (e) { return e.message }; return "unreachable"`,
         )
-        expect(result.output).toMatchObject({ output: "Permission denied: webfetch" })
+        expect(result.output).toMatchObject({ output: "Permission denied: WebFetch" })
       }
       expect(hits).toEqual([])
       expect(yield* permission.list()).toEqual([])
@@ -599,7 +599,7 @@ describe("CodeMode fetch redirects", () => {
       const second = yield* nextRequest()
       expect(second).toMatchObject({
         sessionID,
-        action: "webfetch",
+        action: "WebFetch",
         resources: [`${local}/landed`],
         save: [`${local}/*`],
         metadata: { method: "GET", url: `${local}/landed` },
@@ -649,7 +649,7 @@ describe("CodeMode fetch redirects", () => {
       )
 
       expect(result.output).toMatchObject({
-        output: "Permission denied: webfetch",
+        output: "Permission denied: WebFetch",
         toolCalls: [{ tool: "fetch", status: "error", input: { method: "GET", url: `${origin}/to-local` } }],
       })
       expect(hits).toEqual(["GET /to-local"])

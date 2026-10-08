@@ -3872,12 +3872,12 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.reasoningStart({ id: "reasoning-1" }),
         LLMEvent.reasoningDelta({ id: "reasoning-1", text: "Think" }),
         LLMEvent.reasoningEnd({ id: "reasoning-1" }),
-        LLMEvent.toolInputStart({ id: "call-error", name: "write" }),
-        LLMEvent.toolInputDelta({ id: "call-error", name: "write", text: '{"path":"README.md"}' }),
-        LLMEvent.toolInputEnd({ id: "call-error", name: "write" }),
-        LLMEvent.toolCall({ id: "call-error", name: "write", input: { path: "README.md" }, providerExecuted: true }),
-        LLMEvent.toolError({ id: "call-error", name: "write", message: "Denied" }),
-        LLMEvent.toolResult({ id: "call-error", name: "write", result: { type: "error", value: "Denied" } }),
+        LLMEvent.toolInputStart({ id: "call-error", name: "Write" }),
+        LLMEvent.toolInputDelta({ id: "call-error", name: "Write", text: '{"path":"README.md"}' }),
+        LLMEvent.toolInputEnd({ id: "call-error", name: "Write" }),
+        LLMEvent.toolCall({ id: "call-error", name: "Write", input: { path: "README.md" }, providerExecuted: true }),
+        LLMEvent.toolError({ id: "call-error", name: "Write", message: "Denied" }),
+        LLMEvent.toolResult({ id: "call-error", name: "Write", result: { type: "error", value: "Denied" } }),
         LLMEvent.toolCall({
           id: "call-provider",
           name: "web_search",
@@ -3923,7 +3923,7 @@ describe("SessionRunnerLLM", () => {
         content: [
           Expected.reasoning("Think"),
           Expected.failedTool(
-            { id: "call-error", name: "write" },
+            { id: "call-error", name: "Write" },
             { input: { path: "README.md" }, error: { type: "tool.execution", message: "Denied" } },
           ),
           Expected.completedTool(
@@ -5530,7 +5530,7 @@ describe("SessionRunnerLLM", () => {
       sessionID,
       assistantMessageID,
       id: "call-interrupted-subagent",
-      name: "subagent",
+      name: "Agent",
     })
     yield* s.bus.publish(SessionEvent.Tool.Input.Ended, {
       sessionID,
@@ -5569,7 +5569,7 @@ describe("SessionRunnerLLM", () => {
           {
             error: {
               type: "aborted",
-              message: "Tool execution interrupted: subagent (sessionID: ses_existing_child)",
+              message: "Tool execution interrupted: Agent (sessionID: ses_existing_child)",
             },
             metadata: { sessionID: "ses_existing_child", status: "running", internal: "private" },
           },
@@ -6172,7 +6172,7 @@ describe("SessionRunnerLLM", () => {
       registry,
       {
         question: {
-          name: "question",
+          name: "AskUserQuestion",
           description: "Ask the user",
           input: Schema.Struct({}),
           output: Schema.Struct({}),
@@ -7984,7 +7984,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("rejects malformed streamed tool input ordering", function* (s) {
-    yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "read", text: "{}" })])
+    yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "Read", text: "{}" })])
 
     const defect = yield* s.resume.pipe(Effect.catchDefect(Effect.succeed))
     expect(defect).toBeInstanceOf(Error)

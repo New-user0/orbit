@@ -197,14 +197,14 @@ describe("command template shell spans", () => {
       yield* probe.execute("")
       expect(asserted).toStrictEqual([
         {
-          action: "shell",
+          action: "Bash",
           resources: ["git status"],
           save: ["git status *"],
           metadata: { command: "git status" },
           sessionID,
         },
         {
-          action: "shell",
+          action: "Bash",
           resources: ["git log -n 3", "cat notes.txt"],
           save: ["git log *", "cat *"],
           metadata: { command: "git log -n 3 && cat notes.txt" },
@@ -224,7 +224,7 @@ describe("command template shell spans", () => {
       const probe = yield* install("!`> out.txt`")
       yield* probe.execute("")
       expect(asserted).toStrictEqual([
-        { action: "shell", resources: ["> out.txt"], save: [], metadata: { command: "> out.txt" }, sessionID },
+        { action: "Bash", resources: ["> out.txt"], save: [], metadata: { command: "> out.txt" }, sessionID },
       ])
     }),
   )
@@ -237,7 +237,7 @@ describe("command template shell spans", () => {
       // the whole span, so a later `cd` elsewhere still asks.
       expect(asserted).toStrictEqual([
         {
-          action: "shell",
+          action: "Bash",
           resources: ["cat id_rsa", "cd keys && cat id_rsa"],
           save: ["cat *"],
           metadata: { command: "cd keys && cat id_rsa" },
@@ -288,7 +288,7 @@ describe("command template shell spans", () => {
       const probe = yield* install("Status: !`git status`\nClean: !`rm -rf build`")
       const error = yield* probe.execute("").pipe(Effect.flip)
       expect(error).toBeInstanceOf(Command.ExecutionError)
-      expect(error.message).toBe('Shell interpolation failed for "rm -rf build": Permission denied: shell')
+      expect(error.message).toBe('Shell interpolation failed for "rm -rf build": Permission denied: Bash')
       expect(asserted.map((input) => input.resources)).toEqual([["git status"], ["rm -rf build"]])
       expect(spawned).toEqual([])
       expect(probe.prompts).toEqual([])
@@ -507,7 +507,7 @@ describe("command template shell spans from a folder that is not trusted", () =>
 describe("command template shell spans with the permission service", () => {
   real.live("asks once per uncovered span, in template order, and runs only after the last answer", () =>
     Effect.gen(function* () {
-      const session = yield* createSession([{ action: "shell", resource: "git status", effect: "allow" }])
+      const session = yield* createSession([{ action: "Bash", resource: "git status", effect: "allow" }])
       const permission = yield* Permission.Service
       const asked = yield* requests
       const probe = yield* install("Status: !`git status`\nLog: !`git log -n 3`\nDiff: !`git diff`", {}, session.id)
@@ -515,7 +515,7 @@ describe("command template shell spans with the permission service", () => {
 
       const first = yield* Queue.take(asked)
       expect(first).toMatchObject({
-        action: "shell",
+        action: "Bash",
         resources: ["git log -n 3"],
         save: ["git log *"],
         sessionID: session.id,
@@ -557,13 +557,13 @@ describe("command template shell spans with the permission service", () => {
   real.live("fails the command on a deny rule before any approved span runs", () =>
     Effect.gen(function* () {
       const session = yield* createSession([
-        { action: "shell", resource: "git *", effect: "allow" },
-        { action: "shell", resource: "rm *", effect: "deny" },
+        { action: "Bash", resource: "git *", effect: "allow" },
+        { action: "Bash", resource: "rm *", effect: "deny" },
       ])
       const asked = yield* requests
       const probe = yield* install("Status: !`git status`\nClean: !`rm -rf build`", {}, session.id)
       const error = yield* probe.execute("").pipe(Effect.flip)
-      expect(error.message).toBe('Shell interpolation failed for "rm -rf build": Permission denied: shell')
+      expect(error.message).toBe('Shell interpolation failed for "rm -rf build": Permission denied: Bash')
       expect(yield* Queue.size(asked)).toBe(0)
       expect(spawned).toEqual([])
       expect(probe.prompts).toEqual([])
@@ -583,7 +583,7 @@ describe("command template shell spans through Session.command", () => {
         .pipe(Effect.flip, Effect.forkScoped)
 
       const request = yield* Queue.take(asked)
-      expect(request).toMatchObject({ action: "shell", resources: ["echo declined"], sessionID: session.id })
+      expect(request).toMatchObject({ action: "Bash", resources: ["echo declined"], sessionID: session.id })
       yield* answer(session, request, "reject")
       const error = yield* Fiber.join(running)
       expect(error).toBeInstanceOf(Command.ExecutionError)

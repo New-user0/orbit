@@ -44,6 +44,7 @@ import { PlanDock } from "./plan-dock"
 import { WorkflowCard } from "./workflow-card"
 import {
   canonicalToolName,
+  legacyToolInput,
   executeCalls,
   todoItems,
   workflowAgents,
@@ -2405,7 +2406,7 @@ function ToolPart(props: { part: SessionMessageAssistantTool; images?: boolean }
       return toolDisplayMetadata(props.part.state)
     },
     get input() {
-      return typeof props.part.state.input === "string" ? {} : props.part.state.input
+      return typeof props.part.state.input === "string" ? {} : legacyToolInput(props.part.name, props.part.state.input)
     },
     get output() {
       if (props.part.state.status === "streaming") return undefined

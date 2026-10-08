@@ -114,8 +114,8 @@ Session context is mutable immediately before provider dispatch:
 
 ```ts
 await ctx.session.hook("context", (event) => {
-  event.tools.read.description = "Read a file using narrow line ranges."
-  delete event.tools.write
+  event.tools.Read.description = "Read a file using narrow line ranges."
+  delete event.tools.Write
 })
 
 await ctx.session.hook("retry", (event) => {

@@ -116,7 +116,7 @@ const withTool = <A, E, R>(
 const call = (input: typeof WriteTool.Input.Type, id = "call-write") => ({
   sessionID,
   ...toolIdentity,
-  call: { type: "tool-call" as const, id, name: "write", input },
+  call: { type: "tool-call" as const, id, name: "Write", input },
 })
 
 const it = testEffect(Layer.empty)
@@ -126,7 +126,7 @@ describe("WriteTool", () => {
     withTempDir((tmp) =>
       withTool(tmp.path, makeWriteFixture(), (registry) =>
         Effect.gen(function* () {
-          expect(yield* toolTraits(registry, "write", { path: "a.txt", content: "a" })).toMatchObject({
+          expect(yield* toolTraits(registry, "Write", { file_path: "a.txt", content: "a" })).toMatchObject({
             readOnly: false,
             concurrencySafe: false,
             destructive: false,
@@ -141,8 +141,8 @@ describe("WriteTool", () => {
       const fixture = makeWriteFixture()
       return withTool(tmp.path, fixture, (registry) =>
         Effect.gen(function* () {
-          expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["write", "execute"])
-          const settled = yield* executeTool(registry, call({ path: "src/new.txt", content: "created" }))
+          expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["Write", "execute"])
+          const settled = yield* executeTool(registry, call({ file_path: "src/new.txt", content: "created" }))
           expect(settled).toEqual({
             status: "completed",
             output: {
@@ -157,7 +157,7 @@ describe("WriteTool", () => {
             "created",
           )
           expect(fixture.assertions).toMatchObject([
-            { sessionID, action: "edit", resources: ["src/new.txt"], save: ["*"] },
+            { sessionID, action: "Edit", resources: ["src/new.txt"], save: ["*"] },
           ])
           expect(fixture.assertions[0]?.metadata).toMatchObject({
             files: [
@@ -189,7 +189,7 @@ describe("WriteTool", () => {
         })
       return withTool(tmp.path, fixture, (registry) =>
         Effect.gen(function* () {
-          expect(yield* executeTool(registry, call({ path: "formatted.txt", content: "format me" }))).toMatchObject({
+          expect(yield* executeTool(registry, call({ file_path: "formatted.txt", content: "format me" }))).toMatchObject({
             status: "completed",
           })
           expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("FORMAT ME")
@@ -204,7 +204,7 @@ describe("WriteTool", () => {
       return Effect.promise(() => fs.writeFile(path.join(tmp.path, "existing.txt"), "before")).pipe(
         Effect.andThen(
           withTool(tmp.path, fixture, (registry) =>
-            executeTool(registry, call({ path: "existing.txt", content: "after" })),
+            executeTool(registry, call({ file_path: "existing.txt", content: "after" })),
           ),
         ),
         Effect.andThen((settled) =>
@@ -248,10 +248,10 @@ describe("WriteTool", () => {
         Effect.andThen(
           withTool(tmp.path, fixture, (registry) =>
             Effect.gen(function* () {
-              yield* executeTool(registry, call({ path: "preserved.txt", content: "after" }, "call-preserved"))
+              yield* executeTool(registry, call({ file_path: "preserved.txt", content: "after" }, "call-preserved"))
               yield* executeTool(
                 registry,
-                call({ path: "deduplicated.txt", content: "\uFEFFafter" }, "call-deduplicated"),
+                call({ file_path: "deduplicated.txt", content: "\uFEFFafter" }, "call-deduplicated"),
               )
 
               expect(yield* Effect.promise(() => fs.readFile(preserved, "utf8"))).toBe("\uFEFFafter")
@@ -268,7 +268,7 @@ describe("WriteTool", () => {
       const fixture = makeWriteFixture()
       const target = path.join(tmp.path, "absolute.txt")
       return withTool(tmp.path, fixture, (registry) =>
-        executeTool(registry, call({ path: target, content: "inside" })),
+        executeTool(registry, call({ file_path: target, content: "inside" })),
       ).pipe(
         Effect.andThen((result) =>
           Effect.gen(function* () {
@@ -276,7 +276,7 @@ describe("WriteTool", () => {
               status: "completed",
               content: [{ type: "text", text: "Created file successfully: absolute.txt" }],
             })
-            expect(fixture.assertions.map((input) => input.action)).toEqual(["edit"])
+            expect(fixture.assertions.map((input) => input.action)).toEqual(["Edit"])
             expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("inside")
           }),
         ),
@@ -298,13 +298,13 @@ describe("WriteTool", () => {
         }).pipe(
           Effect.andThen(
             withTool(active.path, fixture, (registry) =>
-              executeTool(registry, call({ path: "link.txt", content: "after" })),
+              executeTool(registry, call({ file_path: "link.txt", content: "after" })),
             ),
           ),
           Effect.andThen((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(fixture.assertions.map((input) => input.action)).toEqual(["edit"])
+              expect(fixture.assertions.map((input) => input.action)).toEqual(["Edit"])
               expect(fixture.assertions[0]?.resources).toEqual(["link.txt"])
             }),
           ),
@@ -326,12 +326,12 @@ describe("WriteTool", () => {
         const fixture = makeWriteFixture()
         const target = path.join(outside.path, "external.txt")
         return withTool(active.path, fixture, (registry) =>
-          executeTool(registry, call({ path: target, content: "external" })),
+          executeTool(registry, call({ file_path: target, content: "external" })),
         ).pipe(
           Effect.andThen((settled) =>
             Effect.gen(function* () {
               const absoluteTarget = target
-              expect(fixture.assertions.map((input) => input.action)).toEqual(["external_directory", "edit"])
+              expect(fixture.assertions.map((input) => input.action)).toEqual(["external_directory", "Edit"])
               expect(fixture.assertions[0]).toMatchObject({
                 resources: [path.join(outside.path, "*").replaceAll("\\", "/")],
               })
@@ -373,7 +373,7 @@ describe("WriteTool", () => {
         ).pipe(
           Effect.andThen(
             withTool(active.path, fixture, (registry) =>
-              executeTool(registry, call({ path: target, content: "external" })),
+              executeTool(registry, call({ file_path: target, content: "external" })),
             ),
           ),
           Effect.andThen(
@@ -398,8 +398,8 @@ describe("WriteTool", () => {
   // of it is outside like any other path, so the write asks about the folder it would reach and creates nothing when
   // that is refused. A junction stands for the link, since it needs no privilege on Windows.
   for (const item of [
-    { project: "untrusted", untrusted: true, actions: ["external_directory", "edit"] },
-    { project: "trusted", untrusted: false, actions: ["edit"] },
+    { project: "untrusted", untrusted: true, actions: ["external_directory", "Edit"] },
+    { project: "trusted", untrusted: false, actions: ["Edit"] },
   ])
     it.live(
       `${item.untrusted ? "asks" : "does not ask"} about the folder a link leads to in a ${item.project} project`,
@@ -414,7 +414,7 @@ describe("WriteTool", () => {
               const settled = yield* withTool(
                 active.path,
                 fixture,
-                (registry) => executeTool(registry, call({ path: "out/pwned.txt", content: "pwned" })),
+                (registry) => executeTool(registry, call({ file_path: "out/pwned.txt", content: "pwned" })),
                 item.untrusted,
               )
               expect(settled.status).toBe("completed")
@@ -444,7 +444,7 @@ describe("WriteTool", () => {
             yield* withTool(
               active.path,
               fixture,
-              (registry) => executeTool(registry, call({ path: "out/pwned.txt", content: "pwned" })),
+              (registry) => executeTool(registry, call({ file_path: "out/pwned.txt", content: "pwned" })),
               true,
             ),
           ).toEqual({
@@ -472,7 +472,7 @@ describe("WriteTool", () => {
           fixture.denyAction = "external_directory"
           expect(
             yield* withTool(active.path, fixture, (registry) =>
-              executeTool(registry, call({ path: external, content: "blocked" })),
+              executeTool(registry, call({ file_path: external, content: "blocked" })),
             ),
           ).toEqual({
             status: "error",
@@ -482,16 +482,16 @@ describe("WriteTool", () => {
           expect(fixture.writes).toEqual([])
 
           const deniedEdit = makeWriteFixture()
-          deniedEdit.denyAction = "edit"
+          deniedEdit.denyAction = "Edit"
           expect(
             yield* withTool(active.path, deniedEdit, (registry) =>
-              executeTool(registry, call({ path: "denied.txt", content: "blocked" })),
+              executeTool(registry, call({ file_path: "denied.txt", content: "blocked" })),
             ),
           ).toEqual({
             status: "error",
-            error: { type: "permission.rejected", message: "Permission denied: edit" },
+            error: { type: "permission.rejected", message: "Permission denied: Edit" },
           })
-          expect(deniedEdit.assertions.map((input) => input.action)).toEqual(["edit"])
+          expect(deniedEdit.assertions.map((input) => input.action)).toEqual(["Edit"])
           expect(deniedEdit.writes).toEqual([])
         }),
       ([active, outside]) =>
@@ -512,7 +512,7 @@ describe("WriteTool", () => {
             fixture,
             (registry) =>
               Effect.gen(function* () {
-                expect(yield* executeTool(registry, call({ path: "ledger.txt", content: "after" }))).toEqual({
+                expect(yield* executeTool(registry, call({ file_path: "ledger.txt", content: "after" }))).toEqual({
                   status: "error",
                   error: {
                     type: "file.unread",
@@ -523,7 +523,7 @@ describe("WriteTool", () => {
                 yield* (yield* FileLedger.Service).record(sessionID, target)
                 const later = new Date(Date.now() + 60_000)
                 yield* Effect.promise(() => fs.utimes(target, later, later))
-                expect(yield* executeTool(registry, call({ path: "ledger.txt", content: "after" }))).toEqual({
+                expect(yield* executeTool(registry, call({ file_path: "ledger.txt", content: "after" }))).toEqual({
                   status: "error",
                   error: {
                     type: "file.stale",

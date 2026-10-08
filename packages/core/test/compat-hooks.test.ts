@@ -1,3 +1,4 @@
+import { ToolNames } from "@orbit/core/tool/names"
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -161,7 +162,7 @@ describe("the compatibility alias table and the built-in tools", () => {
     WebSearchTool.name,
     SubagentTool.name,
     TodoTool.name,
-  ]
+  ].map(ToolNames.legacy)
 
   test("names only tools that Orbit has", () => {
     for (const names of Object.values(CompatNames.tools)) for (const name of names) expect(builtIn).toContain(name)
@@ -169,10 +170,10 @@ describe("the compatibility alias table and the built-in tools", () => {
 
   test("reaches patch from every editing name, as it takes the place of the editing tools on some models", () => {
     for (const foreign of ["Edit", "MultiEdit", "Write"]) {
-      expect(CompatAliases.toOrbit(foreign)).toContain(PatchTool.name)
-      expect(CompatAliases.toOrbit(foreign)).toContain(foreign === "Write" ? WriteTool.name : EditTool.name)
+      expect(CompatAliases.toOrbit(foreign)).toContain(ToolNames.legacy(PatchTool.name))
+      expect(CompatAliases.toOrbit(foreign)).toContain(ToolNames.legacy(foreign === "Write" ? WriteTool.name : EditTool.name))
     }
-    expect(CompatAliases.toForeign(PatchTool.name)).toEqual(["Edit", "MultiEdit", "Write"])
+    expect(CompatAliases.toForeign(ToolNames.legacy(PatchTool.name))).toEqual(["Edit", "MultiEdit", "Write"])
   })
 })
 

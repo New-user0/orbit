@@ -8,6 +8,7 @@ import {
 import { plain } from "@orbit/flow/plain"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
 import { aboveFolders, holdsBack, readStatus, trusted, view, type TrustGrant } from "./trust.js"
+import { legacyToolName } from "./tool-name.js"
 
 export type Update =
   | { readonly type: "item"; readonly item: Item }
@@ -145,7 +146,7 @@ export class Controller {
         const input = typeof state.input === "string" ? undefined : state.input
         const metadata = "metadata" in state ? state.metadata : undefined
         // The task tools report the whole task list in their result metadata.
-        const plan = part.name === "todo" ? todos(input?.todos) : todos(metadata?.todos)
+        const plan = legacyToolName(part.name) === "todo" ? todos(input?.todos) : todos(metadata?.todos)
         if (plan) this.emit({ type: "plan", todos: plan })
         this.update({
           type: "tool",
@@ -474,7 +475,7 @@ export class Controller {
         return
       case "session.tool.called": {
         const current = this.tool(event.data.id)
-        const plan = current.name === "todo" ? todos(event.data.input.todos) : undefined
+        const plan = legacyToolName(current.name) === "todo" ? todos(event.data.input.todos) : undefined
         if (plan) this.emit({ type: "plan", todos: plan })
         this.update({ ...current, input: event.data.input })
         return

@@ -12,6 +12,7 @@ import { Option, Schema } from "effect"
 import { fileURLToPath } from "url"
 import { SessionMessage } from "../message.js"
 import { SessionProviderContext } from "../provider-context.js"
+import { ToolNames } from "../../tool/names.js"
 import type { FileAttachment } from "@orbit/schema/prompt"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
@@ -108,15 +109,23 @@ const providerMetadata = (
   state: Record<string, unknown> | undefined,
 ): ProviderMetadata | undefined => (state === undefined ? undefined : { [provider]: state })
 
-const toolInput = (tool: SessionMessage.AssistantTool) =>
-  tool.state.status === "streaming"
-    ? Option.getOrElse(decodeToolInput(tool.state.input), () => tool.state.input)
-    : tool.state.input
+// A call recorded under an old tool name and field names is lowered under the current ones, so the model sees one
+// vocabulary. Hosted tools belong to the provider and keep what it called them.
+const toolName = (tool: SessionMessage.AssistantTool) =>
+  tool.executed === true ? tool.name : ToolNames.canonical(tool.name)
+
+const toolInput = (tool: SessionMessage.AssistantTool) => {
+  const input =
+    tool.state.status === "streaming"
+      ? Option.getOrElse(decodeToolInput(tool.state.input), () => tool.state.input)
+      : tool.state.input
+  return tool.executed === true ? input : ToolNames.lowerInput(tool.name, input)
+}
 
 const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined): ContentPart =>
   ToolCallPart.make({
     id: tool.id,
-    name: tool.name,
+    name: toolName(tool),
     input: toolInput(tool),
     providerExecuted: tool.executed,
     providerMetadata,
@@ -129,7 +138,7 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
     const single = content.length === 1 ? content[0] : undefined
     return ToolResultPart.make({
       id: tool.id,
-      name: tool.name,
+      name: toolName(tool),
       result:
         single?.type === "text"
           ? { type: "text" as const, value: single.text }
@@ -141,7 +150,7 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
   if (tool.state.status === "error") {
     return ToolResultPart.make({
       id: tool.id,
-      name: tool.name,
+      name: toolName(tool),
       result: { error: tool.state.error, content: tool.state.content ?? [] },
       resultType: "error",
       providerExecuted: tool.executed,

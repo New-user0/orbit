@@ -19,7 +19,7 @@ import { ShellParse } from "../../shell/parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
 
-export const name = "shell"
+export const name = "Bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
 
 const BACKGROUND_INSTRUCTION =
@@ -46,6 +46,9 @@ const description = (shell?: string) =>
 
 export const Input = Schema.Struct({
   command: Schema.String.annotate({ description: "Shell command string to execute" }),
+  description: Schema.optionalKey(Schema.String).annotate({
+    description: "A short sentence saying what the command does, shown to the person in place of the raw command.",
+  }),
   workdir: Schema.optionalKey(Schema.String).annotate({
     description:
       "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",
@@ -53,9 +56,9 @@ export const Input = Schema.Struct({
   timeout: Schema.optionalKey(NonNegativeInt).annotate({
     description: `Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to ${DEFAULT_TIMEOUT_MS} for foreground commands. Background commands have no timeout by default.`,
   }),
-  background: Schema.optionalKey(Schema.Boolean).annotate({
+  run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use shell_watch; to stop the command, use shell_stop.",
+      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use TaskWatch; to stop the command, use TaskStop.",
   }),
 })
 
@@ -196,7 +199,7 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              const timeout = input.background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
+              const timeout = input.run_in_background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
               let finalTimeout = timeout
               const info = yield* shell.create(
                 {
@@ -237,8 +240,8 @@ export const Plugin = {
               const job = yield* jobs.start({
                 // CodeMode children share a tool-call ID, but each shell must own its job.
                 id: info.id,
-                type: name,
-                title: info.command,
+                type: "shell",
+                title: input.description ?? info.command,
                 metadata: { sessionID: context.sessionID, shellID: info.id },
                 recovery: {
                   kind: "shell",
@@ -249,7 +252,7 @@ export const Plugin = {
                 run,
               })
 
-              if (input.background === true) {
+              if (input.run_in_background === true) {
                 yield* jobs.background(job.id)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
                 return backgroundResult(info.id, info.file)

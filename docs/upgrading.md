@@ -1028,6 +1028,16 @@ Ask and deny rules now govern a tool that does not take care of its own permissi
 
 **What to do:** approve the prompt, or add an allow rule for the tool's action. Authors of a tool that asks in `execute` set `options.authorizes: true` to avoid the second question.
 
+### Built-in tools take the reference names and input fields
+
+The built-in tools are renamed, and several of their input fields with them: `shell` is `Bash`, `read` is `Read`, `edit` is `Edit`, `write` is `Write`, `patch` is `Patch`, `glob` is `Glob`, `grep` is `Grep`, `webfetch` is `WebFetch`, `websearch` is `WebSearch`, `question` is `AskUserQuestion`, `todo` is `TodoWrite`, `task_create`, `task_update` and `task_list` are `TaskCreate`, `TaskUpdate` and `TaskList`, `subagent` is `Agent`, `skill` is `Skill`, `notebook_edit` is `NotebookEdit`, `lsp` is `LSP`, `enter_plan_mode` and `exit_plan_mode` are `EnterPlanMode` and `ExitPlanMode`, `enter_worktree` and `exit_worktree` are `EnterWorktree` and `ExitWorktree`, `shell_output`, `shell_watch` and `shell_stop` are `TaskOutput`, `TaskWatch` and `TaskStop`, `workflow` is `Workflow` and `memory` is `Memory`. `Edit` takes `file_path`, `old_string`, `new_string` and `replace_all`, `Read` and `Write` take `file_path`, `NotebookEdit` takes `notebook_path`, and `Bash` takes `run_in_background` where it took `background`. The model is now told the new names, and the permission action of a tool is its new name (`Edit` for `Edit`, `Write`, `Patch` and `NotebookEdit`).
+
+One table, `ToolNames` (`packages/schema/src/tool-names.ts`, re-exported from `packages/core/src/tool/names.ts`), keeps every old spelling working. Permission rules, saved approvals, policies of the form `<action>:<resource>`, hook matchers and the clients that draw a call all accept either spelling, and an old spelling stands for the same tool as the new one and for no other: an `allow` for `read` never covers `Bash`. A config hook whose matcher accepts the old name is told that name in `tool_name`, and its `tool_input` carries the old field names beside the current ones, so a guard that checks `path` or `oldString` keeps blocking. A session recorded before the change replays under the new names: history is lowered with the new tool name and fields, while the recorded events keep what they were written with and nothing is migrated. A plugin hook on `tool.execute.before` or `tool.execute.after` now sees the new tool name and fields, so a hook that compares `event.tool` with `"edit"` or reads `input.path` must compare with `Edit` or read `file_path`. A model that still sends an old tool name or field is not understood, because the old names are no longer in its tool list. `Read` does not take `pages` yet.
+
+**Affects:** plugin authors whose hooks or tools match on a built-in tool's name or input field, SDK callers that read tool names from events of new sessions, and tests or scripts that call the tools by name. Permission rules, hook matchers and old sessions keep working.
+
+**What to do:** nothing for rules and hook matchers. Update plugin code that compares a tool name or reads a renamed field, and prefer the new names in rules you write.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

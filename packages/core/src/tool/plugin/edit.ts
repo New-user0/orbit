@@ -27,17 +27,17 @@ import { FileAccess } from "../../file-access.js"
 import { Permission } from "../../permission.js"
 import { fileDiff } from "./file-diff.js"
 
-export const name = "edit"
+export const name = "Edit"
 
 export const Input = Schema.Struct({
-  path: Schema.String.annotate({
+  file_path: Schema.String.annotate({
     description: "File to edit",
   }),
-  oldString: Schema.String.annotate({ description: "Exact text to find and replace" }),
-  newString: Schema.String.annotate({ description: "Text to replace oldString with (must differ from oldString)" }),
-  replaceAll: Schema.optionalKey(Schema.Boolean).annotate({
+  old_string: Schema.String.annotate({ description: "Exact text to find and replace" }),
+  new_string: Schema.String.annotate({ description: "Text to replace old_string with (must differ from old_string)" }),
+  replace_all: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Whether to replace every occurrence of oldString. When false, oldString must match exactly once. Defaults to false.",
+      "Whether to replace every occurrence of old_string. When false, old_string must match exactly once. Defaults to false.",
   }),
 })
 
@@ -109,28 +109,28 @@ const findLineOccurrences = (content: string, search: string) => {
   }, [])
 }
 
-/** The edit that `input` asks for, planned against a file's text: where oldString is, and what replaces it. */
+/** The edit that `input` asks for, planned against a file's text: where old_string is, and what replaces it. */
 const plan = (input: typeof Input.Type, source: string) => {
   const ending = source.includes(crlf) ? crlf : "\n"
-  const oldString = input.oldString.replaceAll(crlf, "\n").replaceAll("\n", ending)
-  const newString = input.newString.replaceAll(crlf, "\n").replaceAll("\n", ending)
-  const exact = findOccurrences(source, oldString)
+  const oldText = input.old_string.replaceAll(crlf, "\n").replaceAll("\n", ending)
+  const newText = input.new_string.replaceAll(crlf, "\n").replaceAll("\n", ending)
+  const exact = findOccurrences(source, oldText)
   // These one-to-one mappings preserve offsets into the original source.
-  const unicode = exact.length > 0 ? [] : findOccurrences(normalizeForMatch(source), normalizeForMatch(oldString))
-  const trailing = exact.length > 0 || unicode.length > 0 ? [] : findLineOccurrences(source, oldString)
-  return { matches: exact.length > 0 ? exact : unicode.length > 0 ? unicode : trailing, newString }
+  const unicode = exact.length > 0 ? [] : findOccurrences(normalizeForMatch(source), normalizeForMatch(oldText))
+  const trailing = exact.length > 0 || unicode.length > 0 ? [] : findLineOccurrences(source, oldText)
+  return { matches: exact.length > 0 ? exact : unicode.length > 0 ? unicode : trailing, newText }
 }
 
 /** Why an edit that needs no file cannot work, if it cannot. */
 const refusal = (input: typeof Input.Type) => {
-  if (input.oldString === input.newString)
+  if (input.old_string === input.new_string)
     return new ToolFailure({
-      message: "No changes to apply: oldString and newString are identical.",
+      message: "No changes to apply: old_string and new_string are identical.",
       code: Tool.ErrorCode.EditNoChange,
     })
-  if (input.oldString === "")
+  if (input.old_string === "")
     return new ToolFailure({
-      message: "oldString must not be empty. Use write to create or overwrite a file.",
+      message: "old_string must not be empty. Use write to create or overwrite a file.",
       code: Tool.ErrorCode.EditEmptyOldString,
     })
 }
@@ -139,12 +139,12 @@ const refusal = (input: typeof Input.Type) => {
 const mismatch = (input: typeof Input.Type, replacements: number) => {
   if (replacements === 0)
     return new ToolFailure({
-      message: `Could not find oldString in ${input.path}. It must match exactly, including whitespace and indentation.`,
+      message: `Could not find old_string in ${input.file_path}. It must match exactly, including whitespace and indentation.`,
       code: Tool.ErrorCode.EditNoMatch,
     })
-  if (replacements > 1 && input.replaceAll !== true)
+  if (replacements > 1 && input.replace_all !== true)
     return new ToolFailure({
-      message: `Found ${replacements} matches for oldString, but expected exactly one. Add more surrounding context to make oldString unique, or set replaceAll to true to replace every occurrence.`,
+      message: `Found ${replacements} matches for old_string, but expected exactly one. Add more surrounding context to make old_string unique, or set replace_all to true to replace every occurrence.`,
       code: Tool.ErrorCode.EditAmbiguous,
     })
 }
@@ -186,10 +186,10 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { authorizes: true, codemode: false, permission: "edit" },
+          options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
-            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in oldString or newString. The edit fails if oldString is not found. By default, oldString must identify a UNIQUE location. Multiple matches FAIL unless replaceAll is true. Add more surrounding context to disambiguate, or set replaceAll to true to replace every occurrence. Use replaceAll when the change should apply to every occurrence, such as renaming a variable.",
+            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in old_string or new_string. The edit fails if old_string is not found. By default, old_string must identify a UNIQUE location. Multiple matches FAIL unless replace_all is true. Add more surrounding context to disambiguate, or set replace_all to true to replace every occurrence. Use replace_all when the change should apply to every occurrence, such as renaming a variable.",
           input: Input,
           output: Output,
           // Refuses an edit that cannot work before `execute` asks anyone to approve it. A file outside the Location is
@@ -200,14 +200,14 @@ export const Plugin = {
             Effect.gen(function* () {
               const refused = refusal(input)
               if (refused) return yield* refused
-              const target = yield* access.resolve({ path: input.path, kind: "file" })
+              const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               if (target.externalDirectory) return
               yield* Effect.gen(function* () {
-                yield* ledger.assertFresh(context.sessionID, target.absolute, input.path)
-                const original = yield* readOriginal(environment.files, target.absolute, input.path)
+                yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
+                const original = yield* readOriginal(environment.files, target.absolute, input.file_path)
                 const mismatched = mismatch(input, plan(input, original.text).matches.length)
                 if (mismatched) return yield* mismatched
-              }).pipe(fileMutation.withLock([FileAccess.resolvePath(location.directory, input.path)]))
+              }).pipe(fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]))
             }).pipe(
               // Only a finding refuses the call, and every finding above carries a code. A path that cannot be
               // resolved or read for any other reason is left to `execute`, which reports it.
@@ -226,25 +226,25 @@ export const Plugin = {
               const refused = refusal(input)
               if (refused) return yield* refused
 
-              const target = yield* access.resolve({ path: input.path, kind: "file" })
+              const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.path)
+              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
 
-              const original = yield* readOriginal(environment.files, target.absolute, input.path)
+              const original = yield* readOriginal(environment.files, target.absolute, input.file_path)
               const source = original.text
               const edit = plan(input, source)
               const replacements = edit.matches.length
               // The person is asked to approve an edit only once it is known to work, whichever file it is for.
               const mismatched = mismatch(input, replacements)
               if (mismatched) return yield* mismatched
-              const replaced = (input.replaceAll === true ? edit.matches : edit.matches.slice(0, 1))
+              const replaced = (input.replace_all === true ? edit.matches : edit.matches.slice(0, 1))
                 .toReversed()
                 .reduce(
-                  (content, match) => `${content.slice(0, match.start)}${edit.newString}${content.slice(match.end)}`,
+                  (content, match) => `${content.slice(0, match.start)}${edit.newText}${content.slice(match.end)}`,
                   source,
                 )
               yield* permission.assert({
-                action: "edit",
+                action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
                 metadata: { files: [fileDiff(target.resource, source, replaced)] },
@@ -267,7 +267,7 @@ export const Plugin = {
                 replacements,
               } satisfies Output
             }).pipe(
-              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.path)]),
+              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]),
               Effect.map((output) => ({
                 output,
                 content: `Edited ${output.files[0]?.file} (${output.replacements} replacement${output.replacements === 1 ? "" : "s"})`,
@@ -276,7 +276,7 @@ export const Plugin = {
               Effect.mapError((error) =>
                 error instanceof ToolFailure
                   ? error
-                  : new ToolFailure({ message: `Unable to edit ${input.path}`, error }),
+                  : new ToolFailure({ message: `Unable to edit ${input.file_path}`, error }),
               ),
             )
           },

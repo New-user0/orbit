@@ -112,8 +112,8 @@ Session context is mutable immediately before provider dispatch:
 yield *
   ctx.session.hook("context", (event) =>
     Effect.sync(() => {
-      event.tools.read.description = "Read a file using narrow line ranges."
-      delete event.tools.write
+      event.tools.Read.description = "Read a file using narrow line ranges."
+      delete event.tools.Write
     }),
   )
 

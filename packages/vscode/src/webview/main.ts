@@ -12,6 +12,7 @@ import type {
   Workspace,
 } from "../protocol.js"
 import { agentsOf, describe, duration, excerpt, phases, segments, tokens } from "./present.js"
+import { legacyToolName } from "../tool-name.js"
 
 // Runs inside the webview. Every string from the model or the server is set as text, never parsed as HTML.
 declare function acquireVsCodeApi(): { postMessage(message: FromView): void }
@@ -190,7 +191,7 @@ function render(item: Item) {
   state.started = true
   empty.remove()
   // The plan has its own card, kept where the first plan update appeared.
-  if (item.type === "tool" && item.name === "todo") {
+  if (item.type === "tool" && legacyToolName(item.name) === "todo") {
     if (!plan) {
       plan = element("div", "plan")
       column.append(plan)

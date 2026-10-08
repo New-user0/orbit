@@ -1,6 +1,7 @@
 export * as LspPlugin from "./plugin.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
+import { isRecord } from "@orbit/ai/utils/record"
 import { Effect } from "effect"
 import path from "path"
 import { Location } from "../location.js"
@@ -12,7 +13,7 @@ import { Lsp } from "./index.js"
  * a broken build right away. Diagnostics also go in the result metadata, keyed by path, for the TUI's edit view.
  */
 
-const EDITING_TOOLS = new Set(["edit", "write", "patch", "notebook_edit"])
+const EDITING_TOOLS = new Set(["Edit", "Write", "Patch", "NotebookEdit"])
 const MAX_PER_FILE = 10
 const ERROR = 1
 
@@ -41,8 +42,8 @@ export const Plugin = define({
           ...(items.length > MAX_PER_FILE ? [`  … ${items.length - MAX_PER_FILE} more`] : []),
         ])
         // The TUI looks diagnostics up by the path the tool was given, so key them by that as well.
-        const given =
-          typeof event.input === "object" && event.input && "path" in event.input ? event.input.path : undefined
+        const input = isRecord(event.input) ? event.input : {}
+        const given = input.file_path ?? input.notebook_path ?? input.path
         const diagnostics = Object.fromEntries([
           ...errors,
           ...(typeof given === "string" && errors.length === 1 ? [[given, errors[0]![1]] as const] : []),

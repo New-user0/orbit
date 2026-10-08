@@ -192,7 +192,7 @@ it.effect("auto compaction estimates current content against the buffered prompt
       initial: "Project instructions.",
       tools: stubSnapshot({
         definitions: [
-          ToolDefinition.make({ name: "read", description: "Read files", inputSchema: { type: "object" } }),
+          ToolDefinition.make({ name: "Read", description: "Read files", inputSchema: { type: "object" } }),
         ],
         execute: () => Effect.die("unused"),
       }),
@@ -227,7 +227,7 @@ it.effect("auto compaction estimates current content against the buffered prompt
     const tool = SessionMessage.AssistantTool.make({
       type: "tool",
       id: "call_read",
-      name: "read",
+      name: "Read",
       state: { status: "completed", input: {}, content: [{ type: "text", text: "x".repeat(4_000) }] },
       time: { created: DateTime.makeUnsafe(0) },
     })
@@ -367,7 +367,7 @@ const recentWithToolOutput = (id: Session.ID, content: SessionMessage.ToolStateC
         {
           type: "tool",
           id: "call_read",
-          name: "read",
+          name: "Read",
           state: { status: "completed", input: {}, content },
           time: { created: 0 },
         },

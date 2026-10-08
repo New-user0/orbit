@@ -44,7 +44,7 @@ const context = (id: string, system = fallback): SessionHooks["context"] => ({
   system: [SystemPart.make(system)],
   messages: [],
   tools: Object.fromEntries(
-    ["shell", "read", "grep", "glob", "edit", "write", "patch"].map((name) => [
+    ["Bash", "Read", "Grep", "Glob", "Edit", "Write", "Patch"].map((name) => [
       name,
       { description: name, input: { type: "object" } },
     ]),
@@ -133,7 +133,7 @@ describe("OptimizePlugin", () => {
       yield* OptimizePlugin.OpenAIPlugin.effect(pluginHost)
       const event = context("gpt-5")
       event.system.push(SystemPart.make("Project instructions"))
-      event.tools.shell = { description: "Run a command", input: { type: "object" } }
+      event.tools.Bash = { description: "Run a command", input: { type: "object" } }
 
       yield* hooks.trigger("session", "context", event)
 
@@ -142,7 +142,7 @@ describe("OptimizePlugin", () => {
         "Project instructions",
       ])
       expect(event.system[0]?.text).not.toContain("${ORBIT_TOOL_GUIDANCE}")
-      expect(Object.keys(event.tools).sort()).toEqual(["edit", "glob", "grep", "patch", "read", "shell", "write"])
+      expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"])
     }),
   )
 
@@ -166,7 +166,7 @@ describe("OptimizePlugin", () => {
         "Project instructions",
       ])
       expect(event.system[0]?.text.startsWith(baseline)).toBe(true)
-      expect(Object.keys(event.tools).sort()).toEqual(["edit", "glob", "grep", "patch", "read", "shell", "write"])
+      expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"])
     }),
   )
 
@@ -177,17 +177,17 @@ describe("OptimizePlugin", () => {
       yield* OptimizePlugin.OpenAIToolsPlugin.effect(pluginHost)
       yield* OptimizePlugin.AnthropicToolsPlugin.effect(pluginHost)
       const cases = [
-        ["openai", "gpt-5", ["edit", "patch", "read", "shell", "write"]],
-        ["openrouter", "openai/gpt-6-astra", ["edit", "patch", "read", "shell", "write"]],
-        ["azure", "GPT-4.1", ["edit", "patch", "read", "shell", "write"]],
-        ["groq", "openai/gpt-oss-120b", ["edit", "patch", "read", "shell", "write"]],
-        ["anthropic", "claude-opus-4-8", ["edit", "patch", "read", "shell", "write"]],
-        ["amazon-bedrock", "us.anthropic.Claude-sonnet-4-6", ["edit", "patch", "read", "shell", "write"]],
-        ["github-copilot", "claude-sonnet-4.6", ["edit", "patch", "read", "shell", "write"]],
-        ["google", "gemini-2.5-pro", ["edit", "glob", "grep", "patch", "read", "shell", "write"]],
-        ["moonshotai", "kimi-k2", ["edit", "glob", "grep", "patch", "read", "shell", "write"]],
-        ["openai", "o3", ["edit", "glob", "grep", "patch", "read", "shell", "write"]],
-        ["anthropic", "other-model", ["edit", "glob", "grep", "patch", "read", "shell", "write"]],
+        ["openai", "gpt-5", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["openrouter", "openai/gpt-6-astra", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["azure", "GPT-4.1", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["groq", "openai/gpt-oss-120b", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["anthropic", "claude-opus-4-8", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["amazon-bedrock", "us.anthropic.Claude-sonnet-4-6", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["github-copilot", "claude-sonnet-4.6", ["Bash", "Edit", "Patch", "Read", "Write"]],
+        ["google", "gemini-2.5-pro", ["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"]],
+        ["moonshotai", "kimi-k2", ["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"]],
+        ["openai", "o3", ["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"]],
+        ["anthropic", "other-model", ["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"]],
       ] as const
 
       yield* Effect.forEach(
@@ -221,18 +221,18 @@ describe("OptimizePlugin", () => {
           yield* hooks.trigger("session", "context", event)
           // The prompt plugin registered first, so it rendered guidance before the search tools were curated away.
           expect(event.system[0]?.text).toBe(rendered(PROMPT_GPT, tools))
-          expect(Object.keys(event.tools).sort()).toEqual(["edit", "patch", "read", "shell", "write"])
+          expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Patch", "Read", "Write"])
         }),
       )
 
       const event = context("gpt-5")
       yield* hooks.trigger("session", "context", event)
       expect(event.system[0]?.text).toBe(rendered(PROMPT_GPT, Object.keys(event.tools)))
-      expect(Object.keys(event.tools).sort()).toEqual(["edit", "glob", "grep", "patch", "read", "shell", "write"])
+      expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"])
       const claude = context("claude-sonnet-4-6")
       yield* hooks.trigger("session", "context", claude)
       expect(claude.system.map((part) => part.text)).toEqual([fallback])
-      expect(Object.keys(claude.tools).sort()).toEqual(["edit", "patch", "read", "shell", "write"])
+      expect(Object.keys(claude.tools).sort()).toEqual(["Bash", "Edit", "Patch", "Read", "Write"])
     }),
   )
 
@@ -293,7 +293,7 @@ describe("OptimizePlugin", () => {
       yield* hooks.trigger("session", "context", event)
 
       expect(event.system.map((part) => part.text)).toEqual(["Custom agent prompt"])
-      expect(Object.keys(event.tools).sort()).toEqual(["edit", "glob", "grep", "patch", "read", "shell", "write"])
+      expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"])
     }),
   )
 
@@ -310,7 +310,7 @@ describe("OptimizePlugin", () => {
       yield* hooks.trigger("session", "context", event)
 
       expect(event.system.map((part) => part.text)).toEqual([fallback])
-      expect(Object.keys(event.tools).sort()).toEqual(["edit", "patch", "read", "shell", "write"])
+      expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Patch", "Read", "Write"])
     }),
   )
 
@@ -362,7 +362,7 @@ describe("OptimizePlugin", () => {
             const event = context(id)
             yield* hooks.trigger("session", "context", event)
             expect(event.system[0]?.text).toBe(rendered(prompt, Object.keys(event.tools)))
-            expect(Object.keys(event.tools).sort()).toEqual(["edit", "glob", "grep", "patch", "read", "shell", "write"])
+            expect(Object.keys(event.tools).sort()).toEqual(["Bash", "Edit", "Glob", "Grep", "Patch", "Read", "Write"])
           }),
         { discard: true },
       )

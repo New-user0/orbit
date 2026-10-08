@@ -35,7 +35,7 @@ export const Plugin = {
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
-        name: "enter_worktree",
+        name: "EnterWorktree",
         options: { codemode: false },
         traits: { interruptBehavior: "block" },
         description:
@@ -59,7 +59,7 @@ export const Plugin = {
           }).pipe(Effect.mapError(failure("enter a worktree"))),
       })
       editor.add({
-        name: "exit_worktree",
+        name: "ExitWorktree",
         options: { codemode: false },
         traits: { interruptBehavior: "block" },
         description: "Move this session back from the worktree it entered with enter_worktree, optionally removing it.",

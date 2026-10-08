@@ -37,16 +37,16 @@ export const AnthropicPlugin = make(
 export const OpenAIToolsPlugin = make("orbit.optimize.openai.tools", (model, tools) => {
   const ids = [model.id, model.modelID, model.family].join(" ").toLowerCase()
   if (!ids.includes("gpt")) return undefined
-  delete tools.grep
-  delete tools.glob
+  delete tools.Grep
+  delete tools.Glob
   return undefined
 })
 
 export const AnthropicToolsPlugin = make("orbit.optimize.anthropic.tools", (model, tools) => {
   const ids = [model.id, model.modelID, model.family].join(" ").toLowerCase()
   if (!ids.includes("claude")) return undefined
-  delete tools.grep
-  delete tools.glob
+  delete tools.Grep
+  delete tools.Glob
   return undefined
 })
 
