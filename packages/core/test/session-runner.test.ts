@@ -5672,6 +5672,32 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(0)
     })
 
+    scenario("leaves no resume note behind when the turn limit is spent at an output-limit stop", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 1 }, resume: false })
+      yield* s.llm.push(lengthStop("limit-note", "Part"), TestLLM.stop())
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+      expect(s.requests).toHaveLength(1)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(0)
+    })
+
+    scenario("fails with the limit when it is spent at the output-limit cap", function* (s) {
+      yield* s.session.prompt({ sessionID, text: "Write", turn: { maxSteps: 4 }, resume: false })
+      yield* s.llm.push(
+        lengthStop("cap-1", "A"),
+        lengthStop("cap-2", "B"),
+        lengthStop("cap-3", "C"),
+        lengthStop("cap-4", "D"),
+        TestLLM.stop(),
+      )
+
+      expect(yield* limited(s)).toMatchObject({ type: "limit.steps" })
+
+      expect(s.requests).toHaveLength(4)
+      expect((yield* s.context).filter((message) => message.type === "synthetic")).toHaveLength(3)
+    })
+
     scenario("runs a queued prompt without options unlimited in the same busy period", function* (s) {
       yield* s.session.prompt({ sessionID, text: "A", turn: { maxSteps: 1 }, resume: false })
       yield* s.session.prompt({ sessionID, text: "B", delivery: "queue", resume: false })
@@ -7158,6 +7184,49 @@ describe("SessionRunnerLLM", () => {
     ])
   })
 
+  scenario("restarts the overload count after a response cut off by the output limit", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded around a cut-off", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), lengthStop("cut-between", "Part"))
+    yield* s.llm.push(Stream.fail(overloaded()), TestLLM.text("Done", "after-cut"))
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    for (let index = 0; index < 2; index++) {
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust("1 minute")
+    }
+    // Before the fix the third overload switched models with no retry, so waiting for one would only time out.
+    const third = yield* Effect.raceFirst(
+      Queue.take(scheduled).pipe(Effect.as(true)),
+      Fiber.await(run).pipe(Effect.as(false)),
+    )
+    if (third) yield* TestClock.adjust("1 minute")
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  // The cap of three resumes reads durable history, so the switch to a fallback model mid-turn must not reset it.
+  scenario("holds the output-limit cap on the fallback model after overloads", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Overloaded then long", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
+    yield* s.llm.push(...Array.from({ length: 6 }, (_, index) => lengthStop(`fb-limit-${index}`, String(index))))
+    yield* s.llm.push(TestLLM.text("Never reached", "fb-limit-done"))
+    yield* retriesBefore(s, 2)
+
+    expect(s.requests.map((request) => request.model)).toEqual([
+      model,
+      model,
+      model,
+      ...Array.from({ length: 4 }, () => replacementModel),
+    ])
+    const context = yield* s.context
+    expect(
+      context.flatMap((message) => (message.type === "synthetic" ? [message.metadata?.notice] : [])),
+    ).toEqual(["fallback", "output-limit", "output-limit", "output-limit"])
+    expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
+  })
+
   scenario("records the notice before the fallback's answer and keeps it out of the tail after a tool call", function* (s) {
     yield* s.session.prompt({ sessionID, text: "Overloaded", turn: { fallbackModel }, resume: false })
     yield* s.llm.push(Stream.fail(overloaded()), Stream.fail(overloaded()), Stream.fail(overloaded()))
@@ -8378,5 +8447,304 @@ describe("SessionRunnerLLM", () => {
     expect(defect).toBeInstanceOf(Error)
     if (!(defect instanceof Error)) return
     expect(defect.message).toBe("Tool input delta before start: call-1")
+  })
+
+  const OUTPUT_LIMIT_NOTICE = {
+    type: "synthetic",
+    metadata: { notice: "output-limit" },
+  }
+
+  const lengthStop = (id: string, text: string) =>
+    TestLLM.complete(
+      { reason: { normalized: "length", raw: "max_tokens" } },
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text }),
+      LLMEvent.textEnd({ id }),
+    )
+
+  scenario("resumes a response that stopped at the output limit", function* (s) {
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(lengthStop("limit-1", "Part 1"), TestLLM.text(" Part 2", "limit-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests[1]?.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Part 1" }],
+    })
+    expect(s.requests[1]?.messages.at(-1)).toMatchObject({ role: "user" })
+    expect(userTexts(s.requests[1]).at(-1)).toContain("reached the output limit. Resume exactly where it stopped")
+    const context = yield* s.context
+    expect(context).toMatchObject([
+      Expected.user("Write a long answer"),
+      Expected.assistant({ finish: "length" }, [Expected.text("Part 1")]),
+      OUTPUT_LIMIT_NOTICE,
+      Expected.assistant({ finish: "stop" }, [Expected.text(" Part 2")]),
+    ])
+    expect(context.find((message) => message.type === "synthetic")?.description).toBeUndefined()
+    yield* replaySessionProjection(sessionID)
+    expect(yield* s.context).toMatchObject(context)
+  })
+
+  // Every way an output-limited response can start another request; each must stop at the cap of three resumes.
+  for (const row of [
+    { name: "text only", cut: (n: number) => lengthStop(`cap-${n}`, String(n)) },
+    {
+      name: "a cut-off tool call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: `cap-call-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cap-call-${n}`, name: "echo", text: '{"text":"par' }),
+          LLMEvent.toolCall({ id: `cap-call-${n}`, name: "echo", input: { text: "par" }, partialInput: true }),
+        ),
+    },
+    {
+      name: "an input that never became a call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: `cap-input-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cap-input-${n}`, name: "echo", text: '{"text":' }),
+        ),
+    },
+    {
+      name: "a tool call that ran",
+      cut: (n: number) =>
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolCall({ id: `cap-ran-${n}`, name: "echo", input: { text: String(n) } }),
+        ),
+    },
+  ])
+    scenario(`stops resuming after three consecutive output-limit stops: ${row.name}`, function* (s) {
+      yield* s.admit("Never finishes")
+      yield* s.llm.push(...Array.from({ length: 8 }, (_, index) => row.cut(index + 1)), TestLLM.text("Done", "cap-done"))
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(4)
+      const context = yield* s.context
+      expect(context.filter((message) => message.type === "synthetic")).toHaveLength(3)
+      expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "length" })
+    })
+
+  scenario("counts the output-limit streak from the last response that finished normally", function* (s) {
+    yield* s.admit("Mixed limits")
+    yield* s.llm.push(
+      lengthStop("reset-1", "1"),
+      TestLLM.tool("call-reset", "echo", { text: "reset" }),
+      lengthStop("reset-2", "2"),
+      lengthStop("reset-3", "3"),
+      lengthStop("reset-4", "4"),
+      TestLLM.text("Done", "reset-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+  })
+
+  scenario("never runs a tool call that was cut off by the output limit", function* (s) {
+    yield* s.admit("Truncated call")
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolInputStart({ id: "call-cut", name: "echo" }),
+        LLMEvent.toolInputDelta({ id: "call-cut", name: "echo", text: '{"text":"par' }),
+        LLMEvent.toolCall({ id: "call-cut", name: "echo", input: { text: "par" }, partialInput: true }),
+      ),
+      TestLLM.tool("call-whole", "echo", { text: "whole" }),
+      TestLLM.text("Done", "cut-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["whole"])
+    expect(s.requests).toHaveLength(3)
+    const types = yield* recordedEventTypes(sessionID)
+    expect(types.indexOf("session.tool.failed.2")).toBeGreaterThan(-1)
+    expect(types.indexOf("session.tool.failed.2")).toBeLessThan(types.indexOf("session.step.ended.1"))
+    const context = yield* s.context
+    expect(context[1]).toMatchObject({
+      type: "assistant",
+      finish: "length",
+      content: [{ type: "tool", id: "call-cut", state: { status: "error", error: { type: "tool.input-truncated" } } }],
+    })
+    expect(context[2]).toMatchObject(OUTPUT_LIMIT_NOTICE)
+  })
+
+  scenario("never starts a cut-off call beside a safe call and runs the safe call once", function* (s) {
+    yield* s.admit("Safe call and a cut-off call")
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length", raw: "max_tokens" } },
+        LLMEvent.toolCall({ id: "call-safe", name: "echo", input: { text: "safe" } }),
+        LLMEvent.toolInputStart({ id: "call-cut", name: "echo" }),
+        LLMEvent.toolInputDelta({ id: "call-cut", name: "echo", text: '{"text":"par' }),
+        LLMEvent.toolCall({ id: "call-cut", name: "echo", input: { text: "par" }, partialInput: true }),
+      ),
+      TestLLM.text("Done", "safe-cut-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["safe"])
+    expect(s.requests).toHaveLength(2)
+    expect((yield* s.context)[1]).toMatchObject({
+      type: "assistant",
+      finish: "length",
+      content: expect.arrayContaining([
+        expect.objectContaining({ id: "call-safe", state: expect.objectContaining({ status: "completed" }) }),
+        expect.objectContaining({
+          id: "call-cut",
+          state: expect.objectContaining({ status: "error", error: expect.objectContaining({ type: "tool.input-truncated" }) }),
+        }),
+      ]),
+    })
+  })
+
+  for (const row of [
+    { name: "a pre-output provider failure", failure: () => Stream.fail(providerUnavailable()) },
+    {
+      name: "a stream that breaks mid-response",
+      failure: () => TestLLM.failAfter(incompleteStream(), LLMEvent.stepStart({ index: 0 }), LLMEvent.textStart({ id: "mid" })),
+    },
+    {
+      name: "an unknown finish after text",
+      failure: () =>
+        TestLLM.complete(
+          { reason: { normalized: "unknown" } },
+          LLMEvent.textStart({ id: "unk" }),
+          LLMEvent.textDelta({ id: "unk", text: "x" }),
+          LLMEvent.textEnd({ id: "unk" }),
+        ),
+    },
+  ])
+    scenario(`keeps counting the output-limit streak across ${row.name}`, function* (s) {
+      yield* s.admit("Limits with a failure")
+      yield* s.llm.push(lengthStop("retry-1", "1"), lengthStop("retry-2", "2"), lengthStop("retry-3", "3"))
+      yield* s.llm.push(row.failure())
+      yield* s.llm.push(lengthStop("retry-4", "4"), lengthStop("retry-5", "5"), lengthStop("retry-6", "6"))
+
+      const scheduled = yield* subscribeRetries(s)
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* Queue.take(scheduled)
+      yield* TestClock.adjust(FIRST_RETRY)
+      yield* Fiber.join(run).pipe(Effect.exit)
+
+      const notes = (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit")
+      expect(notes).toHaveLength(3)
+    })
+
+  scenario("compacts before resuming a response that stopped at the context window", function* (s) {
+    s.currentModel = compactModel
+    yield* s.admit("Question")
+    yield* s.llm.push(
+      TestLLM.complete(
+        {
+          reason: { normalized: "length", raw: "model_context_window_exceeded" },
+          usage: { nonCachedInputTokens: 3_950, outputTokens: 10 },
+        },
+        LLMEvent.textStart({ id: "window-1" }),
+        LLMEvent.textDelta({ id: "window-1", text: "Part" }),
+        LLMEvent.textEnd({ id: "window-1" }),
+      ),
+      TestLLM.text("## Objective\n- Keep going", "window-summary"),
+      TestLLM.text("Done", "window-done"),
+    )
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1]).at(-1)).toContain("## Objective")
+    expect(userTexts(s.requests[2])[0]).toContain("<summary>\n## Objective\n- Keep going\n</summary>")
+    const context = yield* s.context
+    expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    expect(context.some((message) => message.type === "compaction")).toBe(true)
+  })
+
+  scenario("resumes in the same step when the agent has steps left", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 2
+      }),
+    )
+    yield* s.admit("Two steps")
+    yield* s.llm.push(lengthStop("steps-1", "A"), TestLLM.text("B", "steps-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests.map((request) => request.toolChoice?.type)).not.toContain("none")
+  })
+
+  scenario("delivers a steered message at a text-only output-limit stop instead of resuming", function* (s) {
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(
+      lengthStop("steer-1", "A"),
+      TestLLM.text("Answer", "steer-done"),
+    )
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    yield* s.admit("STEER")
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
+    ).toHaveLength(0)
+  })
+
+  scenario("resumes a reply cut off at the configured cap", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-resume-1", "Part"), TestLLM.text(" rest", "cap-resume-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 8_000])
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
+    ).toHaveLength(1)
+  })
+
+  scenario("starts a fresh output-limit streak after a new prompt", function* (s) {
+    yield* s.admit("First")
+    yield* s.llm.push(
+      lengthStop("new-1", "1"),
+      lengthStop("new-2", "2"),
+      lengthStop("new-3", "3"),
+      lengthStop("new-4", "4"),
+    )
+    yield* s.resume
+    expect(s.requests).toHaveLength(4)
+
+    yield* s.admit("Second")
+    yield* s.llm.push(lengthStop("new-5", "5"), TestLLM.text("Done", "new-done"))
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(6)
+    expect((yield* s.context).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+  })
+
+  scenario("keeps tools disabled while resuming on the agent's final step", function* (s) {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(Agent.ID.make("build"), (agent) => {
+        agent.steps = 1
+      }),
+    )
+    yield* s.admit("Final step")
+    yield* s.llm.push(lengthStop("final-1", "A"), TestLLM.text("B", "final-2"))
+
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(s.requests.map((request) => request.toolChoice)).toMatchObject([{ type: "none" }, { type: "none" }])
   })
 })
