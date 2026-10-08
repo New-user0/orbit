@@ -4871,9 +4871,38 @@ describe("SessionRunnerLLM", () => {
           { id: "call-missing" },
           {
             error: {
-              type: "tool.execution",
+              type: "tool.unknown",
               message:
                 'No tool named "missing" is currently available. Please use a tool from the available tool list.',
+            },
+          },
+        ),
+      ]),
+      Expected.assistant({ finish: "stop" }, [Expected.text("Recovered")]),
+    ])
+  })
+
+  scenario("returns a schema failure to the model with its code and continues", function* (s) {
+    yield* s.admit("Call echo wrongly")
+
+    yield* s.llm.push(
+      TestLLM.tool("call-invalid", "echo", { text: 1 }),
+      TestLLM.text("Recovered", "text-after-invalid"),
+    )
+    yield* s.resume
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool"])
+    expect(JSON.stringify(s.requests[1]?.messages.at(-1))).toContain('Invalid arguments for tool \\"echo\\"')
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call echo wrongly"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-invalid" },
+          {
+            error: {
+              type: "tool.input-invalid",
+              message: expect.stringContaining('Invalid arguments for tool "echo"'),
             },
           },
         ),

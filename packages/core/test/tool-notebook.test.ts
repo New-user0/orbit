@@ -64,18 +64,26 @@ const notebook = {
   nbformat_minor: 5,
 }
 
-const withTool = <A, E, R>(directory: string, body: (registry: Tool.Interface) => Effect.Effect<A, E, R>) =>
+const withTool = <A, E, R>(
+  directory: string,
+  body: (registry: Tool.Interface) => Effect.Effect<A, E, R | FileLedger.Service>,
+  // The permissive ledger allows every change. The real one asks that the session has read the file.
+  ledger: "permissive" | "real" = "permissive",
+) =>
   Effect.gen(function* () {
     return yield* body(yield* Tool.Service)
   }).pipe(
     Effect.provide(
-      AppNodeBuilder.build(LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, notebookToolNode]), [
-        FileLedger.node.replace(FileLedger.permissiveLayer),
-        Location.node.replace(
-          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
-        ),
-        Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
-      ]),
+      AppNodeBuilder.build(
+        LayerNode.group([Tool.node, FileAccess.node, FileMutation.node, FileLedger.node, notebookToolNode]),
+        [
+          ...(ledger === "real" ? [] : [FileLedger.node.replace(FileLedger.permissiveLayer)]),
+          Location.node.replace(
+            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+          ),
+          Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
+        ],
+      ),
     ),
   )
 
@@ -155,6 +163,43 @@ describe("NotebookEditTool", () => {
               )
               expect(missing.status).toBe("error")
             }),
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.live("names a notebook the session has not read, and one that changed since, with the ledger's codes", () =>
+    withTempDir((tmp) => {
+      const target = path.join(tmp.path, "analysis.ipynb")
+      const input = { path: "analysis.ipynb", mode: "delete", index: 0 } as const
+      return Effect.promise(() => fs.writeFile(target, `${JSON.stringify(notebook, null, 1)}\n`)).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            (registry) =>
+              Effect.gen(function* () {
+                expect(yield* executeTool(registry, call(input))).toEqual({
+                  status: "error",
+                  error: {
+                    type: "file.unread",
+                    message: "analysis.ipynb has not been read in this session. Read it before changing it.",
+                  },
+                })
+
+                yield* (yield* FileLedger.Service).record(sessionID, target)
+                const later = new Date(Date.now() + 60_000)
+                yield* Effect.promise(() => fs.utimes(target, later, later))
+                expect(yield* executeTool(registry, call(input))).toEqual({
+                  status: "error",
+                  error: {
+                    type: "file.stale",
+                    message: "analysis.ipynb changed since it was last read. Read it again before changing it.",
+                  },
+                })
+                expect(JSON.parse(yield* Effect.promise(() => fs.readFile(target, "utf8"))).cells).toHaveLength(2)
+              }),
+            "real",
           ),
         ),
       )
