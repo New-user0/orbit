@@ -107,6 +107,44 @@ function waitForRequest(input: Partial<Permission.AssertInput> = {}) {
 }
 
 describe("Permission", () => {
+  it.effect("closes a prompt for clients when the call waiting on it is interrupted", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const bus = yield* Bus.Service
+      const replies: Array<unknown> = []
+      const unsubscribe = yield* bus.listen((event) =>
+        event.type === Permission.Event.Replied.type ? Effect.sync(() => replies.push(event.data)) : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const waiting = yield* waitForRequest()
+
+      yield* Fiber.interrupt(waiting.fiber)
+
+      expect(replies).toEqual([
+        { sessionID: waiting.request.sessionID, requestID: waiting.request.id, reply: "reject" },
+      ])
+      expect(yield* waiting.service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("publishes no second reply for a prompt that was already answered", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const bus = yield* Bus.Service
+      const replies: Array<unknown> = []
+      const unsubscribe = yield* bus.listen((event) =>
+        event.type === Permission.Event.Replied.type ? Effect.sync(() => replies.push(event.data)) : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const waiting = yield* waitForRequest()
+
+      yield* waiting.service.reply({ requestID: waiting.request.id, reply: "once" })
+      yield* Fiber.join(waiting.fiber)
+
+      expect(replies).toHaveLength(1)
+    }),
+  )
+
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])

@@ -93,6 +93,17 @@ const ResumeParams = {
   ),
 }
 
+// Where no session list can open, a bare flag fails, so the help does not offer one.
+const HeadlessResumeParams = {
+  resume: Flag.string("resume").pipe(
+    Flag.withAlias("r"),
+    Flag.withDescription(
+      "Resume an existing session: a session ID, or words to search for in this folder's sessions. The next word is its value, so quote a message or put it after --",
+    ),
+    Flag.optional,
+  ),
+}
+
 const SessionParams = {
   ...ResumeParams,
   fork: Flag.boolean("fork").pipe(Flag.withDescription("Fork the session before continuing"), Flag.withDefault(false)),
@@ -637,7 +648,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           Flag.withDescription("Session ID to continue, or to create if it does not exist"),
           Flag.optional,
         ),
-        ...ResumeParams,
+        ...HeadlessResumeParams,
         fork: Flag.boolean("fork").pipe(
           Flag.withDescription("Fork the session before continuing"),
           Flag.withDefault(false),
@@ -830,6 +841,7 @@ export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NA
     ...TrustParams,
     ...PermissionParams,
     ...SessionParams,
+    ...HeadlessResumeParams,
     ...PrintParams,
     print: PrintFlag,
     message: Argument.string("message").pipe(

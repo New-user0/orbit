@@ -27,9 +27,23 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { SessionMessage } from "./session/message.js"
 import { SessionSchema } from "./session/schema.js"
 import { State } from "./state.js"
-import { decode, definition, effectiveName, execute, normalizedName, normalizeContent } from "./tool/runtime.js"
+import { ToolAuthorization } from "./tool/authorization.js"
+import { ToolCurrentCall } from "./tool/current-call.js"
+import {
+  type Authorize,
+  decode,
+  definition,
+  effectiveName,
+  execute,
+  normalizedName,
+  normalizeContent,
+} from "./tool/runtime.js"
 import { ToolTraits } from "./tool/traits.js"
 import { Wildcard } from "./util/wildcard.js"
+
+/** The call that is executing; see `ToolCurrentCall`. */
+export const CurrentCall = ToolCurrentCall.Current
+export type Call = ToolCurrentCall.Call
 
 export class RegistrationError extends Schema.TaggedError<RegistrationError>()("Tool.RegistrationError", {
   name: Schema.String,
@@ -154,13 +168,44 @@ const layer = Layer.effect(
         input,
       })
 
+    // The registry gate, for every path that runs a tool: a direct call and a Code Mode inner call both pass through
+    // `executeTool`. A tool that does not say it asks about the call itself is asked about here, on its permission action
+    // or its name, and a declaration that is missing or broken counts as not saying so.
+    const gate: Authorize = (tool, decoded, context) =>
+      ToolAuthorization.authorizesItself(tool, decoded).pipe(
+        Effect.flatMap((authorizes) =>
+          authorizes
+            ? Effect.void
+            : permission
+                .assert({
+                  action: tool.options?.permission ?? effectiveName(tool),
+                  resources: ["*"],
+                  save: ["*"],
+                  metadata: {},
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool", messageID: context.messageID, id: context.id },
+                })
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new Tool.Error({
+                        message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                        error,
+                      }),
+                  ),
+                ),
+        ),
+      )
+
     const executeTool = Effect.fn("Tool.execute")(function* (
       tool: Tool.Info,
       name: string,
       input: unknown,
       context: UnresolvedContext,
     ) {
-      const execution = yield* execute(tool, input, context).pipe(
+      const execution = yield* execute(tool, input, context, gate).pipe(
+        Effect.provideService(CurrentCall, { tool: name, input }),
         Effect.map((value) => ({ value })),
         Effect.catchTag("Tool.Error", (failure) => Effect.succeed({ failure })),
       )
@@ -246,6 +291,7 @@ const layer = Layer.effect(
                 (error) =>
                   new Tool.Error({
                     message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                    error,
                   }),
               ),
             ),
@@ -482,7 +528,8 @@ function registrationError(tool: Tool.Info) {
     if (error) return error
   }
   const name = normalizedName(tool)
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(name)) return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(name))
+    return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
   if (ToolTraits.exposure(tool) === "direct" && id === "execute")
     return new RegistrationError({ name: id, message: 'Tool name "execute" is reserved for CodeMode' })

@@ -5,8 +5,11 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { toSessionError } from "@orbit/core/session/to-session-error"
 import type { SessionError } from "@orbit/schema/session-error"
 import { Tool } from "@orbit/core/tool"
+import { ToolAuthorization } from "@orbit/core/tool/authorization"
+import { execute } from "@orbit/core/tool/runtime"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Context } from "@orbit/plugin/effect/plugin"
+import { expect } from "bun:test"
 import { Effect, type Scope } from "effect"
 import { host } from "../plugin/host"
 
@@ -186,3 +189,21 @@ export const executeTool = (
       Effect.succeed({ status: "error" as const, error: toSessionError(error) } satisfies ToolExecution),
     ),
   )
+
+/** `execute` from the runtime with a gate that lets every call through, for suites that test the runtime and not the gate. */
+export const runTool = (tool: Parameters<typeof execute>[0], input: unknown, context: Parameters<typeof execute>[2]) =>
+  execute(tool, input, context, () => Effect.void)
+
+/**
+ * The registry asks about calls of these tools: none of them claims to ask for itself, so none escapes the rules. The
+ * gate itself is tested in tool-gate.test.ts; this pins that a built-in does not opt out of it.
+ */
+export const expectRegistryAsks = (registry: Tool.Interface, ids: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const listed = yield* registry.list()
+    for (const id of ids) {
+      const tool = listed.find((item) => item.id === id)
+      expect(tool).toBeDefined()
+      expect(yield* ToolAuthorization.authorizesItself(tool!, {})).toBe(false)
+    }
+  })

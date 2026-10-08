@@ -86,6 +86,8 @@ export const create = (
     // Fetch is available to a program, so a call reaches beyond this machine. It is neither read-only nor safe beside
     // other calls; a program parallelizes inside with Promise.all.
     traits: { readOnly: false, concurrencySafe: false, openWorld: true, interruptBehavior: "block" },
+    // A program authorizes itself: each tool it calls goes through the registry gate on its own, and `fetch` asks per request.
+    options: { authorizes: true },
     execute: ({ code }, context) =>
       Effect.gen(function* () {
         // Aborts when the execution ends, however it ends, so a fetch that is still asking or sending stops with it.

@@ -654,14 +654,19 @@ function App() {
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
       if (args.model) {
-        const { providerID, modelID } = Model.parse(args.model)
+        // The help advertises provider/model#variant; the variant is not part of the model ID.
+        const [reference, variant] = args.model.split("#", 2)
+        const { providerID, modelID } = Model.parse(reference)
         if (!providerID || !modelID)
-          return toast.show({
+          toast.show({
             variant: "warning",
             message: `Invalid model format: ${args.model}`,
             duration: 3000,
           })
-        local.model.set({ providerID, modelID }, { recent: true })
+        else {
+          local.model.set({ providerID, modelID }, { recent: true })
+          if (variant) local.model.variant.set(variant)
+        }
       }
       if (args.sessionID && !args.fork) {
         route.navigate({

@@ -928,6 +928,7 @@ export function createData(config: CreateDataInput) {
             type: "tool",
             id: event.data.id,
             name: event.data.name,
+            ...(event.data.displayName === undefined ? {} : { displayName: event.data.displayName }),
             time: { created: event.created },
             state: { status: "streaming", input: "" },
           })

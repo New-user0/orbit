@@ -36,7 +36,8 @@ export function classify(argv: ReadonlyArray<string>): Classified {
   const prints = printAt !== -1 && (first?.kind !== "word" || !subcommands.has(first.text) || printAt < wordAt)
   if (prints) return { mode: "print", args: [...tokens.flatMap((token) => token.rewritten), ...operands] }
   // A bare --resume is only a flag of the interface and of `orb run`; another command's -r is its own.
-  if (first?.kind === "word" && first.text !== "run") return { mode: "root", args: argv }
+  // The interface also takes a directory as its first word, so only a real subcommand other than `run` keeps its own -r.
+  if (first?.kind === "word" && subcommands.has(first.text) && first.text !== "run") return { mode: "root", args: argv }
   return { mode: "root", args: [...tokens.flatMap((token) => token.resumed), ...operands] }
 }
 

@@ -4,6 +4,7 @@ import { ToolFailure } from "@orbit/ai"
 import { name, namespace } from "@orbit/schema/mcp"
 import { McpEvent } from "@orbit/schema/mcp-event"
 import { Context, Effect, Fiber, type JsonSchema, Layer, PubSub, Semaphore, Stream } from "effect"
+import { plain } from "@orbit/util/plain"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
 
@@ -39,19 +40,8 @@ export function traits(tool: Mcp.Tool): Tool.Traits {
     destructive: !readOnly && annotations?.destructiveHint !== false,
     openWorld: annotations?.openWorldHint !== false,
     interruptBehavior: "block",
-    ...(title === undefined ? {} : { displayName: escaped(title) }),
+    ...(title === undefined ? {} : { displayName: plain(title) }),
   }
-}
-
-// A control character acts on a terminal and a format character, such as a right-to-left override, reorders the text
-// around it, so each is written out. Same rule as `plain` in @orbit/flow, which core does not depend on;
-// tool-runtime-10 folds both into one shared function.
-function escaped(text: string) {
-  return text.replace(/\r?\n|\p{C}/gu, (match) => {
-    if (match.endsWith("\n")) return "\\n"
-    const code = match.codePointAt(0) ?? 0
-    return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
-  })
 }
 
 export interface Interface {
@@ -80,7 +70,7 @@ export const layer = Layer.effect(
             for (const tool of discovered) {
               editor.add({
                 name: tool.name,
-                options: { namespace: namespace(tool.server), codemode: tool.codemode !== false },
+                options: { authorizes: true, namespace: namespace(tool.server), codemode: tool.codemode !== false },
                 traits: traits(tool),
                 description: tool.description ?? "",
                 input: (tool.inputSchema ?? { type: "object", properties: {} }) as JsonSchema.JsonSchema,
@@ -151,7 +141,13 @@ export const layer = Layer.effect(
                     Effect.mapError((error) =>
                       error instanceof ToolFailure
                         ? error
-                        : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
+                        : error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError
+                          ? // A refusal keeps its cause, so the session error is `permission.rejected`.
+                            new ToolFailure({
+                              message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                              error,
+                            })
+                          : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
                     ),
                   ),
               })

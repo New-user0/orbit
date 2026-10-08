@@ -1,4 +1,5 @@
 import { Locale } from "./locale"
+import { bodyText } from "./renderer"
 import { canonicalToolName, finiteNumber, webSearchProviderLabel } from "./tool-display"
 
 type Dict = Record<string, unknown>
@@ -20,10 +21,23 @@ export type PermissionPresentationInput = {
   toolMetadata?: unknown
 }
 
+// Every string here can come from a model (a shell command, a path, a diff), so the one exit writes control
+// characters out for both clients.
 export function permissionPresentation(
   source: PermissionPresentationInput,
   formatPath: (value: string) => string = (value) => value,
 ): PermissionPresentation {
+  const presented = present(source, formatPath)
+  return {
+    ...presented,
+    title: bodyText(presented.title),
+    lines: presented.lines.map(bodyText),
+    diff: presented.diff === undefined ? undefined : bodyText(presented.diff),
+    patch: presented.patch === undefined ? undefined : bodyText(presented.patch),
+  }
+}
+
+function present(source: PermissionPresentationInput, formatPath: (value: string) => string): PermissionPresentation {
   const action = canonicalToolName(source.action)
   const input = normalizeInput(action, source.input)
   const metadata = { ...dict(source.toolMetadata), ...dict(source.metadata) }
@@ -154,9 +168,12 @@ function wildcardDirectory(value: string) {
 export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string> }): string[] {
   const save = input.save ?? []
   if (save.length === 1 && save[0] === "*") {
-    return [`This will always allow ${input.action} for this project.`]
+    return [bodyText(`This will always allow ${input.action} for this project.`)]
   }
-  return ["This will always allow the following patterns for this project.", ...save.map((item) => `- ${item}`)]
+  return [
+    "This will always allow the following patterns for this project.",
+    ...save.map((item) => bodyText(`- ${item}`)),
+  ]
 }
 
 export function permissionOptionLabel(option: "once" | "always" | "reject" | "confirm" | "cancel") {

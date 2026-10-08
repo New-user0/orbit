@@ -55,6 +55,21 @@ test("-p --resume fails with one failed result for a session that does not exist
   expect(JSON.parse(both.stdout).error).toContain("cannot be combined")
 }, 180_000)
 
+// The interface's own checks come before the terminal UI starts, so a child process can reach them without a terminal.
+test.each([
+  [["--fork"], "--fork requires --continue, --session or --resume"],
+  [["-r", "x", "-c"], "--resume cannot be combined with --continue or --session"],
+  [["-r", "x", "-s", "ses_x"], "--resume cannot be combined with --continue or --session"],
+  [["-r", "no session has these words", "--fork"], "--fork with --resume needs the ID of an existing session"],
+  [["-r", "no session has these words", "--prompt", "hi"], "--prompt cannot be combined with a --resume"],
+  [["-r", "--prompt", "hi"], "--prompt cannot be combined with a --resume"],
+])("orb %j is refused before the terminal UI starts", async (flags, message) => {
+  const result = await orb([...base, ...flags])
+
+  expect(result.code).toBe(1)
+  expect(result.stderr + result.stdout).toContain(message)
+}, 180_000)
+
 test("-p --resume continues the session that --session made", async () => {
   const id = SessionID.create()
   await sent([...base, "-p", "--session", id, "first"])

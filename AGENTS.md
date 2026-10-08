@@ -199,6 +199,7 @@ Walk the Review checklist in `docs/untrusted-repositories.md` before opening a P
 - Avoid mocks as much as possible, you shouldn't be using globalThis.\* at all unless it's the only option.
 - Test actual implementation, do not duplicate logic into tests
 - Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package directories such as `packages/core`.
+- Compare failures with `docs/known-failures.md`; a new flake is fixed, or added there with its reason, in the PR that meets it; a timeout-only failure that passes when its file is re-run alone needs no row, but the PR names it and the file it re-ran. A test named as a gate in its Gates section (idle egress, class 9 control characters, trust tests) is never excused: re-run it alone and it must pass. The class 3/4 symlink gates cannot run unelevated on Windows (`EPERM`); they must pass on Linux or with Developer Mode before a milestone that touches containment closes.
 
 ## Checks
 

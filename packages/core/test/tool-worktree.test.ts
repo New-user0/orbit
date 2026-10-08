@@ -13,7 +13,7 @@ import { Worktree } from "@orbit/core/worktree"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
-import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
+import { executeTool, expectRegistryAsks, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const moves: string[] = []
 const removed: string[] = []
@@ -53,6 +53,7 @@ describe("worktree tools", () => {
   it.effect("move a session into a new worktree and back, removing it when asked", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
+      yield* expectRegistryAsks(registry, ["enter_worktree", "exit_worktree"])
       for (const name of ["enter_worktree", "exit_worktree"])
         expect(yield* toolTraits(registry, name)).toMatchObject({
           readOnly: false,

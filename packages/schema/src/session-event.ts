@@ -498,6 +498,8 @@ export namespace Tool {
       schema: {
         ...ToolBase,
         name: Schema.String,
+        // The name the tool declares for people, stored escaped. Absent when it declares none and for hosted tools.
+        displayName: Schema.String.pipe(optional),
       },
     })
     export type Started = typeof Started.Type

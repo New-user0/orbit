@@ -116,6 +116,10 @@ test.each([
   [["run", "-r"], ["run", "--resume="]],
   [["run", "hi", "--resume", "--format", "json"], ["run", "hi", "--resume=", "--format", "json"]],
   [["-r", "--", "x"], ["--resume=", "--", "x"]],
+  // The interface takes a directory as its first word, which is not a subcommand.
+  [[".", "-r"], [".", "--resume="]],
+  [["/some/dir", "--resume"], ["/some/dir", "--resume="]],
+  [["dir", "-r", "--standalone"], ["dir", "--resume=", "--standalone"]],
 ])("%j gets an empty resume value on the interface and on run", (argv, expected) => {
   expect(classify(argv)).toEqual({ mode: "root", args: expected })
 })

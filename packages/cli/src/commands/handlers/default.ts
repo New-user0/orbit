@@ -32,7 +32,7 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--resume cannot be combined with --continue or --session"))
     if (input.fork && !input.continue && Option.isNone(input.session) && resume === undefined)
       return yield* Effect.fail(new Error("--fork requires --continue, --session or --resume"))
-    const requestedDirectory =Option.getOrUndefined(input.directory)
+    const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
     const serviceStarts = yield* Queue.unbounded<{
@@ -72,7 +72,10 @@ export default Runtime.handler(Commands, (input) =>
     const resumePicks = resume !== undefined && !(resumeID !== undefined && sessionExists)
     if (resumePicks && input.fork)
       return yield* Effect.fail(new Error("--fork with --resume needs the ID of an existing session"))
-    const config =yield* Config.Service
+    // Home sends --prompt to a new session as soon as it shows, which is not the session that the person picks.
+    if (resumePicks && Option.isSome(input.prompt))
+      return yield* Effect.fail(new Error("--prompt cannot be combined with a --resume that opens the session list"))
+    const config = yield* Config.Service
     const npm = yield* Npm.Service
     const fileSystem = yield* FileSystem.FileSystem
     const runServicePromise = Effect.runPromiseWith(Context.make(FileSystem.FileSystem, fileSystem))
