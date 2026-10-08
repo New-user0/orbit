@@ -4,6 +4,7 @@ import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
 import { useData } from "../../../context/data"
 import { useClient } from "../../../context/client"
 import { useTheme } from "../../../context/theme"
+import { bodyText } from "../../../util/renderer"
 import { Keymap } from "../../../context/keymap"
 import { useComposerTab } from "./context"
 import { useDialog } from "../../../ui/dialog"
@@ -138,7 +139,7 @@ export function ShellTab(props: { sessionID: string }) {
                     attributes={active() ? TextAttributes.BOLD : undefined}
                     wrapMode="none"
                   >
-                    {shell.command.split("\n", 1)[0]}
+                    {bodyText(shell.command.split("\n", 1)[0])}
                   </text>
                 </box>
               )

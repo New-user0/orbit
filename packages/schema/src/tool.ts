@@ -32,6 +32,17 @@ export interface Namespace {
 interface BaseOptions {
   readonly namespace?: string
   readonly permission?: string
+  /**
+   * Whether the tool asks about the call itself, in `execute` or before it. The registry asks for a call of a tool that
+   * does not: it asserts the action `permission` names, or the tool's name, on every resource, after `validate` and
+   * before `execute`, so a tool that forgets to ask is not a tool that runs unasked.
+   *
+   * A boolean, or a predicate that receives the input after the schema has decoded it. Only an answer of exactly `true`
+   * lets the tool carry the decision. A tool that leaves it out, a predicate that throws, fails, dies or answers with
+   * anything but a boolean, and a value of any other type, make the registry ask. A tool that sets it takes the
+   * responsibility, including for a call that needs no question at all.
+   */
+  readonly authorizes?: Predicate
 }
 
 /**

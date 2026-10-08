@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { useData } from "../../context/data"
 import { useTheme } from "../../context/theme"
+import { bodyText } from "../../util/renderer"
 import { SPINNER_FRAMES } from "../../component/spinner-frames"
 import { todoItems, toolDisplayMetadata } from "../../util/tool-display"
 
@@ -57,7 +58,7 @@ export function PlanDock(props: { sessionID: string }) {
                   {item.status === "completed" ? "●" : item.status === "in_progress" ? SPINNER_FRAMES[0] : "○"}
                 </text>
                 <text fg={item.status === "in_progress" ? theme.text.base : theme.text.muted} wrapMode="none">
-                  {item.content}
+                  {bodyText(item.content)}
                 </text>
               </box>
             )}

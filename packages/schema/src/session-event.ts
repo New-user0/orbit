@@ -167,6 +167,22 @@ export const UsageRecorded = Event.durable({
 })
 export type UsageRecorded = typeof UsageRecorded.Type
 
+// A new event type rather than another literal of `UsageRecorded.source`: a service that shares the database and
+// predates it decodes `session.usage.recorded` rows strictly, but skips a durable type it does not know.
+export const SideQueryRecorded = Event.durable({
+  type: "session.side_query.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    purpose: Schema.String.annotate({
+      description: "What the side query was for, such as webfetch.summarize or session.away_summary.",
+    }),
+    cost: Money.USD,
+    tokens: TokenUsage.Info,
+  },
+})
+export type SideQueryRecorded = typeof SideQueryRecorded.Type
+
 export const UsageUpdated = Event.ephemeral({
   type: "session.usage.updated",
   schema: {
@@ -708,6 +724,7 @@ export const Definitions = Event.inventory(
 export const DurableDefinitions = Event.inventory(
   ...Definitions.filter((definition) => definition.durability === "durable"),
   UsageRecorded,
+  SideQueryRecorded,
   MessageContentUpdated,
 )
 export const EphemeralDefinitions = Event.inventory(

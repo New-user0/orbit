@@ -8,6 +8,7 @@ import { useDialog } from "../../ui/dialog"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
+import { bodyText } from "../../util/renderer"
 import { projectedPromptInput } from "../../prompt/codec"
 
 export function DialogFork(props: { sessionID: string; messageID?: string; onMove?: (messageID?: string) => void }) {
@@ -63,7 +64,7 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
       .filter((message) => message.type === "user")
       .toReversed()
       .map((message) => ({
-        title: message.text.replace(/\n/g, " "),
+        title: bodyText(message.text).replace(/\n/g, " "),
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: () => fork(message.id),

@@ -291,10 +291,24 @@ const permissionFail = {
       }),
     }),
 }
-const permission = permissionLayer()
+// What the registry gate asked, and what the next question is answered with.
+const gateAsked: string[] = []
+let gateAnswer: "allow" | "decline" | "deny" = "allow"
+const permission = permissionLayer({
+  assert: (input) =>
+    Effect.suspend(() => {
+      gateAsked.push(input.action)
+      if (gateAnswer === "deny")
+        return Effect.fail(new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }))
+      return gateAnswer === "decline" ? Effect.die(new Permission.DeclinedError()) : Effect.void
+    }),
+})
+// These tools stand in for leaves that ask for themselves, so the registry gate leaves them alone.
 const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string, ToolInfo>>, options?: Tool.Options) =>
   registry.transform((editor) =>
-    Object.entries(tools).forEach(([name, tool]) => editor.add({ ...tool, name, options: options ?? tool.options })),
+    Object.entries(tools).forEach(([name, tool]) =>
+      editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
+    ),
   )
 const layer = Layer.unwrap(
   Effect.map(RunnerState, (state) => {
@@ -5199,10 +5213,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({
-        type: "limit.cost",
-        message: expect.stringContaining("cannot be counted"),
-      })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -5211,10 +5222,7 @@ describe("SessionRunnerLLM", () => {
       s.currentModel = compactModel
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 1_000 }, resume: false })
       // The first response alone fills the small window and passes the token limit.
-      yield* s.llm.push(
-        toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }),
-        TestLLM.text("## Objective\n- Summary", "limit-summary"),
-      )
+      yield* s.llm.push(toolStep({ nonCachedInputTokens: 3_950, outputTokens: 1 }), TestLLM.text("## Objective\n- Summary", "limit-summary"))
 
       expect(yield* limited(s)).toMatchObject({ type: "limit.tokens" })
 
@@ -5272,40 +5280,37 @@ describe("SessionRunnerLLM", () => {
   })
 
   for (const delivery of ["steer", "queue"] as const)
-    scenario(
-      `joins a steer that arrives during a ${delivery} compaction after the last response to that turn`,
-      function* (s) {
-        s.currentModel = recoveryModel
-        yield* s.llm.push(
-          TestLLM.text("Active complete", "text-active"),
-          [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
-          TestLLM.text("Reply to the new request", "text-new"),
-        )
-        yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
-        const first = yield* s.llm.gate
-        const run = yield* s.resume.pipe(Effect.forkChild)
-        yield* first.started
-        // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
-        yield* s.session.compact({ sessionID, delivery })
-        const summary = yield* s.llm.gate
-        yield* first.release
-        yield* summary.started
-        // The drain has not settled between the response and the compaction, so no idle mark separates them.
-        expect(run.pollUnsafe()).toBeUndefined()
-        yield* s.session.prompt({ sessionID, text: "New request during compaction" })
-        const third = yield* s.llm.gate
-        yield* summary.release
-        yield* third.started
+    scenario(`joins a steer that arrives during a ${delivery} compaction after the last response to that turn`, function* (s) {
+      s.currentModel = recoveryModel
+      yield* s.llm.push(
+        TestLLM.text("Active complete", "text-active"),
+        [LLMEvent.textDelta({ id: "summary", text: "## Objective\n- durable summary" })],
+        TestLLM.text("Reply to the new request", "text-new"),
+      )
+      yield* s.session.prompt({ sessionID, text: "Active work", turn: { maxSteps: 2 }, resume: false })
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      // A steered compaction is admitted while the last response streams; a queued one waits for the turn's end.
+      yield* s.session.compact({ sessionID, delivery })
+      const summary = yield* s.llm.gate
+      yield* first.release
+      yield* summary.started
+      // The drain has not settled between the response and the compaction, so no idle mark separates them.
+      expect(run.pollUnsafe()).toBeUndefined()
+      yield* s.session.prompt({ sessionID, text: "New request during compaction" })
+      const third = yield* s.llm.gate
+      yield* summary.release
+      yield* third.started
 
-        // The steer joined the finished turn and inherits its options.
-        expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
-          boundary: undefined,
-          options: { maxSteps: 2 },
-        })
-        yield* third.release
-        yield* Fiber.join(run)
-      },
-    )
+      // The steer joined the finished turn and inherits its options.
+      expect(yield* SessionTurn.current(s.db, sessionID)).toMatchObject({
+        boundary: undefined,
+        options: { maxSteps: 2 },
+      })
+      yield* third.release
+      yield* Fiber.join(run)
+    })
 
   scenario("coalesces multiple active steering prompts into one continuation step", function* (s) {
     const execution = yield* SessionExecution.Service
@@ -5951,6 +5956,108 @@ describe("SessionRunnerLLM", () => {
         ]),
       ])
     })
+
+  // The runner is a door into execution: a tool that does not ask for itself is asked about by the registry, and a
+  // decline there ends the step as a decline from a leaf does.
+  scenario("asks about a tool that does not authorize itself before the runner executes it", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAsked.length = 0
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}), TestLLM.stop())
+
+    yield* s.resume
+
+    expect(gateAsked).toEqual(["unmarked"])
+    expect(ran).toEqual(["unmarked"])
+  })
+
+  scenario("fails a tool the registry gate denies as a permission rejection and continues", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAnswer = "deny"
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}))
+    yield* s.llm.push(TestLLM.stop())
+
+    yield* s.resume.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          gateAnswer = "allow"
+        }),
+      ),
+    )
+
+    expect(ran).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call unmarked"),
+      Expected.assistant({}, [Expected.failedTool({ id: "call-unmarked" }, { error: { type: "permission.rejected" } })]),
+      { type: "assistant", finish: "stop" },
+    ])
+  })
+
+  scenario("interrupts runner continuation when the registry gate is declined", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAsked.length = 0
+    gateAnswer = "decline"
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}))
+
+    const exit = yield* s.resume.pipe(
+      Effect.exit,
+      Effect.ensuring(
+        Effect.sync(() => {
+          gateAnswer = "allow"
+        }),
+      ),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(gateAsked).toEqual(["unmarked"])
+    expect(ran).toEqual([])
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call unmarked"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-unmarked" },
+          { error: { type: "aborted", message: "The user declined this tool call" } },
+        ),
+      ]),
+    ])
+  })
 
   scenario("returns permission corrections to the model and continues", function* (s) {
     const registry = yield* Tool.Service

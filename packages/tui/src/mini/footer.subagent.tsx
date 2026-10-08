@@ -8,6 +8,7 @@ import { RunEntryContent, separatorRows } from "./scrollback.writer"
 import type { FooterSubagentDetail, FooterSubagentTab } from "./types"
 import type { RunFooterTheme, RunTheme } from "./theme"
 import { stringWidth } from "../util/string-width"
+import { bodyText } from "../util/renderer"
 import { footerMenuText } from "./footer.menu"
 
 registerOrbitSpinner()
@@ -82,11 +83,11 @@ export function RunFooterSubagentBody(props: {
       return ""
     }
 
-    return current.description || current.title || current.label
+    return bodyText(current.description || current.title || current.label)
   })
   const subtitle = createMemo(() => {
     const current = tab()
-    if (!current || title() === current.label) {
+    if (!current || title() === bodyText(current.label)) {
       return ""
     }
 
@@ -190,7 +191,7 @@ export function RunFooterSubagentBody(props: {
             <text fg={footer().text} wrapMode="none" flexGrow={1} flexShrink={1}>
               {footerMenuText(title(), titleWidth(), props.mono)}
               <Show when={subtitle().length > 0 && titleWidth() >= stringWidth(title()) + stringWidth(subtitle()) + 2}>
-                <span style={{ fg: footer().muted }}>{"  " + subtitle()}</span>
+                <span style={{ fg: footer().muted }}>{"  " + bodyText(subtitle())}</span>
               </Show>
             </text>
             <Show when={headerControls()}>

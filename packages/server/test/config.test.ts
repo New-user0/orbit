@@ -89,7 +89,7 @@ for (const scenario of [
           fs.writeFile(
             config,
             JSON.stringify({
-              model: "acme/fast",
+              username: "dev",
               permissions: [
                 { action: "shell", resource: "*", effect: "allow" },
                 { action: "shell", resource: "rm *", effect: "deny" },
@@ -111,7 +111,7 @@ for (const scenario of [
 
         expect(response.status).toBe(200)
         expect(document?.scope).toBe("project")
-        expect(document?.info.model).toBeDefined()
+        expect(document?.info.username).toBeDefined()
         if (implicit) {
           expect(document).not.toHaveProperty("trusted")
           expect(document?.info.mcp?.servers?.docs).toBeDefined()

@@ -2762,7 +2762,7 @@ it.effect("does not call MCP when permission is blocked", () =>
         input: { code: "return await tools.demo.search({})" },
       },
     })
-    expect(execution.content).toEqual([{ type: "text", text: "Unable to execute demo_search" }])
+    expect(execution.content).toEqual([{ type: "text", text: "Permission denied: demo_search" }])
     expect(execution.metadata).toEqual({
       toolCalls: [{ tool: "demo.search", status: "error" }],
       error: true,

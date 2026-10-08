@@ -1,7 +1,7 @@
 export * as SessionStats from "./stats.js"
 
 import { DateTime, Effect, Option, Schema } from "effect"
-import { and, eq, gte, inArray, lt, sql } from "drizzle-orm"
+import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm"
 import { Model } from "@orbit/schema/model"
 import { Money } from "@orbit/schema/money"
 import { Project } from "@orbit/schema/project"
@@ -74,7 +74,8 @@ type ToolAggregate = {
   durations: number[]
 }
 
-const decodeUsage = Schema.decodeUnknownOption(SessionEvent.UsageRecorded.data)
+// Both usage events carry these two fields; the rest of each payload is not needed here.
+const decodeUsage = Schema.decodeUnknownOption(Schema.Struct({ cost: Money.USD, tokens: TokenUsage.Info }))
 const Window = 31 * 24 * 60 * 60 * 1_000
 
 export class InvalidRangeError extends Schema.TaggedError<InvalidRangeError>()("SessionStats.InvalidRangeError", {
@@ -294,11 +295,22 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
         .where(
           and(
             inArray(EventTable.aggregate_id, batch),
-            eq(
-              EventTable.type,
-              Event.versionedType(SessionEvent.UsageRecorded.type, SessionEvent.UsageRecorded.durable.version),
+            or(
+              and(
+                eq(
+                  EventTable.type,
+                  Event.versionedType(SessionEvent.UsageRecorded.type, SessionEvent.UsageRecorded.durable.version),
+                ),
+                sql`json_extract(${EventTable.data}, '$.source') = 'compaction'`,
+              ),
+              eq(
+                EventTable.type,
+                Event.versionedType(
+                  SessionEvent.SideQueryRecorded.type,
+                  SessionEvent.SideQueryRecorded.durable.version,
+                ),
+              ),
             ),
-            sql`json_extract(${EventTable.data}, '$.source') = 'compaction'`,
             gte(EventTable.created, from),
             lt(EventTable.created, to),
           ),

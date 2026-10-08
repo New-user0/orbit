@@ -3,6 +3,7 @@ import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../../../context/keymap"
 import { useSessionTerminals } from "../../../context/session-terminals"
 import { useTheme } from "../../../context/theme"
+import { bodyText } from "../../../util/renderer"
 import { useToast } from "../../../ui/toast"
 import { useComposerTab } from "./context"
 
@@ -103,7 +104,7 @@ export function TerminalsTab(props: { sessionID: string; visibleTerminalID?: str
                   wrapMode="none"
                   truncate
                 >
-                  {terminal?.foregroundProcess ?? terminal?.title ?? "+ New terminal"}
+                  {bodyText(terminal?.foregroundProcess ?? terminal?.title ?? "+ New terminal")}
                 </text>
               </box>
             )

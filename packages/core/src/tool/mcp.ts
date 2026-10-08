@@ -80,33 +80,26 @@ export const layer = Layer.effect(
             for (const tool of discovered) {
               editor.add({
                 name: tool.name,
-                options: { namespace: namespace(tool.server), codemode: tool.codemode !== false },
+                options: { authorizes: true, namespace: namespace(tool.server), codemode: tool.codemode !== false },
                 traits: traits(tool),
                 description: tool.description ?? "",
                 input: (tool.inputSchema ?? { type: "object", properties: {} }) as JsonSchema.JsonSchema,
                 output: (tool.outputSchema ?? {}) as JsonSchema.JsonSchema,
                 execute: (input, context) =>
                   Effect.gen(function* () {
-                    yield* permission
-                      .assert({
-                        action: name(tool.server, tool.name),
-                        resources: ["*"],
-                        save: ["*"],
-                        metadata: {},
-                        sessionID: context.sessionID,
-                        agent: context.agent,
-                        source: {
-                          type: "tool",
-                          messageID: context.messageID,
-                          id: context.id,
-                        },
-                      })
-                      .pipe(
-                        // Keep the correction as the cause so the step sees the rejection and stops its queue.
-                        Effect.catchTag("Permission.CorrectedError", (error) =>
-                          Effect.fail(new ToolFailure({ message: error.feedback, error })),
-                        ),
-                      )
+                    yield* permission.assert({
+                      action: name(tool.server, tool.name),
+                      resources: ["*"],
+                      save: ["*"],
+                      metadata: {},
+                      sessionID: context.sessionID,
+                      agent: context.agent,
+                      source: {
+                        type: "tool",
+                        messageID: context.messageID,
+                        id: context.id,
+                      },
+                    })
                     const result = yield* mcp
                       .callTool({
                         server: tool.server,
@@ -158,7 +151,13 @@ export const layer = Layer.effect(
                     Effect.mapError((error) =>
                       error instanceof ToolFailure
                         ? error
-                        : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
+                        : error instanceof Permission.BlockedError || error instanceof Permission.CorrectedError
+                          ? // A refusal keeps its cause, so the session error is `permission.rejected`.
+                            new ToolFailure({
+                              message: error instanceof Permission.CorrectedError ? error.feedback : error.message,
+                              error,
+                            })
+                          : new ToolFailure({ message: `Unable to execute ${name(tool.server, tool.name)}` }),
                     ),
                   ),
               })
