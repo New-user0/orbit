@@ -3,7 +3,9 @@ import type { LanguageModelV3, LanguageModelV3StreamPart } from "@ai-sdk/provide
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { AISDK } from "@orbit/core/aisdk"
 import { SessionRunnerRetry } from "@orbit/core/session/runner/retry"
+import { SessionSchema } from "@orbit/core/session/schema"
 import { toSessionError } from "@orbit/core/session/to-session-error"
+import { Agent } from "@orbit/schema/agent"
 import { Model } from "@orbit/core/model"
 import { Provider } from "@orbit/core/provider"
 import {
@@ -561,11 +563,19 @@ it.effect("normalizes file data across AI SDK prompt parts", () =>
           Message.user([
             { type: "media", media: Media.bytes(bytes, "image/png"), filename: "bytes.png" },
             { type: "media", media: Media.base64("AAAA", "image/png"), filename: "base64.png" },
-            { type: "media", media: Media.fromDataUrl("data:image/png;charset=utf-8;base64,AQID"), filename: "inline.png" },
+            {
+              type: "media",
+              media: Media.fromDataUrl("data:image/png;charset=utf-8;base64,AQID"),
+              filename: "inline.png",
+            },
             { type: "media", media: Media.url("https://example.com/image.png", { mediaType: "image/png" }) },
             { type: "media", media: Media.base64("s3://bucket/image.png", "image/png") },
           ]),
-          Message.assistant({ type: "media", media: Media.url("http://example.com/document.pdf", { mediaType: "application/pdf" }), filename: "document.pdf" }),
+          Message.assistant({
+            type: "media",
+            media: Media.url("http://example.com/document.pdf", { mediaType: "application/pdf" }),
+            filename: "document.pdf",
+          }),
           Message.tool({
             id: "call_1",
             name: "screenshot",
@@ -680,7 +690,10 @@ it.effect("does not treat SSE comment heartbeats as model progress", () =>
 
     expect(result).toMatchObject({
       _tag: "Failure",
-      failure: { message: expect.stringContaining("SSE read timed out") },
+      failure: {
+        message: expect.stringContaining("SSE read timed out"),
+        reason: { _tag: "Transport", operation: "read", code: "Timeout" },
+      },
     })
   }),
 )
@@ -748,12 +761,7 @@ it.effect("routes AI SDK requests and responses through HTTP hook middleware", (
     expect(sent[0]?.headers.get("x-hook")).toBe("applied")
     expect(sent[0]?.headers.get("authorization")).toBe("Bearer test")
     expect(JSON.parse(sent[0]?.body ?? "")).toMatchObject({ model: "api-model" })
-    expect(seen).toEqual([
-      "POST https://example.test/v1/chat/completions",
-      sent[0]?.body,
-      sent[0]?.body,
-      "status 200",
-    ])
+    expect(seen).toEqual(["POST https://example.test/v1/chat/completions", sent[0]?.body, sent[0]?.body, "status 200"])
     expect(response.events.filter(LLMEvent.is.textDelta).map((event) => event.text)).toEqual(["rewritten"])
   }),
 )
@@ -812,6 +820,7 @@ it.effect("fails with a retryable transport error when response headers time out
     expect(error.reason).toMatchObject({
       _tag: "Transport",
       operation: "request",
+      code: "Timeout",
       message: "Response headers timed out",
     })
     expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
@@ -1172,13 +1181,62 @@ it.effect("classifies mid-stream socket drops as read transport errors", () =>
   }),
 )
 
-it.effect("classifies the SSE chunk timeout as a read transport error", () =>
+it.effect("classifies the SSE chunk timeout as a read transport timeout", () =>
   Effect.gen(function* () {
     const error = yield* streamFailure(new Error("SSE read timed out"), true)
-    expect(error.reason).toMatchObject({ _tag: "Transport", transport: "http", operation: "read" })
+    expect(error.reason).toMatchObject({ _tag: "Transport", transport: "http", operation: "read", code: "Timeout" })
     expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
   }),
 )
+
+it.effect("classifies the response header timeout as a request transport timeout", () =>
+  Effect.gen(function* () {
+    const error = yield* streamFailure(new Error("Response headers timed out"))
+    expect(error.reason).toMatchObject({ _tag: "Transport", transport: "http", operation: "request", code: "Timeout" })
+    expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
+  }),
+)
+
+it.effect("finds a watchdog timeout under a wrapping error", () =>
+  Effect.gen(function* () {
+    const wrapped = Object.assign(new TypeError("terminated"), { cause: new Error("SSE read timed out") })
+    const error = yield* streamFailure(wrapped, true)
+    expect(error.reason).toMatchObject({ _tag: "Transport", operation: "read", code: "Timeout" })
+  }),
+)
+
+it.effect("keeps other network failures out of the timeout cap", () =>
+  Effect.gen(function* () {
+    const error = yield* streamFailure(new Error("terminated"), true)
+    expect(error.reason).toMatchObject({ _tag: "Transport", operation: "read" })
+    expect(error.reason).not.toMatchObject({ code: "Timeout" })
+  }),
+)
+
+// The AI SDK path shares the cap with the native routes: a watchdog that fires has already waited minutes.
+for (const [name, failure, streamed] of [
+  ["the SSE chunk timeout", new Error("SSE read timed out"), true],
+  ["the response header timeout", new Error("Response headers timed out"), false],
+] as const) {
+  it.effect(`counts ${name} toward the timeout retry cap`, () =>
+    Effect.gen(function* () {
+      const error = yield* streamFailure(failure, streamed)
+      const policy = yield* SessionRunnerRetry.policy(SessionSchema.ID.make("ses_aisdk_timeouts"))
+      const decide = () =>
+        policy({
+          cause: error,
+          error: toSessionError(error),
+          agent: Agent.ID.make("build"),
+          model: Model.Ref.make({ id: Model.ID.make("api-model"), providerID: Provider.ID.make("test-provider") }),
+          hook: () => Effect.void,
+          retry: SessionRunnerRetry.isRetryable(error),
+        })
+
+      const decisions = [yield* decide(), yield* decide(), yield* decide(), yield* decide()]
+      expect(decisions.map((decision) => decision.retry)).toEqual([true, true, true, false])
+    }),
+  )
+}
 
 it.effect("keeps unrecognized error codes on the unknown provider path", () =>
   Effect.gen(function* () {

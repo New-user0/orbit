@@ -862,3 +862,18 @@ retries do not change.
 
 **What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
 overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.
+
+### Failed model requests retry sooner, more often and for longer
+
+A session step or compaction that fails with a transient error, an overload included, now waits 0.5, 1, 2, 4, 8 and
+16 seconds, then 32 seconds for the remaining four of its ten retries, with 20% jitter. It used to wait 2, 4 and 8
+seconds, then 10 seconds. A provider that stays down now holds a step for about 160 seconds before it fails, where it
+held it for about 84. A provider's `Retry-After` still sets the minimum wait, capped at 15 minutes.
+
+Timeouts still stop after 3 retries, and more of them count: WebSocket idle timeouts, and the response-header and
+stream-idle timeouts of providers that use the AI SDK path. Session titles and `generate` calls never retry an overload;
+they send one request.
+
+**Affects:** people on an overloaded or unavailable provider, and plugins whose `retry` hook reads the proposed delay.
+
+**What to do:** nothing. A `retry` hook can still shorten or stop the wait.
