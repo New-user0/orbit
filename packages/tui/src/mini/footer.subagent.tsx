@@ -87,7 +87,7 @@ export function RunFooterSubagentBody(props: {
   })
   const subtitle = createMemo(() => {
     const current = tab()
-    if (!current || title() === current.label) {
+    if (!current || title() === bodyText(current.label)) {
       return ""
     }
 

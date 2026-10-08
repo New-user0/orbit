@@ -386,7 +386,7 @@ export function RunFormBody(props: {
                   {bodyText(field().description ?? formLabel(field()))}
                 </text>
                 <text width="100%" fg={props.theme.link} wrapMode="word" flexShrink={0}>
-                  {field().url}
+                  {bodyText(field().url)}
                 </text>
                 <text
                   width="100%"
@@ -425,9 +425,9 @@ export function RunFormBody(props: {
                         !!row.description &&
                         stringWidth(ordinal()) +
                           2 +
-                          stringWidth(row.label) +
+                          stringWidth(bodyText(row.label)) +
                           (multiple() ? 4 : picked() ? 2 : 0) +
-                          stringWidth(row.description) <=
+                          stringWidth(bodyText(row.description)) <=
                           size().width - (compact() ? 0 : 5) - (props.mono ? 0 : 1)
                       return (
                         <box
@@ -532,7 +532,7 @@ export function RunFormBody(props: {
                       ? state().answers[field.key] === true
                         ? "acknowledged"
                         : "required"
-                      : formDisplay(field, state().answers[field.key]) || "(not answered)"}
+                      : bodyText(formDisplay(field, state().answers[field.key])) || "(not answered)"}
                   </text>
                 )}
               </For>

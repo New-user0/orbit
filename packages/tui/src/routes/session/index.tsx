@@ -38,7 +38,7 @@ import type {
 } from "@orbit/client"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
-import { bodyText } from "../../util/renderer"
+import { bodyText, outputText } from "../../util/renderer"
 import { FilePath } from "../../ui/file-path"
 import { PlanDock } from "./plan-dock"
 import { WorkflowCard } from "./workflow-card"
@@ -1740,10 +1740,10 @@ function TurnTokenToolCalls(props: { tools: SessionMessageAssistantTool[] }) {
           {(tool) => (
             <box flexDirection="row">
               <text width={nameWidth()} flexShrink={0} fg={theme.text.muted} attributes={TextAttributes.BOLD}>
-                {tool.name}
+                {bodyText(tool.name)}
               </text>
               <text fg={theme.text.muted} attributes={TextAttributes.DIM} wrapMode="word" flexGrow={1} minWidth={0}>
-                {turnTokenToolSummary(tool)}
+                {bodyText(turnTokenToolSummary(tool))}
               </text>
             </box>
           )}
@@ -1962,7 +1962,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   const completion = () => source() === "subagent" || source() === "shell"
   const childID = () => (source() === "subagent" ? stringValue(metadata()?.childID) : undefined)
   const state = () => stringValue(metadata()?.state)
-  const actor = () => (source() === "shell" ? "Shell" : Locale.titlecase(stringValue(metadata()?.agent) ?? "Subagent"))
+  const actor = () => (source() === "shell" ? "Shell" : Locale.titlecase(displayValue(metadata()?.agent) ?? "Subagent"))
   const text = () => {
     if (props.message.type === "system") return props.message.description ?? "Instructions updated"
     if (props.message.type === "synthetic") return props.message.description ?? ""
@@ -1974,8 +1974,8 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
     if (state() === "error") return "failed"
     return state() ?? "finished"
   }
-  const heading = () => `${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`
-  const suffix = () => Locale.truncateWidth(` · ${description()}`, Math.max(0, ctx.width - 3 - stringWidth(heading())))
+  const heading = () => bodyText(`${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`)
+  const suffix = () => Locale.truncateWidth(bodyText(` · ${description()}`), Math.max(0, ctx.width - 3 - stringWidth(heading())))
   const color = () => {
     if (state() === "error") return theme.text.feedback.error.base
     if (state() === "cancelled") return theme.text.feedback.warning.base
@@ -1987,7 +1987,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
       when={completion()}
       fallback={
         <InlineToolRow icon="◈" color={theme.text.muted} pending="Notice" complete={true}>
-          {text()}
+          {bodyText(text())}
         </InlineToolRow>
       }
     >
@@ -2014,7 +2014,7 @@ function SessionSkillMessage(props: { message: Extract<SessionMessageInfo, { typ
   const theme = useTheme()
   return (
     <InlineToolRow icon="→" color={theme.text.muted} pending="Skill" complete={true}>
-      Skill {props.message.name}
+      Skill {bodyText(props.message.name)}
     </InlineToolRow>
   )
 }
@@ -2297,7 +2297,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
                       {" skill "}
                     </span>
                     <span style={{ bg: theme.decrease(theme.background.raised.base), fg: theme.text.muted }}>
-                      {` ${skill.name} `}
+                      {` ${bodyText(skill.name)} `}
                     </span>
                   </text>
                 )}
@@ -2322,7 +2322,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
                       </span>
                       <span style={{ bg: theme.decrease(theme.background.raised.base), fg: theme.text.muted }}>
                         {" "}
-                        {file.name ?? (file.source.type === "uri" ? file.source.uri : "attachment")}{" "}
+                        {bodyText(file.name ?? (file.source.type === "uri" ? file.source.uri : "attachment"))}{" "}
                       </span>
                     </text>
                   )
@@ -2339,7 +2339,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
 function QueuedPromptDock(props: { prompts: { id: string; text: string }[]; onOpen: () => void }) {
   const theme = useTheme()
   const [hover, setHover] = createSignal(false)
-  const next = createMemo(() => props.prompts[0]?.text.replaceAll("\n", " "))
+  const next = createMemo(() => props.prompts[0] && bodyText(props.prompts[0].text).replaceAll("\n", " "))
 
   return (
     <box
@@ -2564,7 +2564,7 @@ type ToolProps = {
 }
 function GenericTool(props: ToolProps) {
   const theme = useTheme()
-  const output = createMemo(() => bodyText(props.output ?? "").trim())
+  const output = createMemo(() => outputText(props.output ?? "").trim())
   const input = createMemo(() => Object.entries(props.input))
   const [expanded, setExpanded] = createSignal(false)
   const expandable = createMemo(() => input().length > 0 || output().length > 0)
@@ -2817,8 +2817,8 @@ function Shell(props: ToolProps) {
     <ShellDisplay
       part={props.part}
       shellID={stringValue(props.metadata.shellID)}
-      command={stringValue(props.input.command)}
-      workdir={stringValue(props.input.workdir)}
+      command={displayValue(props.input.command)}
+      workdir={displayValue(props.input.workdir)}
       status={props.part.state.status}
       background={props.part.state.status === "completed" && props.metadata.status === "running"}
       output={stringValue(props.metadata.shellID) ? undefined : props.output}
@@ -2916,11 +2916,11 @@ function ShellDisplay(props: {
     if (props.status === "streaming") return ""
     if (props.shellID) {
       if (props.background && !expanded()) return ""
-      if (props.status === "completed" && props.output !== undefined) return bodyText(stripAnsi(props.output.trim()))
-      const text = bodyText(stripAnsi((backgroundOutput() || props.output || "").trim()))
+      if (props.status === "completed" && props.output !== undefined) return outputText(stripAnsi(props.output.trim()))
+      const text = outputText(stripAnsi((backgroundOutput() || props.output || "").trim()))
       return outputTruncated() ? `[earlier output omitted]\n${text}` : text
     }
-    return bodyText(stripAnsi(props.output?.trim() ?? ""))
+    return outputText(stripAnsi(props.output?.trim() ?? ""))
   })
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6 - (isRunning() ? 2 : 0)))
@@ -2987,21 +2987,21 @@ function Write(props: ToolProps) {
   const { currentSyntax: syntax } = useThemes()
   const pathFormatter = usePathFormatter()
   const code = createMemo(() => {
-    return stringValue(props.input.content) ?? ""
+    return displayValue(props.input.content) ?? ""
   })
 
   return (
     <Switch>
       <Match when={props.part.state.status === "completed"}>
         <BlockTool
-          path={{ label: "# Wrote", value: pathFormatter.format(stringValue(props.input.path)) }}
+          path={{ label: "# Wrote", value: pathFormatter.format(displayValue(props.input.path)) }}
           part={props.part}
         >
           <line_number fg={theme.text.muted} minWidth={3} paddingRight={1}>
             <code
               conceal={false}
               fg={theme.text.base}
-              filetype={filetype(stringValue(props.input.path))}
+              filetype={filetype(displayValue(props.input.path))}
               syntaxStyle={syntax()}
               content={bodyText(code())}
             />
@@ -3010,8 +3010,8 @@ function Write(props: ToolProps) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="◇" pending="Preparing write…" complete={stringValue(props.input.path)} part={props.part}>
-          Write {pathFormatter.format(stringValue(props.input.path))}
+        <InlineTool icon="◇" pending="Preparing write…" complete={displayValue(props.input.path)} part={props.part}>
+          Write {pathFormatter.format(displayValue(props.input.path))}
         </InlineTool>
       </Match>
     </Switch>
@@ -3021,9 +3021,9 @@ function Write(props: ToolProps) {
 function Glob(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   return (
-    <InlineTool icon="◇" pending="Finding files…" complete={stringValue(props.input.pattern)} part={props.part}>
-      Glob "{stringValue(props.input.pattern)}"{" "}
-      <Show when={stringValue(props.input.path)}>in {pathFormatter.format(stringValue(props.input.path))} </Show>
+    <InlineTool icon="◇" pending="Finding files…" complete={displayValue(props.input.pattern)} part={props.part}>
+      Glob "{displayValue(props.input.pattern)}"{" "}
+      <Show when={displayValue(props.input.path)}>in {pathFormatter.format(displayValue(props.input.path))} </Show>
       <Show when={finiteNumber(props.metadata.count)}>
         ({finiteNumber(props.metadata.count)} {finiteNumber(props.metadata.count) === 1 ? "match" : "matches"})
       </Show>
@@ -3046,17 +3046,17 @@ function Read(props: ToolProps) {
       <InlineTool
         icon="◇"
         pending="Reading file…"
-        complete={stringValue(props.input.path)}
+        complete={displayValue(props.input.path)}
         spinner={isRunning()}
         part={props.part}
       >
-        Read {pathFormatter.format(stringValue(props.input.path))}
+        Read {pathFormatter.format(displayValue(props.input.path))}
       </InlineTool>
       <For each={loaded()}>
         {(filepath) => (
           <box paddingLeft={3}>
             <text paddingLeft={3} fg={theme.text.muted}>
-              ↳ Loaded {pathFormatter.format(filepath)}
+              ↳ Loaded {pathFormatter.format(bodyText(filepath))}
             </text>
           </box>
         )}
@@ -3068,9 +3068,9 @@ function Read(props: ToolProps) {
 function Grep(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   return (
-    <InlineTool icon="◇" pending="Searching content…" complete={stringValue(props.input.pattern)} part={props.part}>
-      Grep "{stringValue(props.input.pattern)}"{" "}
-      <Show when={stringValue(props.input.path)}>in {pathFormatter.format(stringValue(props.input.path))} </Show>
+    <InlineTool icon="◇" pending="Searching content…" complete={displayValue(props.input.pattern)} part={props.part}>
+      Grep "{displayValue(props.input.pattern)}"{" "}
+      <Show when={displayValue(props.input.path)}>in {pathFormatter.format(displayValue(props.input.path))} </Show>
       <Show when={finiteNumber(props.metadata.matches)}>
         ({finiteNumber(props.metadata.matches)} {finiteNumber(props.metadata.matches) === 1 ? "match" : "matches"})
       </Show>
@@ -3080,17 +3080,17 @@ function Grep(props: ToolProps) {
 
 function WebFetch(props: ToolProps) {
   return (
-    <InlineTool icon="◇" pending="Fetching from the web…" complete={stringValue(props.input.url)} part={props.part}>
-      WebFetch {stringValue(props.input.url)}
+    <InlineTool icon="◇" pending="Fetching from the web…" complete={displayValue(props.input.url)} part={props.part}>
+      WebFetch {displayValue(props.input.url)}
     </InlineTool>
   )
 }
 
 function WebSearch(props: ToolProps) {
   const ctx = use()
-  const provider = createMemo(() => stringValue(props.metadata.provider))
+  const provider = createMemo(() => displayValue(props.metadata.provider))
   return (
-    <InlineTool icon="◇" pending="Searching web…" complete={stringValue(props.input.query)} part={props.part}>
+    <InlineTool icon="◇" pending="Searching web…" complete={displayValue(props.input.query)} part={props.part}>
       <Show when={provider()} fallback="Web Search">
         {(value) => (
           <>
@@ -3106,7 +3106,7 @@ function WebSearch(props: ToolProps) {
           </>
         )}
       </Show>{" "}
-      "{stringValue(props.input.query)}"
+      "{displayValue(props.input.query)}"
     </InlineTool>
   )
 }
@@ -3115,9 +3115,9 @@ function Subagent(props: ToolProps) {
   const { navigate } = useRoute()
   const data = useData()
   const sessionID = createMemo(() => stringValue(props.metadata.sessionID) ?? stringValue(props.metadata.sessionId))
-  const description = createMemo(() => stringValue(props.input.description))
+  const description = createMemo(() => displayValue(props.input.description))
   const continuation = createMemo(() => Boolean(stringValue(props.input.sessionID)))
-  const model = createMemo(() => subagentModelLabel(stringValue(props.input.model), data.location.model.list()))
+  const model = createMemo(() => subagentModelLabel(displayValue(props.input.model), data.location.model.list()))
   const isRunning = createMemo(() => {
     const id = sessionID()
     return props.part.state.status === "running" || Boolean(id && data.session.status(id) === "running")
@@ -3141,7 +3141,7 @@ function Subagent(props: ToolProps) {
         ) : undefined
       }
     >
-      {`${continuation() ? "Continue subagent" : `${Locale.titlecase(stringValue(props.input.agent) ?? stringValue(props.input.subagent_type) ?? "General")} Subagent`} — ${description() ?? "Subagent"}${model() ? ` · ${model()}` : ""}`}
+      {`${continuation() ? "Continue subagent" : `${Locale.titlecase(displayValue(props.input.agent) ?? displayValue(props.input.subagent_type) ?? "General")} Subagent`} — ${description() ?? "Subagent"}${model() ? ` · ${model()}` : ""}`}
     </InlineTool>
   )
 }
@@ -3197,7 +3197,7 @@ function ExecuteCallView(props: { call: Accessor<ExecuteCall> }) {
           <text fg={color()}>{props.call().status === "error" ? "✗" : "›"}</text>
         </box>
         <text flexGrow={1} wrapMode="none" truncate fg={color()}>
-          {expanded() ? props.call().tool : executeCallSummary(props.call())}
+          {bodyText(expanded() ? props.call().tool : executeCallSummary(props.call()))}
         </text>
       </box>
       <Show when={expanded()}>
@@ -3237,7 +3237,7 @@ function Workflow(props: ToolProps) {
   const running = createMemo(() => props.part.state.status === "streaming" || props.part.state.status === "running")
   return (
     <WorkflowCard
-      description={stringValue(props.input.description) ?? "Workflow"}
+      description={displayValue(props.input.description) ?? "Workflow"}
       agents={workflowAgents(props.metadata.agents)}
       running={running()}
       failed={props.part.state.status === "error"}
@@ -3252,7 +3252,7 @@ function Execute(props: ToolProps) {
   const dialog = useDialog()
   const isLoading = createMemo(() => props.part.state.status === "streaming" || props.part.state.status === "running")
   const calls = createMemo(() => executeCalls(props.metadata.toolCalls))
-  const output = createMemo(() => bodyText(stripAnsi(props.output?.trim() ?? "")))
+  const output = createMemo(() => outputText(stripAnsi(props.output?.trim() ?? "")))
   const hasRuntimeError = createMemo(() => props.metadata.error === true || props.part.state.status === "error")
   const outputPreview = createMemo(() => collapseToolOutput(output(), 4, 4 * Math.max(20, ctx.width - 6)).output)
   const showOutput = createMemo(() => output() && hasRuntimeError())
@@ -3304,7 +3304,7 @@ function Edit(props: ToolProps) {
   })
 
   const file = createMemo(() => parseApplyPatchFiles(props.metadata.files)[0])
-  const path = createMemo(() => file()?.relativePath ?? stringValue(props.input.path))
+  const path = createMemo(() => file()?.relativePath ?? displayValue(props.input.path))
 
   return (
     <Switch>
@@ -3340,11 +3340,11 @@ function Edit(props: ToolProps) {
       <Match when={true}>
         <BlockTool
           path={
-            stringValue(props.input.path)
-              ? { label: "← Edit", value: pathFormatter.format(stringValue(props.input.path)) }
+            displayValue(props.input.path)
+              ? { label: "← Edit", value: pathFormatter.format(displayValue(props.input.path)) }
               : undefined
           }
-          title={stringValue(props.input.path) ? undefined : "# Preparing edit…"}
+          title={displayValue(props.input.path) ? undefined : "# Preparing edit…"}
           part={props.part}
           spinner={props.part.state.status === "streaming"}
         />
@@ -3360,7 +3360,7 @@ function ApplyPatch(props: ToolProps) {
   const pathFormatter = usePathFormatter()
   const files = createMemo(() => parseApplyPatchFiles(props.metadata.files))
   const targets = createMemo(() => {
-    const patch = stringValue(props.input.patchText)
+    const patch = displayValue(props.input.patchText)
     if (!patch) return []
     return [...patch.matchAll(/\*\*\* (?:Add|Update|Delete) File: ([^\r\n]+)/g)].map((match) => match[1].trim())
   })
@@ -3369,8 +3369,8 @@ function ApplyPatch(props: ToolProps) {
     if (!Array.isArray(applied)) return []
     return applied.flatMap((value) => {
       const item = recordValue(value)
-      const type = stringValue(item?.type)
-      const resource = stringValue(item?.resource)
+      const type = displayValue(item?.type)
+      const resource = displayValue(item?.resource)
       return type && resource ? [{ type, resource }] : []
     })
   })
@@ -3493,7 +3493,7 @@ function Question(props: ToolProps) {
               {(q, i) => (
                 <box flexDirection="column">
                   <text fg={theme.text.muted}>{bodyText(q.question)}</text>
-                  <text fg={theme.text.base}>{format(answers()?.[i()])}</text>
+                  <text fg={theme.text.base}>{bodyText(format(answers()?.[i()]))}</text>
                 </box>
               )}
             </For>
@@ -3510,7 +3510,7 @@ function Question(props: ToolProps) {
 }
 
 function Skill(props: ToolProps) {
-  const name = createMemo(() => stringValue(props.metadata.name) ?? stringValue(props.input.id))
+  const name = createMemo(() => displayValue(props.metadata.name) ?? displayValue(props.input.id))
   return (
     <InlineTool icon="◇" pending="Loading skill…" complete={name()} part={props.part}>
       Skill "{name()}"
@@ -3545,7 +3545,14 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
 }
 
 function stringValue(value: unknown) {
-  return typeof value === "string" ? bodyText(value) : undefined
+  return typeof value === "string" ? value : undefined
+}
+
+// For drawing: the same value with control characters written out. `stringValue` stays the parser for IDs, lookup keys
+// and comparisons, where a control character must neither be rewritten nor silently change what is looked up.
+function displayValue(value: unknown) {
+  const text = stringValue(value)
+  return text === undefined ? undefined : bodyText(text)
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
@@ -3593,7 +3600,7 @@ export function parseApplyPatchFiles(value: unknown) {
     const type =
       stringValue(file.type) ??
       (status === "added" ? "add" : status === "deleted" ? "delete" : status === "modified" ? "update" : undefined)
-    const relativePath = stringValue(file.file) ?? stringValue(file.relativePath)
+    const relativePath = displayValue(file.file) ?? displayValue(file.relativePath)
     const filePath = stringValue(file.filePath) ?? relativePath
     const patch = stringValue(file.patch)
     const additions = finiteNumber(file.additions)
@@ -3607,7 +3614,7 @@ export function parseApplyPatchFiles(value: unknown) {
       deletions === undefined
     )
       return []
-    return [{ type, relativePath, filePath, patch, additions, deletions, movePath: stringValue(file.movePath) }]
+    return [{ type, relativePath, filePath, patch, additions, deletions, movePath: displayValue(file.movePath) }]
   })
 }
 

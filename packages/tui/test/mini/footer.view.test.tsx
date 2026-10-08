@@ -572,6 +572,47 @@ test.each([56, 160])("exit confirmation replaces routine footer details at %i co
   }
 })
 
+test("direct footer draws the control characters of a form's external URL and option labels written out", async () => {
+  const request: FormInfo = {
+    id: "frm_hostile",
+    sessionID: "ses_child",
+    title: "Deploy",
+    fields: [
+      { key: "link", type: "external", url: "https://example.com/a\u001b]0;pwn\u0007b", title: "Authorize" },
+      {
+        key: "target",
+        type: "string",
+        title: "Target",
+        options: [{ value: "x", label: "L\u001b[2Kx", description: "d‮e" }],
+      },
+    ],
+  }
+  const app = await renderFooter({ height: 16, view: { type: "form", request } })
+
+  try {
+    await app.renderOnce()
+    const external = app.captureCharFrame()
+    expect(external).toContain("a\\x1b]0;pwn\\x07b")
+    expect(external).not.toContain("\u001b")
+  } finally {
+    app.cleanup()
+  }
+
+  const choice = await renderFooter({
+    height: 16,
+    view: { type: "form", request: { ...request, id: "frm_choice", fields: [request.fields[1]!] } },
+  })
+  try {
+    await choice.renderOnce()
+    const options = choice.captureCharFrame()
+    expect(options).toContain("L\\x1b[2Kx")
+    expect(options).not.toContain("\u001b")
+    expect(options).not.toContain("‮")
+  } finally {
+    choice.cleanup()
+  }
+})
+
 test("direct footer preserves a partial multi-field form draft across permission preemption", async () => {
   const request: FormInfo = {
     id: "frm_preempted",

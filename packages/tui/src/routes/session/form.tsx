@@ -875,7 +875,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                   openExternal()
                 }}
               >
-                {external().url}
+                {bodyText(external().url)}
               </text>
               <text
                 fg={store.answers[external().key] === true ? theme.text.feedback.success.base : theme.text.muted}
@@ -1106,7 +1106,7 @@ export function FormPrompt(props: { form: FormWithLocation }) {
                       </box>
                     )
                   }
-                  const value = () => formDisplayValue(item, store.answers[item.key], "(none)")
+                  const value = () => bodyText(formDisplayValue(item, store.answers[item.key], "(none)"))
                   const answered = () => store.answers[item.key] !== undefined
                   const missing = () => !answered() && item.required === true
                   const invalid = () => formValidateValue(item, store.answers[item.key])

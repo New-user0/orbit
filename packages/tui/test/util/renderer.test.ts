@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { MarkdownRenderable, SyntaxStyle, TextRenderable, type CliRenderer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { bodyText, destroyRenderer, terminalTitle } from "../../src/util/renderer"
+import { bodyText, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
 
 // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
 // a model, a tool or a stored prompt can put into a message body.
@@ -37,10 +37,14 @@ test.each(["text", "markdown"] as const)("draws the control characters of a body
   const drawn = await frame((renderer) => blocks[kind](renderer, bodyText(hostile)))
   expect(drawn).toContain(written)
 
-  // The control run: the same body drawn as it came never shows the written-out form.
+  // The control run: the same body drawn as it came carries the raw characters to the frame, so the check above can fail.
   const raw = await frame((renderer) => blocks[kind](renderer, hostile), "b")
+  expect(raw).toContain("\u001b")
   expect(raw).not.toContain("\\x1b")
-  expect(raw).not.toContain("\\u{202e}")
+})
+
+test("turns a lone carriage return in program output into a line break and writes out the other controls", () => {
+  expect(outputText("Receiving 33%\rReceiving 66%\r\ndone\u001b[2K")).toBe("Receiving 33%\nReceiving 66%\ndone\\x1b[2K")
 })
 
 test("writes out each control, keeps line breaks and tabs, and leaves a lone carriage return visible", () => {

@@ -158,6 +158,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
+- Message bodies on the session screen and in Mini: `bodyText` and `outputText` (`src/util/renderer.ts`),
+  `entryBody` (`src/mini/entry.body.ts`) and `permissionPresentation` (`src/util/permission.ts`). Proof:
+  `test/body-sinks.test.tsx` (one row per sink on the real session screen, the carriage-return rows, and a trusted
+  control), `test/util/renderer.test.ts` (the escaping, with a control run whose raw frame holds ESC),
+  `test/cli/tui/form.test.tsx` and `test/mini/footer.view.test.tsx` (form links, options and review rows),
+  `test/mini/entry.body.test.ts` and `test/util/permission-body.test.ts`.
 - Window titles, the exit summary and the Mini splash: `terminalTitle`, `sessionEpilogue` and the splash's own filter.
   Proof: `test/util/renderer.test.ts`, `test/util/presentation.test.ts`, `test/mini/splash.test.ts`.
 - The keybindings file: `Config.read` reads `keybindings.json` from the folder that holds `cli.json`, the person's own
@@ -807,20 +813,22 @@ repository text.
   renderer.setTerminalTitle(terminalTitle(title))
   ```
 
-- A message body, which is model text, a stored prompt, tool output, a question preview or a tool error, passes `bodyText`
-  (`packages/tui/src/util/renderer.ts`) where the terminal UI and Mini draw it. It is `body` in
-  `packages/flow/src/plain.ts`, so the escaping is the one `plain` uses: line breaks and tabs stay, a carriage return
-  alone, C0 controls, DEL, C1 controls and the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E and U+2066 to
-  U+2069) are written out as `\x1b` or `\u{202e}`, where the person can see them. Other format characters stay, since
-  a zero-width joiner holds an emoji sequence together. Mini passes every body through `entryBody`
-  (`packages/tui/src/mini/entry.body.ts`), including the fields of a tool snapshot; the session screen passes the text
-  and reasoning parts, the compaction summary, the user message, the output and arguments of a generic tool, shell and
-  `execute` output, the tool name, the `btw` answer, question and form text, tool and retry errors, the inline labels
-  of tools (through `stringValue`), edit diffs, the shell command line and the approval prompt (through
-  `permissionPresentation` and `permissionAlwaysLines`, which serve both clients) through it. Shell output goes through
-  `stripAnsi` first, so its sequences are removed rather than written out, and Mini turns a lone carriage return into a
-  line break before `bodyText`. A new place that draws such text calls `bodyText`
-  too.
+- A message body, which is model text, tool output, a question or its answer, a plan, a notice, a skill or file name from a
+  tool, or a tool error, passes `bodyText` (`packages/tui/src/util/renderer.ts`) where the terminal UI and Mini draw
+  it. It is `body` in `packages/flow/src/plain.ts`, so the escaping is the one `plain` uses: line breaks and tabs stay,
+  a carriage return alone, C0 controls, DEL, C1 controls and the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E
+  and U+2066 to U+2069) are written out as `\x1b` or `\u{202e}`, where the person can see them. Other format characters
+  stay, since a zero-width joiner holds an emoji sequence together. Program output (shell, `execute` and generic tool
+  output) passes `outputText` instead, which first turns a lone carriage return into a line break, as Mini's
+  `cleanRunText` does, because progress meters redraw a line with one; commands and approval prompts use `bodyText`,
+  where a carriage return is an ordinary character for the shell. Mini passes every body through `entryBody`
+  (`packages/tui/src/mini/entry.body.ts`); the session screen passes its sinks through `bodyText` or `outputText`
+  one by one, and the approval prompt goes through `permissionPresentation` and `permissionAlwaysLines`
+  (`packages/tui/src/util/permission.ts`), which serve both clients. In `routes/session/index.tsx`, `stringValue` only
+  parses (IDs, lookup keys and comparisons read the value as it came) and `displayValue` is the parsed value for
+  drawing, so a path with a control character still finds its diagnostics. Shell output goes through `stripAnsi`
+  first, so its sequences are removed rather than written out. A new place that draws such text calls `bodyText` or
+  `outputText`, and a new test row goes into `packages/tui/test/body-sinks.test.tsx`.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
   the Mini splash (`packages/tui/src/mini/splash.ts`), and `DialogFlowRuns` passes every store string through `plain`
@@ -1371,11 +1379,16 @@ fixes it or asks.
   `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
   [upgrading](upgrading.md) note. Until it is made, class 8 calls a field a permission only when it selects which rules,
   agent or mode apply.
-- **Text that the person did not write, in `orb run`.** The terminal UI and Mini now write control characters out of
-  message bodies with `bodyText` (task `clients-ux-60`). `orb run` is still open: the answer, the thinking lines and
-  the tool blocks of its default format are written as the model and the tools made them (its JSON formats write the
-  same text out with `jsonLine`). Closing it means passing them through `body` from `@orbit/flow/plain`. Recaps are not
-  drawn anywhere yet; they pass `bodyText` when `clients-ux-27` lands.
+- **Text that the person did not write, in `orb run`, and sinks without their own test.** The terminal UI and Mini
+  write control characters out of message bodies with `bodyText` (task `clients-ux-60`), and
+  `test/body-sinks.test.tsx` pins the sinks listed in the inventory. Changed in the code but not pinned by a test: the
+  tool list of the token-usage view (`TurnTokenToolCalls`), the details dialog of `execute` (`dialog-execute.tsx`), the
+  timeline and fork lists (`dialog-timeline.tsx`, `dialog-fork.tsx`), the Mini subagent and command pickers
+  (`footer.command.tsx`), and the width checks of Mini form rows and its subagent footer, which now measure the written-out
+  text. Message bodies in the markdown export and other places that were not walked may remain. `orb run` is still open:
+  the answer, the thinking lines and the tool blocks of its default format are written as the model and the tools made
+  them (its JSON formats write the same text out with `jsonLine`). Closing it means passing them through `body` from
+  `@orbit/flow/plain`. Recaps are not drawn anywhere yet; they pass `bodyText` when `clients-ux-27` lands.
 - **A leading wildcard in a host allow.** A rule whose pattern starts with a wildcard, such as `*example.com/*` or
   `*://example.com/*`, also matches the `METHOD url` resource of a write, so it allows `POST https://example.com/x`. The
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which

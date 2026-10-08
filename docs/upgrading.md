@@ -824,13 +824,23 @@ running session. Lines written by earlier builds are read as before.
 
 ### Control characters in messages are written out on screen
 
-The terminal UI and Mini used to draw model text, a workflow node's stored prompt, tool output, question previews, tool errors,
-approval prompts and shell commands as they were. A body that carried an escape sequence, a carriage return or a right-to-left override could set the
-window title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape
-and `\u{202e}` for an override, so you can see that they were there. Line breaks, tabs, emoji and other Unicode are
-unchanged, and so is Markdown formatting. Text that the model meant to color with escape sequences shows the written-out
-form instead. Mini turns a lone carriage return into a line break before it writes out the rest, and shell output
-loses its color sequences (they are removed, not written out).
+The terminal UI and Mini used to draw model text, tool output, tool errors, approval prompts, shell commands and the
+labels of tools as they were. A body that carried an escape sequence or a right-to-left override could set the window
+title, erase a line or reorder text. Those characters are now drawn written out, such as `\x1b` for an escape and
+`\u{202e}` for an override, so you can see that they were there. The places include the text of questions and their
+answers, the plan, the notices that a background shell or subagent finished, skill names, the paths that a read loaded,
+the queued-prompt line, the cards of a workflow, the call lines of `execute`, the external link and the review rows of
+a form. Line breaks, tabs, emoji and other Unicode are unchanged, and so is Markdown formatting. Text that the model
+meant to color with escape sequences shows the written-out form instead.
+
+A carriage return is handled by where it is drawn. In program output (shell, `execute` and the output of other tools)
+a lone carriage return, which progress meters use to redraw a line, is drawn as a line break, as Mini already did, and
+the color sequences of shell output are removed rather than written out. In a command line, an approval prompt or any
+other text, a carriage return is written out as `\x0d`, because a shell treats it as an ordinary character.
+
+A few places also write controls out but have no test of their own yet: the tool list of the token-usage view, the
+details dialog of `execute`, the timeline and fork lists, and the Mini subagent picker. Known gaps in
+[untrusted-repositories.md](untrusted-repositories.md) names them, and `orb run` is unchanged.
 
 **Affects:** anyone who reads tool output or model text in the terminal UI or Mini that holds raw control characters.
 `orb run` and the stored messages are unchanged.
