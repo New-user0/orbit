@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { Plugin } from "@orbit/plugin/tui"
 import type { AttentionSoundName } from "@orbit/plugin/tui/context"
 
@@ -11,7 +12,7 @@ function notify(
   const session = sessionID ? context.data.session.get(sessionID) : undefined
   const isSubagent = session?.parentID !== undefined
   void context.attention.notify({
-    title: title ?? session?.title,
+    title: title ?? (session?.title ? plain(session.title) : undefined),
     message,
     notification: isSubagent ? false : { when: "blurred" },
     sound: { name: sound, when: "always" },

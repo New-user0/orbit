@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { type DialogContext, useDialog } from "../ui/dialog"
 import { useClient } from "../context/client"
@@ -13,7 +14,7 @@ export function DialogSessionRename(props: { sessionID: string; currentTitle?: s
     <DialogPrompt
       title="Rename session"
       placeholder="Session title"
-      value={props.currentTitle}
+      value={props.currentTitle && plain(props.currentTitle)}
       onConfirm={(value) => {
         const title = value.trim()
         if (!title) return

@@ -880,11 +880,18 @@ opens it, as `--session` does; an empty value, or anything else, opens the sessi
 search. In `orb run` and `orb -p` it needs a session that exists: the ID, or the newest session of the working folder
 that matches the words, and a miss fails with "Session not found" (as one failed result under `--output-format json`)
 instead of creating a session, as `--session` does. The session's own folder is the one checked for trust, wherever the
-command starts. `--resume` cannot be combined with `--continue` or `--session`. Titles in the session list, in the open dialog and on a session opened with `--session` are written out, as `\x1b` or `\u{202e}`, where they hold control or
-format characters.
+command starts. `--resume` cannot be combined with `--continue` or `--session`.
 
 `--prompt` cannot be combined with a `-r` that opens the session list, because the prompt would go to a new session and
-not to the one you pick. `--model provider/model#variant` applies the variant to that model.
+not to the one you pick. `--model provider/model#variant` applies the variant to that model. Your `--model` wins over
+the selected agent's own model and over the model a resumed session has stored (`--session`, `-r <ID>` and `--continue`)
+until you pick another model with the model picker or the cycle keys; picking a variant keeps the model.
+
+The TUI now writes the title of a session out wherever it draws one: the tab rail, the sidebar, the banner, Home's recent
+list, the session list, the open dialog, the agent map, the rename prompt, the session-deleted notice and the
+notification text of a session. Control and format characters in a title appear as `\x1b` or `\u{202e}` instead of acting
+on the terminal. The rename prompt shows a title written out the same way, so renaming a title that held such a
+character saves the written-out form unless you retype it.
 
 `-r` takes the next word as its value, so `orb -p -r fix it` resumes the session matching "fix" and sends "it". Quote the
 message, or put it after `--`, as in `orb -p -r ses_abc -- fix it`. A `-r` that ends the line, or is followed by another

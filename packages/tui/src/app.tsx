@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { registerOrbitSpinner } from "./component/register-spinner"
 import { Effect, Latch } from "effect"
@@ -653,19 +654,14 @@ function App() {
   onMount(() => {
     batch(() => {
       if (args.agent) local.agent.set(args.agent)
-      if (args.model) {
-        // The help advertises provider/model#variant; local.tsx applies the variant once the catalog loads.
-        const { providerID, modelID } = Model.parse(args.model.split("#", 2)[0])
-        if (!providerID || !modelID)
-          toast.show({
-            variant: "warning",
-            message: `Invalid model format: ${args.model}`,
-            duration: 3000,
-          })
-        else {
-          local.model.set({ providerID, modelID }, { recent: true })
-        }
-      }
+      // local.tsx applies a valid `provider/model#variant` itself, once the catalog has loaded.
+      const launch = args.model && Model.parse(args.model.split("#", 2)[0])
+      if (launch && (!launch.providerID || !launch.modelID))
+        toast.show({
+          variant: "warning",
+          message: `Invalid model format: ${args.model}`,
+          duration: 3000,
+        })
       if (args.sessionID && !args.fork) {
         route.navigate({
           type: "session",
@@ -1392,7 +1388,7 @@ function App() {
       route.navigate({ type: "home" })
       toast.show({
         variant: "info",
-        message: title ? `Session "${title}" was deleted` : "The current session was deleted",
+        message: title ? `Session "${plain(title)}" was deleted` : "The current session was deleted",
       })
     }
   })

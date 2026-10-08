@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store"
 import { dedupeWith } from "effect/Array"
 import { createSimpleContext } from "./helper"
-import { batch, createMemo, createSignal, onCleanup } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js"
 import { useEvent } from "./event"
 import path from "path"
 import { useTuiPaths } from "./runtime"
@@ -183,6 +183,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       const launchReference = args.model?.split("#", 2)
       const launchModel = launchReference && parse(launchReference[0])
       const [launchVariant, setLaunchVariant] = createSignal(launchReference?.[1])
+      // The launch model beats the agent's model and a resumed session's stored model until the person picks another
+      // model. It applies to new sessions and to the first session the person opens, which is the one `-s`, `-r` and
+      // `-c` name.
+      const [launchActive, setLaunchActive] = createSignal(launchModel !== undefined)
+      const [launchSessionID, setLaunchSessionID] = createSignal<string>()
+      // `-c` starts on a placeholder session route until the latest session is found, so wait for a loaded session.
+      createEffect(() => {
+        if (route.data.type === "session" && data.session.get(route.data.sessionID) && !untrack(launchSessionID))
+          setLaunchSessionID(route.data.sessionID)
+      })
 
       const fallbackModel = createMemo(() => {
         if (launchModel && isModelValid(launchModel)) return launchModel
@@ -207,6 +217,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       const newSessionModel = createMemo(() => {
         const a = agent.current()
         return getFirstValidModel(
+          () => (launchActive() ? launchModel : undefined),
           () => a && selectionState.newSessionModelByLocationAgent[locationAgentKey(a.id)],
           () => a?.model && { providerID: a.model.providerID, modelID: a.model.id },
           fallbackModel,
@@ -265,7 +276,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         const current = agent.current()
         if (!current) return
         const session = data.session.get(sessionID)
+        const launched =
+          launchActive() && launchModel && launchSessionID() === sessionID ? preferredSelection(launchModel) : undefined
         const selected = [
+          launched,
           selectionState.selectionBySessionAgent[sessionID]?.[current.id],
           !session?.agent || session.agent === current.id ? durableSelection(sessionID) : undefined,
         ].find((selection) => selection && isModelValid(selection))
@@ -313,11 +327,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               ? current
               : preferredSelection(model),
           )
+          setLaunchActive(false)
           return true
         }
         const current = agent.current()
         if (!current) return false
         setSelectionState("newSessionModelByLocationAgent", locationAgentKey(current.id), model)
+        setLaunchActive(false)
         return true
       }
 
@@ -486,6 +502,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           set(value: string | undefined) {
             const m = currentSelection()
             if (!m) return
+            // Picking a variant keeps the model on screen, so the launch model becomes an ordinary choice first.
+            if (launchActive()) selectModel({ providerID: m.providerID, modelID: m.modelID })
             setLaunchVariant(undefined)
             if (route.data.type === "session") {
               setSessionDraft(route.data.sessionID, { ...m, variant: normalizeModelVariant(value) })
