@@ -278,10 +278,24 @@ const permissionFail = {
       }),
     }),
 }
-const permission = permissionLayer()
+// What the registry gate asked, and what the next question is answered with.
+const gateAsked: string[] = []
+let gateAnswer: "allow" | "decline" | "deny" = "allow"
+const permission = permissionLayer({
+  assert: (input) =>
+    Effect.suspend(() => {
+      gateAsked.push(input.action)
+      if (gateAnswer === "deny")
+        return Effect.fail(new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }))
+      return gateAnswer === "decline" ? Effect.die(new Permission.DeclinedError()) : Effect.void
+    }),
+})
+// These tools stand in for leaves that ask for themselves, so the registry gate leaves them alone.
 const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string, ToolInfo>>, options?: Tool.Options) =>
   registry.transform((editor) =>
-    Object.entries(tools).forEach(([name, tool]) => editor.add({ ...tool, name, options: options ?? tool.options })),
+    Object.entries(tools).forEach(([name, tool]) =>
+      editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
+    ),
   )
 const layer = Layer.unwrap(
   Effect.map(RunnerState, (state) => {
@@ -740,6 +754,21 @@ const recordedEventTypes = (id: Session.ID) =>
         Effect.map((rows) => rows.map((row) => row.type)),
       )
   })
+
+const batchBoundaryEvents = (id: Session.ID) =>
+  recordedEventTypes(id).pipe(
+    Effect.map((types) => {
+      const relevant = types.filter((type) =>
+        [
+          "session.tool.success.2",
+          "session.step.started.1",
+          "session.step.ended.1",
+          "session.inbox.delivered.1",
+        ].includes(type),
+      )
+      return relevant.slice(relevant.indexOf("session.tool.success.2"))
+    }),
+  )
 
 const recordedStepSettlementEvents = (id: Session.ID, assistantMessageID: SessionMessage.ID) =>
   Effect.gen(function* () {
@@ -1243,6 +1272,96 @@ describe("SessionRunnerLLM", () => {
 
     expect(s.requests).toHaveLength(3)
     expect(userTexts(s.requests[2])).toContain("Background work completed")
+  })
+
+  scenario("delivers a notice admitted during a tool batch once, after the tool results", function* (s) {
+    yield* s.admit("Start background work")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "job started" }),
+      TestLLM.text("Handled notice", "text-notice"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    yield* s.session.synthetic({
+      sessionID,
+      text: "Shell job finished",
+      description: "job",
+      metadata: { source: "shell", state: "completed" },
+    })
+    expect(s.requests).toHaveLength(1)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "user"])
+    expect(userTexts(s.requests[1])).toEqual(["Start background work", "Shell job finished"])
+    expect(userTexts(s.requests[0])).toEqual(["Start background work"])
+    expect((yield* s.context).map((message) => message.type)).toEqual(["user", "assistant", "synthetic", "assistant"])
+    expect(yield* s.inbox).toEqual([])
+    expect(yield* batchBoundaryEvents(sessionID)).toEqual([
+      "session.tool.success.2",
+      "session.step.ended.1",
+      "session.inbox.delivered.1",
+      "session.step.started.1",
+      "session.step.ended.1",
+    ])
+  })
+
+  scenario("delivers a notice only after every tool in the batch has joined", function* (s) {
+    yield* s.admit("Echo twice in parallel")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-echo-0", name: "echo", input: { text: "0" } }),
+        LLMEvent.toolCall({ id: "call-echo-1", name: "echo", input: { text: "1" } }),
+      ),
+      TestLLM.text("Handled notice", "text-notice"),
+    )
+    const tools = yield* s.blockTools(2)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    expect(yield* tools.maxActive).toBe(2)
+    yield* s.session.synthetic({ sessionID, text: "Shell job finished" })
+    expect(s.requests).toHaveLength(1)
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(2)
+    expect(messageRoles(s.requests[1])).toEqual(["user", "assistant", "tool", "tool", "user"])
+    expect(userTexts(s.requests[1])).toEqual(["Echo twice in parallel", "Shell job finished"])
+    expect(yield* s.inbox).toEqual([])
+    expect(yield* batchBoundaryEvents(sessionID)).toEqual([
+      "session.tool.success.2",
+      "session.tool.success.2",
+      "session.step.ended.1",
+      "session.inbox.delivered.1",
+      "session.step.started.1",
+      "session.step.ended.1",
+    ])
+  })
+
+  scenario("keeps a queued prompt admitted during a tool batch out of the tool continuation", function* (s) {
+    yield* s.admit("Echo before queue")
+    yield* s.llm.push(
+      TestLLM.tool("call-echo", "echo", { text: "working" }),
+      TestLLM.text("Finished first", "text-first"),
+      TestLLM.text("Handled queue", "text-queue"),
+    )
+    const tools = yield* s.blockTools()
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* tools.started
+    yield* s.session.prompt({ sessionID, text: "Queued for later", delivery: "queue" })
+
+    yield* tools.release
+    yield* Fiber.join(run)
+
+    expect(s.requests).toHaveLength(3)
+    expect(userTexts(s.requests[1])).toEqual(["Echo before queue"])
+    expect(userTexts(s.requests[2])).toEqual(["Echo before queue", "Queued for later"])
+    expect(messageRoles(s.requests[2])).toEqual(["user", "assistant", "tool", "assistant", "user"])
+    expect(yield* s.inbox).toEqual([])
   })
 
   scenario("streams one request with registry definitions from chronological user history", function* (s) {
@@ -5307,6 +5426,108 @@ describe("SessionRunnerLLM", () => {
       ])
     })
 
+  // The runner is a door into execution: a tool that does not ask for itself is asked about by the registry, and a
+  // decline there ends the step as a decline from a leaf does.
+  scenario("asks about a tool that does not authorize itself before the runner executes it", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAsked.length = 0
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}), TestLLM.stop())
+
+    yield* s.resume
+
+    expect(gateAsked).toEqual(["unmarked"])
+    expect(ran).toEqual(["unmarked"])
+  })
+
+  scenario("fails a tool the registry gate denies as a permission rejection and continues", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAnswer = "deny"
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}))
+    yield* s.llm.push(TestLLM.stop())
+
+    yield* s.resume.pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          gateAnswer = "allow"
+        }),
+      ),
+    )
+
+    expect(ran).toEqual([])
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call unmarked"),
+      Expected.assistant({}, [Expected.failedTool({ id: "call-unmarked" }, { error: { type: "permission.rejected" } })]),
+      { type: "assistant", finish: "stop" },
+    ])
+  })
+
+  scenario("interrupts runner continuation when the registry gate is declined", function* (s) {
+    const registry = yield* Tool.Service
+    const ran: string[] = []
+    yield* registry.transform((editor) =>
+      editor.add({
+        name: "unmarked",
+        description: "Does not ask for itself",
+        input: Schema.Struct({}),
+        output: Schema.Struct({}),
+        options: { codemode: false },
+        execute: () => Effect.sync(() => ran.push("unmarked")).pipe(Effect.as({ output: {} })),
+      }),
+    )
+    gateAsked.length = 0
+    gateAnswer = "decline"
+    yield* s.admit("Call unmarked")
+    yield* s.llm.push(TestLLM.tool("call-unmarked", "unmarked", {}))
+
+    const exit = yield* s.resume.pipe(
+      Effect.exit,
+      Effect.ensuring(
+        Effect.sync(() => {
+          gateAnswer = "allow"
+        }),
+      ),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    if (exit._tag === "Failure") expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+    expect(gateAsked).toEqual(["unmarked"])
+    expect(ran).toEqual([])
+    expect(s.requests).toHaveLength(1)
+    expect(yield* s.context).toMatchObject([
+      Expected.user("Call unmarked"),
+      Expected.assistant({}, [
+        Expected.failedTool(
+          { id: "call-unmarked" },
+          { error: { type: "aborted", message: "The user declined this tool call" } },
+        ),
+      ]),
+    ])
+  })
+
   scenario("returns permission corrections to the model and continues", function* (s) {
     const registry = yield* Tool.Service
     yield* transformTools(
@@ -6033,6 +6254,22 @@ describe("SessionRunnerLLM", () => {
     yield* retriesBefore(s, 3)
 
     expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model])
+    expect(yield* fallbackNotices(s)).toEqual([])
+  })
+
+  scenario("restarts the overload count after another failure", function* (s) {
+    yield* s.session.prompt({ sessionID, text: "Reset", turn: { fallbackModel }, resume: false })
+    yield* s.llm.push(
+      Stream.fail(overloaded()),
+      Stream.fail(overloaded()),
+      Stream.fail(rateLimited()),
+      Stream.fail(overloaded()),
+    )
+    yield* s.llm.push(TestLLM.text("Recovered", "reset-success"))
+    yield* retriesBefore(s, 4)
+
+    expect(s.requests.map((request) => request.model)).toEqual([model, model, model, model, model])
+    expect(yield* retryCount()).toBe(4)
     expect(yield* fallbackNotices(s)).toEqual([])
   })
 

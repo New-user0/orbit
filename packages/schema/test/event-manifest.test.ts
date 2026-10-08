@@ -137,6 +137,7 @@ describe("public event manifest", () => {
         "session.viewed.1",
         "session.message.content.updated.1",
         "session.usage.recorded.1",
+        "session.side_query.recorded.1",
         "session.forked.2",
         "session.inbox.delivered.1",
         "session.inbox.enqueued.1",
@@ -177,6 +178,7 @@ describe("public event manifest", () => {
     expect(SessionEvent.DurableDefinitions).toEqual([
       ...SessionEvent.Definitions.filter((definition) => definition.durability === "durable"),
       SessionEvent.UsageRecorded,
+      SessionEvent.SideQueryRecorded,
       SessionEvent.MessageContentUpdated,
     ])
     expect(SessionEvent.UsageRecorded.durability).toBe("durable")
@@ -185,6 +187,15 @@ describe("public event manifest", () => {
     expect(EventManifest.Definitions).not.toContain(SessionEvent.UsageRecorded)
     expect(EventManifest.ServerDefinitions).not.toContain(SessionEvent.UsageRecorded)
     expect(EventManifest.Latest.has("session.usage.recorded")).toBe(false)
+    expect(SessionEvent.SideQueryRecorded.durability).toBe("durable")
+    expect(EventManifest.Durable.get("session.side_query.recorded.1")).toBe(SessionEvent.SideQueryRecorded)
+    expect(SessionEvent.Definitions).not.toContain(SessionEvent.SideQueryRecorded)
+    expect(EventManifest.Definitions).not.toContain(SessionEvent.SideQueryRecorded)
+    // The v1 usage event keeps its source literals, so a service that predates side queries still decodes its rows.
+    expect(SessionEvent.UsageRecorded.data.fields.source.members.map((member) => member.literal)).toEqual([
+      "title",
+      "compaction",
+    ])
     expect(SessionEvent.UsageUpdated.durability).toBe("ephemeral")
     expect(SessionEvent.Compaction.Delta.durability).toBe("ephemeral")
     expect(SessionEvent.Tool.Progress.durability).toBe("ephemeral")
