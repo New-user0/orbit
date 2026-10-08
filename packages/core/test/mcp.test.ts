@@ -2868,13 +2868,13 @@ describe("MCP tool traits", () => {
   })
 
   test("writes out the control and format characters of a title a server chose", () => {
-    const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b‮e\r\nf\ng"
+    const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b\u202ee\r\nf\ng\rh"
     const displayName = McpTool.traits(tool({ title: hostile })).displayName
-    expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e\\nf\\ng")
+    expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e\\nf\\ng\\x0dh")
     expect(displayName).not.toMatch(/\p{C}/u)
     expect(McpTool.traits(tool({ annotations: { title: hostile } })).displayName).toBe(displayName)
     // A title that is only a format character is still a title once written out.
-    expect(McpTool.traits(tool({ title: "‮" })).displayName).toBe("\\u{202e}")
+    expect(McpTool.traits(tool({ title: "\u202e" })).displayName).toBe("\\u{202e}")
   })
 
   const fixture = (codemode: boolean, environment?: Record<string, string>) =>
@@ -2909,8 +2909,8 @@ describe("MCP tool traits", () => {
 
   testEffect(Layer.empty).live("maps the hints of a stdio server onto the traits of a directly loaded tool", () =>
     Effect.gen(function* () {
-      const { tools, service } = yield* fixture(false)
-      expect(tools.map((entry) => entry.name)).toEqual(["lookup", "remove", "plain", "local", "untitled"])
+      const loaded = yield* fixture(false)
+      expect(loaded.tools.map((entry) => entry.name)).toEqual(["lookup", "remove", "plain", "local", "untitled"])
       yield* Effect.gen(function* () {
         const registry = yield* registered
         expect(yield* toolTraits(registry, "traits_lookup")).toMatchObject({
@@ -2947,13 +2947,13 @@ describe("MCP tool traits", () => {
             call: { type: "tool-call", id: "call_untitled", name: "traits_untitled", input: {} },
           }),
         ).toMatchObject({ status: "completed", output: "x" })
-      }).pipe(Effect.provide(traitsLayer(service)))
+      }).pipe(Effect.provide(traitsLayer(loaded.service)))
     }),
   )
 
   testEffect(Layer.empty).live("registers the same traits for a server that Code Mode reaches", () =>
     Effect.gen(function* () {
-      const { service } = yield* fixture(true)
+      const loaded = yield* fixture(true)
       yield* Effect.gen(function* () {
         const registry = yield* registered
         expect(yield* toolTraits(registry, "traits_lookup")).toMatchObject({
@@ -2969,19 +2969,21 @@ describe("MCP tool traits", () => {
         expect((yield* registry.list()).find((entry) => entry.id === "traits_lookup")?.traits).toMatchObject({
           displayName: "Look up",
         })
-      }).pipe(Effect.provide(traitsLayer(service)))
+      }).pipe(Effect.provide(traitsLayer(loaded.service)))
     }),
   )
 
   testEffect(Layer.empty).live("carries a hostile title to every client as written-out text", () =>
     Effect.gen(function* () {
-      const { service } = yield* fixture(false, { MCP_TRAITS_TITLE: "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b‮e" })
+      const loaded = yield* fixture(false, {
+        MCP_TRAITS_TITLE: "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b\u202ee\rf",
+      })
       yield* Effect.gen(function* () {
         const registry = yield* registered
         const displayName = (yield* registry.snapshot()).describe("traits_lookup")?.displayName
-        expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e")
+        expect(displayName).toBe("a\\x1b]0;x\\x07b\\x1b[2Kc\\x9bd\\x9d\\x7f\\u{200b}\\u{202e}e\\x0df")
         expect(displayName).not.toMatch(/\p{C}/u)
-      }).pipe(Effect.provide(traitsLayer(service)))
+      }).pipe(Effect.provide(traitsLayer(loaded.service)))
     }),
   )
 

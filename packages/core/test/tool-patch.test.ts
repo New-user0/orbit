@@ -177,7 +177,7 @@ const withTempTool = <A, E, R>(body: (directory: string, registry: Tool.Interfac
   )
 
 describe("PatchTool", () => {
-  it.live("is destructive only for a patch that deletes a file, or that cannot be read", () =>
+  it.live("is destructive only for a patch that deletes or moves a file, or that cannot be read", () =>
     withTempTool((_, registry) =>
       Effect.gen(function* () {
         const traits = (patchText: string) => toolTraits(registry, "patch", { patchText })
@@ -185,8 +185,7 @@ describe("PatchTool", () => {
         const deleting = "*** Begin Patch\n*** Update File: b.txt\n@@\n-x\n+y\n*** Delete File: c.txt\n*** End Patch"
         expect(yield* traits(modifying)).toMatchObject({ readOnly: false, concurrencySafe: false, destructive: false })
         expect(yield* traits(deleting)).toMatchObject({ readOnly: false, concurrencySafe: false, destructive: true })
-        const moving =
-          "*** Begin Patch\n*** Update File: b.txt\n*** Move to: d.txt\n@@\n-x\n+y\n*** End Patch"
+        const moving = "*** Begin Patch\n*** Update File: b.txt\n*** Move to: d.txt\n@@\n-x\n+y\n*** End Patch"
         expect(yield* traits(moving)).toMatchObject({ destructive: true })
         expect(yield* traits("not a patch")).toMatchObject({
           readOnly: false,
