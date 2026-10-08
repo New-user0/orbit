@@ -98,17 +98,20 @@ const responseFixtures = responseRows.map(
 )
 
 const chat = {
-  request: (requireFinishReason: boolean) =>
-    LLM.request({
-      model: LanguageModel.update(
-        OpenAIChat.route
-          .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
-          .model({ id: "gpt-4o-mini" }),
-        { compatibility: { requireFinishReason } },
-      ),
+  // Leaving `requireFinishReason` out is the route's default, which is to require one.
+  request: (requireFinishReason?: boolean) => {
+    const model = OpenAIChat.route
+      .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
+      .model({ id: "gpt-4o-mini" })
+    return LLM.request({
+      model:
+        requireFinishReason === undefined
+          ? model
+          : LanguageModel.update(model, { compatibility: { requireFinishReason } }),
       prompt: "Write it.",
       tools,
-    }),
+    })
+  },
   calls: (inputs: ReadonlyArray<string>) =>
     inputs.map((input, index) => toolCallChunk(`call_${index}`, "write", input, index)),
 }
@@ -186,7 +189,7 @@ describe("a response that does not show it finished", () => {
 
   it.effect("OpenAI Chat fails a stream without a finish_reason by default and never calls the cut-off call", () =>
     Effect.gen(function* () {
-      const result = yield* run(chat.request(true), sseEvents(...chat.calls([cutOff])))
+      const result = yield* run(chat.request(), sseEvents(...chat.calls([cutOff])))
 
       expect(result.failure).toMatchObject({
         reason: { _tag: "InvalidProviderOutput", classification: "incomplete-stream" },
