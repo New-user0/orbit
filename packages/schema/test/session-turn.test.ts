@@ -16,8 +16,17 @@ describe("SessionTurn.Options", () => {
     expect(decode({})).toEqual({})
   })
 
-  test("drops keys it does not define", () => {
-    expect(decode({ maxSteps: 2, maxTurns: 9 })).toEqual({ maxSteps: 2 })
+  // Stored messages and inbox rows read with Options, so a key that another version added must not make them unreadable.
+  // A request is held to a stricter schema: see SessionTurn.RequestField.
+  test("ignores keys it does not define, wherever a stored message or inbox payload carries them", () => {
+    const stored = { maxSteps: 2, maxTurns: 9 }
+    const user = { id: "msg_turn", time: { created: 1 }, type: "user" as const, text: "hello", turn: stored }
+
+    expect(decode(stored)).toEqual({ maxSteps: 2 })
+    expect(Schema.decodeUnknownSync(SessionMessage.User)(user).turn).toEqual({ maxSteps: 2 })
+    expect(Schema.decodeUnknownSync(SessionInbox.UserPayload)({ text: "hello", turn: stored }).turn).toEqual({
+      maxSteps: 2,
+    })
   })
 
   test.each([
@@ -56,6 +65,34 @@ describe("SessionTurn.Options", () => {
     })
     expect(() => payload({ text: "hello", turn: { maxSteps: 0 } })).toThrow()
     expect(() => message({ ...user, turn: { maxCost: -1 } })).toThrow()
+  })
+})
+
+describe("SessionTurn.RequestField", () => {
+  const decodeRequest = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String, turn: SessionTurn.RequestField }))
+
+  test("reads the options Options reads, and may be left out", () => {
+    const every = { maxSteps: 3, maxCost: 0.5, maxTokens: 20_000, fallbackModel: { ...fallbackModel, variant: "fast" } }
+
+    expect<unknown>(decodeRequest({ text: "hello", turn: every })).toEqual({ text: "hello", turn: every })
+    expect(decodeRequest({ text: "hello", turn: {} })).toEqual({ text: "hello", turn: {} })
+    expect(decodeRequest({ text: "hello" })).toEqual({ text: "hello" })
+  })
+
+  // A dropped key would admit the prompt with fewer limits than it asked for, and an empty set lifts the turn's limits.
+  test.each([
+    ["a snake case spelling of a limit", { max_steps: 2 }],
+    ["a limit that does not exist", { maxTurns: 9 }],
+    ["a different case", { MaxSteps: 2 }],
+    ["a misspelled limit beside a valid one", { maxSteps: 2, max_cost: 1 }],
+    ["a key beside a fallbackModel", { fallbackModel, maxCosts: 1 }],
+  ])("refuses %s instead of dropping it", (_name, turn) => {
+    expect(() => decodeRequest({ text: "hello", turn })).toThrow("Expected no excess property")
+  })
+
+  test("refuses the values Options refuses", () => {
+    for (const turn of [{ maxSteps: 0 }, { maxCost: -0.01 }, { maxTokens: 1.5 }, { fallbackModel: "provider/model" }])
+      expect(() => decodeRequest({ text: "hello", turn })).toThrow()
   })
 })
 

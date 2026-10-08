@@ -72,13 +72,19 @@ it.live("takes turn options on a prompt and returns them, with the delivery, on 
       fallbackModel: { id: "backup", providerID: "provider", variant: "fast" },
     }
 
-    // Options that are not valid are refused at the boundary, and admit nothing.
+    // Options that are not valid are refused at the boundary, and admit nothing. A key the options do not define counts
+    // as not valid: dropping it would admit the prompt with fewer limits than it asked for, and options with nothing
+    // left in them lift the limits set earlier in the turn.
     for (const invalid of [
       { maxSteps: 0 },
       { maxCost: -1 },
       { maxCost: 0 },
       { maxTokens: 1.5 },
       { fallbackModel: "provider/backup" },
+      { max_steps: 2 },
+      { maxTurns: 9 },
+      { maxSteps: 2, max_cost: 1 },
+      { maxSteps: 2, fallbackModel: { id: "backup", providerID: "provider" }, maxCosts: 1 },
     ])
       expect(yield* prompt({ id: ids.first, text: "Refused", turn: invalid })).toMatchObject({
         status: 400,

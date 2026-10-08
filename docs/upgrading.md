@@ -640,11 +640,12 @@ the turn in progress, so the field tells where a turn begins. A message that Orb
 from the agent loop, has no `delivery` and never starts a turn, and neither does a message stored before this change,
 which counts as a steer. The `session.prompt` request also takes a `turn` object, with `maxSteps`, `maxCost` (in US
 dollars), `maxTokens` and `fallbackModel`, all optional. A step or token count that is not a whole number above zero, a
-cost that is not above zero, or a `fallbackModel` that is not a model reference is refused with a 400. Orbit stores the
-options with the prompt and returns them as `turn` on the `user` message, and the latest options in a turn are the ones
-that apply to it. It does not act on them yet: no limit stops a turn and no fallback model is used. A turn ends only at
-a queued input or when the session is marked idle, so a steer that arrives after the agent loop has finished its last
-response, but before the idle mark, still joins that turn.
+cost that is not above zero, a `fallbackModel` that is not a model reference, or a key that `turn` does not define
+(`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
+fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
+message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
+turn and no fallback model is used. A turn ends only at a queued input or when the session is marked idle, so a steer
+that arrives after the agent loop has finished its last response, but before the idle mark, still joins that turn.
 
 **Affects:** programs that read messages through the HTTP API, the client libraries or an exported session, and code
 that checks them against the old shape: `user` messages gain optional `turn` and `delivery`, `synthetic` messages gain
