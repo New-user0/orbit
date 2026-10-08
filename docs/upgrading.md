@@ -1133,3 +1133,14 @@ they send one request.
 **Affects:** people on an overloaded or unavailable provider, and plugins whose `retry` hook reads the proposed delay.
 
 **What to do:** nothing. A `retry` hook can still shorten or stop the wait.
+
+### `/cost` (alias `/usage`) shows what a session has cost
+
+A new `/cost` command, also reachable as `/usage` and from the command palette as "Cost and usage", opens a dialog with
+the session cost, its input, output, reasoning, cache read and cache write tokens, its wall-clock and API time, and a
+breakdown by model. A price the provider did not report reads "unknown" rather than `$0.00`, and a time that older
+messages do not carry reads `-`.
+
+**Affects:** people who type `/cost` or `/usage` into the prompt, where those words were not commands before.
+
+**What to do:** nothing.
