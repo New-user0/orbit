@@ -62,6 +62,7 @@ import { Config } from "@orbit/core/config"
 import { Document, Info } from "@orbit/schema/config"
 import { ConfigCompaction } from "@orbit/schema/config/compaction"
 import { Tool } from "@orbit/core/tool"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info as ToolInfo } from "@orbit/schema/tool"
 import { InstructionStateTable, SessionInboxTable, SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
@@ -1104,6 +1105,7 @@ describe("SessionRunnerLLM", () => {
         messageID: expect.stringMatching(/^msg_/),
         id: Tool.CallID.make("call-location"),
         progress: expect.any(Function),
+        traits: ToolTraits.defaults,
       },
     ])
     expect(Array.from(yield* Fiber.join(progressFiber))[0]?.data.metadata).toEqual({ phase: "reading" })

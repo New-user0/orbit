@@ -22,6 +22,7 @@ import { Money } from "@orbit/schema/money"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { DateTime, Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
 import { testEffect } from "../lib/effect"
+import { stubSnapshot } from "../lib/tool"
 import { host } from "../plugin/host"
 
 const model = LanguageModel.make({
@@ -170,7 +171,7 @@ const input = (tokens: number) => {
       messages,
       agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
       initial: "",
-      tools: { definitions: [], execute: () => Effect.die("unused") },
+      tools: stubSnapshot({ definitions: [], execute: () => Effect.die("unused") }),
     },
   }
 }
