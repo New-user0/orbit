@@ -1,5 +1,6 @@
 import { createMemo } from "solid-js"
 import type { SessionInfo } from "@orbit/client"
+import { plain } from "@orbit/flow/plain"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import { useData } from "../context/data"
 import { useRoute } from "../context/route"
@@ -65,7 +66,7 @@ function row(info: SessionInfo, branch: string, running: boolean) {
   const elapsed = (running ? Date.now() : (info.time.idle ?? info.time.updated)) - info.time.created
   return {
     value: info.id,
-    title: `${branch}${running ? "●" : "○"} ${withTimestampedFallback(info)}`,
+    title: `${branch}${running ? "●" : "○"} ${plain(withTimestampedFallback(info))}`,
     description: [
       info.model?.id,
       Locale.duration(Math.max(0, elapsed)),

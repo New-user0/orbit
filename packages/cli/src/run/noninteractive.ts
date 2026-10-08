@@ -10,6 +10,7 @@ import type {
   ToolContent,
 } from "@orbit/client/promise"
 import { jsonLine, progress } from "@orbit/flow/plain"
+import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { EOL } from "node:os"
 import { Option, Schema } from "effect"
@@ -127,6 +128,7 @@ export async function runNonInteractivePrompt(input: Input) {
   let lastFinish: string | undefined
   let limit: SessionStructuredError | undefined
   let failure: string | undefined
+  let ended = false
 
   const streaming = input.format === "json" || input.format === "stream-json"
   const answer: string[] = []
@@ -220,12 +222,13 @@ export async function runNonInteractivePrompt(input: Input) {
   // A declined tool call ends its step with an interrupted-step error that is only a consequence of our own rejection,
   // which was reported when the call was declined.
   const surfaceStepError = () => {
-    const failure = pendingStepError
+    const step = pendingStepError
     pendingStepError = undefined
-    if (!failure || emittedError || permissionRejected || formCancelled) return
+    if (!step || emittedError || permissionRejected || formCancelled) return
     emittedError = true
     process.exitCode = 1
-    if (!emit("error", failure.time, { subtype: "error", error: failure.error })) UI.error(failure.error.message)
+    failure = step.error.message
+    if (!emit("error", step.time, { subtype: "error", error: step.error })) UI.error(step.error.message)
   }
 
   const writeText = (part: { messageID: string; text: string; [key: string]: unknown }, timestamp: number) => {
@@ -682,7 +685,12 @@ export async function runNonInteractivePrompt(input: Input) {
           emittedError = true
           process.exitCode = 1
           failure = event.data.error.message
-          if (!emit("error", time, { subtype: subtype({ failed: true, interrupted: false, limit }), error: event.data.error }))
+          if (
+            !emit("error", time, {
+              subtype: subtype({ failed: true, interrupted: false, limit }),
+              error: event.data.error,
+            })
+          )
             UI.error(event.data.error.message)
         }
         return
@@ -697,6 +705,7 @@ export async function runNonInteractivePrompt(input: Input) {
           emittedError = true
           process.exitCode = 1
           const error = { type: "aborted" as const, message: `Session interrupted: ${event.data.reason}` }
+          failure = error.message
           if (!emit("error", time, { subtype: "error", error })) UI.error(error.message)
         }
         return
@@ -706,7 +715,13 @@ export async function runNonInteractivePrompt(input: Input) {
         return
       }
       if (event.type === "session.synthetic") {
-        if (input.compatibility !== "v1") replace(event.id.replace(/^evt_/, "msg_"), event.data.metadata, event.data.description, time)
+        if (input.compatibility !== "v1")
+          replace(
+            SessionMessage.ID.fromEvent(Event.ID.make(event.id)),
+            event.data.metadata,
+            event.data.description,
+            time,
+          )
         continue
       }
     }
@@ -854,8 +869,11 @@ export async function runNonInteractivePrompt(input: Input) {
     if (last) {
       pendingStepError = last.error ? { error: last.error, time: last.time.completed ?? last.time.created } : undefined
     }
-    surfaceStepError()
     const failed = projected.messages.findLast((message) => message.type === "idle")?.outcome === "failed"
+    // A busy period that failed after a response that failed part way may have been stopped by a limit that the runner
+    // checked before retrying, so its terminal event, not the response, says why. The failure is held until that event
+    // has been waited for.
+    if (!failed || ended) surfaceStepError()
     return {
       found: projected.found,
       failed,
@@ -875,7 +893,6 @@ export async function runNonInteractivePrompt(input: Input) {
 
   let completed: Promise<void> | undefined
   // Whether the loop has consumed the event that ended the run, which can trail the history and the wait.
-  let ended = false
   try {
     if (input.agent) {
       await input.client.session.switchAgent({ sessionID: input.sessionID, agent: input.agent })
@@ -991,6 +1008,7 @@ export async function runNonInteractivePrompt(input: Input) {
       const timeout = timer && setTimeout(timer.resolve, 5000)
       await (timer ? Promise.race([completed, timer.promise]) : completed).finally(() => clearTimeout(timeout))
     }
+    surfaceStepError()
     // The history alone marks a failed run as failed, even when no event said why.
     if (projected.failed && !emittedError && !interrupted && !permissionRejected && !formCancelled) {
       const error = { type: "unknown", message: "The run ended in failure." }
@@ -1003,6 +1021,7 @@ export async function runNonInteractivePrompt(input: Input) {
       const error = prePromotionError ?? { type: "unknown", message: "Prompt was not promoted" }
       emittedError = true
       process.exitCode = 1
+      failure = error.message
       if (!emit("error", Date.now(), { subtype: "error", error })) UI.error(error.message)
     }
     reachedEnd = true

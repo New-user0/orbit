@@ -1,6 +1,7 @@
 import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, For, onMount, Show, untrack } from "solid-js"
 import { TextAttributes } from "@opentui/core"
+import { plain } from "@orbit/flow/plain"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import { Locale } from "../util/locale"
 import { useArgs } from "../context/args"
@@ -126,7 +127,7 @@ export function Home() {
                   >
                     <text fg={theme.brand.base}>◦</text>
                     <text fg={theme.text.base} flexGrow={1} flexShrink={1} wrapMode="none">
-                      {withTimestampedFallback(session)}
+                      {plain(withTimestampedFallback(session))}
                     </text>
                     <text fg={theme.text.muted} flexShrink={0}>
                       {Locale.ago(session.time.updated)}

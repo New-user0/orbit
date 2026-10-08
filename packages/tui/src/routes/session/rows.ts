@@ -432,6 +432,62 @@ export function turnTokensPerSecond(
   return output / (duration / 1_000)
 }
 
+/**
+ * Walks forward from a step to the end of its turn: the next user message or idle marker. It stops at the first
+ * assistant row, because the escalation notice that replaces a step sits between that step and its successor, and it
+ * never copies or scans the rest of the session. Inbox items that are queued but not yet delivered sit in the list as
+ * user rows, so `queued` names them and they do not close the turn.
+ */
+function followUp(messages: SessionMessageInfo[], index: number, queued?: ReadonlySet<string>) {
+  const message = messages[index]
+  if (message?.type !== "assistant") return
+  let resumed = false
+  // Probing past the end instead of reading `length` keeps a closed turn from subscribing to later appends.
+  for (let next = index + 1; ; next++) {
+    const item = messages[next]
+    if (!item) return { message, end: "open" as const, resumed }
+    if (queued?.has(item.id)) continue
+    if (item.type === "user" || item.type === "idle") return { message, end: "closed" as const, resumed }
+    if (item.type === "assistant") return { message, end: "assistant" as const, resumed }
+    if (item.type !== "synthetic") continue
+    if (item.metadata?.notice === "output-escalation" && item.metadata.replaces === message.id)
+      return { message, end: "retried" as const, resumed }
+    if (item.metadata?.notice === "output-limit") resumed = true
+  }
+}
+
+/**
+ * True for an assistant step whose error or output-limit finish was followed by another assistant step before the
+ * next user message or idle marker, so the run carried on and the failure is history rather than the outcome.
+ */
+export function recoveredStep(messages: SessionMessageInfo[], index: number, queued?: ReadonlySet<string>) {
+  const follow = followUp(messages, index, queued)
+  if (!follow || !(follow.message.error || follow.message.finish === "length")) return false
+  return follow.end === "assistant"
+}
+
+/** True when a later output-escalation notice names this step as the attempt it replaced. */
+export function retriedStep(messages: SessionMessageInfo[], index: number, queued?: ReadonlySet<string>) {
+  return followUp(messages, index, queued)?.end === "retried"
+}
+
+/**
+ * The muted label that follows an assistant footer. A replaced attempt is "retried", ahead of "continued" for a
+ * failure the run recovered from. A final output-limit finish is "truncated" only once nothing carries on: a resume
+ * note with no row after it yet means the next step is starting, so it has no label until the turn closes.
+ */
+export function footerOutcome(messages: SessionMessageInfo[], index: number, queued?: ReadonlySet<string>) {
+  const follow = followUp(messages, index, queued)
+  if (!follow) return
+  if (follow.end === "retried") return "retried"
+  if (follow.message.error || follow.message.finish === "length") {
+    if (follow.end === "assistant") return "continued"
+  }
+  if (follow.message.finish !== "length") return
+  if (follow.end === "open" && follow.resumed) return
+  return "truncated"
+}
+
 export function legacyTurns(messages: SessionMessageInfo[]) {
   return !messages.some((message) => message.type === "idle")
 }

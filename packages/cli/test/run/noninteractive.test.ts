@@ -1072,7 +1072,12 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
       format: "result",
       messages: history(assistant("msg_a", undefined, undefined, earlier), assistant("msg_b", "stop", "fixed")),
     })
-    expect(JSON.parse(result.stdout)).toMatchObject({ type: "result", sessionID: "ses_1", is_error: false, result: "fixed" })
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      type: "result",
+      sessionID: "ses_1",
+      is_error: false,
+      result: "fixed",
+    })
   })
 
   test("a failure that the history shows after the events ended is not dropped", async () => {
@@ -1732,12 +1737,14 @@ describe("runNonInteractivePrompt limits and results", () => {
     stepEnded("msg_two"),
     settled(),
   ]
-  const limitFailure = (type: string, message = "The turn reached its limit.") => (id: string) => [
-    prompted(id),
-    stepStarted("msg_one"),
-    stepEnded("msg_one", "tool-calls", 0.75),
-    executionFailed(message, type),
-  ]
+  const limitFailure =
+    (type: string, message = "The turn reached its limit.") =>
+    (id: string) => [
+      prompted(id),
+      stepStarted("msg_one"),
+      stepEnded("msg_one", "tool-calls", 0.75),
+      executionFailed(message, type),
+    ]
 
   test("sends the limits and the fallback model with the prompt, and nothing when none was asked for", async () => {
     const sdk = await run({ turn: twoSteps, options })
@@ -1927,18 +1934,98 @@ describe("runNonInteractivePrompt limits and results", () => {
       messages: oneStepHistory(0.75),
     })
 
-    test.each(["result", "json", "stream-json"] as const)("a limit stop is not written as a success in %s", async (format) => {
-      const output = await capture({ ...late("limit.steps"), format })
-      expect(output.exitCode).toBe(1)
-      if (format === "result")
-        return expect(JSON.parse(output.stdout)).toMatchObject({
-          is_error: true,
-          subtype: "error_max_steps",
-          error: "Reached it.",
-        })
-      expect(events(output.stdout).filter((event) => event.type === "error")).toEqual([
-        expect.objectContaining({ subtype: "error_max_steps" }),
-      ])
+    test.each(["result", "json", "stream-json"] as const)(
+      "a limit stop is not written as a success in %s",
+      async (format) => {
+        const output = await capture({ ...late("limit.steps"), format })
+        expect(output.exitCode).toBe(1)
+        if (format === "result")
+          return expect(JSON.parse(output.stdout)).toMatchObject({
+            is_error: true,
+            subtype: "error_max_steps",
+            error: "Reached it.",
+          })
+        expect(events(output.stdout).filter((event) => event.type === "error")).toEqual([
+          expect.objectContaining({ subtype: "error_max_steps" }),
+        ])
+      },
+    )
+
+    // The runner checks the limits before each retry, so a response that failed part way can push the spend over one.
+    const idleFailed = { id: "msg_idle", type: "idle", outcome: "failed", time: { created: 4 } } as const
+    const partialThenLimit = (type: string) => ({
+      wait: () => Promise.resolve(),
+      terminalDelay: 50,
+      turn: (id: string) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        stepEnded("msg_one", "tool-calls", 0.2),
+        stepStarted("msg_two"),
+        stepFailed("stream cut", "msg_two"),
+        executionFailed("Reached it.", type),
+      ],
+      messages: (id: string) => [
+        idleFailed,
+        ...history(
+          assistant("msg_one", "tool-calls", undefined, undefined, { cost: 0.2, tokens: 10 }),
+          assistant(
+            "msg_two",
+            "error",
+            undefined,
+            { type: "provider.transport", message: "stream cut" },
+            { cost: 0.4, tokens: 5 },
+          ),
+        )(id),
+      ],
+    })
+
+    test.each([
+      ["limit.cost", "error_max_cost"],
+      ["limit.tokens", "error_max_tokens"],
+    ])("a failed partial step followed by %s is reported as %s, not as the step failure", async (type, subtype) => {
+      const result = await capture({
+        ...partialThenLimit(type),
+        format: "result",
+        options: { maxCost: 0.5, maxTokens: 10 },
+      })
+      expect(JSON.parse(result.stdout)).toMatchObject({ is_error: true, subtype, error: "Reached it." })
+      expect(result.exitCode).toBe(1)
+      for (const format of ["json", "stream-json"] as const) {
+        const lines = await capture({ ...partialThenLimit(type), format })
+        expect(events(lines.stdout).filter((event) => event.type === "error")).toEqual([
+          expect.objectContaining({ subtype, error: { type, message: "Reached it." } }),
+        ])
+      }
+    })
+
+    test("a failed partial step whose terminal event never arrives is reported as the step failure", async () => {
+      const result = await capture({
+        format: "result",
+        wait: () => Promise.resolve(),
+        turn: (id) => [prompted(id), stepStarted("msg_two"), stepFailed("stream cut", "msg_two")],
+        messages: partialThenLimit("limit.cost").messages,
+      })
+      expect(JSON.parse(result.stdout)).toMatchObject({ is_error: true, subtype: "error", error: "stream cut" })
+    }, 15_000)
+
+    test("a limit stop right after a step cut off by the output limit is not a success while the event is behind", async () => {
+      const output = await capture({
+        format: "result",
+        wait: () => Promise.resolve(),
+        terminalDelay: 50,
+        turn: (id) => [
+          prompted(id),
+          stepStarted("msg_one"),
+          textEnded("msg_one", "forty-tw"),
+          stepEnded("msg_one", "length"),
+          executionFailed("Reached 1 step.", "limit.steps"),
+        ],
+        messages: (id) => [
+          idleFailed,
+          ...history(assistant("msg_one", "length", "forty-tw", undefined, { cost: 0, tokens: 3 }))(id),
+        ],
+      })
+      expect(JSON.parse(output.stdout)).toMatchObject({ subtype: "error_max_steps", truncated: true })
     })
 
     test("a run whose history ends in a failed idle marker is a failure even when no event says why", async () => {
@@ -1960,7 +2047,10 @@ describe("runNonInteractivePrompt limits and results", () => {
       format: "result",
       turn: (id) => [prompted(id), settled()],
       messages: history(
-        { ...assistant("msg_one", undefined, undefined, undefined, { cost: 0.1, tokens: 1 }), finish: "unknown" } as never,
+        {
+          ...assistant("msg_one", undefined, undefined, undefined, { cost: 0.1, tokens: 1 }),
+          finish: "unknown",
+        } as never,
         assistant("msg_two", "stop", "Done.", undefined, { cost: 0.1, tokens: 1 }),
       ),
     })
@@ -1970,7 +2060,13 @@ describe("runNonInteractivePrompt limits and results", () => {
   test("a truncated answer warns on stderr in the result format too", async () => {
     const output = await capture({
       format: "result",
-      turn: (id) => [prompted(id), stepStarted("msg_one"), textEnded("msg_one", "forty-tw"), stepEnded("msg_one", "length"), settled()],
+      turn: (id) => [
+        prompted(id),
+        stepStarted("msg_one"),
+        textEnded("msg_one", "forty-tw"),
+        stepEnded("msg_one", "length"),
+        settled(),
+      ],
     })
     expect(output.stderr).toContain("The answer was cut off by the output limit.")
     expect(JSON.parse(output.stdout)).toMatchObject({ truncated: true })
@@ -1980,9 +2076,9 @@ describe("runNonInteractivePrompt limits and results", () => {
     const lines = async (input: Parameters<typeof capture>[0]) =>
       events((await capture({ ...input, format })).stdout).filter((event) => event.type === "error")
     // A step failure that nothing recovered, a non-user interruption and a prompt the server never promoted.
-    expect(await lines({ turn: (id) => [prompted(id), stepStarted("msg_one"), stepFailed("cut", "msg_one"), settled()] })).toEqual([
-      expect.objectContaining({ subtype: "error" }),
-    ])
+    expect(
+      await lines({ turn: (id) => [prompted(id), stepStarted("msg_one"), stepFailed("cut", "msg_one"), settled()] }),
+    ).toEqual([expect.objectContaining({ subtype: "error" })])
     expect(await lines({ turn: (id) => [prompted(id), settled("interrupted", "shutdown")] })).toEqual([
       expect.objectContaining({ subtype: "error" }),
     ])

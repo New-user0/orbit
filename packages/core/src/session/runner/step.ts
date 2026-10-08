@@ -38,7 +38,11 @@ import { ToolScheduler } from "./tool-scheduler.js"
 export type Outcome = Data.TaggedEnum<{
   Completed: { readonly needsContinuation: boolean }
   /** The response stopped at the output limit; the runner decides whether to resume it. */
-  OutputLimited: { readonly needsContinuation: boolean }
+  OutputLimited: {
+    readonly needsContinuation: boolean
+    /** A tool was called before the cut-off, a provider-hosted one included; such a reply is never repeated. */
+    readonly toolCalled: boolean
+  }
   Retry: {
     readonly error: SessionError.Error
     readonly decision: SessionRunnerRetry.Decision
@@ -363,7 +367,8 @@ export const make = Effect.gen(function* () {
         }
 
         // Read before the sweep below: an input cut off by a length stop is settled, not run, and must not start a step.
-        const ran = publisher.record().needsContinuation
+        const before = publisher.record()
+        const ran = before.needsContinuation
 
         // A length stop cuts inputs off before their call: settle them so nothing stays streaming and the model learns.
         if (!llmError && Exit.isSuccess(stream) && !recorded.providerFailed && recorded.finish?.finish === "length")
@@ -416,7 +421,7 @@ export const make = Effect.gen(function* () {
         if (tools.interrupted && Exit.isFailure(joined)) return yield* Effect.failCause(joined.cause)
         if (record.failure) return yield* new StepFailedError({ error: record.failure })
         const needsContinuation = input.prepared.request.toolChoice?.type !== "none" && record.needsContinuation
-        if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation: needsContinuation && ran })
+        if (record.finish?.finish === "length") return Outcome.OutputLimited({ needsContinuation: needsContinuation && ran, toolCalled: before.toolCalled })
         return Outcome.Completed({ needsContinuation })
       }),
     )

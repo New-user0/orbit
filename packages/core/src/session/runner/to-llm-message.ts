@@ -323,9 +323,22 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
   }
 }
 
+/**
+ * History without the `output-escalation` notices and the attempts they replace: the retry at the larger output
+ * limit is the same request, so neither is sent, estimated or summarized.
+ */
+export const withoutReplaced = (messages: readonly SessionMessage.Info[]) => {
+  const notices = messages.filter(
+    (message) => message.type === "synthetic" && message.metadata?.notice === "output-escalation",
+  )
+  if (notices.length === 0) return messages
+  const replaced = new Set(notices.map((message) => message.metadata?.replaces))
+  return messages.filter((message) => !notices.includes(message) && !replaced.has(message.id))
+}
+
 /** Translate projected Session history into canonical @orbit/ai context. */
 export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
   model: Model.Ref,
   providerMetadataKey: string = model.providerID,
-) => messages.flatMap((message) => toLLMMessage(message, model, providerMetadataKey))
+) => withoutReplaced(messages).flatMap((message) => toLLMMessage(message, model, providerMetadataKey))

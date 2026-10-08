@@ -181,6 +181,8 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     yield* InstructionEntry.initialize(db, event.data.sessionID, event.data.instructionEntries, event.created)
 
   let cursor = -1
+  // Copied rows get new IDs, so a notice that names the attempt it replaces must follow that attempt to its copy.
+  const copiedIDs = new Map<string, SessionMessage.ID>()
   while (copiedSeq !== undefined) {
     const rows = yield* db
       .select()
@@ -202,17 +204,22 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       .pipe(Effect.orDie)
     if (rows.length === 0) break
 
+    const copies = rows.map((row) => ({
+      row,
+      id: SessionMessage.ID.make(`${SessionMessage.ID.fromEvent(event.id)}_${row.seq}`),
+    }))
+    copies.forEach((copy) => copiedIDs.set(copy.row.id, copy.id))
     yield* db
       .insert(SessionMessageTable)
       .values(
-        rows.map((row) => ({
-          id: SessionMessage.ID.make(`${SessionMessage.ID.fromEvent(event.id)}_${row.seq}`),
+        copies.map((copy) => ({
+          id: copy.id,
           session_id: event.data.sessionID,
-          type: row.type,
-          seq: row.seq,
-          time_created: row.time_created,
-          time_updated: row.time_updated,
-          data: row.data,
+          type: copy.row.type,
+          seq: copy.row.seq,
+          time_created: copy.row.time_created,
+          time_updated: copy.row.time_updated,
+          data: replacedToCopy(copy.row, copiedIDs),
         })),
       )
       .run()
@@ -224,6 +231,18 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
   if (event.data.instructions)
     yield* InstructionState.initialize(db, event.data.sessionID, event.durable.seq, event.data.instructions)
 })
+
+/** An output-escalation notice keeps naming the parent's attempt unless it is remapped to that attempt's copy. */
+function replacedToCopy(
+  row: typeof SessionMessageTable.$inferSelect,
+  copiedIDs: ReadonlyMap<string, SessionMessage.ID>,
+) {
+  if (row.type !== "synthetic") return row.data
+  const metadata = row.data.metadata
+  if (metadata?.notice !== "output-escalation" || typeof metadata.replaces !== "string") return row.data
+  const copy = copiedIDs.get(metadata.replaces)
+  return copy ? { ...row.data, metadata: { ...metadata, replaces: copy } } : row.data
+}
 
 function run(db: DatabaseService, event: MessageEvent) {
   return Effect.gen(function* () {

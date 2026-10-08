@@ -1,7 +1,7 @@
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { run } from "@orbit/tui"
-import { Commands, PrintParamKeys } from "../commands"
+import { Commands, PrintParamFlags, PrintParamKeys } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Config } from "../../config"
 import { Context, Effect, FileSystem, Option, Queue } from "effect"
@@ -17,14 +17,24 @@ import { errorMessage } from "../../util/error"
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
     // The flags of a printed run mean nothing to the interface, so say so instead of dropping them.
-    // Derived from the printed run's own flags, so a flag added there cannot slip past this check.
-    const printOnly = PrintParamKeys.filter((key) => {
+    // Derived from the printed run's own flags (the ones the interface also takes are not among them), so a flag added
+    // there cannot slip past this check.
+    const printOnly = PrintParamKeys.flatMap((key, index) => {
       const value: unknown = input[key]
-      if (Option.isOption(value)) return Option.isSome(value)
-      return Array.isArray(value) ? value.length > 0 : value === true
-    }).map((key) => `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`)
+      const given = Option.isOption(value)
+        ? Option.isSome(value)
+        : Array.isArray(value)
+          ? value.length > 0
+          : value === true
+      return given ? [PrintParamFlags[index]] : []
+    })
     if (printOnly.length > 0)
       return yield* Effect.fail(new Error(`${printOnly.join(", ")} can only be used with -p, as in: orb -p <message>`))
+    const resume = Option.getOrUndefined(input.resume)
+    if (resume !== undefined && (input.continue || Option.isSome(input.session)))
+      return yield* Effect.fail(new Error("--resume cannot be combined with --continue or --session"))
+    if (input.fork && !input.continue && Option.isNone(input.session) && resume === undefined)
+      return yield* Effect.fail(new Error("--fork requires --continue, --session or --resume"))
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
@@ -50,7 +60,10 @@ export default Runtime.handler(Commands, (input) =>
         )
       },
     })
-    const session = Option.getOrUndefined(input.session)
+    // A --resume value that is the ID of a session opens it, as --session does; anything else, including nothing, opens
+    // the session list with the value typed into its search.
+    const resumeID = resume !== undefined && /^ses\S*$/.test(resume) ? resume : undefined
+    const session = Option.getOrUndefined(input.session) ?? resumeID
     // A missing --session ID becomes the ID of the session the first prompt creates.
     const sessionExists =
       session !== undefined &&
@@ -59,6 +72,12 @@ export default Runtime.handler(Commands, (input) =>
           findSession(Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }), session),
         catch: (cause) => new Error(errorMessage(cause)),
       })) !== undefined
+    const resumePicks = resume !== undefined && !(resumeID !== undefined && sessionExists)
+    if (resumePicks && input.fork)
+      return yield* Effect.fail(new Error("--fork with --resume needs the ID of an existing session"))
+    // Home sends --prompt to a new session as soon as it shows, which is not the session that the person picks.
+    if (resumePicks && Option.isSome(input.prompt))
+      return yield* Effect.fail(new Error("--prompt cannot be combined with a --resume that opens the session list"))
     const config = yield* Config.Service
     const npm = yield* Npm.Service
     const fileSystem = yield* FileSystem.FileSystem
@@ -85,7 +104,11 @@ export default Runtime.handler(Commands, (input) =>
       args: {
         continue: input.continue,
         sessionID: sessionExists ? session : undefined,
-        newSessionID: sessionExists ? undefined : session,
+        newSessionID: sessionExists ? undefined : Option.getOrUndefined(input.session),
+        model: Option.getOrUndefined(input.model),
+        agent: Option.getOrUndefined(input.agent),
+        fork: input.fork,
+        resume: resumePicks ? resume : undefined,
         prompt: Option.getOrUndefined(input.prompt),
         auto: input.auto || input.yolo || input.dangerouslySkipPermissions,
       },

@@ -468,6 +468,44 @@ it.effect("regenerates an existing title using the title agent", () =>
   }),
 )
 
+it.effect("regenerating a title leaves out an escalated attempt and its notice", () =>
+  Effect.gen(function* () {
+    yield* enableTitleAgent
+    const sessionID = Session.ID.make("ses_title_escalated")
+    yield* insertSession(sessionID, "Original title")
+    yield* prompt(sessionID, "Investigate the login failure")
+    const events = yield* Bus.Service
+    const reply = (ordinal: number, text: string) =>
+      Effect.gen(function* () {
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID,
+          assistantMessageID,
+          agent: Agent.ID.make("build"),
+          model: Model.Ref.make({ id: Model.ID.make("title-model"), providerID: Provider.ID.make("test") }),
+          started: 0,
+        })
+        yield* events.publish(SessionEvent.Text.Started, { sessionID, assistantMessageID, ordinal })
+        yield* events.publish(SessionEvent.Text.Ended, { sessionID, assistantMessageID, ordinal, text })
+        return assistantMessageID
+      })
+    const cut = yield* reply(0, "FirstCutText")
+    yield* events.publish(SessionEvent.Synthetic, {
+      sessionID,
+      text: "EscalationNoticeText",
+      metadata: { notice: "output-escalation", replaces: cut },
+    })
+    yield* reply(0, "WholeAnswerText")
+
+    yield* (yield* SessionTitle.Service).generate(sessionID)
+
+    const sent = JSON.stringify(requests[0]?.messages)
+    expect(sent).toContain("WholeAnswerText")
+    expect(sent).not.toContain("FirstCutText")
+    expect(sent).not.toContain("EscalationNoticeText")
+  }),
+)
+
 it.effect("bounds regeneration context while preserving the original request and recent conversation", () =>
   Effect.gen(function* () {
     yield* enableTitleAgent
