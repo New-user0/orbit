@@ -279,7 +279,7 @@ export function DialogSessionList() {
           },
         },
         {
-          command: "session.rename",
+          command: "dialog.session.rename",
           title: "rename",
           onTrigger: (option: { value: string; title: string }) =>
             DialogSessionRename.show(dialog, option.value, option.title),

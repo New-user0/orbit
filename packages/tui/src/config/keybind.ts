@@ -121,7 +121,7 @@ export const Definitions = {
   "session.tab.reopen": keybind("ctrl+shift+t", "Reopen last closed session tab"),
   "session.timeline": keybind("<leader>g", "Show session timeline"),
   "session.fork": keybind("none", "Fork session from message"),
-  "session.rename": keybind("ctrl+r", "Rename session"),
+  "session.rename": keybind("none", "Rename session"),
   "session.delete": keybind("ctrl+d", "Delete session"),
   "session.share": keybind("none", "Share current session"),
   "session.unshare": keybind("none", "Unshare current session"),
@@ -245,6 +245,7 @@ export const Definitions = {
   "input.select.all": keybind("super+a", "Select all in input"),
   "prompt.history.previous": keybind("up", "Previous history item"),
   "prompt.history.next": keybind("down", "Next history item"),
+  "prompt.history.search": keybind("ctrl+r", "Search prompt history"),
 
   "composer.subagent.up": keybind("up", "Previous subagent"),
   "composer.subagent.down": keybind("down", "Next subagent"),
@@ -266,6 +267,7 @@ export const Definitions = {
   "dialog.select.end": keybind("end", "Move to last dialog item"),
   "dialog.select.submit": keybind("return", "Submit selected dialog item"),
   "dialog.prompt.submit": keybind("return", "Submit dialog prompt"),
+  "dialog.session.rename": keybind("ctrl+r", "Rename session"),
   "dialog.integration.rename": keybind("ctrl+r", "Rename integration account"),
   "dialog.integration.delete": keybind("ctrl+d", "Delete integration account"),
   "dialog.worktree.generate": keybind("tab", "Generate worktree name"),
@@ -316,8 +318,8 @@ export function isCommand(name: string): name is CommandName {
 
 /**
  * The places a keymap layer can belong to. A layer names its place with `context`, and the keybindings file can give a
- * command other keys in one place only, as `session.rename` can have one key in the session list and another in a
- * session. The set is closed: a layer that names anything else is read as having no place.
+ * command other keys in one place only, as `dialog.session.rename` can have one key in the session list while
+ * `session.rename` has another in a session. The set is closed: a layer that names anything else is read as having no place.
  */
 export const Contexts = [
   "global",

@@ -110,8 +110,15 @@ async function mountList(file: object) {
   }
 }
 
+test("renames from ctrl+r in the session list, which the prompt's history search shares", async () => {
+  await using list = await mountList({})
+
+  list.app.mockInput.pressKey("r", { ctrl: true })
+  await list.app.waitForFrame((frame) => frame.includes("Rename session"))
+})
+
 test("renames from the key that the session-list context of the keybindings file gives it", async () => {
-  await using list = await mountList({ contexts: { "session-list": { "session.rename": "ctrl+alt+r" } } })
+  await using list = await mountList({ contexts: { "session-list": { "dialog.session.rename": "ctrl+alt+r" } } })
 
   // The stock key has gone to the context's own: it does nothing here, and the other opens the rename prompt.
   list.app.mockInput.pressKey("r", { ctrl: true })
@@ -123,7 +130,7 @@ test("renames from the key that the session-list context of the keybindings file
 })
 
 test("renames from the stock key when the keybindings file names another context", async () => {
-  await using list = await mountList({ contexts: { dialog: { "session.rename": "ctrl+alt+r" } } })
+  await using list = await mountList({ contexts: { dialog: { "dialog.session.rename": "ctrl+alt+r" } } })
 
   list.app.mockInput.pressKey("r", { ctrl: true, meta: true })
   await list.app.renderOnce()
