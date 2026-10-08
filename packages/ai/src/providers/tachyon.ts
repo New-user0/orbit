@@ -1,6 +1,5 @@
 import { Effect, Option, Schema } from "effect"
 import { Headers, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
-import { certificateFailureCode } from "../provider-error.js"
 import type { ProviderPackage } from "../provider-package.js"
 import { OpenAIChat } from "../protocols/openai-chat.js"
 import { Auth } from "../route/auth.js"
@@ -284,7 +283,6 @@ function accessToken(input: Connection) {
               cause,
               transport: "http",
               operation: "request",
-              code: certificateFailureCode(cause),
               url: input.apigeeURL,
               phase: "connect",
               delivery: "not-sent",

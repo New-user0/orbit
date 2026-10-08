@@ -68,8 +68,9 @@ export const isContextOverflowFailure = (failure: unknown) =>
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
 
-// OpenSSL's certificate verification codes (X509_V_ERR_*), which Node and Bun report as the error code, plus Node's own
-// host-name check and the generic handshake failure.
+// The certificate verification codes (X509_V_ERR_* names) that Bun's fetch reports as the error code, as listed in its
+// binary, plus Node's own host-name check. UNKNOWN_CERTIFICATE_VERIFICATION_ERROR is Bun's name for a result its table
+// does not map. A provider's own error codes are never in this set.
 const CERTIFICATE_CODES = new Set([
   "UNABLE_TO_GET_ISSUER_CERT",
   "UNABLE_TO_GET_CRL",
@@ -125,8 +126,18 @@ const CERTIFICATE_CODES = new Set([
   "HOSTNAME_MISMATCH",
   "EMAIL_MISMATCH",
   "IP_ADDRESS_MISMATCH",
+  "APPLICATION_VERIFICATION",
+  "SUITE_B_INVALID_VERSION",
+  "SUITE_B_INVALID_ALGORITHM",
+  "SUITE_B_INVALID_CURVE",
+  "SUITE_B_INVALID_SIGNATURE_ALGORITHM",
+  "SUITE_B_LOS_NOT_ALLOWED",
+  "SUITE_B_CANNOT_SIGN_P_384_WITH_P_256",
+  "INVALID_CALL",
+  "NAME_CONSTRAINTS_WITHOUT_SANS",
+  "STORE_LOOKUP",
+  "UNKNOWN_CERTIFICATE_VERIFICATION_ERROR",
   "ERR_TLS_CERT_ALTNAME_INVALID",
-  "CERTIFICATE_VERIFY_FAILED",
 ])
 
 /**
@@ -136,7 +147,7 @@ const CERTIFICATE_CODES = new Set([
 export const certificateFailureCode = (error: unknown, depth = 0): string | undefined => {
   if (depth > 5 || !isRecord(error)) return undefined
   const code = typeof error.code === "string" ? error.code : undefined
-  if (code !== undefined && CERTIFICATE_CODES.has(code.toUpperCase())) return code
+  if (code !== undefined && CERTIFICATE_CODES.has(code)) return code
   return certificateFailureCode(error.cause, depth + 1)
 }
 

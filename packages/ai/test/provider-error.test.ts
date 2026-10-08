@@ -11,7 +11,12 @@ import {
   isOverloaded,
   isRetryable,
 } from "../src/index.js"
-import { certificateFailureCode, classifyProviderFailure, providerErrorMessage, type ProviderFailure } from "../src/provider-error.js"
+import {
+  certificateFailureCode,
+  classifyProviderFailure,
+  providerErrorMessage,
+  type ProviderFailure,
+} from "../src/provider-error.js"
 
 describe("provider error classification", () => {
   test("classifies provider token limit messages as context overflow", () => {
@@ -758,7 +763,10 @@ describe("certificate failures", () => {
     "ERROR_IN_CERT_NOT_AFTER_FIELD",
     "CRL_HAS_EXPIRED",
     "UNABLE_TO_GET_CRL",
-    "CERTIFICATE_VERIFY_FAILED",
+    "NAME_CONSTRAINTS_WITHOUT_SANS",
+    "UNKNOWN_CERTIFICATE_VERIFICATION_ERROR",
+    "SUITE_B_INVALID_CURVE",
+    "APPLICATION_VERIFICATION",
   ]
 
   test.each(codes)("does not retry %s", (code) => {
@@ -775,27 +783,53 @@ describe("certificate failures", () => {
     Bun.file(path.join(import.meta.dir, "..", "..", "util", "test", "fixture", "tls", name)).text()
 
   test.each([
-    { name: "an unknown CA", cert: "server", ca: undefined, host: "127.0.0.1" },
-    { name: "a host name mismatch", cert: "server", ca: "ca.pem", host: "127.0.0.2" },
-    { name: "the wrong purpose", cert: "client-only", ca: "purpose-ca.pem", host: "127.0.0.1" },
-    { name: "a leaf from an unknown issuer", cert: "client-only", ca: undefined, host: "127.0.0.1" },
+    {
+      name: "an unknown CA",
+      cert: "server",
+      ca: undefined,
+      serverName: undefined,
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    },
+    {
+      name: "a host name mismatch",
+      cert: "server",
+      ca: "ca.pem",
+      serverName: "mismatch.invalid",
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+    },
+    {
+      name: "the wrong purpose",
+      cert: "client-only",
+      ca: "purpose-ca.pem",
+      serverName: undefined,
+      code: "INVALID_PURPOSE",
+    },
+    {
+      name: "a leaf with no subject alternative name under a name-constrained CA",
+      cert: "nameconstrained-leaf",
+      ca: "nameconstrained-ca.pem",
+      serverName: undefined,
+      code: "NAME_CONSTRAINTS_WITHOUT_SANS",
+    },
   ])("does not retry what fetch throws for $name", async (input) => {
     const server = Bun.serve({
-      hostname: "0.0.0.0",
+      hostname: "127.0.0.1",
       port: 0,
       tls: { cert: await fixture(`${input.cert}.pem`), key: await fixture(`${input.cert}.key`) },
       fetch: () => new Response("ok"),
     })
-    const thrown = await fetch(
-      `https://${input.host}:${server.port}`,
-      input.ca ? { tls: { ca: await fixture(input.ca) } } : {},
-    ).then(
+    const thrown = await fetch(`https://127.0.0.1:${server.port}`, {
+      tls: {
+        ...(input.ca ? { ca: await fixture(input.ca) } : {}),
+        ...(input.serverName ? { serverName: input.serverName } : {}),
+      },
+    }).then(
       () => undefined,
       (error: unknown) => error,
     )
     await server.stop(true)
     expect(thrown).toBeInstanceOf(Error)
-    expect(certificateFailureCode(thrown)).toBeDefined()
+    expect(certificateFailureCode(thrown)).toBe(input.code)
     expect(isRetryable(transport({ cause: thrown }))).toBe(false)
   })
 
