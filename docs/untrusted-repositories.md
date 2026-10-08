@@ -157,8 +157,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the `result` object and the error that `reportRunError` prints, goes through `jsonLine` from `@orbit/flow/plain`.
   Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
   step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
-  thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
-  are message content and still open (see Known gaps; close them with `body` from `@orbit/flow/plain`). Proof:
+  thinking lines of the default format are message content and still open (see Known gaps). The tool lines that
+  `renderTool` and `renderToolError` draw in `run.ts` are closed: the title and the description of an inline tool, the
+  title of a block, and the failed line go through `progress`, and a block body and the `--verbose` tool output go
+  through `body`. So do the init, result and delta lines (`jsonLine`), the usage line and the summary of auto-rejected
+  requests (`progress`), and the schema text output (`jsonLine`). Proof: `packages/cli/test/print.test.ts` ("a hostile
+  tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/flow/test/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
@@ -1411,8 +1415,8 @@ fixes it or asks.
   fork lists (`dialog-timeline.tsx`, `dialog-fork.tsx`), the `/btw` answer (`btw.tsx`), the attachment names of a user
   message, the terminal and subagent rows of the composer (`terminals-tab.tsx`, `subagents-tab.tsx`, whose titles are
   session titles), the Mini subagent picker and footer (`footer.subagent.tsx`), and the width checks of Mini form
-  rows. Open, with no sanitizer: `orb run`, whose default format writes the answer, the thinking lines and the tool
-  blocks as the model and the tools made them (its JSON formats write the same text out with `jsonLine`); the text of
+  rows. Open, with no sanitizer: `orb run`, whose default format writes the answer and the thinking lines as the model
+  made them (its JSON formats write the same text out with `jsonLine`, and its tool lines are escaped); the text of
   the desktop notification that `notifications.ts` sends through `context.attention.notify`, which carries the
   "Session failed" message and the session title; the markdown export of a session; the prompt history search and the
   stash list, which draw text that the person typed or pasted; and the session titles in the tab rail, the session list

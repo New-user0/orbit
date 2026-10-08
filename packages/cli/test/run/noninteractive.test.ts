@@ -384,6 +384,7 @@ async function run(input: {
   attached?: boolean
   format?: "default" | "json" | "stream-json" | "result"
   jsonSchema?: unknown
+  envelope?: { cwd: string; agent?: string; model?: string; version: string }
   compatibility?: "v1"
   cancel?: (input: { sessionID: string; formID: string }) => Promise<void>
   renderTool?: (part: SessionMessageAssistantTool) => Promise<void>
@@ -465,6 +466,7 @@ async function run(input: {
     thinking: input.thinking ?? false,
     format: input.format ?? "default",
     jsonSchema: input.jsonSchema,
+    envelope: input.envelope,
     auto: false,
     attached: input.attached ?? false,
     compatibility: input.compatibility,
@@ -991,6 +993,27 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
     expect(interrupted.exitCode).toBe(1)
   })
 
+  test("the result reports a stop that the user did not ask for as an interruption with its reason", async () => {
+    const envelope = { cwd: "/tmp", version: "test" }
+    const shutdown = await capture({
+      format: "result",
+      envelope,
+      turn: (messageID) => [prompted(messageID), settled("interrupted", "shutdown")],
+    })
+    expect(JSON.parse(shutdown.stdout)).toMatchObject({ is_error: true, outcome: "interrupted", reason: "shutdown" })
+    expect(shutdown.exitCode).toBe(1)
+  })
+
+  test("a failed run with a schema in the text format prints its error once", async () => {
+    const output = await capture({
+      envelope: { cwd: "/tmp", version: "test" },
+      jsonSchema: { type: "object" },
+      turn: (messageID) => [prompted(messageID), executionFailed("boom")],
+    })
+    expect(output.stderr.match(/boom/g)).toHaveLength(1)
+    expect(output.exitCode).toBe(1)
+  })
+
   test("a failed step that nothing follows is reported when the execution ends, before the history is read", async () => {
     // What has been written to stderr so far, which a run's reading of the history can look at.
     const writtenSoFar = () =>
@@ -1128,6 +1151,25 @@ describe("runNonInteractivePrompt while the runner recovers", () => {
         structured_output: { name: "Alice" },
       })
       expect(parsed.exitCode).toBe(0)
+    })
+
+    test("gives the same answer in the result and stream-json envelopes", async () => {
+      const envelope = { cwd: "/tmp", version: "test" }
+      // One after the other: each run replaces process.stdout.write.
+      const results = []
+      for (const format of ["result", "stream-json"] as const) {
+        const output = await capture({
+          format,
+          envelope,
+          jsonSchema: { type: "object" },
+          turn: cut('{"name": "Ali', 'ce"}'),
+        })
+        results.push(JSON.parse(output.stdout.trim().split(/\r?\n/).at(-1)!))
+      }
+
+      results.forEach((result) =>
+        expect(result).toMatchObject({ is_error: false, result: '{"name": "Alice"}', structured_output: { name: "Alice" } }),
+      )
     })
 
     test("is written as one line to a pipe and to a terminal", async () => {

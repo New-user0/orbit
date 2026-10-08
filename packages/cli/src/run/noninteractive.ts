@@ -105,7 +105,8 @@ export async function runNonInteractivePrompt(input: Input) {
   // The lines of the envelope, and the schema text mode that prints only the parsed answer.
   const lines = input.envelope !== undefined && (input.format === "result" || input.format === "stream-json")
   const schemaText = input.envelope !== undefined && input.format === "default" && input.jsonSchema !== undefined
-  const collecting = input.format === "result" || schemaText
+  // The answer of these runs is gathered through `hold`, so every format joins output-limit continuations the same way.
+  const collecting = input.format === "result" || schemaText || (lines && input.format === "stream-json")
   if (lines && input.envelope && input.format === "stream-json") {
     process.stdout.write(
       jsonLine({
@@ -133,6 +134,9 @@ export async function runNonInteractivePrompt(input: Input) {
   let permissionRejected = false
   let formCancelled = false
   let interrupted = false
+  // Why the runner stopped the run when the user did not: a shutdown, inactivity or a newer prompt. The result reports
+  // it as an interruption with that reason.
+  let interruption: string | undefined
   let v1InvalidOutput = false
   let prePromotionError: { message: string; [key: string]: unknown } | undefined
   let finalizing = false
@@ -147,8 +151,6 @@ export async function runNonInteractivePrompt(input: Input) {
   let failure: string | undefined
   const totals = { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
   const rejected: { action: string; resources: string[] }[] = []
-  // The answer of a stream-json run, which is written as it arrives and so is not held; kept per message for `discard`.
-  let streamed: { messageID: string; text: string }[] = []
   // The assistant messages whose step ended at the output limit, and the ones that a notice replaced.
   const lengthMessages = new Set<string>()
   const replaced = new Set<string>()
@@ -200,7 +202,6 @@ export async function runNonInteractivePrompt(input: Input) {
   }
 
   const discard = (messageID: string) => {
-    streamed = streamed.filter((part) => part.messageID !== messageID)
     held = held.flatMap((item): Held[] => {
       if (item.type === "note") return item.messageID === messageID ? [] : [item]
       const parts = item.parts.filter((part) => part.messageID !== messageID)
@@ -242,7 +243,8 @@ export async function runNonInteractivePrompt(input: Input) {
   }
 
   const writeText = (part: { messageID: string; text: string; [key: string]: unknown }, timestamp: number) => {
-    if (emit("text", timestamp, { part })) return void streamed.push({ messageID: part.messageID, text: part.text })
+    const written = emit("text", timestamp, { part })
+    if (written && !collecting) return
     if (input.compatibility === "v1") return printText(part.text)
     hold(part.messageID, part.text)
   }
@@ -765,6 +767,7 @@ export async function runNonInteractivePrompt(input: Input) {
         // A declined tool call ends the step with an interruption; it was already reported above.
         if (event.data.reason !== "user" && !emittedError && !permissionRejected && !formCancelled) {
           emittedError = true
+          interruption = event.data.reason
           process.exitCode = 1
           const error = { type: "aborted" as const, message: `Session interrupted: ${event.data.reason}` }
           if (!emit("error", time, { error })) UI.error(error.message)
@@ -1041,24 +1044,25 @@ export async function runNonInteractivePrompt(input: Input) {
     // Every way out of the run prints exactly one result, failed unless the run reached its end cleanly.
     const failed = !reachedEnd || emittedError || interrupted || permissionRejected || formCancelled
     if (lines) {
-      const text = input.format === "stream-json" ? streamed.map((part) => part.text.trim()).filter(Boolean) : answer
       writeEnvelopeResult({
         sessionID: input.sessionID,
-        text: text.join("\n\n"),
+        text: answer.join("\n\n"),
         failed,
         schema: input.jsonSchema,
-        outcome: interrupted ? "interrupted" : failed ? "failed" : "succeeded",
+        outcome: interrupted || interruption !== undefined ? "interrupted" : failed ? "failed" : "succeeded",
         reason: !failed
           ? undefined
           : interrupted
             ? "interrupted"
-            : failure !== undefined
-              ? "error"
-              : permissionRejected
-                ? "permission_rejected"
-                : formCancelled
-                  ? "question_cancelled"
-                  : "incomplete",
+            : interruption !== undefined
+              ? interruption
+              : failure !== undefined
+                ? "error"
+                : permissionRejected
+                  ? "permission_rejected"
+                  : formCancelled
+                    ? "question_cancelled"
+                    : "incomplete",
         error: failure,
         steps: totals.steps,
         duration: Date.now() - startedAt,
@@ -1066,7 +1070,7 @@ export async function runNonInteractivePrompt(input: Input) {
         tokens: totals.tokens,
         rejected,
       })
-    } else if (schemaText) writeSchemaText(answer.join("\n\n"), failed, failure)
+    } else if (schemaText) writeSchemaText(answer.join("\n\n"), failed)
     else if (input.format === "result") writeResult(input.sessionID, answer.join("\n\n"), failed, input.jsonSchema)
     // Nobody could approve these, so the model went on without them; the exit code does not change.
     if (input.envelope && input.format === "default" && rejected.length > 0)
@@ -1226,10 +1230,11 @@ function writeEnvelopeResult(run: {
 }
 
 // `orb -p --json-schema` in text format: stdout holds only the parsed answer, and an answer that is not JSON is an error.
-function writeSchemaText(text: string, failed: boolean, failure: string | undefined) {
+function writeSchemaText(text: string, failed: boolean) {
   const parsed = parseJson(unfence(text))
   if (failed || !parsed) process.exitCode = process.exitCode || 1
-  if (failed) return void (failure && UI.error(failure))
+  // The error was already printed when it happened.
+  if (failed) return
   if (!parsed) return UI.error("The answer was not valid JSON.")
   process.stdout.write(jsonLine(parsed.value) + EOL)
 }

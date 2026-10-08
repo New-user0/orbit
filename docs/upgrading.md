@@ -316,7 +316,9 @@ reports the refusal as a JSON result object under `--output-format json`; `--tru
 `{"type":"init","protocol":1,"sessionID","cwd","agent","model","version"}` that is written before the message is sent
 (`agent` is `null` until the session has chosen one), and ending with exactly one result line. `--output-format json`
 prints only that result object. Besides `sessionID`, `is_error`, `result`, `structured_output` and `error`, it now has
-`outcome` (`succeeded`, `failed` or `interrupted`), `reason` when the run did not succeed, `steps`, `duration_ms`,
+`outcome` (`succeeded`, `failed` or `interrupted`), `reason` when the run did not succeed (`error`, `invalid_output`,
+`permission_rejected`, `question_cancelled`, `incomplete`, `interrupted` for Ctrl-C, or the reason the runner stopped it,
+such as `shutdown`, which is an `interrupted` outcome), `steps`, `duration_ms`,
 `cost`, `tokens` and `rejected` (the requests that were rejected because nobody could approve them). The steps, cost and
 tokens include failed steps and the steps of subagents the run started. `--include-partial-messages` (stream-json only)
 adds `text_delta`, `reasoning_delta` (with `--thinking`) and `tool_input_delta` lines. `--verbose` implies `--thinking`,
@@ -325,7 +327,9 @@ auto-rejected requests ends with one summary line on stderr; its exit code does 
 
 `orb -p --json-schema` with the text format now prints only the parsed JSON answer (it used to print the result object,
 which `--output-format json` still does); an answer that is not JSON is an error on stderr and exits 1. `orb run
---format` is hidden from `--help` and prints exactly what it printed before, without the new fields or lines.
+--format` is hidden from `--help` and prints what it printed before, without the new fields or lines. The one visible
+change is that its text output now writes out control characters in tool titles, descriptions, block bodies and the
+failed line, so a name that holds a line break or an escape sequence shows as `\x..` text.
 
 **Affects:** scripts that read the output of `orb -p --json-schema` as a result object.
 

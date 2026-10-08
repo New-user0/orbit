@@ -1,6 +1,6 @@
 import { Service, type Endpoint } from "@orbit/client/effect/service"
 import { Orbit, type OrbitClient, type SessionMessageAssistantTool } from "@orbit/client/promise"
-import { jsonLine, progress } from "@orbit/flow/plain"
+import { body, jsonLine, progress } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
 import { open } from "node:fs/promises"
 import { EOL } from "node:os"
@@ -263,8 +263,8 @@ async function renderTool(part: SessionMessageAssistantTool, directory: string, 
       : ""
   if (info.mode === "block") {
     UI.empty()
-    UI.println(UI.Style.TEXT_NORMAL + info.icon, UI.Style.TEXT_NORMAL + info.title)
-    if (info.body?.trim()) UI.println(info.body)
+    UI.println(UI.Style.TEXT_NORMAL + info.icon, UI.Style.TEXT_NORMAL + progress(info.title))
+    if (info.body?.trim()) UI.println(body(info.body))
     UI.empty()
     return
   }
@@ -273,7 +273,14 @@ async function renderTool(part: SessionMessageAssistantTool, directory: string, 
     UI.Style.TEXT_NORMAL + progress(info.title),
     info.description ? UI.Style.TEXT_DIM + progress(info.description) + UI.Style.TEXT_NORMAL : "",
   )
-  if (output) UI.println(output.split(/\r?\n/).map((line) => `  ${progress(line)}`).join(EOL))
+  // A lone carriage return would overwrite the line before it on a terminal, so it breaks the line instead.
+  if (output)
+    UI.println(
+      body(output.replace(/\r\n?/g, "\n"))
+        .split("\n")
+        .map((line) => `  ${line}`)
+        .join(EOL),
+    )
 }
 
 async function renderToolError(part: SessionMessageAssistantTool, directory: string) {

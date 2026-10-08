@@ -55,7 +55,7 @@ const HeadlessParams = {
     Flag.withDefault(false),
   ),
   jsonSchema: Flag.string("json-schema").pipe(
-    Flag.withDescription("JSON Schema file the final answer must follow; prints one JSON result object"),
+    Flag.withDescription("JSON Schema file the final answer must follow; the result carries the parsed answer as structured_output, and text output prints only the parsed JSON"),
     Flag.optional,
   ),
   file: Flag.string("file").pipe(

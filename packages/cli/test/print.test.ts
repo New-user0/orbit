@@ -283,24 +283,47 @@ test("--verbose shows tool output and one usage line per step on stderr", async 
   })
 }, 180_000)
 
-test("a hostile tool name and session title reach no terminal or reader as a control character", async () => {
-  const hostile = "evil\u001b]0;pwned\u0007\u009b31m x"
-  await scripted([{ tool: { name: hostile, input: {} } }, "done"], async (own, home) => {
-    const stream = await print(own, home, ["--title", hostile, "say ok"], "stream-json")
-    const text = await print(own, home, ["--title", hostile, "--verbose", "say ok"], "text")
+test("--verbose tool output keeps tabs and writes out the characters that act on a terminal", async () => {
+  const file = path.join(workspace, "tabbed.txt")
+  await Bun.write(file, "col\tone\n\u001b[31mred\u001b[0m\rlone\n")
+  const call = { name: "read", input: { path: file } }
+  const verbose = await scripted([{ tool: call }, "done"], (own, home) => print(own, home, ["--verbose", "say ok"], "text"))
 
-    // Every line is one JSON value with no raw control or separator character, and the name is still what the model sent.
-    stream.stdout
-      .trim()
-      .split(/\r?\n/)
-      .forEach((line) => expect(raw.test(line)).toBe(false))
-    expect(parseLines(stream.stdout).some((line) => JSON.stringify(line).includes("evil"))).toBe(true)
-    // What reaches the terminal is the text with the characters written out, never the sequence that sets a title.
-    expect(text.stderr).not.toContain("\u001b]0;")
-    expect(text.stderr).not.toContain("\u0007")
-    expect(text.stderr).not.toContain("\u009b")
-  })
+  expect(verbose.stderr).toContain("col\tone")
+  expect(verbose.stderr).toContain("\\x1b[31mred")
+  expect(verbose.stderr).not.toContain("\u001b[31m")
+  // A lone carriage return breaks the line instead of overwriting the one before it.
+  expect(verbose.stderr).not.toMatch(/\[0m\\x0d/)
+  expect(verbose.stderr).toMatch(/\[0m\r?\n\s*lone/)
 }, 180_000)
+
+test("a hostile tool name reaches no terminal or reader as a control character", async () => {
+  const hostile = "evil\u001b]0;pwned\u0007\u009b31m x"
+  const stream = await scripted([{ tool: { name: hostile, input: {} } }, "done"], (own, home) =>
+    print(own, home, ["say ok"], "stream-json"),
+  )
+  // Its own script, so that the text run calls the tool as well; a shared script would answer it with "done" only.
+  const text = await scripted([{ tool: { name: hostile, input: {} } }, "done"], (own, home) =>
+    print(own, home, ["--verbose", "say ok"], "text"),
+  )
+  const control = await scripted([{ tool: { name: "plain_name", input: {} } }, "done"], (own, home) =>
+    print(own, home, ["--verbose", "say ok"], "text"),
+  )
+
+  // Every line is one JSON value with no raw control or separator character, and the name is still what the model sent.
+  stream.stdout
+    .trim()
+    .split(/\r?\n/)
+    .forEach((line) => expect(raw.test(line)).toBe(false))
+  expect(parseLines(stream.stdout).some((line) => JSON.stringify(line).includes("evil"))).toBe(true)
+  // What reaches the terminal is the text with the characters written out, never the sequence that sets a title.
+  expect(text.stderr).toContain("evil\\x1b]0;pwned\\x07")
+  expect(text.stderr).not.toContain("\u001b]0;")
+  expect(text.stderr).not.toContain("\u0007")
+  expect(text.stderr).not.toContain("\u009b")
+  // The control run shows that the tool is called and printed, so the absence above is the escaping's doing.
+  expect(control.stderr).toContain("plain_name")
+}, 240_000)
 
 test("-p reads a piped message, and with no message at all it fails", async () => {
   const before = model.steps.length
