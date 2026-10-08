@@ -6,6 +6,7 @@ import { editKeybindings } from "../src/component/keybindings-toast"
 import { KeybindingsFile } from "../src/config/keybindings-file"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
+import { directory, json } from "./fixture/tui-client"
 
 // The whole path from a keybindings file in the config folder to a key press in the running app.
 
@@ -93,6 +94,106 @@ test.each([
   // deleting what follows the cursor.
   expect(setup.captureCharFrame().includes("› hello")).toBe(chord)
 })
+
+test.each([
+  ["prompt", true],
+  ["mini", false],
+])(
+  "a key given to prompt.clear in the %s context clears the prompt only if that is the prompt's: %s",
+  async (context, clears) => {
+    await using state = await tmpdir()
+    await using config = await tmpdir()
+    await writeFile(
+      path.join(config.path, "keybindings.json"),
+      JSON.stringify({ contexts: { [context]: { "prompt.clear": "ctrl+alt+x" } } }),
+    )
+    await using setup = await createAppFixture({
+      state: state.path,
+      configPath: path.join(config.path, "cli.json"),
+      config: { animations: false },
+    })
+
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await setup.mockInput.typeText("hello")
+    await setup.waitForFrame((frame) => frame.includes("› hello"))
+    setup.mockInput.pressKey("x", { ctrl: true, meta: true })
+    await setup.renderOnce()
+    await Bun.sleep(100)
+
+    expect(setup.captureCharFrame().includes("› hello")).toBe(!clears)
+  },
+)
+
+const location = { directory, project: { id: "project", directory, canonical: directory } }
+const session = {
+  id: "ses_keys",
+  title: "Session for keys",
+  projectID: "project",
+  location: { directory },
+  agent: "build",
+  model: { providerID: "provider", id: "model" },
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 0, updated: 0 },
+}
+
+test.each([
+  ["session", true],
+  ["dialog", false],
+])(
+  "a key given to a session command in the %s context toggles the sidebar only if that is the session's: %s",
+  async (context, toggles) => {
+    await using state = await tmpdir()
+    await using config = await tmpdir()
+    await writeFile(
+      path.join(config.path, "keybindings.json"),
+      JSON.stringify({ contexts: { [context]: { "session.sidebar.toggle": "ctrl+y" } } }),
+    )
+    await using setup = await createAppFixture({
+      state: state.path,
+      configPath: path.join(config.path, "cli.json"),
+      args: { sessionID: session.id },
+      config: { animations: false },
+      fetch: (url) => {
+        if (url.pathname === "/api/fs/list") return json({ location, data: [] })
+        if (url.pathname === "/api/location") return json(location)
+        if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
+        if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
+        if (/^\/api\/session\/[^/]+\/(message|inbox|permission)$/.test(url.pathname))
+          return json({ data: [], cursor: {} })
+        if (url.pathname === "/api/agent")
+          return json({ location, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
+        if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
+        if (url.pathname === "/api/model")
+          return json({ location, data: [{ id: "model", providerID: "provider", name: "Model", variants: [] }] })
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+
+    // The command list names the command by what it would do and shows the key the keymap holds for it.
+    const listed = async () => {
+      setup.mockInput.pressKey("p", { ctrl: true })
+      await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
+      await setup.mockInput.typeText("sidebar")
+      const frame = await setup.waitForFrame((frame) => /(Show|Hide) sidebar/.test(frame))
+      setup.mockInput.pressEscape()
+      await setup.waitForFrame((frame) => !frame.includes("Commands"))
+      return frame.split("\n").find((line) => /(Show|Hide) sidebar/.test(line))
+    }
+
+    const before = await listed()
+    expect(before).toContain("Show sidebar")
+    expect(before?.includes("ctrl+y")).toBe(toggles)
+
+    setup.mockInput.pressKey("y", { ctrl: true })
+    await setup.renderOnce()
+    await Bun.sleep(200)
+    await setup.renderOnce()
+    expect((await listed())?.includes("Hide sidebar")).toBe(toggles)
+  },
+)
 
 test("a change to the file while the app runs reaches the keys of the text area too", async () => {
   await using state = await tmpdir()

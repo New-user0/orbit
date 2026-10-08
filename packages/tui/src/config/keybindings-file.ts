@@ -164,6 +164,7 @@ const listing = {
     "location.reload",
     "diff.open",
     "plugins.list",
+    "session.aside",
     "theme.switch",
     "theme.switch_mode",
     "theme.mode.lock",
