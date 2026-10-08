@@ -550,6 +550,34 @@ describe("ToolTraits", () => {
         expect((yield* snapshot.traits({ call: toolCall("execute", { code: "return 1" }) })).readOnly).toBe(false)
       }),
     )
+
+    it.effect("finds a namespaced tool by its effective name only", () =>
+      Effect.gen(function* () {
+        const service = yield* Tool.Service
+        yield* service.transform((editor) =>
+          editor.add({ ...make(declared), options: { namespace: "acme", codemode: false } }),
+        )
+        const snapshot = yield* service.snapshot()
+
+        expect(snapshot.describe("acme_echo")).toEqual(ToolTraits.describe(make(declared)))
+        expect(yield* snapshot.traits({ call: toolCall("acme_echo") })).toEqual(declared)
+        expect(snapshot.describe("echo")).toBeUndefined()
+        expect(yield* snapshot.traits({ call: toolCall("echo") })).toEqual(ToolTraits.conservative)
+      }),
+    )
+
+    it.effect("treats a tool that the permission rules disable like an unknown tool", () =>
+      Effect.gen(function* () {
+        const service = yield* Tool.Service
+        yield* register(service, make(declared))
+        const disabled = yield* service.snapshot([{ action: "echo", resource: "*", effect: "deny" }])
+        const enabled = yield* service.snapshot()
+
+        expect(disabled.describe("echo")).toBeUndefined()
+        expect(yield* disabled.traits({ call: toolCall("echo") })).toEqual(ToolTraits.conservative)
+        expect((yield* enabled.traits({ call: toolCall("echo") })).readOnly).toBe(true)
+      }),
+    )
   })
 
   describe("Tool.Context.traits", () => {

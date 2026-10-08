@@ -730,17 +730,19 @@ A tool registered through a plugin or the SDK can now declare `traits`: whether 
 others or destructive (each a boolean, or a function of the decoded input that answers with a boolean), and fixed
 values such as `openWorld`, `interruptBehavior`, `maxResultChars`, `searchHint` and `displayName`. For every call, Orbit
 resolves them and passes the answers to the tool as `context.traits`. A trait a tool leaves out takes its default: not
-read-only, not concurrency-safe, not destructive, and `block` on interrupt. A call that cannot be resolved takes the
-conservative traits, which are the same except that it counts as destructive: that is a tool that is unknown or was not
-offered in the request, input the schema rejects when a predicate needs to read it, and a predicate that throws, fails
-or answers with anything but a boolean, which is also logged. Only `readOnly` may relax a permission decision, and a failing predicate never leaves it
-true. Nothing schedules, cancels or limits calls by these traits yet, so tools run as they did before.
+read-only, not concurrency-safe, not destructive, and `block` on interrupt.
+
+A call whose traits cannot be resolved gets the conservative traits instead, which are the defaults except that the call
+counts as destructive. That happens for a tool that is unknown or was not offered in the request, for input the schema
+rejects when a predicate needs to read it, and for a predicate that throws, fails or answers with anything but a
+boolean; the last case is also logged. Only `readOnly` may relax a permission decision, and a failing predicate never
+leaves it true. Nothing schedules, cancels or limits calls by these traits yet, so tools run as they did before.
 
 A registration whose traits are invalid is skipped with a log line, as other invalid registrations are, and the tools
 beside it still register. Invalid means an empty `displayName` or `searchHint`, a `maxResultChars` that is not a
-positive number (`Infinity` is allowed and means the result is never written to a file), an `interruptBehavior` other
-than `cancel` or `block`, or a trait of the wrong type. An update that would leave a tool with invalid traits keeps the
-earlier definition.
+positive number (`Infinity` is allowed, and declares that the result is never to be written to a file), an
+`interruptBehavior` other than `cancel` or `block`, or a trait of the wrong type. An update that would leave a tool with
+invalid traits keeps the earlier definition.
 
 **Affects:** plugin authors and code built on the SDK. `Tool.Context` gains a required `traits` field, so code that
 builds a context by hand, for example to call a tool's `execute` in a test, must add it. `Tool.Snapshot` gains `traits`
