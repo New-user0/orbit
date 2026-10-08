@@ -34,6 +34,17 @@ interface BaseOptions {
   readonly permission?: string
 }
 
+/**
+ * How a tool reaches the model. `codemode` and `pinned` are the whole representation of whether a tool is loaded or
+ * deferred; there is no separate `defer` or `alwaysLoad` option. Core reads them in one place, `ToolTraits.exposure`
+ * and `ToolTraits.pinned`, so a registration does not change when the way tools are offered does:
+ *
+ * - `codemode: false` loads the tool: the request advertises it directly, under its own name and schema.
+ * - `codemode` left out or `true` defers it: the model finds it through Code Mode, in the catalog that `execute` lists
+ *   and through `search`, and calls it from a program.
+ * - `pinned: true` defers it the same way and also lists it in the inline catalog, whatever the catalog's budget leaves
+ *   out. A tool that is loaded is already in front of the model, so `pinned` cannot be set with `codemode: false`.
+ */
 export type Options = BaseOptions &
   (
     | {
@@ -100,7 +111,11 @@ export interface Traits<Input = unknown> {
    * full. A positive number; `Infinity` means the result is never written to a file.
    */
   readonly maxResultChars?: number
-  /** A few words that help the model find the tool when it searches the catalog. Not empty. */
+  /**
+   * A few words that help the model find the tool when it searches the catalog, for a purpose that its name and
+   * description do not say. Code Mode's `search` matches them: a match counts for less than one in the tool's name and
+   * for more than one in its description. `search` does not return them. Not empty.
+   */
   readonly searchHint?: string
   /**
    * A name for people to read in place of the tool's own. Not empty. It can come from a server, so whoever prints or

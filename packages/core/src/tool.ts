@@ -343,8 +343,9 @@ const layer = Layer.effect(
             if (whollyDisabled(tool.options?.permission ?? name, rules)) continue
             active.set(name, tool)
           }
-          const direct = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode === false))
-          const codeModeTools = new Map(Array.from(active).filter(([, tool]) => tool.options?.codemode !== false))
+          const exposed = Map.groupBy(active, ([, tool]) => ToolTraits.exposure(tool))
+          const direct = new Map(exposed.get("direct"))
+          const codeModeTools = new Map(exposed.get("deferred"))
           const namespaces = data.namespaces
           const codeModeInventory = { tools: codeModeTools, namespaces }
           const codeModeEnabled = !whollyDisabled("execute", rules)
@@ -483,7 +484,7 @@ function registrationError(tool: Tool.Info) {
   const name = normalizedName(tool)
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(name)) return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
-  if (tool.options?.codemode === false && id === "execute")
+  if (ToolTraits.exposure(tool) === "direct" && id === "execute")
     return new RegistrationError({ name: id, message: 'Tool name "execute" is reserved for CodeMode' })
   const result = Result.try({
     try: () => ToolDefinition.make(definition(tool)),

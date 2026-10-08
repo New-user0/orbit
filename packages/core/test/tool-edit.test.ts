@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -839,6 +839,44 @@ describe("EditTool", () => {
               ],
               { concurrency: "unbounded" },
             ),
+          ),
+        ),
+        Effect.andThen((results) =>
+          Effect.gen(function* () {
+            expect(results.map((result) => result.status)).toEqual(["completed", "completed"])
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("ONE\nTWO\n")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("an edit started while an earlier edit of the file is still formatting is not stale", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "formatting.txt")
+      // The first edit has written and is formatting, so the file is newer than the ledger until it records.
+      edit.formatFile = () => Effect.sleep("300 millis").pipe(Effect.as(false))
+      return Effect.promise(() => fs.writeFile(target, "one\ntwo\n")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            edit,
+            (registry) =>
+              Effect.gen(function* () {
+                yield* (yield* FileLedger.Service).record(sessionID, target)
+                const first = yield* executeTool(
+                  registry,
+                  call({ path: "formatting.txt", oldString: "one", newString: "ONE" }, "call-edit-one"),
+                ).pipe(Effect.forkChild)
+                yield* Effect.sleep("100 millis")
+                const second = yield* executeTool(
+                  registry,
+                  call({ path: "formatting.txt", oldString: "two", newString: "TWO" }, "call-edit-two"),
+                )
+                return [yield* Fiber.join(first), second]
+              }),
+            { ledger: "real" },
           ),
         ),
         Effect.andThen((results) =>

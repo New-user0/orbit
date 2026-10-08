@@ -11,6 +11,7 @@ import {
   type DialogSelectOption,
   type DialogSelectProps,
 } from "../../../src/ui/dialog-select"
+import { KeybindingsFile } from "../../../src/config/keybindings-file"
 import { truncateFilePath } from "../../../src/ui/file-path"
 import { stringWidth } from "../../../src/util/string-width"
 import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
@@ -23,10 +24,11 @@ async function renderSelect(
   onGlobal: () => void,
   onRow: (option: DialogSelectOption<string>) => void,
   current?: string,
+  extra?: { keybindings?: KeybindingsFile.Result; context?: DialogSelectProps<string>["context"] },
 ) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
-  const config = createTuiResolvedConfig()
+  const config = createTuiResolvedConfig({}, { keybindings: extra?.keybindings })
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { DialogSelect }, { ToastProvider }] =
     await Promise.all([
       import("../../../src/config"),
@@ -43,6 +45,7 @@ async function renderSelect(
       return (
         <DialogSelect
           title="Items"
+          context={extra?.context}
           options={options}
           current={current}
           actions={[
@@ -371,6 +374,48 @@ test("dialog actions run without options while row actions still require a selec
     app.renderer.destroy()
   }
 })
+
+// Both contexts name keys for the same action, as the model picker and the session list can both have a "new" action.
+const contextKeys = KeybindingsFile.decode(
+  JSON.stringify({
+    contexts: {
+      dialog: { "dialog.move_session.new": "ctrl+alt+n" },
+      "session-list": { "dialog.move_session.new": "ctrl+alt+s" },
+    },
+  }),
+)
+
+test.each([
+  [undefined, "n", "s"],
+  ["dialog" as const, "n", "s"],
+  ["session-list" as const, "s", "n"],
+])(
+  "a dialog list in the %s context takes that context's keys from the keybindings file",
+  async (context, own, other) => {
+    await using tmp = await tmpdir()
+    let global = 0
+    const app = await renderSelect(
+      tmp.path,
+      [],
+      () => global++,
+      () => {},
+      undefined,
+      { keybindings: contextKeys, context },
+    )
+
+    try {
+      // Another context's key does nothing here, and the stock key has gone to the context's own.
+      app.mockInput.pressKey(other, { ctrl: true, meta: true })
+      app.mockInput.pressKey("a", { ctrl: true })
+      expect(global).toBe(0)
+
+      app.mockInput.pressKey(own, { ctrl: true, meta: true })
+      expect(global).toBe(1)
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)
 
 test("renders one gap before an empty state", async () => {
   await using tmp = await tmpdir()

@@ -581,6 +581,40 @@ it.live("a Promise plugin update can remove validate from a tool", () =>
   }),
 )
 
+it.live("a Promise plugin update that leaves validate alone keeps an Effect validate, so its defect passes through", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const tools = yield* Tool.Service
+    const steps: Array<string> = []
+    yield* tools.transform((editor) =>
+      editor.add({
+        name: "dies",
+        description: "Its validate dies",
+        input: Mode,
+        options: { codemode: false },
+        validate: () => Effect.die("validate defect"),
+        execute: () => Effect.sync(() => void steps.push("execute")).pipe(Effect.as({ content: "ran" })),
+      }),
+    )
+    yield* PluginPromise.fromPromise({
+      id: "describe-only",
+      async setup(context) {
+        await context.tool.transform((editor) =>
+          editor.update("dies", (tool) => {
+            tool.description = "Only the description changed"
+          }),
+        )
+      },
+    }).effect(yield* PluginHost.make(plugins))
+
+    const exit = yield* (yield* tools.snapshot()).execute({ ...identity, call: call("dies", "read") }).pipe(Effect.exit)
+    expect(Exit.isFailure(exit) && exit.cause.toString().includes("validate defect")).toBe(true)
+    // A defect is not a failure of the call, so it did not become a validation error.
+    expect(Exit.isFailure(exit) && Cause.hasFails(exit.cause)).toBe(false)
+    expect(steps).toEqual([])
+  }),
+)
+
 // The adapter converts `validate` before the registry sees it. Whatever the registry refuses must still reach it, so the
 // plugin stays active, the tools beside the bad one register, and one line says what was skipped.
 for (const [name, validate] of invalidValidates) {

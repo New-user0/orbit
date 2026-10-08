@@ -192,18 +192,21 @@ export const Plugin = {
           input: Input,
           output: Output,
           // Refuses an edit that cannot work before `execute` asks anyone to approve it. A file outside the Location is
-          // not looked at: nobody has approved reaching it yet, and `execute` asks first. This runs outside the file's
-          // lock, so it can be out of date by the time `execute` runs; `execute` repeats every check.
+          // not looked at: nobody has approved reaching it yet, and `execute` asks first. The file is read under the
+          // file's lock, so an earlier edit of the same file that is still formatting or recording does not make this
+          // one look stale. `execute` still repeats every check, because the file can change between the two.
           validate: (input, context) =>
             Effect.gen(function* () {
               const refused = refusal(input)
               if (refused) return yield* refused
               const target = yield* access.resolve({ path: input.path, kind: "file" })
               if (target.externalDirectory) return
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.path)
-              const original = yield* readOriginal(environment.files, target.absolute, input.path)
-              const mismatched = mismatch(input, plan(input, original.text).matches.length)
-              if (mismatched) return yield* mismatched
+              yield* Effect.gen(function* () {
+                yield* ledger.assertFresh(context.sessionID, target.absolute, input.path)
+                const original = yield* readOriginal(environment.files, target.absolute, input.path)
+                const mismatched = mismatch(input, plan(input, original.text).matches.length)
+                if (mismatched) return yield* mismatched
+              }).pipe(fileMutation.withLock([FileAccess.resolvePath(location.directory, input.path)]))
             }).pipe(
               // Only a finding refuses the call, and every finding above carries a code. A path that cannot be
               // resolved or read for any other reason is left to `execute`, which reports it.

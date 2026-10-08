@@ -12,6 +12,7 @@ import { normalizeToolHistory } from "../tool-history.js"
 import { sanitizeSurrogates } from "../utils/sanitize.js"
 import * as ProviderShared from "../protocols/shared.js"
 import { ToolSchemaProjection } from "../protocols/utils/tool-schema.js"
+import { ToolStream } from "../protocols/utils/tool-stream.js"
 import { TextTools } from "./text-tools.js"
 import type { LanguageModelSanitizerCompatibility, ProtocolID, ProviderOptions } from "../schema/index.js"
 import {
@@ -608,7 +609,8 @@ const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest, o
     Effect.gen(function* () {
       const compiled = yield* compile(request, options)
       const events = compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime, options)
-      return TextTools.applies(request) ? TextTools.raise(events) : events
+      // Last, so every route and transport shares one rule for calls rebuilt from incomplete JSON.
+      return ToolStream.gateOnFinish(TextTools.applies(request) ? TextTools.raise(events) : events)
     }),
   )
 

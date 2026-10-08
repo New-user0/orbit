@@ -34,6 +34,7 @@ export function DialogPrompt(props: DialogPromptProps) {
   }
 
   Keymap.createLayer(() => ({
+    context: "dialog",
     mode: "modal",
     target: textareaTarget,
     enabled: textareaTarget() !== undefined && !props.busy,
@@ -50,6 +51,7 @@ export function DialogPrompt(props: DialogPromptProps) {
   }))
 
   Keymap.createLayer(() => ({
+    context: "dialog",
     mode: "modal",
     enabled: props.onCancel !== undefined,
     priority: 1,

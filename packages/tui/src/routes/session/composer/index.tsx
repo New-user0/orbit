@@ -75,6 +75,7 @@ export function Composer(props: ComposerProps) {
   }
 
   Keymap.createLayer(() => ({
+    context: "composer",
     mode: "composer",
     enabled: () => props.open,
     priority: 1,

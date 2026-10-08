@@ -234,6 +234,11 @@ export const ToolCall = Schema.Struct({
   namespace: Schema.optional(Schema.String),
   input: Schema.Unknown,
   providerExecuted: Schema.optional(Schema.Boolean),
+  /**
+   * The input was rebuilt from incomplete JSON, so it may be missing what the model meant to write. `LLMClient.stream`
+   * holds such a call back until the response finishes and drops it unless the finish is `tool-calls` or `stop`.
+   */
+  partialInput: Schema.optional(Schema.Literal(true)),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ToolCall" })
 export type ToolCall = Schema.Schema.Type<typeof ToolCall>

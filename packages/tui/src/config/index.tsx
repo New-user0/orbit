@@ -8,6 +8,7 @@ import { createStore, reconcile } from "solid-js/store"
 import { watch } from "fs"
 import path from "path"
 import { TuiKeybind } from "./keybind"
+import { KeybindingsFile } from "./keybindings-file"
 
 export interface Interface {
   readonly path?: string
@@ -273,6 +274,8 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
     sounds: AttentionSoundPaths
   }
   keybinds: TuiKeybind.BindingLookupView
+  /** What was wrong with the keybindings file, if anything. Its keys are already in `keybinds`. */
+  keybindings: { diagnostics: readonly KeybindingsFile.Diagnostic[] }
   leader: { timeout: number }
   mouse: boolean
   cursor?: {
@@ -296,10 +299,20 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
 
 export function resolve(
   input: Info,
-  options: { terminalSuspend: boolean; environment?: Readonly<Record<string, string | undefined>> },
+  options: {
+    terminalSuspend: boolean
+    environment?: Readonly<Record<string, string | undefined>>
+    keybindings?: KeybindingsFile.Result
+  },
 ): Resolved {
   const tabsMode = input.tabs?.mode ?? (input.tabs?.enabled === undefined ? "auto" : input.tabs.enabled ? "on" : "off")
-  const keybinds: TuiKeybind.KeybindOverrides = { ...input.keybinds }
+  const file = options.keybindings ?? KeybindingsFile.empty
+  // The keybindings file is read after cli.json, so what it sets for a command wins over what cli.json sets.
+  const keybinds: TuiKeybind.KeybindOverrides = {
+    ...input.keybinds,
+    ...(file.leader === undefined ? {} : { leader: file.leader }),
+    ...file.bindings,
+  }
   if (!options.terminalSuspend) {
     keybinds["terminal.suspend"] = "none"
     if (keybinds["input.undo"] === undefined) {
@@ -319,9 +332,13 @@ export function resolve(
       sound_pack: input.attention?.sound_pack ?? "orbit.default",
       sounds: input.attention?.sounds ?? {},
     },
-    keybinds: createBindingLookup(TuiKeybind.toBindingConfig(TuiKeybind.parse(keybinds)), {
-      bindingDefaults: TuiKeybind.bindingDefaults(),
-    }),
+    keybinds: Object.assign(
+      createBindingLookup(TuiKeybind.toBindingConfig(TuiKeybind.parse(keybinds)), {
+        bindingDefaults: TuiKeybind.bindingDefaults(),
+      }),
+      { override: KeybindingsFile.overrides(file) },
+    ),
+    keybindings: { diagnostics: file.diagnostics },
     leader: { timeout: input.leader?.timeout ?? 2000 },
     mouse: input.mouse ?? true,
     cursor: input.cursor
@@ -349,6 +366,18 @@ export function resolve(
   }
 }
 
+/**
+ * Reads cli.json through the host, and the keybindings file that sits beside it. The two are read on their own: a
+ * keybindings file that is missing or broken says so in `keybindings.diagnostics` and never makes this reject.
+ */
+export async function read(host: Interface) {
+  const [info, keybindings] = await Promise.all([
+    host.get(),
+    host.path ? KeybindingsFile.load(KeybindingsFile.locate(host.path)) : KeybindingsFile.empty,
+  ])
+  return { info, keybindings }
+}
+
 const ConfigContext = createContext<{
   data: Resolved
   path?: string
@@ -357,13 +386,17 @@ const ConfigContext = createContext<{
 
 export function ConfigProvider(props: {
   config: Resolved
+  /** The keybindings file that `config` was resolved with, so that a change to cli.json keeps it. */
+  keybindings?: KeybindingsFile.Result
   service?: Interface
   options?: { terminalSuspend: boolean; environment?: Readonly<Record<string, string | undefined>> }
   children: JSX.Element
 }) {
   const [config, setConfig] = createStore(props.config)
   const host = props.service
-  const apply = (info: Info) => setConfig(reconcile(resolve(info, props.options ?? { terminalSuspend: true })))
+  let keybindings = props.keybindings ?? KeybindingsFile.empty
+  const apply = (info: Info) =>
+    setConfig(reconcile(resolve(info, { ...(props.options ?? { terminalSuspend: true }), keybindings })))
   const update = async (update: (draft: any) => void) => {
     if (!host) throw new Error("Config updates are not available")
     const info = await host.update(update)
@@ -371,11 +404,15 @@ export function ConfigProvider(props: {
     return info
   }
   let reload = Promise.resolve()
+  // The keybindings file sits in the directory that holds cli.json, so this one watcher covers both.
   const watcher = host?.path
     ? watch(path.dirname(host.path), () => {
         reload = reload
-          .then(() => host.get())
-          .then(apply)
+          .then(() => read(host))
+          .then((next) => {
+            keybindings = next.keybindings
+            apply(next.info)
+          })
           .catch(() => {})
       })
     : undefined

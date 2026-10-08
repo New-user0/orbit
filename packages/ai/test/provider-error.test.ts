@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { isContextOverflow } from "../src/index.js"
-import { classifyProviderFailure, providerErrorMessage } from "../src/provider-error.js"
+import {
+  AIError,
+  InvalidProviderOutputError,
+  ProviderInternalError,
+  RateLimitError,
+  TransportError,
+  UnknownProviderError,
+  isContextOverflow,
+  isOverloaded,
+  isRetryable,
+} from "../src/index.js"
+import { classifyProviderFailure, providerErrorMessage, type ProviderFailure } from "../src/provider-error.js"
 
 describe("provider error classification", () => {
   test("classifies provider token limit messages as context overflow", () => {
@@ -561,5 +571,158 @@ describe("provider error messages", () => {
         "invalid parameter",
       ].map(providerErrorMessage),
     ).toEqual([undefined, undefined, undefined, undefined])
+  })
+})
+
+describe("provider overload classification", () => {
+  const anthropic = '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+  const responses = (code: string) =>
+    JSON.stringify({ type: "response.failed", response: { error: { code, message: "Our servers are overloaded." } } })
+  const outcome = (failure: ProviderFailure) => {
+    const reason = classifyProviderFailure(failure)
+    return reason._tag === "ProviderInternal"
+      ? `ProviderInternal ${reason.classification ?? "unclassified"}`
+      : reason._tag
+  }
+  const run = (cases: ReadonlyArray<readonly [name: string, failure: ProviderFailure]>, expected: string) =>
+    expect(cases.map(([name, failure]) => `${name}: ${outcome(failure)}`)).toEqual(
+      cases.map(([name]) => `${name}: ${expected}`),
+    )
+
+  test("classifies overload on affirmative evidence", () => {
+    run(
+      [
+        ["status 529", { message: "Provider request failed with HTTP 529", status: 529 }],
+        ["status 529 with an overload code", { message: "Overloaded", status: 529, rawBody: anthropic }],
+        ["status 529 with throttle wording", { message: "Rate limit exceeded, try again", status: 529 }],
+        ["overloaded_error in a stream frame", { message: "overloaded_error: Overloaded", rawBody: anthropic }],
+        ["overloaded_error with status 200", { message: "Overloaded", status: 200, rawBody: anthropic }],
+        ["server_is_overloaded", { message: "Request failed", rawBody: responses("server_is_overloaded") }],
+        [
+          "server_is_overloaded on a 503",
+          { message: "Request failed", status: 503, rawBody: responses("server_is_overloaded") },
+        ],
+        ["overloaded_error on a 429", { message: "Overloaded", status: 429, rawBody: anthropic }],
+        [
+          "server_is_overloaded on a 429",
+          { message: "Request failed", status: 429, rawBody: responses("server_is_overloaded") },
+        ],
+        ["code only in the message label", { message: "Upstream request failed: [overloaded_error] Overloaded" }],
+        ["capacity wording with no status", { message: "The model is currently at capacity due to high demand." }],
+        ["temporary capacity wording", { message: "The service is temporarily at capacity." }],
+        ["overloaded wording with no status", { message: "The model is overloaded." }],
+        ["overloaded wording with status 200", { message: "The model is overloaded.", status: 200 }],
+        [
+          "overloaded wording on a 500",
+          { message: "That model is currently overloaded with other requests.", status: 500 },
+        ],
+        ["overloaded wording on a 503", { message: "The model is overloaded. Please try again later.", status: 503 }],
+        [
+          "capacity wording only in the raw body",
+          {
+            message: "Provider request failed with HTTP 502",
+            status: 502,
+            rawBody: '{"error":{"message":"Upstream at capacity"}}',
+          },
+        ],
+      ],
+      "ProviderInternal overloaded",
+    )
+  })
+
+  test("keeps retry-after on an overload", () => {
+    expect(classifyProviderFailure({ message: "Overloaded", status: 529, retryAfterMs: 2_000 })).toMatchObject({
+      _tag: "ProviderInternal",
+      classification: "overloaded",
+      retryAfterMs: 2_000,
+    })
+    expect(
+      classifyProviderFailure({ message: "Overloaded", status: 429, rawBody: anthropic, retryAfterMs: 2_000 }),
+    ).toMatchObject({ _tag: "ProviderInternal", classification: "overloaded", retryAfterMs: 2_000 })
+  })
+
+  test("leaves other server failures unclassified", () => {
+    run(
+      [
+        ["plain 500", { message: "Internal server error", status: 500 }],
+        ["plain 502", { message: "Bad gateway", status: 502 }],
+        ["service unavailable on a 503", { message: "Service Unavailable", status: 503 }],
+        ["plain 504", { message: "Gateway timeout", status: 504 }],
+        ["HTTP 408", { message: "Request timeout", status: 408 }],
+        ["HTTP 409", { message: "Conflict", status: 409 }],
+        ["overloaded wording on a 408", { message: "The model is overloaded.", status: 408 }],
+        ["capacity wording on a 409", { message: "The model is at capacity.", status: 409 }],
+        ["service unavailable with no status", { message: "Service unavailable" }],
+        ["temporarily unavailable", { message: "The service is temporarily unavailable." }],
+        ["busy server", { message: "The server is busy." }],
+        ["try again", { message: "Try again" }],
+        ["provider returned error", { message: "Provider returned an error" }],
+        ["resource_exhausted code", { message: "Request failed", rawBody: '{"code":"resource_exhausted"}' }],
+        ["service_unavailable code", { message: "Request failed", rawBody: '{"code":"service_unavailable"}' }],
+        ["slow_down code", { message: "Request failed", rawBody: '{"code":"slow_down"}' }],
+        ["api_error code", { message: "Request failed", rawBody: '{"type":"error","error":{"type":"api_error"}}' }],
+        ["server_error code", { message: "Request failed", rawBody: '{"error":{"type":"server_error"}}' }],
+      ],
+      "ProviderInternal unclassified",
+    )
+  })
+
+  test("does not turn throttles or rejections into overloads", () => {
+    const cases = [
+      ["throttle on a 429", { message: "Rate limit reached for requests", status: 429 }, "RateLimit"],
+      [
+        "overloaded wording on a 429",
+        { message: "The engine is currently overloaded, please try again", status: 429 },
+        "RateLimit",
+      ],
+      [
+        "throttle wording beats overload wording",
+        { message: "Rate limit exceeded: the model is overloaded" },
+        "RateLimit",
+      ],
+      ["quota on a 429", { message: "Quota exceeded: the service is overloaded", status: 429 }, "QuotaExceeded"],
+      [
+        "overloaded wording on a 401",
+        { message: "Invalid credentials: server overloaded", status: 401 },
+        "Authentication",
+      ],
+      ["overloaded wording on a 400", { message: "The model is overloaded.", status: 400 }, "InvalidRequest"],
+      [
+        "overloaded_error on a 400",
+        { message: "Upstream request failed", status: 400, rawBody: anthropic },
+        "InvalidRequest",
+      ],
+      [
+        "server_is_overloaded on a 404",
+        { message: "Not found", status: 404, rawBody: responses("server_is_overloaded") },
+        "InvalidRequest",
+      ],
+    ] as const
+    expect(cases.map(([name, failure]) => `${name}: ${outcome(failure)}`)).toEqual(
+      cases.map(([name, , expected]) => `${name}: ${expected}`),
+    )
+  })
+
+  test("isOverloaded is true only for a provider failure that said so", () => {
+    const overloaded = new ProviderInternalError({ message: "Overloaded", classification: "overloaded" })
+    const reasons = [
+      overloaded,
+      new ProviderInternalError({ message: "Internal server error" }),
+      new RateLimitError({ message: "Slow down" }),
+      new TransportError({ message: "Connection lost", transport: "http", operation: "read" }),
+      new UnknownProviderError({ message: "Overloaded" }),
+      new InvalidProviderOutputError({ message: "Overloaded", classification: "incomplete-stream" }),
+    ]
+
+    expect(reasons.map((reason) => isOverloaded(new AIError({ reason })))).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ])
+    // An overload is still an ordinary provider failure to the retry rules.
+    expect(isRetryable(new AIError({ reason: overloaded }))).toBe(true)
   })
 })

@@ -1230,13 +1230,21 @@ const finishEvents = Effect.fn("OpenAIChat.finishEvents")(function* (state: Pars
       ? (yield* ToolStream.finishAll(ADAPTER, state.tools)).events
       : state.toolCallEvents
   const hasToolCalls = toolCallEvents.length > 0
+  // With no finish_reason the provider never said the response ended, so a call rebuilt from cut-off input cannot be
+  // the evidence that it did: `unknown` makes the gate drop that call.
   const reason = state.finishReason
     ? {
         ...state.finishReason,
         normalized:
           state.finishReason.normalized === "stop" && hasToolCalls ? "tool-calls" : state.finishReason.normalized,
       }
-    : { normalized: hasToolCalls ? ("tool-calls" as const) : ("stop" as const) }
+    : {
+        normalized: toolCallEvents.some((event) => LLMEvent.is.toolCall(event) && event.partialInput)
+          ? ("unknown" as const)
+          : hasToolCalls
+            ? ("tool-calls" as const)
+            : ("stop" as const),
+      }
   // Snapshot details at publish time so the emitted event never observes later
   // mutation of the accumulated `reasoningDetails` array.
   const metadata = reasoningMetadata(

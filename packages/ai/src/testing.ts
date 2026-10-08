@@ -1,5 +1,6 @@
 export * as TestLLM from "./testing.js"
 
+import { ToolStream } from "./protocols/utils/tool-stream.js"
 import {
   LLMClient,
   type CompactionRequest,
@@ -145,7 +146,8 @@ const make = (options: LayerOptions) =>
           Effect.map((response) => {
             if (response instanceof CompactionResponse || response instanceof CompactionCheckpointResponse)
               return Stream.die("TestLLM generation requires an event response")
-            return Stream.isStream(response) ? response : Stream.fromIterable(response)
+            // Same rule as the real client, so a scripted truncated call behaves like a recovered one.
+            return ToolStream.gateOnFinish(Stream.isStream(response) ? response : Stream.fromIterable(response))
           }),
         ),
       )

@@ -660,6 +660,40 @@ message is not affected.
 **What to do:** Nothing for code that does not read the type. If you match on `tool.execution`, also match the types
 above, or match the type of the failure you care about.
 
+### Keys can be set in `keybindings.json`, per place, and as two-step chords
+
+The terminal UI and `orb mini` now read an optional `keybindings.json` from the folder that holds `cli.json`. It takes
+comments and trailing commas and has three settings: `leader`, `bindings` and `contexts`.
+
+- `bindings` gives a command other keys wherever it is bound, and `null` takes its keys away. `contexts` does the same in
+  one place only: `global`, `prompt`, `session`, `permission`, `composer`, `dialog`, `session-list`, `diff`, `which-key`
+  (which has no commands yet) or `mini`. So `session.rename` can have one key in the session list and another in a
+  session. A command's keys come from its context first, then `bindings`, then `keybinds` in `cli.json`, then the
+  defaults. `keybinds` in `cli.json` works as before.
+- A key can be a chord, two or more strokes separated by a space, such as `ctrl+k ctrl+s`. `<leader>` sequences, lists
+  separated by commas and `enter` or `esc` work beside it, and Escape cancels a chord that is waiting for its next stroke.
+  A chord takes its first key from every other binding of that key: while `ctrl+k ctrl+s` exists, `ctrl+k` waits for a
+  second stroke everywhere, and no longer deletes to the end of the line in the prompt.
+- Orbit leaves out an entry that names no command, no place or no key it can read, says so in one toast, and applies the
+  rest. It also warns when two entries of one place use the same keys, or when one starts the other. It never compares
+  the file with its own default keys. A file that cannot be parsed is ignored whole, with one note, and the settings in
+  `cli.json` are not touched. In the terminal UI, saving the file applies it at once, including the leader key and the
+  editing keys of the prompt, which were read only once at start-up before. `orb mini` reads the file when it starts and
+  prints what it left out to the terminal before the footer takes the screen.
+- `/keybindings`, or "Edit keybindings" in the command palette of the terminal UI, writes a template that lists every
+  place with its commands, all commented out, where there is no file, and opens the file in `$VISUAL` or `$EDITOR`. With
+  neither set it opens the file with the program your system uses for that kind of file, and when that fails it shows
+  the path. Orbit looks for the editor on PATH only and starts it from the folder of the file, so a program of the same
+  name in the project folder is never the one that runs.
+- A plugin's keymap layer can name its place with the new `context` field of `KeymapLayer`. A layer that names none, or
+  one that is not in the list above, gets only the keys set in `bindings`.
+
+**Affects:** anyone who wants other keys, and plugin authors. Nothing changes until the file exists, except that a change
+to `leader` or to an `input.*` key in `cli.json` now also applies while the terminal UI runs. `cli.json` also accepts
+`keybindings.open`, the command behind `/keybindings`, which has no key by default.
+
+**What to do:** nothing. Run `/keybindings` to start from the template.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -750,9 +784,10 @@ a folder that is not trusted.
 
 ### An edit that cannot work fails before it asks you to approve it
 
-The `edit` tool used to ask for your approval first and check the edit afterwards, so you could approve an edit that
-then failed because the text to replace was not in the file, or was in it more than once. Now the checks come first,
-and an edit that cannot work fails without asking:
+The `edit` tool used to ask for your approval before it checked that the text to replace was in the file exactly once,
+and that the file existed and was not a directory, so you could approve an edit that then failed. Those checks now come
+first. The refusals for identical or empty text and for a file that was not read or changed already came before the
+approval; they now carry a stable code too. An edit that cannot work fails without asking:
 
 - the old and new text are the same, or the old text is empty;
 - the file does not exist or is a directory;
@@ -831,3 +866,75 @@ with such a `validate` keeps the earlier definition.
 one is not affected, and a wrapper that replaces only `execute` keeps the tool's `validate`.
 
 **What to do:** Nothing for plugins that are already running; both additions are optional.
+
+### A tool's `searchHint` helps Code Mode search find it
+
+A tool's `traits.searchHint` was accepted and ignored. Code Mode's `search` now matches it: a program that searches for a
+word in the hint finds the tool. A match in the hint counts for less than a match in the tool's name and for more than
+one in its description. The hint only ranks the tool; `search` and the catalog return the same fields as before. It
+applies to the tools that Code Mode offers, which is every tool that does not set `codemode: false`. A tool that sets it
+is advertised to the model directly and is not searched. `Tool.make` in `@orbit/codemode` takes the same `searchHint`
+option.
+
+How a tool is offered did not change, and `Tool.Options` now documents it: `codemode: false` advertises the tool
+directly, leaving `codemode` out or setting anything else defers it into Code Mode, and `pinned: true` also keeps a
+deferred tool in the catalog that the model sees first. There is no separate `defer` or `alwaysLoad` option. Core reads
+these two options in one place, `ToolTraits.exposure` and `ToolTraits.pinned` in `@orbit/core/tool/traits`.
+
+**Affects:** plugin authors and code built on the SDK or `@orbit/codemode` whose tools declare a `searchHint`: the order
+of their Code Mode search results changes, and a tool can now appear for a word that only its hint contains. Code that
+reads `options.codemode` or `options.pinned` of a registration to tell where a tool goes can ask the two functions
+instead.
+
+**What to do:** Nothing. To make a deferred tool easier to find, give it a short `searchHint` of the words someone
+would use for it.
+
+## Agent loop
+
+Changes to how a turn runs: what a response may call, and how its failures are told apart.
+
+### A tool call the model did not finish writing no longer runs
+
+When a response ended in the middle of a tool call, for example because the model reached its output limit, Orbit
+rebuilt the arguments from the half-written text and ran the tool with them, so a `write` call cut off inside its
+`content` wrote a truncated file. Routes that close each call before the finish reason arrives did this. A call rebuilt
+from incomplete arguments now runs only when the response finishes with `tool-calls` or `stop`. If the response finishes
+any other way (an output limit, a content filter or an unknown reason), or the stream breaks first, the call is dropped:
+the tool does not run, and the response ends with an input that was started and never called. A call whose arguments
+arrived complete is not affected, and still runs when a later call in the same response was cut off. A call that
+stopped before its first argument is not caught: it cannot be told from a call to a tool that takes no arguments, so it
+still runs with empty arguments.
+
+A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
+`tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
+incomplete, with no reason or a reason Orbit does not know, and a Chat-style stream that ended without a finish reason
+from a model whose `compatibility.requireFinishReason` is `false`. Both now report an unknown finish, so the call is
+dropped, and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
+retries or continues. The first kind reports an unknown finish even when every call in it is complete, where it used to
+report `tool-calls`; those calls still run.
+
+**Affects:** sessions whose model reaches its output limit while writing a tool call, most often a large `write` or
+`edit`, and sessions on a Responses-style provider that ends a response as incomplete without saying why, which the
+session now retries or continues instead of treating as finished. It also affects code built on `@orbit/ai`: a
+`tool-call` event carries `partialInput: true` when its input was rebuilt, `LLMClient.stream` and `generate` hold such a
+call back until the response finishes and drop it unless the finish is `tool-calls` or `stop`, and `TestLLM` follows the
+same rule for scripted responses.
+
+**What to do:** nothing. To carry on after a cut-off, send a follow-up message, and if a large write keeps being cut
+off, ask the model to split it.
+
+### Overloaded providers are classified, and an overload sent as a 429 is no longer a rate limit
+
+A provider failure that says it is overloaded now carries `classification: "overloaded"` on its `ProviderInternal` error
+reason, and `isOverloaded(error)` from `@orbit/ai` reads it. The evidence is status 529, the `overloaded_error` and
+`server_is_overloaded` codes, or "overloaded" or "at capacity" in the error text of a 5xx or of a failure that carries
+no error status. "Unavailable", "busy" and other server failures stay unclassified. An overload code now wins over
+status 429, so a gateway that reports an overload as a 429 produces a `ProviderInternal` failure, which is the session
+error `provider.internal`, where it used to produce a `RateLimit` one, `provider.rate-limit`. Both are retried, so
+retries do not change.
+
+**Affects:** code that matches on provider error reasons or on the session error type, and `orb flow` workflows whose
+`retryOn` lists `rate-limit` without `transient`: such a 429 is `transient` to them now, so they no longer retry it.
+
+**What to do:** nothing unless you match on `RateLimit` to detect these failures. Match `isOverloaded(error)` for an
+overload, and add `transient` to a `retryOn` that lists `rate-limit` alone.

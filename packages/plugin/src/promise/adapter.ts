@@ -521,12 +521,15 @@ export function fromPromise(plugin: Plugin) {
                     update: (id, update) =>
                       editor.update(id, (tool) => {
                         const value: Info = promiseTool(tool)
+                        const read = value.validate
                         update(value)
                         Object.assign(tool, value, {
                           output: value.output,
                           options: value.options,
                           traits: effectTraits(value.traits),
-                          validate: effectValidate(value.validate),
+                          // A plugin that left validate as it read it back keeps the Effect function it was given, so a
+                          // defect or a decline from it passes through instead of becoming a validation failure.
+                          validate: value.validate === read ? tool.validate : effectValidate(value.validate),
                           execute: (input: Parameters<Info["execute"]>[0], context: Tool.Context) =>
                             executePromiseTool(value, input, context),
                         })

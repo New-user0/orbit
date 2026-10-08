@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { ConfigProvider, Effect } from "effect"
+import { ConfigProvider, Effect, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
 import { LLM, LLMEvent, Message, ToolDefinition, Media } from "../../src/index.js"
 import { Mistral } from "../../src/providers/index.js"
@@ -657,6 +657,48 @@ describe("Mistral Chat", () => {
       expect(truncated.finishReason).toEqual({ normalized: "length", raw: "length" })
       expect(truncated.events.some(LLMEvent.is.toolCall)).toBe(false)
       expect(truncated.events.some(LLMEvent.is.toolInputEnd)).toBe(false)
+    }),
+  )
+
+  // Mistral takes the finish from `finish_reason` alone and requires one, so a cut-off call is released only by a clean one.
+  const cutOffWrite = chunk({
+    tool_calls: [
+      { index: 0, id: "Ab12Cd34E", function: { name: "write", arguments: '{"path":"a.ts","content":"par' } },
+    ],
+  })
+  ;(
+    [
+      ["tool_calls", "tool-calls", 1],
+      ["stop", "tool-calls", 1],
+      ["future_reason", "unknown", 0],
+    ] as const
+  ).forEach(([raw, normalized, calls]) => {
+    it.effect(`${calls ? "emits" : "withholds"} a tool call with cut-off input on ${raw}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(request).pipe(
+          Effect.provide(fixedResponse(sseEvents(cutOffWrite, chunk({}, raw)))),
+        )
+
+        // Counted first: Bun's toEqual takes a list of `undefined` markers for an empty list.
+        expect(response.toolCalls).toHaveLength(calls)
+        expect(response.toolCalls.every((call) => call.partialInput === true)).toBe(true)
+        expect(response.finishReason.normalized).toBe(normalized)
+        expect(response.events.filter(LLMEvent.is.toolInputEnd)).toHaveLength(1)
+      }),
+    )
+  })
+
+  it.effect("fails a stream with a cut-off call and no finish_reason instead of calling it", () =>
+    Effect.gen(function* () {
+      const events: LLMEvent[] = []
+      const error = yield* LLMClient.stream(request).pipe(
+        Stream.runForEach((event) => Effect.sync(() => void events.push(event))),
+        Effect.provide(fixedResponse(sseEvents(cutOffWrite))),
+        Effect.flip,
+      )
+
+      expect(error.message).toContain("without finish_reason")
+      expect(events.filter(LLMEvent.is.toolCall)).toHaveLength(0)
     }),
   )
 

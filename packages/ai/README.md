@@ -978,7 +978,9 @@ future reply.
 
 Generation responses remain canonical event arrays or arbitrary `Stream<LLMEvent, AIError>` values. The client consumes
 supplied streams directly, preserving failure identity, finalizers, incomplete output, and post-finish tails;
-it does not repair or truncate them.
+it does not repair or truncate them. The one exception is a `tool-call` event marked `partialInput: true`, which the
+real client holds until the step finish and the test client holds too: a `tool-calls` or `stop` finish releases it
+just before that event, and any other finish, or a stream that ends or fails first, drops it.
 
 For explicit compaction, script a `CompactionResponse` through `push`, `always`, or `serve`. Its `replacement` contains the next context window, including retained user messages. The client returns that result and usage directly, with the same lazy request recording and gates. Generation and compaction reject fixtures for the wrong operation instead of converting between response shapes.
 

@@ -1048,6 +1048,50 @@ describe("Bedrock Converse route", () => {
     }),
   )
 
+  // Bedrock closes a tool block before the stop reason arrives, so only the finish tells a cut-off call from a whole one.
+  ;(
+    [
+      ["max_tokens", "length", 0],
+      ["tool_use", "tool-calls", 1],
+      // The finish comes from the stop field alone, so a reason that this route does not know is not a clean one.
+      ["a_reason_added_later", "unknown", 0],
+    ] as const
+  ).forEach(([stopReason, normalized, calls]) => {
+    it.effect(`${calls ? "emits" : "withholds"} a tool call with cut-off input on ${stopReason}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(
+          LLMRequest.update(baseRequest, {
+            tools: [ToolDefinition.make({ name: "write", description: "Write", inputSchema: { type: "object" } })],
+          }),
+        ).pipe(
+          Effect.provide(
+            fixedBytes(
+              eventStreamBody(
+                ["messageStart", { role: "assistant" }],
+                [
+                  "contentBlockStart",
+                  { contentBlockIndex: 0, start: { toolUse: { toolUseId: "tool_1", name: "write" } } },
+                ],
+                [
+                  "contentBlockDelta",
+                  { contentBlockIndex: 0, delta: { toolUse: { input: '{"path":"a.ts","content":"par' } } },
+                ],
+                ["contentBlockStop", { contentBlockIndex: 0 }],
+                ["messageStop", { stopReason }],
+              ),
+            ),
+          ),
+        )
+
+        // Counted first: Bun's toEqual takes a list of `undefined` markers for an empty list.
+        expect(response.toolCalls).toHaveLength(calls)
+        expect(response.toolCalls.every((call) => call.partialInput === true)).toBe(true)
+        expect(response.finishReason).toEqual({ normalized, raw: stopReason })
+        expect(response.events.filter((event) => event.type === "tool-input-end")).toHaveLength(1)
+      }),
+    )
+  })
+
   it.effect("rejects a provider-emitted dotted name before normalizing its replay", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(baseRequest).pipe(
