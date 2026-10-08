@@ -32,17 +32,22 @@ export type Purpose =
 
 export class UnavailableError extends Schema.TaggedError<UnavailableError>()("SideQuery.UnavailableError", {
   message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
 }) {}
 
 export class InvalidOutputError extends Schema.TaggedError<InvalidOutputError>()("SideQuery.InvalidOutputError", {
   message: Schema.String,
+  cause: Schema.optional(Schema.Unknown),
 }) {}
 
 export class TimeoutError extends Schema.TaggedError<TimeoutError>()("SideQuery.TimeoutError", {
   message: Schema.String,
 }) {}
 
-/** A side query never fails its Session; callers degrade on any of these. */
+/**
+ * A side query never fails its Session; callers degrade on any of these. Model and provider text is kept in `cause`,
+ * never in `message`, so a caller may show `message` to a person.
+ */
 export type Error = UnavailableError | InvalidOutputError | TimeoutError
 
 export interface TextInput {
@@ -106,33 +111,27 @@ export const layer = Layer.effect(
         const auxiliary = yield* context.selectAuxiliary(session, SIDE)
         const model = input.model === "primary" ? auxiliary?.primary : auxiliary?.selected
         if (!model) return yield* new UnavailableError({ message: "No model is available for a side query" })
-        const history = input.history
-          ? yield* SessionGenerate.transcript(yield* context.select(session.id), model)
-          : undefined
+        const selection = input.history ? yield* context.select(session.id) : undefined
+        const history = selection ? yield* SessionGenerate.transcript(selection, model) : undefined
         const prepared = yield* context.request.generate({
           session,
           agent: SIDE,
           model,
+          // The transcript holds the Session's tool calls and results, which some providers refuse to take
+          // without the tool definitions, so history sends them and `text` forbids using them.
+          tools: selection?.tools,
           system: [...(history?.system ?? []), ...(input.system ? [SystemPart.make(input.system)] : [])],
           messages: [...(history?.messages ?? []), Message.user(input.prompt)],
         })
         const request = tool
           ? LLMRequest.update(prepared.request, {
-              tools: toDefinitions({ [RESULT_TOOL]: tool }),
+              tools: [...prepared.request.tools, ...toDefinitions({ [RESULT_TOOL]: tool })],
               toolChoice: ToolChoice.named(RESULT_TOOL),
             })
-          : prepared.request
-        const response = yield* llm.generate(request, prepared.options).pipe(
-          Effect.timeoutOrElse({
-            duration: timeout,
-            orElse: () =>
-              Effect.fail(
-                new TimeoutError({
-                  message: `Side query ${input.purpose} timed out after ${Duration.format(timeout)}`,
-                }),
-              ),
-          }),
-        )
+          : prepared.request.tools.length > 0
+            ? LLMRequest.update(prepared.request, { toolChoice: ToolChoice.make("none") })
+            : prepared.request
+        const response = yield* llm.generate(request, prepared.options)
         // Recorded before the output is decoded: the provider billed the call whether or not it is usable.
         const usage = SessionUsage.record(response.usage, model.cost)
         yield* bus.publish(SessionEvent.SideQueryRecorded, {
@@ -144,11 +143,26 @@ export const layer = Layer.effect(
       }).pipe(
         instances.provide(session),
         Effect.provideService(Database.Service, database),
-        // Whatever else goes wrong, the caller can only degrade, so it sees one error.
+        // The deadline covers everything the caller waits for, not only the provider call.
+        Effect.timeoutOrElse({
+          duration: timeout,
+          orElse: () =>
+            Effect.fail(
+              new TimeoutError({ message: `Side query ${input.purpose} timed out after ${Duration.format(timeout)}` }),
+            ),
+        }),
+        // A throwing plugin hook or an incompatible provider context is a defect, and still only costs the caller its answer.
+        Effect.catchDefect((defect) =>
+          Effect.logWarning("side query failed", { purpose: input.purpose, defect }).pipe(
+            Effect.andThen(Effect.fail(new UnavailableError({ message: "The side query could not run", cause: defect }))),
+          ),
+        ),
+        // Whatever else goes wrong, the caller can only degrade, so it sees one error. The provider's own text stays in
+        // `cause`, out of `message`.
         Effect.mapError((error) =>
           error instanceof UnavailableError || error instanceof TimeoutError
             ? error
-            : new UnavailableError({ message: error.message }),
+            : new UnavailableError({ message: "The side query could not run", cause: error }),
         ),
       )
     })
@@ -171,7 +185,7 @@ export const layer = Layer.effect(
         ._decode(call.input)
         .pipe(
           Effect.mapError(
-            (error) => new InvalidOutputError({ message: `Tool input failed schema decode: ${error.message}` }),
+            (error) => new InvalidOutputError({ message: "The tool input failed schema decode", cause: error }),
           ),
         )
       return { value, model: result.model }

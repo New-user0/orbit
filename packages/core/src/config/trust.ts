@@ -133,10 +133,7 @@ function agents(
   const results = Object.entries(value).map(([name, agent]) => ({
     name,
     agent,
-    result: pinnedModel(
-      name,
-      walk(agent, classification.agent, place, (fields) => new ConfigAgent.Info(fields)),
-    ),
+    result: walk(agent, classification.agent, place, (fields) => new ConfigAgent.Info(fields)),
   }))
   const withheld = results.flatMap((item) => item.result.withheld)
   // A disabled agent ignores the rest of its entry. What is left of the entry once `disabled` is taken out must not
@@ -148,21 +145,6 @@ function agents(
   return {
     value: kept.length === 0 ? undefined : Object.fromEntries(kept.map((item) => [item.name, item.result.value])),
     withheld,
-  }
-}
-
-// Side queries run on every Session's behalf, so the model `agents.side.model` pins is one that a folder would spend
-// the user's money on. Other agents keep their `model` as written: they only run when somebody picks them.
-function pinnedModel(
-  name: string,
-  result: { readonly value: ConfigAgent.Info; readonly withheld: readonly Trust.Kind[] },
-): { readonly value: ConfigAgent.Info; readonly withheld: readonly Trust.Kind[] } {
-  if (name !== "side" || result.value.model === undefined) return result
-  return {
-    value: new ConfigAgent.Info(
-      Object.fromEntries(Object.entries(result.value).filter(([field]) => field !== "model")),
-    ),
-    withheld: Trust.Kinds.filter((kind) => kind === "network" || result.withheld.includes(kind)),
   }
 }
 
@@ -232,8 +214,8 @@ export const classification = {
     experimental: withhold("settings"),
   } satisfies Table<Info>,
   agent: {
-    // Inert for every agent except `side`, whose model `agents()` takes out (see `pinnedModel`).
-    model: inert,
+    // Titles, side queries and subagents run without anyone choosing the agent, and a model is paid for by the user.
+    model: withhold("network"),
     // Extra headers and body fields reach the provider, whose tools and endpoints they can change.
     request: withhold("providers"),
     system: inert,
@@ -259,7 +241,7 @@ export const classification = {
     // Which agent a command runs as decides which permission rules apply to it, as `default_agent` does for a session: an
     // agent's own rules come after the user's and win. The template runs as the session's current agent instead.
     agent: withhold("permissions"),
-    model: inert,
+    model: withhold("network"),
     subagent: inert,
     subtask: inert,
   } satisfies Table<ConfigCommand.Info>,

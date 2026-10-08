@@ -1345,10 +1345,13 @@ fixes it or asks.
   configured, and raise how many steps an agent takes. It cannot add a provider or an endpoint, because `providers` and
   an agent's `request` are withheld. The promise says that no file may spend your money, and the user-facing note lists
   `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
-  [upgrading](upgrading.md) note. Until it is made, class 8 calls a field a permission only when it selects which rules,
-  agent or mode apply. The owner has decided one case: a field that picks a model, provider or budget for work that
-  runs without anyone choosing it is withheld, and `agents.side.model` is (`pinnedModel` in `ConfigTrust`, proved by
-  `test/config/trust.test.ts`). The other `model` fields wait for the wider decision.
+  [upgrading](upgrading.md) note. The owner's decision is: "Fields that pick a model, a provider or a budget are
+  permissions until the owner decides otherwise: an untrusted folder cannot set them (classify them in
+  ConfigTrust.classification so they are withheld), because the promise says an untrusted folder cannot spend the user's
+  money. This covers agents.side.model, fallback_model, output_token_cap and similar fields." The `model` of every
+  agent (so also `title` and `side`) and of every command is therefore withheld, as `network`, from the config and from
+  agent and command files (`test/config/trust.test.ts`, `test/config/agent.test.ts`). Still open, and carried by
+  whichever task adds the budget fields: the top-level `model` and an agent's `steps`, which stay as written.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
   reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
   bodies need a sanitizer in the renderer (#22 round 7). In `orb run` that is the answer, the thinking lines and the

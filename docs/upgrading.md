@@ -1019,17 +1019,24 @@ would use for it.
 
 `SideQuery` in `@orbit/core/side-query` runs one non-streaming model call on behalf of a session: `text` returns text
 and `object` returns a value decoded from a single forced tool call. It uses the small model of the session's
-provider, then the session's own model, always with the variant that reasons least, and `agents.side.model` pins the
-choice. Nothing is added to the conversation. The cost lands on the session through a new durable event,
+provider, then the session's own model, always with the variant that reasons least (a session on `#high` still runs
+its side queries at the lowest variant its model lists), and `agents.side.model` pins the choice; a pinned model that
+the catalog does not list falls through to the small model. With `history: true` the session's tool definitions go
+along, and the model may not call them. Nothing is added to the conversation. The cost lands on the session through a new durable event,
 `session.side_query.recorded`, which `orb stats` counts in its cost and token totals; `session.usage.recorded` is
 unchanged. A side query fails with `UnavailableError`, `InvalidOutputError` or `TimeoutError`, and never fails the
 session. Title generation now picks its model through the same `SessionContext.selectAuxiliary`.
 
 **Affects:** plugin authors, and anyone who reads the event log or `orb stats`: `generate` hooks see side queries with
 `agent` set to `side`, and the new event type appears in the log. An older Orbit build that shares the database skips
-the event, so its session cost and totals leave side queries out.
+the event, so only its `orb stats` totals leave side queries out; the cost still reaches the session row.
+
+An untrusted folder can no longer pick a model. While a folder is untrusted, the `model` of its agents (title
+generation and side queries included) and of its commands is withheld and reported as `network`; the user's own choice
+applies instead. Trusting the folder restores them.
 
 **What to do:** Nothing. A `generate` hook that should ignore side queries can return early when `agent` is `side`.
+Run `orb trust` in a repository whose agents or commands rely on their own `model`.
 
 ## Agent loop
 

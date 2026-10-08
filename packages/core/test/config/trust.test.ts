@@ -112,7 +112,7 @@ describe("ConfigTrust.sanitize", () => {
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],
       instructions: ["./docs/ARCHITECTURE.md"],
       commands: { review: { template: "Review $ARGUMENTS", description: "Review a change" } },
-      agents: { reviewer: { system: "Review carefully.", model: "acme/fast", steps: 5, color: "#112233" } },
+      agents: { reviewer: { system: "Review carefully.", steps: 5, color: "#112233" } },
     })
     const result = ConfigTrust.sanitize(inert, place)
     // Nothing was taken out, so nothing was copied.
@@ -149,7 +149,6 @@ describe("ConfigTrust.sanitize", () => {
       agents: {
         reviewer: {
           system: "Review carefully.",
-          model: "acme/fast",
           steps: 5,
           request: { headers: { "x-extra": "1" } },
           permissions: [{ action: "shell", resource: "*", effect: "allow" }, deny],
@@ -168,23 +167,30 @@ describe("ConfigTrust.sanitize", () => {
     expect(result.withheld).toEqual(["permissions", "providers"])
   })
 
-  // Side queries run for every session, so the model that `agents.side.model` pins is one a folder would spend on.
-  test("withholds the model of the side agent and keeps the rest of its entry", () => {
-    const result = sanitize({
-      agents: { side: { model: "acme/expensive#high", description: "Side queries" }, reviewer: { model: "acme/fast" } },
-    })
-    expect(result.info.agents?.side).toEqual(new ConfigAgent.Info({ description: "Side queries" }))
-    expect(result.info.agents?.side).not.toHaveProperty("model")
-    expect(result.info.agents?.reviewer?.model).toMatchObject({ providerID: "acme" })
+  // Titles, side queries and subagents run without anyone choosing the agent, and the owner decided that a field that
+  // picks a model is a permission an untrusted folder cannot set.
+  test.each(["side", "title", "reviewer"])("withholds the model of the agent %s and keeps the rest of its entry", (name) => {
+    const result = sanitize({ agents: { [name]: { model: "acme/expensive#high", description: "Kept" } } })
+    expect(result.info.agents?.[name]).toEqual(new ConfigAgent.Info({ description: "Kept" }))
+    expect(result.info.agents?.[name]).not.toHaveProperty("model")
     expect(result.withheld).toEqual(["network"])
 
-    const alone = sanitize({ agents: { side: { model: "acme/expensive" } } })
-    expect(alone.info.agents?.side).toEqual(new ConfigAgent.Info({}))
+    const alone = sanitize({ agents: { [name]: { model: "acme/expensive" } } })
+    expect(alone.info.agents?.[name]).toEqual(new ConfigAgent.Info({}))
     expect(alone.withheld).toEqual(["network"])
 
-    const unpinned = decode({ agents: { side: { description: "No model" } } })
+    const unpinned = decode({ agents: { [name]: { description: "No model" } } })
     expect(ConfigTrust.sanitize(unpinned, place)).toEqual({ info: unpinned, withheld: [] })
-    expect(ConfigTrust.sanitize(unpinned, place).info).toBe(unpinned)
+  })
+
+  test("withholds the model of a command and keeps the rest of it", () => {
+    const result = ConfigTrust.sanitizeCommands(
+      { review: Schema.decodeUnknownSync(ConfigCommand.Info)({ template: "Review", model: "acme/expensive" }) },
+      place,
+    )
+    expect(result.value?.review).not.toHaveProperty("model")
+    expect(result.value?.review?.template).toBe("Review")
+    expect(result.withheld).toEqual(["network"])
   })
 
   test("keeps an agent whose request and rules are already harmless as it was", () => {

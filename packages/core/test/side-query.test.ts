@@ -1,5 +1,5 @@
 import { beforeEach, expect } from "bun:test"
-import { LLMEvent, LanguageModel, type LLMRequest } from "@orbit/ai"
+import { LLMEvent, LanguageModel, ToolDefinition, type LLMRequest } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { TestLLM } from "@orbit/ai/testing"
 import { Agent } from "@orbit/core/agent"
@@ -70,9 +70,11 @@ const catalog = (id: string) =>
   })
 const smallInfo = catalog("side-small")
 const pinnedInfo = catalog("side-pinned")
+const primaryInfo = catalog("side-primary")
 
 let selections: Array<{ id: string | undefined; variant: string | undefined }> = []
 let provided: string[] = []
+let toolDefinitions: ToolDefinition[] = []
 
 const models = Layer.mock(SessionRunnerModel.Service)({
   resolve: (session) => {
@@ -89,7 +91,8 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 })
 const catalogModels = Layer.mock(Model.Service, {
   small: () => Effect.succeed(smallInfo),
-  get: (_providerID, id) => Effect.succeed(id === pinnedInfo.id ? pinnedInfo : undefined),
+  get: (_providerID, id) =>
+    Effect.succeed(id === pinnedInfo.id ? pinnedInfo : id === primaryInfo.id ? primaryInfo : undefined),
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
   load: () =>
@@ -137,7 +140,8 @@ const it = testEffect(
         PluginSupervisor.node.replace(Layer.empty),
         Tool.node.replace(
           Layer.mock(Tool.Service, {
-            snapshot: () => Effect.succeed(stubSnapshot({ definitions: [], execute: () => Effect.die("unused") })),
+            snapshot: () =>
+              Effect.succeed(stubSnapshot({ definitions: toolDefinitions, execute: () => Effect.die("unused") })),
             transform: () => Effect.die("unused"),
           }),
         ),
@@ -151,9 +155,15 @@ const it = testEffect(
 beforeEach(() => {
   selections = []
   provided = []
+  toolDefinitions = []
 })
 
-const setup = (config?: { readonly pinned?: boolean }) =>
+const setup = (config?: {
+  readonly pinned?: boolean
+  readonly pinnedMissing?: boolean
+  readonly variant?: string
+  readonly activation?: Effect.Effect<void>
+}) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     const bus = yield* Bus.Service
@@ -170,6 +180,8 @@ const setup = (config?: { readonly pinned?: boolean }) =>
         agent.hidden = true
         agent.permissions.push({ action: "*", resource: "*", effect: "deny" })
         if (config?.pinned) agent.model = { providerID: Provider.ID.make("test"), id: Model.ID.make("side-pinned") }
+        if (config?.pinnedMissing)
+          agent.model = { providerID: Provider.ID.make("test"), id: Model.ID.make("side-missing") }
       })
     })
     yield* db
@@ -182,6 +194,7 @@ const setup = (config?: { readonly pinned?: boolean }) =>
         title: "Side query",
         version: "test",
         agent: Agent.ID.make("build"),
+        model: { providerID: "test", id: "side-primary", ...(config?.variant ? { variant: config.variant } : {}) },
       })
       .run()
       .pipe(Effect.orDie)
@@ -193,7 +206,7 @@ const setup = (config?: { readonly pinned?: boolean }) =>
         return Effect.provide(
           Layer.mergeAll(
             Layer.succeed(SessionContext.Service, context),
-            Layer.mock(Plugin.Service, { awaitActivation: Effect.void }),
+            Layer.mock(Plugin.Service, { awaitActivation: config?.activation ?? Effect.void }),
           ) as Layer.Layer<Instance.Services>,
         )
       },
@@ -415,5 +428,83 @@ it.effect("records session.side_query.recorded, raises the session cost and coun
     })
     expect(stats.cost).toBeCloseTo(0.0012 * 3, 10)
     expect(stats.tokens.input).toBe(3000)
+  }),
+)
+
+it.effect("a session on a reasoning variant still runs the primary model at the minimal variant", () =>
+  Effect.gen(function* () {
+    const { sideQuery } = yield* setup({ variant: "high" })
+    const test = yield* TestLLM.Test
+    yield* test.push(answer("one"))
+
+    const result = yield* sideQuery.text({ ...base, model: "primary" })
+
+    expect(String(result.model.id)).toBe("side-primary")
+    expect(selections).toContainEqual({ id: "side-primary", variant: "none" })
+  }),
+)
+
+it.effect("an agents.side.model that the catalog does not list falls back to the small model", () =>
+  Effect.gen(function* () {
+    const { sideQuery } = yield* setup({ pinnedMissing: true })
+    const test = yield* TestLLM.Test
+    yield* test.push(answer("one"))
+
+    expect(String((yield* sideQuery.text(base)).model.id)).toBe("side-small")
+  }),
+)
+
+it.effect("history:true sends the session's tool definitions and forbids calling them", () =>
+  Effect.gen(function* () {
+    toolDefinitions = [ToolDefinition.make({ name: "lookup", description: "Lookup", inputSchema: { type: "object" } })]
+    const { sideQuery } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* test.push(answer("text"), call({ name: "pear", sweetness: 7 }), answer("plain"))
+
+    yield* sideQuery.text({ ...base, history: true })
+    yield* sideQuery.object({ ...base, history: true, schema: Fruit })
+    yield* sideQuery.text(base)
+
+    const [text, object, plain] = (yield* test.requests()).slice(-3)
+    expect(text?.tools.map((tool) => tool.name)).toEqual(["lookup"])
+    expect(text?.toolChoice).toMatchObject({ type: "none" })
+    expect(object?.tools.map((tool) => tool.name)).toEqual(["lookup", "side_query_result"])
+    expect(object?.toolChoice).toMatchObject({ type: "tool", name: "side_query_result" })
+    expect(plain?.tools).toEqual([])
+    expect(plain?.toolChoice).toBeUndefined()
+  }),
+)
+
+it.effect("the timeout covers the work before the provider call", () =>
+  Effect.gen(function* () {
+    const { sideQuery } = yield* setup({ activation: Effect.never })
+    const fiber = yield* sideQuery.text({ ...base, timeout: Duration.seconds(5) }).pipe(Effect.flip, Effect.forkChild)
+    yield* TestClock.adjust("6 seconds")
+
+    expect((yield* Fiber.join(fiber))._tag).toBe("SideQuery.TimeoutError")
+  }),
+)
+
+it.effect("a defect inside the query is an UnavailableError", () =>
+  Effect.gen(function* () {
+    const { sideQuery } = yield* setup({ activation: Effect.die(new Error("hook exploded")) })
+
+    const error = yield* sideQuery.text(base).pipe(Effect.flip)
+
+    expect(error._tag).toBe("SideQuery.UnavailableError")
+    expect(error.message).not.toContain("hook exploded")
+  }),
+)
+
+it.effect("an undecodable answer keeps the model's text out of the error message", () =>
+  Effect.gen(function* () {
+    const { sideQuery } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* test.push(call({ name: "SECRET-MODEL-TEXT", sweetness: "very" }))
+
+    const error = yield* sideQuery.object({ ...base, schema: Fruit }).pipe(Effect.flip)
+
+    expect(error._tag).toBe("SideQuery.InvalidOutputError")
+    expect(error.message).not.toContain("SECRET-MODEL-TEXT")
   }),
 )
