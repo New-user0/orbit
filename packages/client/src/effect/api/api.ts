@@ -15,6 +15,7 @@ import type { SessionMessage } from "@orbit/schema/session-message"
 import type { SessionInbox } from "@orbit/schema/session-inbox"
 import type { PromptInput } from "@orbit/schema/prompt-input"
 import type { AgentAttachment } from "@orbit/schema/prompt"
+import type { SessionTurn } from "@orbit/schema/session-turn"
 import type { Skill } from "@orbit/schema/skill"
 import type { FileDiff } from "@orbit/schema/file-diff"
 import type { InstructionEntry } from "@orbit/schema/instruction-entry"
@@ -347,6 +348,7 @@ export type SessionPromptInput = {
   readonly agents?: ReadonlyArray<AgentAttachment> | undefined
   readonly skills?: ReadonlyArray<PromptInput.SkillAttachment> | undefined
   readonly metadata?: { readonly [x: string]: unknown } | undefined
+  readonly turn?: SessionTurn.Options | undefined
   readonly delivery?: SessionInbox.Delivery | undefined
   readonly resume?: boolean | undefined
 }

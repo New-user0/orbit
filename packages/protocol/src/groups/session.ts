@@ -1,5 +1,6 @@
 import { SessionMessage } from "@orbit/schema/session-message"
 import { SessionInbox } from "@orbit/schema/session-inbox"
+import { SessionTurn } from "@orbit/schema/session-turn"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Session } from "@orbit/schema/session"
 import { SessionStats } from "@orbit/schema/session-stats"
@@ -398,6 +399,7 @@ export const makeSessionGroup = <
           id: SessionMessage.ID.pipe(Schema.optional),
           ...PromptInput.Prompt.fields,
           metadata: SessionInbox.UserPayload.fields.metadata,
+          turn: SessionTurn.RequestField,
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
