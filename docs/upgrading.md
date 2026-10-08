@@ -101,7 +101,7 @@ agent products keep there, used to apply the moment Orbit opened the folder. The
 folder is trusted. Until then Orbit keeps what cannot run code, spend money or reach the network, and leaves out the
 rest:
 
-- **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
+- **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
   agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
   own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
@@ -114,7 +114,7 @@ rest:
   instruction path that leaves the project's folder. `websearch` and `warming` keep only `false`: a repository can
   switch web search or keep-alive requests off, but cannot pick a provider, so it cannot send your queries to the
   keyless search pool, and it cannot start generations that you pay for.
-- **Kept as written:** everything else, such as `model`, `output_style`, `username`, `snapshots`, `watcher`, `media`,
+- **Kept as written:** everything else, such as `output_style`, `username`, `snapshots`, `watcher`, `media`,
   `tool_output`, `compaction`, and the fields of an agent that only describe it.
 
 What these files refer to is held to the folder too. Their `{env:VAR}` references are not expanded, and a
@@ -168,8 +168,8 @@ The files in a project's `.orbit` directory are held to the same decision, becau
   in backticks) fails with a message that names the command and the folder to trust, which is the folder around the
   `.orbit` directory or config file that defines it. Nothing is asked about or started first. A command that names an
   `agent` runs as the session's current agent instead, as a subtask as well.
-- **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt, model and description, and loses
-  what the same entry in `orbit.json` would lose: its `request`, its `allow` and `ask` rules, `disabled`, `mode` and
+- **Agents:** an agent defined in `.orbit/agents` or `.orbit/modes` keeps its prompt and description, and loses
+  what the same entry in `orbit.json` would lose: its `model`, `steps`, `request`, its `allow` and `ask` rules, `disabled`, `mode` and
   `hidden`, so a file cannot remove or hide one of the agents that are already there, or make one of them spawnable by
   the model.
 
@@ -231,18 +231,24 @@ run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit:
 also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" and "The
 terminal UI asks whether to trust a folder" under Clients.
 
-### `agents.side.model` waits for its folder to be trusted
+### A folder's model, provider and budget settings wait for it to be trusted
 
-Small background model calls (see "Side queries run on the small model" under Plugins and SDK) use a hidden agent named
-`side`, and `agents.side.model` pins the model they use. Because that model is one a folder would spend your money on,
-an untrusted folder's config cannot set it: `ConfigTrust` takes the model out of the `side` entry, keeps the rest of the
-entry, and reports the `network` kind as withheld. The model of every other agent is unchanged.
+An untrusted folder can no longer pick a model, a provider or a budget, because every one of them is paid for by you.
+While a folder is untrusted, `ConfigTrust` takes these out of its config documents and out of its agent and command
+files, keeps the rest of each entry, and reports the `providers` kind as withheld: the top-level `model`, the `model`
+and `steps` of every agent (so also `agents.title.model`, which `small_model` migrates to, and `agents.side.model`,
+which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
+Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
 
-**Affects:** a repository that pins `agents.side.model` in its own `orbit.json` or in an agent file of its `.orbit`
-directory, until its folder is trusted.
+A folder whose only config is one of these now counts as holding config back. The headless commands (`orb run` and
+the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
+trust prompt, which lists the `providers` kind.
 
-**What to do:** Nothing for your own config. To use a pinned side model in a repository, run `orb trust` in it, or pin it
-in your user config.
+**Affects:** a repository that sets `model`, an agent's `model` or `steps`, or a command's `model` in its own
+`orbit.json` or in a file of its `.orbit` directory, until its folder is trusted.
+
+**What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in
+your user config.
 
 ## Clients
 
@@ -1031,12 +1037,10 @@ session. Title generation now picks its model through the same `SessionContext.s
 `agent` set to `side`, and the new event type appears in the log. An older Orbit build that shares the database skips
 the event, so only its `orb stats` totals leave side queries out; the cost still reaches the session row.
 
-An untrusted folder can no longer pick a model. While a folder is untrusted, the `model` of its agents (title
-generation and side queries included) and of its commands is withheld and reported as `network`; the user's own choice
-applies instead. Trusting the folder restores them.
+`agents.side.model` is withheld in an untrusted folder; see "A folder's model, provider and budget settings wait for
+it to be trusted" under Configuration.
 
 **What to do:** Nothing. A `generate` hook that should ignore side queries can return early when `agent` is `side`.
-Run `orb trust` in a repository whose agents or commands rely on their own `model`.
 
 ## Agent loop
 

@@ -64,9 +64,9 @@ describe("ConfigTrust.sanitize", () => {
   ]
 
   test.each(withheldWhole)("withholds %p whole and reports it as %p", (field, value, kind) => {
-    const result = sanitize({ model: "acme/fast", [field]: value })
+    const result = sanitize({ username: "dev", [field]: value })
     expect(result.info).not.toHaveProperty(field)
-    expect<unknown>(result.info.model).toEqual({ providerID: "acme", model: "fast" })
+    expect(result.info.username).toBe("dev")
     expect(result.withheld).toEqual([kind])
   })
 
@@ -98,7 +98,6 @@ describe("ConfigTrust.sanitize", () => {
   test("keeps the fields that cannot run code, spend money or reach the network", () => {
     const inert = decode({
       $schema: "https://example.com/orbit.json",
-      model: "acme/fast#high",
       output_style: "explanatory",
       username: "dev",
       snapshots: false,
@@ -112,7 +111,7 @@ describe("ConfigTrust.sanitize", () => {
       permissions: [{ action: "shell", resource: "rm *", effect: "deny" }],
       instructions: ["./docs/ARCHITECTURE.md"],
       commands: { review: { template: "Review $ARGUMENTS", description: "Review a change" } },
-      agents: { reviewer: { system: "Review carefully.", steps: 5, color: "#112233" } },
+      agents: { reviewer: { system: "Review carefully.", color: "#112233" } },
     })
     const result = ConfigTrust.sanitize(inert, place)
     // Nothing was taken out, so nothing was copied.
@@ -149,7 +148,7 @@ describe("ConfigTrust.sanitize", () => {
       agents: {
         reviewer: {
           system: "Review carefully.",
-          steps: 5,
+          color: "#112233",
           request: { headers: { "x-extra": "1" } },
           permissions: [{ action: "shell", resource: "*", effect: "allow" }, deny],
         },
@@ -159,7 +158,7 @@ describe("ConfigTrust.sanitize", () => {
     })
     const agents = result.info.agents
     expect(agents?.reviewer).toBeInstanceOf(ConfigAgent.Info)
-    expect(agents?.reviewer).toMatchObject({ system: "Review carefully.", steps: 5, permissions: [deny] })
+    expect(agents?.reviewer).toMatchObject({ system: "Review carefully.", color: "#112233", permissions: [deny] })
     expect(agents?.reviewer).not.toHaveProperty("request")
     expect(agents?.asker).toEqual(new ConfigAgent.Info({}))
     expect(agents?.plain).toEqual(new ConfigAgent.Info({ description: "No request and no rules" }))
@@ -173,14 +172,35 @@ describe("ConfigTrust.sanitize", () => {
     const result = sanitize({ agents: { [name]: { model: "acme/expensive#high", description: "Kept" } } })
     expect(result.info.agents?.[name]).toEqual(new ConfigAgent.Info({ description: "Kept" }))
     expect(result.info.agents?.[name]).not.toHaveProperty("model")
-    expect(result.withheld).toEqual(["network"])
+    expect(result.withheld).toEqual(["providers"])
 
     const alone = sanitize({ agents: { [name]: { model: "acme/expensive" } } })
     expect(alone.info.agents?.[name]).toEqual(new ConfigAgent.Info({}))
-    expect(alone.withheld).toEqual(["network"])
+    expect(alone.withheld).toEqual(["providers"])
 
     const unpinned = decode({ agents: { [name]: { description: "No model" } } })
     expect(ConfigTrust.sanitize(unpinned, place)).toEqual({ info: unpinned, withheld: [] })
+  })
+
+  // The owner decided that every field that picks a model, a provider or a budget is withheld in an untrusted folder. A
+  // trusted control keeps the same value.
+  test.each([
+    ["model", { model: "acme/expensive#max" }],
+    ["agents.build.model", { agents: { build: { model: "acme/expensive#max" } } }],
+    ["agents.build.steps", { agents: { build: { steps: 500 } } }],
+    ["agents.side.model", { agents: { side: { model: "acme/expensive" } } }],
+    ["agents.title.model", { agents: { title: { model: "acme/expensive" } } }],
+  ])("withholds %s from an untrusted folder and keeps it for a trusted one", (_name, input) => {
+    const result = sanitize(input)
+    expect(result.withheld).toEqual(["providers"])
+    expect(result.info.model).toBeUndefined()
+    for (const agent of Object.values(result.info.agents ?? {})) {
+      expect(agent.model).toBeUndefined()
+      expect(agent.steps).toBeUndefined()
+    }
+    // Control: the same document, unsanitized, still carries the value.
+    const trusted = decode(input)
+    expect(trusted.model !== undefined || Object.values(trusted.agents ?? {}).some((a) => a.model || a.steps)).toBe(true)
   })
 
   test("withholds the model of a command and keeps the rest of it", () => {
@@ -190,7 +210,7 @@ describe("ConfigTrust.sanitize", () => {
     )
     expect(result.value?.review).not.toHaveProperty("model")
     expect(result.value?.review?.template).toBe("Review")
-    expect(result.withheld).toEqual(["network"])
+    expect(result.withheld).toEqual(["providers"])
   })
 
   test("keeps an agent whose request and rules are already harmless as it was", () => {
@@ -219,7 +239,7 @@ describe("ConfigTrust.sanitize", () => {
     expect(result.info.agents?.explicit).toEqual(new ConfigAgent.Info({ description: "Left on." }))
     expect(result.withheld).toEqual(["permissions"])
 
-    const alone = sanitize({ agents: { build: { disabled: true } }, model: "acme/fast" })
+    const alone = sanitize({ agents: { build: { disabled: true } }, username: "dev" })
     expect(alone.info).not.toHaveProperty("agents")
     expect(alone.withheld).toEqual(["permissions"])
   })
@@ -304,7 +324,7 @@ describe("ConfigTrust.sanitize", () => {
 
   test("keeps web search off and withholds every provider selection", () => {
     for (const selection of [{ provider: "random" }, { provider: "exa" }]) {
-      const result = sanitize({ websearch: selection, model: "acme/fast" })
+      const result = sanitize({ websearch: selection, username: "dev" })
       expect(result.info).not.toHaveProperty("websearch")
       expect(result.withheld).toEqual(["network"])
     }
@@ -315,7 +335,7 @@ describe("ConfigTrust.sanitize", () => {
 
   test("keeps keep-alive requests off and withholds every other selection, whatever its interval", () => {
     for (const selection of [true, {}, { interval: "1 millis", duration: "1000 hours", prompt: "again" }]) {
-      const result = sanitize({ warming: selection, model: "acme/fast" })
+      const result = sanitize({ warming: selection, username: "dev" })
       expect(result.info).not.toHaveProperty("warming")
       expect(result.withheld).toEqual(["network"])
     }
@@ -388,14 +408,14 @@ describe("ConfigTrust.sanitize", () => {
   test("withholds the mode and the visibility of an agent, so that a repository cannot choose which of the user's agents run", () => {
     const result = sanitize({
       agents: {
-        autopilot: { mode: "all", description: "Mine", steps: 5 },
+        autopilot: { mode: "all", description: "Mine", color: "#112233" },
         reviewer: { mode: "subagent", system: "Review." },
         build: { hidden: true, color: "#112233" },
         plain: { description: "No mode" },
       },
     })
     expect(result.withheld).toEqual(["permissions"])
-    expect(result.info.agents?.autopilot).toEqual(new ConfigAgent.Info({ description: "Mine", steps: 5 }))
+    expect(result.info.agents?.autopilot).toEqual(new ConfigAgent.Info({ description: "Mine", color: "#112233" }))
     expect(result.info.agents?.reviewer).toEqual(new ConfigAgent.Info({ system: "Review." }))
     expect(result.info.agents?.build).toEqual(new ConfigAgent.Info({ color: "#112233" }))
     expect(result.info.agents?.plain).toEqual(new ConfigAgent.Info({ description: "No mode" }))
@@ -452,7 +472,7 @@ describe("ConfigTrust.sanitize", () => {
 })
 
 describe("ConfigTrust.stamp", () => {
-  const document = (scope: Scope | undefined, input: unknown = { shell: "/bin/zsh", model: "acme/fast" }) =>
+  const document = (scope: Scope | undefined, input: unknown = { shell: "/bin/zsh", username: "dev" }) =>
     new Document({
       type: "document",
       path: AbsolutePath.make(path.join(repo, "orbit.json")),
@@ -472,14 +492,14 @@ describe("ConfigTrust.stamp", () => {
   test("stamps the project and local entries and sanitizes their documents", () => {
     for (const scope of ["project", "local"] as const) {
       const stamped = ConfigTrust.stamp(
-        document(scope, { shell: "/bin/zsh", model: "acme/fast", hooks: {}, websearch: { provider: "random" } }),
+        document(scope, { shell: "/bin/zsh", username: "dev", hooks: {}, websearch: { provider: "random" } }),
         place,
       )
       if (stamped.type !== "document") throw new Error("Expected a document")
       expect(stamped).toBeInstanceOf(Document)
       expect(stamped).toMatchObject({ scope, trusted: false, withheld: ["hooks", "shell", "network"] })
       expect(stamped.path).toBe(AbsolutePath.make(path.join(repo, "orbit.json")))
-      expect<unknown>(stamped.info.model).toEqual({ providerID: "acme", model: "fast" })
+      expect(stamped.info.username).toBe("dev")
       expect(stamped.info.shell).toBeUndefined()
 
       const stampedDirectory = ConfigTrust.stamp(directory(scope), place)
@@ -489,7 +509,7 @@ describe("ConfigTrust.stamp", () => {
   })
 
   test("lists nothing for a document that held nothing back", () => {
-    const stamped = ConfigTrust.stamp(document("project", { model: "acme/fast" }), place)
+    const stamped = ConfigTrust.stamp(document("project", { username: "dev" }), place)
     expect(stamped).toMatchObject({ trusted: false, withheld: [] })
   })
 

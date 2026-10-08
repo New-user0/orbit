@@ -153,7 +153,7 @@ async function hooked(name: string) {
 // A folder whose config holds nothing back.
 async function quiet(name: string) {
   const directory = path.join(root, "work", name)
-  await Bun.write(path.join(directory, "orbit.json"), JSON.stringify({ model }))
+  await Bun.write(path.join(directory, "orbit.json"), JSON.stringify({ username: "dev" }))
   return directory
 }
 
@@ -360,7 +360,7 @@ test("orb trust names a folder that is not there instead of passing a server err
 
 test("a repository with nothing withheld runs without being trusted, as does --bare, and --trust works in the home directory", async () => {
   const clean = path.join(root, "work", "clean")
-  await Bun.write(path.join(clean, "orbit.json"), JSON.stringify({ model }))
+  await Bun.write(path.join(clean, "orbit.json"), JSON.stringify({ username: "dev" }))
 
   succeeded(await orb(clean, ["run", "--standalone", "--model", model, "say ok"]))
   // --bare leaves the project config unread, so a repository that holds back plenty has nothing left to hold back.

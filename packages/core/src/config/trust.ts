@@ -180,7 +180,8 @@ export const classification = {
   info: {
     $schema: inert,
     shell: withhold("shell"),
-    model: inert,
+    // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
+    model: withhold("providers"),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
@@ -215,7 +216,7 @@ export const classification = {
   } satisfies Table<Info>,
   agent: {
     // Titles, side queries and subagents run without anyone choosing the agent, and a model is paid for by the user.
-    model: withhold("network"),
+    model: withhold("providers"),
     // Extra headers and body fields reach the provider, whose tools and endpoints they can change.
     request: withhold("providers"),
     system: inert,
@@ -228,7 +229,8 @@ export const classification = {
     // the model is told about.
     hidden: withhold("permissions"),
     color: inert,
-    steps: inert,
+    // A step allowance is a budget on the user's spend, so it is held back like the model.
+    steps: withhold("providers"),
     // Removing an agent also removes the rules the user attached to it, and an agent defined afterwards starts from
     // allowing everything.
     disabled: withhold("permissions"),
@@ -241,7 +243,7 @@ export const classification = {
     // Which agent a command runs as decides which permission rules apply to it, as `default_agent` does for a session: an
     // agent's own rules come after the user's and win. The template runs as the session's current agent instead.
     agent: withhold("permissions"),
-    model: withhold("network"),
+    model: withhold("providers"),
     subagent: inert,
     subtask: inert,
   } satisfies Table<ConfigCommand.Info>,

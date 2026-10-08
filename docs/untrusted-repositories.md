@@ -725,13 +725,12 @@ runs" is a permission.
   choose which rules, agent or mode apply? Then it is a permission, `withhold("permissions")`, and a permission list
   keeps deny rules only (`denyRules`). `sanitizeCommands` withholds a command's `agent`, and `warming` keeps only
   `false`.
-- A field that picks a model, a provider or a step budget is not covered by that rule, and the table does not treat it
-  as a permission: `model` (in the config, in every agent and in every command) and an agent's `steps` are `inert`. An
-  untrusted folder can therefore choose the most expensive of the models that you configured, or another provider that
-  you configured, and raise how many steps an agent takes. It cannot add a provider, because `providers` and an agent's
-  `request` are withheld. Whether that is acceptable is an open decision (Known gaps). Until it is made, do not write
-  "model or provider" into a rule as if it were settled, and ask before you classify a new field of that kind as inert
-  on the example of these.
+- A field that picks a model, a provider or a budget is withheld too, as `providers`, so that an untrusted folder
+  cannot choose the most expensive of the models that you configured, another provider that you configured, or a larger
+  step allowance. The owner decided this: `model` (top-level, which also carries `small_model` once it is migrated, in
+  every agent, so also `title` and `side`, and in every command) and an agent's `steps` are `withhold("providers")`.
+  There is no `fallback_model` or `output_token_cap` field in the config today; when one is added, classify it the
+  same way. Never classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
   enforced, as `hooks.disabled` has yet to be, read it in policy-authority order and not by value precedence, or a
   repository could switch off the user's guard hooks (#7).
@@ -756,7 +755,7 @@ runs" is a permission.
 **Review questions:**
 
 - Does this field choose which rules, agent or mode apply? Then it is a permission: where is it classified?
-- Does it pick a model, a provider or a step budget? Then it is the open decision above: ask before you call it inert.
+- Does it pick a model, a provider or a budget? Then it is withheld as `providers`, never inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
 - Does a default or fallback name an agent or a mode by constant instead of by configuration?
@@ -1339,19 +1338,15 @@ fixes it or asks.
   is no revoke-by-directory route for a deleted folder. The VS Code extension names such a folder and gives no command
   for it (`packages/vscode/test/trust-text.test.ts`), which leaves the terminal UI, `orb run` and `orb trust` with the
   advice.
-- **`model` and `steps` are inert.** `ConfigTrust.classification` keeps `model` (in the config, in every agent and in
-  every command) and an agent's `steps` as written while a folder is untrusted. A folder can therefore switch a session
-  to the most expensive model of a provider that you configured, or send your prompts to another provider that you
-  configured, and raise how many steps an agent takes. It cannot add a provider or an endpoint, because `providers` and
-  an agent's `request` are withheld. The promise says that no file may spend your money, and the user-facing note lists
-  `model` as kept, so this is an owner decision: keep both inert and say so in the promise, or withhold them with an
-  [upgrading](upgrading.md) note. The owner's decision is: "Fields that pick a model, a provider or a budget are
-  permissions until the owner decides otherwise: an untrusted folder cannot set them (classify them in
-  ConfigTrust.classification so they are withheld), because the promise says an untrusted folder cannot spend the user's
-  money. This covers agents.side.model, fallback_model, output_token_cap and similar fields." The `model` of every
-  agent (so also `title` and `side`) and of every command is therefore withheld, as `network`, from the config and from
-  agent and command files (`test/config/trust.test.ts`, `test/config/agent.test.ts`). Still open, and carried by
-  whichever task adds the budget fields: the top-level `model` and an agent's `steps`, which stay as written.
+- **Decided: `model`, a provider and a budget are withheld.** The owner decided on 2026-10-08, choosing "Withhold
+  all, now": "Every field that picks a model, provider or budget (top-level model, agent model and steps, side/title
+  models, fallback_model, output_token_cap) is withheld in untrusted folders; Orbit uses your own settings until you
+  trust the folder." `ConfigTrust.classification` therefore withholds, as `providers`, the top-level `model`, the
+  `model` and `steps` of every agent (so also `agents.title.model` and `agents.side.model`) and the `model` of
+  every command, from the config and from agent and command files (`test/config/trust.test.ts`,
+  `test/config/agent.test.ts`). The config has no `fallback_model` or `output_token_cap` field; a task that adds
+  one classifies it the same way. No command-file test pins the `model` of a command: `sanitizeCommands` is tested
+  on a command record only.
 - **Text that the person did not write.** A node's prompt is stored raw as a user message, and model-written text
   reaches the terminal the same way. `plain` cannot close it, because it trims and writes line breaks out, so message
   bodies need a sanitizer in the renderer (#22 round 7). In `orb run` that is the answer, the thinking lines and the
@@ -1478,7 +1473,7 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
       validator, templates count, and a gate-versus-runner test covers replay, resume and eval (2).
 - [ ] Every config key, agent field and command field is classified in `ConfigTrust.classification`. A field that
       chooses which rules, agent or mode apply is a permission, and untrusted sources get deny rules only. A field that
-      picks a model, a provider or a step budget is the open decision in Known gaps: ask before calling it inert (8).
+      picks a model, a provider or a budget is withheld as `providers`, never inert (8).
 
 **It runs commands** (spawns, shell, hooks, plugins, workflow nodes, git)
 

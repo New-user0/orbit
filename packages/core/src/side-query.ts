@@ -69,11 +69,16 @@ export interface ObjectInput<S extends Tool.ToolSchema<any>> extends TextInput {
 }
 
 export interface Interface {
-  /** Runs one non-streaming call and returns its text. */
+  /**
+   * Runs one non-streaming call and returns its text. The text is model output drawn from repository content, so a
+   * caller escapes it when it stores it and prints it through `plain` or `terminalTitle`. An answer that is blank or
+   * a tool call is an `InvalidOutputError`.
+   */
   readonly text: (input: TextInput) => Effect.Effect<{ readonly text: string; readonly model: Model.Ref }, Error>
   /**
    * Runs one non-streaming call that must answer through a single forced tool call, decoded with `schema`. The call
-   * is never executed. A missing or undecodable call is an `InvalidOutputError`.
+   * is never executed. A missing or undecodable call is an `InvalidOutputError`. The string fields of `value` are
+   * model output drawn from repository content, so a caller escapes them as it does `text`.
    */
   readonly object: <S extends Tool.ToolSchema<any>>(
     input: ObjectInput<S>,
@@ -157,6 +162,13 @@ export const layer = Layer.effect(
             Effect.andThen(Effect.fail(new UnavailableError({ message: "The side query could not run", cause: defect }))),
           ),
         ),
+        // A provider failure (401, 429, 5xx) reaches the caller only as "could not run", so this is the one place that
+        // records why.
+        Effect.tapError((error) =>
+          error instanceof UnavailableError || error instanceof TimeoutError
+            ? Effect.void
+            : Effect.logWarning("side query failed", { purpose: input.purpose, cause: error }),
+        ),
         // Whatever else goes wrong, the caller can only degrade, so it sees one error. The provider's own text stays in
         // `cause`, out of `message`.
         Effect.mapError((error) =>
@@ -169,6 +181,9 @@ export const layer = Layer.effect(
 
     const text: Interface["text"] = Effect.fn("SideQuery.text")(function* (input) {
       const result = yield* send(input, undefined)
+      // A model may answer with a tool call when the provider drops the "none" choice, and that is no answer.
+      if (result.response.toolCalls.length > 0 || result.response.text.trim() === "")
+        return yield* new InvalidOutputError({ message: "Model did not answer with text" })
       return { text: result.response.text, model: result.model }
     })
 
