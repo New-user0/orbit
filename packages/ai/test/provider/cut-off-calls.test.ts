@@ -63,25 +63,36 @@ const responses = {
         { type: "response.output_item.done", item: { ...item, arguments: input } },
       ]
     }),
-  incomplete: (details: { readonly reason?: string } | null | undefined) => ({
-    type: "response.incomplete",
-    response: { id: "resp_1", ...(details === undefined ? {} : { incomplete_details: details }) },
-  }),
   completed: { type: "response.completed", response: { id: "resp_1" } },
 }
-const responseRows = [
-  { name: "the response is incomplete and says nothing more", details: undefined },
-  { name: "the response is incomplete with null details", details: null },
-  { name: "the response is incomplete with details that hold no reason", details: {} },
-  { name: "the response is incomplete for a reason the route does not know", details: { reason: "interrupted" } },
-].map(
+const responseRows: ReadonlyArray<{ readonly name: string; readonly frame: object; readonly raw?: string }> = [
+  { name: "the response is incomplete with no response object", frame: { type: "response.incomplete" } },
+  {
+    name: "the response is incomplete and says nothing more",
+    frame: { type: "response.incomplete", response: { id: "resp_1" } },
+  },
+  {
+    name: "the response is incomplete with null details",
+    frame: { type: "response.incomplete", response: { id: "resp_1", incomplete_details: null } },
+  },
+  {
+    name: "the response is incomplete with details that hold no reason",
+    frame: { type: "response.incomplete", response: { id: "resp_1", incomplete_details: {} } },
+  },
+  {
+    name: "the response is incomplete for a reason the route does not know",
+    frame: { type: "response.incomplete", response: { id: "resp_1", incomplete_details: { reason: "interrupted" } } },
+    raw: "interrupted",
+  },
+]
+const responseFixtures = responseRows.map(
   (row): Fixture => ({
     route: "Open Responses",
     name: row.name,
     request: responses.request,
-    stream: (...inputs) => sseEvents(...responses.calls(inputs), responses.incomplete(row.details)),
+    stream: (...inputs) => sseEvents(...responses.calls(inputs), row.frame),
     finished: (...inputs) => sseEvents(...responses.calls(inputs), responses.completed),
-    raw: row.details?.reason,
+    raw: row.raw,
     completeCalls: "unknown",
   }),
 )
@@ -101,7 +112,7 @@ const chat = {
   calls: (inputs: ReadonlyArray<string>) =>
     inputs.map((input, index) => toolCallChunk(`call_${index}`, "write", input, index)),
 }
-const chatRows = [
+const chatFixtures = [
   { name: "the stream ends without a finish_reason", end: [] },
   { name: "the last chunk has an empty finish_reason", end: [deltaChunk({}, "")] },
 ].map(
@@ -118,7 +129,7 @@ const chatRows = [
 )
 
 describe("a response that does not show it finished", () => {
-  ;[...responseRows, ...chatRows].forEach((row) => {
+  ;[...responseFixtures, ...chatFixtures].forEach((row) => {
     it.effect(`${row.route} drops a call cut off mid-argument when ${row.name}`, () =>
       Effect.gen(function* () {
         const result = yield* run(row.request, row.stream(cutOff))
