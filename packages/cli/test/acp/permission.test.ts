@@ -82,6 +82,32 @@ describe("acp permissions over the wire", () => {
     ])
   })
 
+  // The shell has three names; a client shows the command in the approval whichever one the call was recorded with.
+  test.each(["shell", "Bash", "PowerShell"])("shows the command of a %s permission request", async (action) => {
+    await using acp = await startSession({
+      onPrompt: ({ sessionID, id }) =>
+        turn(
+          sessionID,
+          id,
+          permissionAsked(sessionID, "perm_shell", {
+            action,
+            metadata: { command: "Get-ChildItem" },
+            source: { type: "tool", messageID: "msg_shell", id: "call_shell" },
+          }),
+        ),
+      permission: allowOnce,
+    })
+
+    await acp.prompt(acp.sessionId, "hello")
+
+    expect(acp.permissions[0]?.toolCall).toMatchObject({
+      title: "Get-ChildItem",
+      kind: "execute",
+      locations: [{ path: "/workspace" }],
+      rawInput: { command: "Get-ChildItem", cwd: "/workspace" },
+    })
+  })
+
   test("preserves external directory permission context", async () => {
     await using acp = await startSession({
       onPrompt: ({ sessionID, id }) =>

@@ -13,6 +13,7 @@ export type ToolContent = ReadonlyArray<
 export function toToolKind(toolName: string): ToolKind {
   switch (toolName.toLocaleLowerCase()) {
     case "bash":
+    case "powershell":
     case "shell":
       return "execute"
     case "webfetch":
@@ -42,6 +43,7 @@ export function toToolKind(toolName: string): ToolKind {
 export function toLocations(toolName: string, input: ToolInput, cwd: string): ToolCallLocation[] {
   switch (toolName.toLocaleLowerCase()) {
     case "bash":
+    case "powershell":
     case "shell":
       return locationFrom(cwd, stringValue(input.workdir) ?? stringValue(input.cwd) ?? cwd)
     case "read":
@@ -181,7 +183,7 @@ function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {
 
 function isShell(toolName: string) {
   const tool = toolName.toLocaleLowerCase()
-  return tool === "bash" || tool === "shell"
+  return tool === "bash" || tool === "powershell" || tool === "shell"
 }
 
 function locationFrom(cwd: string, ...values: unknown[]): ToolCallLocation[] {

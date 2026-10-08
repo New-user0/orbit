@@ -305,12 +305,42 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
+        tool.description = description(ShellSelect.name(yield* compatibleShell))
+      })
+    yield* ctx.session.hook("context", hook)
+    yield* ctx.session.hook("compaction", hook)
+    yield* ctx.session.hook("generate", hook)
+  }),
+}
+
+/**
+ * Offers the shell tool to the model as PowerShell when that is the session shell. It is registered last among the
+ * internal plugins, so it runs after every other plugin's context, compaction and generate hook: a hook written for
+ * `shell` or `Bash` sees one name whatever the session shell is, and hides or replaces the tool however it is offered.
+ * The registry still runs and authorizes it as `Bash`, and the base prompt is told the name the model sees.
+ */
+export const AdvertisePlugin = {
+  id: "orbit.tool.shell.advertise",
+  effect: Effect.fn("ShellTool.AdvertisePlugin")(function* (ctx: Context) {
+    const shellSelect = yield* ShellSelect.Service
+    const compatibleShell = shellSelect.resolve({ priority: "compat" })
+    const hook = (event: SessionHooks["context"]) =>
+      Effect.gen(function* () {
         const shellName = ShellSelect.name(yield* compatibleShell)
-        tool.description = description(shellName)
-        // The model is offered the tool as PowerShell when that is the session shell. The registry still runs it as `name`.
         if (shellName !== "powershell" && shellName !== "pwsh") return
+        const tool = event.tools[name]
+        if (!tool) return
         event.tools[ToolNames.powershell] = tool
         delete event.tools[name]
+        // The guidance and the model prompts call the tool `Bash`. An agent's own system prompt is its author's text.
+        const system = event.system[0]
+        if (!system) return
+        const custom = yield* ctx.agent.get({ agentID: event.agent }).pipe(
+          Effect.map((agent) => agent.data.system !== undefined),
+          Effect.catch(() => Effect.succeed(true)),
+        )
+        if (custom) return
+        event.system[0] = { ...system, text: system.text.replace(/\bBash\b/g, ToolNames.powershell) }
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

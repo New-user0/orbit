@@ -27,6 +27,19 @@ describe("acp tools", () => {
     expect(toToolKind("custom_tool")).toBe("other")
   })
 
+  test.each(["shell", "Bash", "PowerShell"])("treats %s as the shell", (name) => {
+    expect(toToolKind(name)).toBe("execute")
+    expect(toLocations(name, { command: "ls" }, "/workspace")).toEqual([{ path: "/workspace" }])
+    expect(
+      pendingToolCall({ toolCallId: "call", toolName: name, state: { input: { command: "ls" } }, cwd: "/workspace" }),
+    ).toMatchObject({
+      title: "ls",
+      kind: "execute",
+      locations: [{ path: "/workspace" }],
+      rawInput: { cwd: "/workspace" },
+    })
+  })
+
   test("extracts file locations from tool input", () => {
     expect(toLocations("read", { path: "/tmp/a.ts" }, "/workspace")).toEqual([{ path: "/tmp/a.ts" }])
     expect(toLocations("edit", { path: "/tmp/b.ts", oldString: "a", newString: "b" }, "/workspace")).toEqual([

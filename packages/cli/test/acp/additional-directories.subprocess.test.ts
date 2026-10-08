@@ -17,7 +17,9 @@ function toolCall(file: string) {
   const chunks = [
     { choices: [{ delta: { role: "assistant", tool_calls: [call] }, finish_reason: null }], usage: null },
     {
-      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ file_path: file }) } }] } }],
+      choices: [
+        { delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ file_path: file }) } }] } },
+      ],
       usage: null,
     },
     { choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: null },

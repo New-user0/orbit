@@ -91,6 +91,29 @@ const transform = (service: Tool.Interface, tools: Readonly<Record<string, Info>
   )
 
 describe("Tool", () => {
+  // A plugin that confines the shell registers it under the name it had before the rename, after the built-in.
+  it.effect("a plugin tool registered as an old built-in name replaces the built-in's executor and description", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(
+        service,
+        { Bash: { ...constant("built-in"), description: "The built-in shell" } },
+        { codemode: false },
+      )
+      yield* transform(
+        service,
+        { shell: { ...constant("confined"), description: "A confined shell" } },
+        { codemode: false },
+      )
+      const snapshot = yield* service.snapshot()
+      expect(snapshot.definitions.filter((tool) => tool.name === "Bash").map((tool) => tool.description)).toEqual([
+        "A confined shell",
+      ])
+      expect(snapshot.definitions.some((tool) => tool.name === "shell")).toBe(false)
+      expect((yield* snapshot.execute(call("Bash"))).output).toEqual({ text: "confined" })
+    }),
+  )
+
   it.effect("reads the current editor tools by effective name", () =>
     Effect.gen(function* () {
       const service = yield* Tool.Service

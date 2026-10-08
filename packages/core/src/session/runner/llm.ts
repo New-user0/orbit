@@ -408,7 +408,13 @@ const layer = Layer.effect(
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) =>
-            Effect.succeed(outcome.needsContinuation ? ("continue" as const) : stepLimitReached ? ("limited" as const) : ("ended" as const)),
+            Effect.succeed(
+              outcome.needsContinuation
+                ? ("continue" as const)
+                : stepLimitReached
+                  ? ("limited" as const)
+                  : ("ended" as const),
+            ),
           OutputLimited: Effect.fnUntraced(function* (outcome) {
             // A finished response is not an overload, so it restarts the count of overloads in a row.
             overloads = 0
@@ -429,12 +435,7 @@ const layer = Layer.effect(
             // The first cut-off of a reply that ran no tool, under the runner's own lowered cap, retries the same
             // request at the model's maximum before any resume. A hosted tool call counts: repeating it reruns and
             // rebills it. The notice replaces the cut-off attempt, which later requests leave out.
-            if (
-              !outcome.toolCalled &&
-              prepared.escalation &&
-              recovery.streak === 0 &&
-              !recovery.escalated
-            ) {
+            if (!outcome.toolCalled && prepared.escalation && recovery.streak === 0 && !recovery.escalated) {
               yield* bus.publish(SessionEvent.Synthetic, {
                 sessionID,
                 text: ESCALATE_OUTPUT_LIMIT,
@@ -516,7 +517,9 @@ const layer = Layer.effect(
           if (tool.type !== "tool" || (tool.state.status !== "streaming" && tool.state.status !== "running")) continue
           const metadata = tool.state.status === "running" ? tool.state.metadata : undefined
           const childID =
-            ToolNames.canonical(tool.name) === "Agent" && typeof metadata?.sessionID === "string" ? metadata.sessionID : undefined
+            ToolNames.canonical(tool.name) === "Agent" && typeof metadata?.sessionID === "string"
+              ? metadata.sessionID
+              : undefined
           yield* bus.publish(SessionEvent.Tool.Failed, {
             sessionID,
             assistantMessageID: message.id,

@@ -401,7 +401,9 @@ const layer = Layer.effect(
                 codeModeInventory,
                 (name, tool, input, context) =>
                   beforeExecute(name, input, context).pipe(
-                    Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
+                    Effect.flatMap((event) =>
+                      executeTool(tool, name, ToolNames.lowerInput(name, event.input), context),
+                    ),
                   ),
                 authorize,
                 resolve,
@@ -442,8 +444,11 @@ const layer = Layer.effect(
                 id: Tool.CallID.make(input.call.id),
                 progress: input.progress ?? (() => Effect.void),
               }
-              const event = yield* beforeExecute(input.call.name, input.call.input, context)
-              const found = find(event.tool, input.definitions)
+              // Hooks are told the registry name of the tool, so a guard on `Bash` also meets a shell offered as
+              // `PowerShell`. A hook that leaves the name as it was keeps the request as the model made it.
+              const registryName = input.definitions?.get(input.call.name)?.name ?? input.call.name
+              const event = yield* beforeExecute(registryName, input.call.input, context)
+              const found = find(event.tool === registryName ? input.call.name : event.tool, input.definitions)
               if (found.type === "unavailable")
                 return yield* new Tool.Error({
                   message: `Tool is not available for this request: ${event.tool}`,
@@ -454,7 +459,7 @@ const layer = Layer.effect(
                   message: `No tool named "${found.name}" is currently available. Please use a tool from the available tool list.`,
                   code: Tool.ErrorCode.Unknown,
                 })
-              return yield* executeTool(found.tool, found.name, ToolNames.unview(event.input), context)
+              return yield* executeTool(found.tool, found.name, ToolNames.lowerInput(found.name, event.input), context)
             }),
             traits: Effect.fnUntraced(function* (input: Parameters<Snapshot["traits"]>[0]) {
               const found = find(input.call.name, input.definitions)

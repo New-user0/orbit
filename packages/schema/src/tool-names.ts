@@ -121,37 +121,29 @@ export function aliased<T>(record: Record<string, T>): Record<string, T> {
   })
 }
 
-const viewed = new WeakMap<object, object>()
-
 /**
- * The input of a current call as a plugin hook sees it: the current fields, and a read or write of a field under its old
- * name reaches the current one, so a guard keyed on `input.path` still sees the path. Own keys are untouched, so a copy
- * of the view has the current names only. Inputs that are not plain objects, and tools whose fields did not change, are
- * returned as they are. `unview` gives the real input back.
+ * The input of a current call as a plugin hook sees it: a plain copy with the current fields and the old field names as
+ * non-enumerable accessors, so a guard keyed on `input.path` still reads and writes the path. The copy clones, spreads and
+ * serializes like any object and carries the current names only. What a hook leaves in `event.input`, the copy or an object
+ * of its own that uses an old field name, is read back with `lowerInput`. Inputs that are not plain objects, and tools whose
+ * fields did not change, are returned as they are.
  */
 export function view(tool: string, input: unknown): unknown {
   const table = fieldTable(tool)
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
-  const renames = new Map(Object.entries(table).map(([next, old]) => [old, next]))
-  const key = (target: object, property: string | symbol) =>
-    typeof property !== "string" || Object.hasOwn(target, property) ? property : (renames.get(property) ?? property)
-  const record = input as Record<string | symbol, unknown>
-  const proxy = new Proxy(record, {
-    get: (target, property) => target[key(target, property)],
-    set: (target, property, value) => {
-      target[key(target, property)] = value
-      return true
-    },
-    has: (target, property) => key(target, property) in target,
-    deleteProperty: (target, property) => delete target[key(target, property)],
+  const copy: Record<string, unknown> = { ...input }
+  Object.entries(table).forEach(([next, old]) => {
+    if (Object.hasOwn(copy, old)) return
+    Object.defineProperty(copy, old, {
+      get: () => copy[next],
+      set: (value: unknown) => {
+        copy[next] = value
+      },
+      enumerable: false,
+      configurable: true,
+    })
   })
-  viewed.set(proxy, input)
-  return proxy
-}
-
-/** The input behind a `view`, or the value itself when it is not one. */
-export function unview(input: unknown): unknown {
-  return typeof input === "object" && input !== null ? (viewed.get(input) ?? input) : input
+  return copy
 }
 
 function fieldTable(tool: string): Readonly<Record<string, string>> | undefined {

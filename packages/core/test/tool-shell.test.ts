@@ -34,6 +34,8 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Shell } from "@orbit/core/shell"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
+import { SdkPlugins } from "@orbit/core/plugin/sdk"
+import { define } from "@orbit/plugin/effect/plugin"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
 import { ID } from "@orbit/schema/shell"
@@ -52,6 +54,8 @@ const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = Model.Ref.make({ id: Model.ID.make("test"), providerID: Provider.ID.make("test") })
 const assertions: Permission.AssertInput[] = []
 let denyAction: string | undefined
+let hideShell = false
+let activeGuard = ""
 let afterPermission = (_input: Permission.AssertInput): Effect.Effect<void> => Effect.void
 
 const permission = permissionLayer({
@@ -75,6 +79,7 @@ const permission = permissionLayer({
 const reset = () => {
   assertions.length = 0
   denyAction = undefined
+  hideShell = false
   afterPermission = () => Effect.void
 }
 
@@ -154,6 +159,7 @@ const nodes = LayerNode.group([
   filesystem,
   FSUtil.node,
   Global.node,
+  SdkPlugins.node,
 ])
 const replacements = [
   SessionExecution.node.replace(executionNode),
@@ -1340,6 +1346,42 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
+  // A hook that confines a call by returning a copy of the input with the old field, or that clones the input, is not ignored.
+  for (const replace of [
+    (input: Record<string, unknown>) => ({ ...input, background: false }),
+    (input: Record<string, unknown>) => ({ ...structuredClone(input), background: false }),
+  ]) {
+    productionIt.live(
+      "a hook that replaces the input with a copy that uses an old field name changes the call",
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => {
+            reset()
+            return withSession(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const hooks = yield* PluginHooks.Service
+                yield* hooks.register("tool", "execute.before", (event) =>
+                  Effect.sync(() => {
+                    event.input = replace(event.input as Record<string, unknown>)
+                  }),
+                )
+                const settled = yield* executeTool(
+                  registry,
+                  call({ command: helloCommand, run_in_background: true }, "call-replaced"),
+                )
+                // The background flag the hook turned off reached the tool: the command ran in the foreground.
+                expect(settled.status).toBe("completed")
+                expect(settled.content).toEqual([{ type: "text", text: "hello" }])
+              }),
+            )
+          },
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 15_000 },
+    )
+  }
+
   productionIt.live("offers the tool as PowerShell only when the session shell is PowerShell", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -1374,6 +1416,95 @@ describe("ShellTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
+
+  // The shell has three names: `shell` (before the rename), `Bash` and `PowerShell`. A hook written for any of the first two
+  // must reach the tool whichever shell the session has, because the model is offered it as `PowerShell` only at the end.
+  for (const shell of ["sh", "powershell"]) {
+    for (const plugin of [
+      { kind: "a plugin written for the old names", toolNames: undefined, guard: "shell" },
+      { kind: "a plugin that opted in to the reference names", toolNames: "reference" as const, guard: "Bash" },
+    ]) {
+      for (const spelling of ["shell", "Bash"]) {
+        productionIt.live(
+          `session shell ${shell}: ${plugin.kind} hides the tool with ${spelling} and blocks it as ${plugin.guard}`,
+          () =>
+            Effect.acquireUseRelease(
+              Effect.promise(() => tmpdir()),
+              (tmp) =>
+                Effect.gen(function* () {
+                  reset()
+                  const sdk = yield* SdkPlugins.Service
+                  const pluginID = `test.shell-guard.${shell}.${plugin.guard}.${spelling}`
+                  activeGuard = pluginID
+                  yield* sdk.register(
+                    define({
+                      id: pluginID,
+                      ...(plugin.toolNames ? { toolNames: plugin.toolNames } : {}),
+                      effect: (ctx) =>
+                        Effect.gen(function* () {
+                          yield* ctx.session.hook("context", (event) =>
+                            Effect.sync(() => {
+                              if (hideShell && activeGuard === pluginID) delete event.tools[spelling]
+                            }),
+                          )
+                          yield* ctx.tool.hook("execute.before", (event) =>
+                            activeGuard === pluginID && event.tool === plugin.guard
+                              ? Effect.fail(new Tool.Error({ message: `blocked by ${pluginID}` }))
+                              : Effect.void,
+                          )
+                        }),
+                    }),
+                  )
+                  yield* withSession(tmp.path, (registry) =>
+                    Effect.gen(function* () {
+                      const selection = yield* ShellSelect.Service
+                      yield* selection.transform((editor) => editor.configure(shell))
+                      const hooks = yield* PluginHooks.Service
+                      const request = () =>
+                        hooks.trigger("session", "context", {
+                          sessionID,
+                          model: sessionModel,
+                          system: [{ type: "text", text: "Fall back to Bash when a tool cannot do it." }],
+                          messages: [],
+                          options: {},
+                          agent: toolIdentity.agent,
+                          // As `SessionModelRequest` hands them over: a name written before the rename reaches the entry.
+                          tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
+                        } as never)
+                      // Control: without the hide, the tool is offered under exactly one of its two names.
+                      hideShell = false
+                      const control = yield* request()
+                      const offered = Object.keys(control.tools)
+                      expect(offered).toHaveLength(1)
+                      expect(["Bash", "PowerShell"]).toContain(offered[0])
+                      // The prompt names the tool the model is offered.
+                      expect(control.system[0]?.text).toBe(`Fall back to ${offered[0]} when a tool cannot do it.`)
+
+                      hideShell = true
+                      expect(Object.keys((yield* request()).tools)).toEqual([])
+
+                      // The call comes in under the name it was offered with, and the guard still sees the tool.
+                      const snapshot = yield* registry.snapshot()
+                      const bash = snapshot.definitions.find((tool) => tool.name === "Bash")
+                      if (!bash) return yield* Effect.die(new Error("Bash is not registered"))
+                      const failure = yield* snapshot
+                        .execute({
+                          ...call({ command: helloCommand }, "call-guarded"),
+                          call: { ...call({ command: helloCommand }, "call-guarded").call, name: offered[0]! },
+                          definitions: new Map([[offered[0]!, bash]]),
+                        })
+                        .pipe(Effect.flip)
+                      expect(failure.message).toBe(`blocked by ${pluginID}`)
+                    }),
+                  )
+                }),
+              (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+            ),
+          { timeout: 30_000 },
+        )
+      }
+    }
+  }
 
   it.live("exposes malformed native syntax without fallback or partial execution", () =>
     Effect.gen(function* () {

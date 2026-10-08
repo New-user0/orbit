@@ -73,7 +73,10 @@ const ollama = Bun.serve({
               index: 0,
               id: `call_${node}`,
               type: "function",
-              function: { name: "Write", arguments: JSON.stringify({ file_path: `${node}.txt`, content: `${content}\n` }) },
+              function: {
+                name: "Write",
+                arguments: JSON.stringify({ file_path: `${node}.txt`, content: `${content}\n` }),
+              },
             },
           ],
         },
