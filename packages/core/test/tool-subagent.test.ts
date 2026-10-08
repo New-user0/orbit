@@ -34,12 +34,13 @@ import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Permission } from "@orbit/core/permission"
 import { SubagentTool } from "@orbit/core/tool/plugin/subagent"
+import { WorkflowTool } from "@orbit/core/tool/plugin/workflow"
 import { Tool } from "@orbit/core/tool"
 import { tmpdir } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
 import { offlineModels } from "./fixture/models"
 import { testEffect } from "./lib/effect"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const childText = "child final response"
 const completedOutput = (sessionID: Session.ID) =>
@@ -117,6 +118,7 @@ const subagentPluginSupervisor = makeLocationNode({
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service
       yield* registerToolPlugin(SubagentTool.Plugin, {}, (name, callback) => hooks.register("tool", name, callback))
+      yield* registerToolPlugin(WorkflowTool.Plugin, {}, (name, callback) => hooks.register("tool", name, callback))
     }),
   ),
   deps: [Agent.node, Config.node, Model.node, Permission.node, Session.node, Job.node, Tool.node, PluginHooks.node],
@@ -213,6 +215,16 @@ describe("SubagentTool", () => {
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
+          expect(yield* toolTraits(registry, "subagent")).toMatchObject({
+            readOnly: false,
+            concurrencySafe: true,
+            interruptBehavior: "block",
+          })
+          expect(yield* toolTraits(registry, "workflow")).toMatchObject({
+            readOnly: false,
+            concurrencySafe: false,
+            interruptBehavior: "block",
+          })
           const jobs = yield* Job.Service
           const bus = yield* Bus.Service
           const admitted = yield* Deferred.make<Job.Background>()

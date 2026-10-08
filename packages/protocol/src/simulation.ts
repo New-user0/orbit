@@ -512,6 +512,20 @@ export namespace Backend {
         codemode: Schema.optionalKey(Schema.Boolean),
       }),
     ),
+    /** Fixed answers only: a simulated tool cannot answer per call. Without them it is not safe and runs alone. */
+    traits: Schema.optionalKey(
+      Schema.Struct({
+        readOnly: Schema.optionalKey(Schema.Boolean),
+        concurrencySafe: Schema.optionalKey(Schema.Boolean),
+        destructive: Schema.optionalKey(Schema.Boolean),
+        openWorld: Schema.optionalKey(Schema.Boolean),
+        requiresUserInteraction: Schema.optionalKey(Schema.Boolean),
+        cancelSiblingsOnFailure: Schema.optionalKey(Schema.Boolean),
+        interruptBehavior: Schema.optionalKey(Schema.Literals(["cancel", "block"])),
+        maxResultChars: Schema.optionalKey(Schema.Number.check(Schema.isGreaterThan(0))),
+        displayName: Schema.optionalKey(Schema.NonEmptyString),
+      }),
+    ),
   })
   export interface ToolRegistration extends Schema.Schema.Type<typeof ToolRegistration> {}
 

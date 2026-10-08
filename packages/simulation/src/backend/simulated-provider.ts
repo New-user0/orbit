@@ -562,6 +562,7 @@ const makeToolDriver = Effect.fn("SimulatedProvider.makeToolDriver")(function* (
                             registration.permission === undefined
                               ? registration.options
                               : { ...registration.options, permission: registration.permission },
+                          traits: registration.traits,
                           description: registration.description,
                           input: registration.inputSchema,
                           output: registration.outputSchema ?? {},

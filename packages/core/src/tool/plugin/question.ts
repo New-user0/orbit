@@ -56,6 +56,7 @@ export const Plugin = {
         editor.add({
           name,
           options: { codemode: false },
+          traits: { requiresUserInteraction: true, interruptBehavior: "cancel" },
           description,
           input: Input,
           output: Output,

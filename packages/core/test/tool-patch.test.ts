@@ -24,7 +24,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
-import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions } from "./lib/tool"
+import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 const sessionHooks = new Map<string, (event: SessionHooks["context"]) => Effect.Effect<void>>()
 const patchToolNode = makeLocationNode({
@@ -177,6 +177,23 @@ const withTempTool = <A, E, R>(body: (directory: string, registry: Tool.Interfac
   )
 
 describe("PatchTool", () => {
+  it.live("is destructive only for a patch that deletes a file, or that cannot be read", () =>
+    withTempTool((_, registry) =>
+      Effect.gen(function* () {
+        const traits = (patchText: string) => toolTraits(registry, "patch", { patchText })
+        const modifying = "*** Begin Patch\n*** Add File: a.txt\n+a\n*** Update File: b.txt\n@@\n-x\n+y\n*** End Patch"
+        const deleting = "*** Begin Patch\n*** Update File: b.txt\n@@\n-x\n+y\n*** Delete File: c.txt\n*** End Patch"
+        expect(yield* traits(modifying)).toMatchObject({ readOnly: false, concurrencySafe: false, destructive: false })
+        expect(yield* traits(deleting)).toMatchObject({ readOnly: false, concurrencySafe: false, destructive: true })
+        expect(yield* traits("not a patch")).toMatchObject({
+          readOnly: false,
+          concurrencySafe: false,
+          destructive: true,
+        })
+      }),
+    ),
+  )
+
   it.live("selects the same edit tools for compaction and generate requests as the agent loop", () =>
     withTempTool(() =>
       Effect.gen(function* () {

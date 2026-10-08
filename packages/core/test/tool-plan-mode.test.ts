@@ -27,7 +27,7 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { allowAllPermission } from "./lib/permission"
 import { globalProjectNode } from "./lib/project"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const sessionID = Session.ID.make("ses_plan_mode_test")
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
@@ -76,6 +76,14 @@ const callTool = Effect.fn("callTool")(function* (name: string, input: unknown) 
   const sessions = yield* Session.Service
   const agents = yield* Agent.Service
   const registry = yield* Tool.Service
+  expect(yield* toolTraits(registry, "enter_plan_mode")).toMatchObject({
+    readOnly: false,
+    requiresUserInteraction: true,
+  })
+  expect(yield* toolTraits(registry, "exit_plan_mode")).toMatchObject({
+    readOnly: false,
+    requiresUserInteraction: true,
+  })
   const session = yield* sessions.get(sessionID)
   return yield* executeTool(registry, {
     ...toolIdentity,

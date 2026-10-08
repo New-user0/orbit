@@ -1,15 +1,7 @@
 export * as CodeModeTool from "./tool.js"
 
 import { CodeMode, Namespace, Tool, toolError } from "@orbit/codemode"
-import type {
-  Content,
-  Context,
-  Error,
-  Info,
-  Metadata,
-  Namespace as ToolNamespace,
-  Result,
-} from "@orbit/schema/tool"
+import type { Content, Context, Error, Info, Metadata, Namespace as ToolNamespace, Result } from "@orbit/schema/tool"
 import { Cause, Deferred, Effect, Exit, Ref, Schema, Semaphore } from "effect"
 import { Permission } from "../permission.js"
 import { definition, normalizedName } from "../tool/runtime.js"
@@ -91,6 +83,9 @@ export const create = (
     description,
     input: CodeMode.Input,
     output: ExecuteOutput,
+    // Fetch is available to a program, so a call reaches beyond this machine. It is neither read-only nor safe beside
+    // other calls; a program parallelizes inside with Promise.all.
+    traits: { readOnly: false, concurrencySafe: false, openWorld: true, interruptBehavior: "block" },
     execute: ({ code }, context) =>
       Effect.gen(function* () {
         // Aborts when the execution ends, however it ends, so a fetch that is still asking or sending stops with it.

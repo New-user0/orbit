@@ -155,6 +155,36 @@ test("decodes semantic UI snapshots", () => {
     expect(() => decode({ format: "orbit-ui-snapshot-v1", nodes })).toThrow()
 })
 
+test("decodes simulated tool registrations with and without static traits", () => {
+  const registration = { name: "lookup", description: "Look up", inputSchema: { type: "object" } }
+  const decodeTools = (tools: unknown[]) =>
+    Backend.decodeRequest({ jsonrpc: "2.0", id: 1, method: "tool.attach", params: { tools } })
+  const traits = {
+    readOnly: true,
+    concurrencySafe: true,
+    destructive: false,
+    openWorld: true,
+    requiresUserInteraction: false,
+    cancelSiblingsOnFailure: false,
+    interruptBehavior: "cancel",
+    maxResultChars: 1000,
+    displayName: "Look up",
+  }
+  expect(decodeTools([registration])).toMatchObject({ params: { tools: [registration] } })
+  expect(decodeTools([{ ...registration, traits }])).toMatchObject({ params: { tools: [{ traits }] } })
+  expect(decodeTools([{ ...registration, traits: { concurrencySafe: true } }])).toMatchObject({
+    params: { tools: [{ traits: { concurrencySafe: true } }] },
+  })
+  for (const invalid of [
+    { readOnly: "yes" },
+    { interruptBehavior: "queue" },
+    { maxResultChars: 0 },
+    { displayName: "" },
+    "fast",
+  ])
+    expect(() => decodeTools([{ ...registration, traits: invalid }])).toThrow()
+})
+
 test("decodes the simulated tool lifecycle", () => {
   const registration = {
     name: "lookup",
