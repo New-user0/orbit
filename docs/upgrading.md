@@ -104,16 +104,11 @@ rest:
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
   `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and
   `disabled` on an agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command,
-  because an agent's
- own rules come after yours and win: which agent a session starts as, which agent runs a command,
-  and which agents the
- model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
-  from the project runs as
- the session's current agent, and an agent keeps the mode and visibility it has, or the ones
-  a new agent gets. A key
- that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
-  project's value outranks yours,
- so it would otherwise replace the one in your own config.
+  because an agent's own rules come after yours and win: which agent a session starts as, which agent runs a command,
+  and which agents the model may spawn as subagents choose between sets of rules, as `default_agent` does. A command
+  from the project runs as the session's current agent, and an agent keeps the mode and visibility it has, or the ones
+  a new agent gets. A key that is set but empty, such as `sandbox: {}` or `formatter: true`, is left out too: a
+  project's value outranks yours, so it would otherwise replace the one in your own config.
 
 - **Left out whole:** `model`, an agent's `model` and `steps` and a command's `model`, `hooks`, `mcp`, `plugins`,
   `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`, `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
