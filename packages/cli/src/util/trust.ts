@@ -20,6 +20,8 @@ type Defined = {
   readonly commands: ReadonlyArray<{ readonly id: string; readonly command: string }>
   readonly approvals: ReadonlyArray<{ readonly id: string; readonly permissions: string }>
   readonly agents: ReadonlyArray<{ readonly id: string; readonly agent: string }>
+  /** The models and limits on attempts that the file picks, as `field: value`. */
+  readonly models: ReadonlyArray<{ readonly id: string; readonly choice: string }>
 }
 
 type Options = {
@@ -72,7 +74,10 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
   // A file that defines nothing a run carries out holds nothing up, as a folder that holds nothing back does not.
   const defined =
     options.defines &&
-    (options.defines.commands.length > 0 || options.defines.approvals.length > 0 || options.defines.agents.length > 0)
+    (options.defines.commands.length > 0 ||
+      options.defines.approvals.length > 0 ||
+      options.defines.agents.length > 0 ||
+      options.defines.models.length > 0)
       ? options.defines
       : undefined
   const current = yield* call((signal) => client.location.trust.get({ location }, { signal })).pipe(
@@ -340,6 +345,14 @@ function lead(
           {
             says: `lets the file choose which of your agents run its nodes: ${file} names an \`agent\` for each entry below, and an agent's own rules are added after your global rules, where the last match wins, so the file can pick an agent whose rules allow actions that yours ask about, which a run then does without asking:`,
             rows: defines.agents.map((item) => [item.id, `agent: ${item.agent}`] as const),
+          },
+        ]),
+    ...(defines.models.length === 0
+      ? []
+      : [
+          {
+            says: `lets the file choose which of your models run its nodes, and how many attempts they get: ${file} sets a \`model\`, fallback models or a limit on attempts for each entry below, where your own \`--model\` would otherwise decide, so the file can spend on a model you did not pick:`,
+            rows: defines.models.map((item) => [item.id, item.choice] as const),
           },
         ]),
   ]

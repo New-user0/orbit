@@ -77,12 +77,23 @@ export const execute = Effect.fn("cli.flow.execute")(function* (input: {
  * executes the shell commands that its check nodes, verify nodes and suite tasks define, which no permission rule is
  * asked about. It approves what the agents of its nodes ask permission for where they set `permissions` to `auto`. And it
  * runs nodes as the agents it names, in the `agent` of a node, of a team member or of a `judge`, whose own rules are added
- * after the user's global rules and win. The last two settle the user's own rules in the file's favour. A file that
- * defines any of the three needs a trusted folder as well. One that defines none keeps the check that `orb run` has.
+ * after the user's global rules and win. The last two settle the user's own rules in the file's favour. And it runs the
+ * models it picks, in the `model` of a node, of a team member or of a `judge`, in its fallback models and in a suite's
+ * `models`, and the attempts it asks for, which replace the `--model` the person passed and spend on what the person did
+ * not choose. A file that defines any of the four needs a trusted folder as well. One that defines none keeps the check
+ * that `orb run` has.
  */
 export const trustOptions = Effect.fn("cli.flow.trustOptions")(function* (file: string, kind: "workflow" | "suite") {
-  const { importsModule, suiteAgents, suiteCommands, workflowAgents, workflowApprovals, workflowCommands } =
-    yield* Effect.promise(() => import("@orbit/flow"))
+  const {
+    importsModule,
+    suiteAgents,
+    suiteCommands,
+    suiteModels,
+    workflowAgents,
+    workflowApprovals,
+    workflowCommands,
+    workflowModels,
+  } = yield* Effect.promise(() => import("@orbit/flow"))
   const defines = yield* Effect.tryPromise({
     try: async () => ({
       file,
@@ -91,6 +102,8 @@ export const trustOptions = Effect.fn("cli.flow.trustOptions")(function* (file: 
       approvals: kind === "workflow" ? await workflowApprovals(file) : [],
       // A suite names an agent only as the `judge` of a task.
       agents: await (kind === "workflow" ? workflowAgents(file) : suiteAgents(file)),
+      // The models a file picks replace the person's `--model`, so they are held back like the config's `model`.
+      models: await (kind === "workflow" ? workflowModels(file) : suiteModels(file)),
     }),
     catch: (cause) => cause,
   })

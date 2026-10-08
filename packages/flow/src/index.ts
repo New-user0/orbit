@@ -8,9 +8,11 @@ export {
   loadWorkflow,
   suiteAgents,
   suiteCommands,
+  suiteModels,
   workflowAgents,
   workflowApprovals,
   workflowCommands,
+  workflowModels,
 } from "./load.js"
 export { json, plain, progress } from "./plain.js"
 export { otlp, spans, timeline, type Span } from "./trace.js"

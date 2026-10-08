@@ -146,8 +146,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
-  `workflowCommands`, `workflowApprovals`, `workflowAgents`, `suiteCommands` and `suiteAgents`. Proof:
-  `packages/cli/test/trust.test.ts`, `packages/flow/test/load.test.ts`, `packages/flow/test/agents.test.ts`.
+  `workflowCommands`, `workflowApprovals`, `workflowAgents`, `workflowModels`, `suiteCommands`, `suiteAgents` and
+  `suiteModels`. The models list is the fields that pick a model or add attempts (`model`, `retry.fallbackModels`,
+  `retry.maxAttempts`, `maxIterations`, `maxRounds`, a judge's `model`, a suite's `models`): a node's `model` replaces the
+  person's `--model` (`runner.ts`), so an untrusted clone would choose what the person pays for. Proof:
+  `packages/cli/test/trust.test.ts`, `packages/flow/test/load.test.ts`, `packages/flow/test/models.test.ts`,
+  `packages/flow/test/agents.test.ts`.
 - Every command that starts work: `requireTrust`, `trustRefusal` and `warnUntrusted`. `orb acp` only warns, because the
   editor chooses its folders. Proof: `packages/cli/test/trust.test.ts`.
 - The run store, `.orbit/runs.db`, and the worktree paths built from it: `Store.run`, `Store.runs`, `Git.clean` and
@@ -401,7 +405,9 @@ and its data twins (commands, approvals, agents) at once.
 
 - For each file kind, list what it can make the code do: spawn, approve, choose an agent, a path, a model or a provider.
   The lists live in `packages/flow/src/load.ts`: `workflowCommands`, `suiteCommands`, `workflowApprovals`,
-  `workflowAgents`, `suiteAgents`, and `importsModule` for a module, which is code and not data.
+  `workflowAgents`, `workflowModels`, `suiteAgents`, `suiteModels`, and `importsModule` for a module, which is code and
+  not data. A field that picks a model or a budget in a data file belongs in the models list as it does in
+  `ConfigTrust.classification`, and a test in `models.test.ts` compares the list with what the runner is handed.
 - Read the file as the runner does. A workflow is read through `validate`, the function `compile` calls, so the gate
   scans what the runner executes and fails as the loader fails. Do not write a second parser that can drift.
 - Count a template. `{{plan.text}}` is filled in when the node starts, and a reply can say `auto` or name an agent.

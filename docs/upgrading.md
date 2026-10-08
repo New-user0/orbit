@@ -242,6 +242,15 @@ and `steps` of every agent (so also `agents.title.model`, which `small_model` mi
 which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
 Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
 
+A workflow or suite file in an untrusted folder can no longer pick a model either. `orb flow run`, `flow resume` and
+`eval` stop, with the usual untrusted-folder message and exit 1, before any model is asked, when a YAML or JSON file sets
+a `model` on a node, a team member or a `judge`, lists `retry.fallbackModels`, sets `retry.maxAttempts`, `maxIterations`
+or `maxRounds`, or is a suite with `models`, even in a folder that holds nothing back. The message lists each field as
+written under "lets the file choose which of your models run its nodes". Before, such a file ran at once and its `model`
+replaced the `--model` you passed. `--trust` runs it once, `orb trust` trusts the folder for good, and a file that sets
+none of these keeps running without a grant. In a trusted folder nothing changes: the file's model still wins over
+`--model`. The file's own `budget` is not held, because it only lowers what a run may spend.
+
 A folder whose only config is one of these now counts as holding config back. The headless commands (`orb run` and
 the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
 trust prompt, which lists the `providers` kind.
