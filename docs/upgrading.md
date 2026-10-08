@@ -644,15 +644,24 @@ cost that is not above zero, a `fallbackModel` that is not a model reference, or
 (`max_steps`, say, or a misspelled `maxCost`) is refused with a 400, because a dropped key would leave the prompt with
 fewer limits than it asked for. Orbit stores the options with the prompt and returns them as `turn` on the `user`
 message, and the latest options in a turn are the ones that apply to it. It does not act on them yet: no limit stops a
-turn and no fallback model is used. A turn ends only at a queued input or when the session is marked idle, so a steer
-that arrives after the agent loop has finished its last response, but before the idle mark, still joins that turn.
+turn and no fallback model is used.
+
+A turn is closed only by an idle mark, or by a queued input that starts the next one, and Orbit records nothing where it
+cuts a history short. So a steer joins the last turn in front of it, with that turn's options, fallback model and
+notices, whenever the history in front of it does not end in an idle mark. That is so for the first prompt after a fork
+that stops before one (a fork before a queued prompt, say), after a revert, which removes the idle mark that followed
+the history it keeps (a revert to a queued prompt, say), and after an import of a session that was exported in the
+middle of a turn. It is also so for a steer that arrives after the agent loop has finished its last response but before
+the idle mark. A prompt sent with `queue` delivery starts a new turn in each of these cases.
 
 **Affects:** programs that read messages through the HTTP API, the client libraries or an exported session, and code
 that checks them against the old shape: `user` messages gain optional `turn` and `delivery`, `synthetic` messages gain
 optional `delivery`, and the `session.inbox.enqueued` event carries `turn` on a prompt that had it. The generated client
 types add `SessionTurnOptions` and the new fields.
 
-**What to do:** nothing. Every new field is optional, and a prompt without `turn` behaves as before.
+**What to do:** nothing. Every new field is optional, and a prompt without `turn` behaves as before. A client that sets
+`turn` and wants the first prompt after a fork, a revert or an import to start a new turn sends it with
+`delivery: "queue"`.
 
 ## Permissions
 
