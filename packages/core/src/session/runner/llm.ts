@@ -349,6 +349,13 @@ const layer = Layer.effect(
             if (limit) return yield* new StepFailedError({ error: limit })
             // At the cap no path starts another request (a tool that ran, a swept input or a text-only stop).
             if (outputLimitStreak(loaded.messages) >= MAX_OUTPUT_RECOVERIES) return false
+            // A text-only resume never reaches the step boundary, so a waiting steered message would sit behind up to
+            // three requests. Return now: the boundary delivers it and its user message starts a fresh streak.
+            if (
+              !outcome.needsContinuation &&
+              (yield* SessionInbox.list(db, sessionID)).some((item) => item.type === "user" && item.delivery === "steer")
+            )
+              return false
             yield* bus.publish(SessionEvent.Synthetic, {
               sessionID,
               text: RESUME_AFTER_OUTPUT_LIMIT,

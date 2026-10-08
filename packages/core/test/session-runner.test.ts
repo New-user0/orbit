@@ -8682,6 +8682,37 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests.map((request) => request.toolChoice?.type)).not.toContain("none")
   })
 
+  scenario("delivers a steered message at a text-only output-limit stop instead of resuming", function* (s) {
+    yield* s.admit("Write a long answer")
+    yield* s.llm.push(
+      lengthStop("steer-1", "A"),
+      TestLLM.text("Answer", "steer-done"),
+    )
+    const first = yield* s.llm.gate
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* first.started
+    yield* s.admit("STEER")
+    yield* first.release
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => userTexts(request).includes("STEER"))).toEqual([false, true])
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
+    ).toHaveLength(0)
+  })
+
+  scenario("resumes a reply cut off at the configured cap", function* (s) {
+    yield* s.configControl!.setEntries([new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) })])
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(lengthStop("cap-resume-1", "Part"), TestLLM.text(" rest", "cap-resume-2"))
+    yield* s.runPrompt("Question")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([8_000, 8_000])
+    expect(
+      (yield* s.context).filter((message) => message.type === "synthetic" && message.metadata?.notice === "output-limit"),
+    ).toHaveLength(1)
+  })
+
   scenario("starts a fresh output-limit streak after a new prompt", function* (s) {
     yield* s.admit("First")
     yield* s.llm.push(

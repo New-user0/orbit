@@ -1417,25 +1417,28 @@ finishes with `stop` or `tool-calls`, after a compaction and after a new message
 cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
 `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
 no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
-an incomplete stream's continuation does; the allowance is bounded.
+an incomplete stream's continuation does; the allowance is bounded. A text-only cut-off is not resumed when a steered
+message from you is already waiting: that message is delivered at once and starts a new count. A steer that arrives
+during a resume waits for at most the three resumes.
 
 **Affects:** anyone whose model answers or tool calls are long enough to hit the output limit, and clients that list a
 session's messages, which now see an extra note with `metadata.notice` set to `output-limit` and no description.
 
-**What to do:** nothing. Raise the model's output limit if you would rather avoid the extra requests.
+**What to do:** nothing. Raise the model's output limit, and raise or unset `output_token_cap` if you set it, if you
+would rather avoid the extra requests.
 
 ### New `output_token_cap` setting
 
 The root `output_token_cap` setting is a positive whole number of tokens that caps how much a model may write in one
-request. A reply cut off at the cap is resumed like any other cut-off (see the output-limit note below), so one step
-can write several times the cap, and a reply that runs several steps can write more still. Compaction summaries and
-titles keep their own limits. Every agent request, including a subagent's, asks for the smaller of the cap and the
-model's own maximum, and the cap is applied before `session.context` hooks run, so a hook can still change it. It
-reaches every provider, including one whose adapter otherwise omits the default limit, and `session.context` hooks
-see it as `outputTokenCap` when it lowered the model's limit. The one exception is a model that rejects an output
-limit at its highest reasoning effort, where Orbit sends none. The cap never raises a limit. Left unset, requests
-are unchanged. Zero, a negative number or a fraction is reported and ignored. With a cap of 1,024 or less, every request
-from a model with a fixed reasoning budget is refused; below about 2,000, most of the cap goes to reasoning.
+request. A reply cut off at the cap is resumed like any other cut-off (see the output-limit note above), so the cap
+limits each model request, not the whole reply. Compaction summaries and titles keep their own limits. Every agent
+request, including a subagent's, asks for the smaller of the cap and the model's own maximum, and the cap is applied
+before `session.context` hooks run, so a hook can still change it. It reaches every provider, including one whose
+adapter otherwise omits the default limit, and `session.context` hooks see it as `outputTokenCap` when it lowered the
+model's limit. The one exception is a model that rejects an output limit at its highest reasoning effort, where Orbit
+sends none. The cap never raises a limit. Left unset, requests are unchanged. Zero, a negative number or a fraction is
+reported and ignored. With a cap of 1,024 or less, every request from a model with a fixed reasoning budget is refused;
+below about 2,000, most of the cap goes to reasoning.
 
 In a folder that is not trusted yet, `output_token_cap` is left out whole, like the other settings that choose a model
 or a budget. Orbit uses your own setting until you trust the folder.
@@ -1450,13 +1453,13 @@ When the provider reports that the model is overloaded three times in a row with
 fallback model, if one is set (`fallback_model`, or `turn.fallbackModel` on the prompt) and it differs from the
 session's own model. The switch is immediate, with no wait, and the retry allowance starts again on the new model. Any
 other failure between two overloads, such as a rate limit, restarts the count, and so does a response cut off by the
-output limit. If the overloaded response had already produced text, that response stays failed and the step continues from it on the fallback model. The conversation gets a
-`synthetic` message with `metadata.notice` of `fallback` and a one-line `description` naming both models; the message
-also tells the model that it was switched. The fallback lasts until the next turn starts (a queued prompt, or the first
-prompt after the session went idle) or until you switch model yourself. Orbit reads it from that message, so a restart
-or a moved location keeps it. The message comes before the fallback model's answer, never after it. The failed
-attempt's empty draft stays ahead of the message; it is closed without a finish, left out of requests and not counted as
-a step. No new event type is added.
+output limit. If the overloaded response had already produced text, that response stays failed and the step continues
+from it on the fallback model. The conversation gets a `synthetic` message with `metadata.notice` of `fallback` and a
+one-line `description` naming both models; the message also tells the model that it was switched. The fallback lasts
+until the next turn starts (a queued prompt, or the first prompt after the session went idle) or until you switch model
+yourself. Orbit reads it from that message, so a restart or a moved location keeps it. The message comes before the
+fallback model's answer, never after it. The failed attempt's empty draft stays ahead of the message; it is closed
+without a finish, left out of requests and not counted as a step. No new event type is added.
 
 **Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
 
