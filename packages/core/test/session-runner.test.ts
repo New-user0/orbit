@@ -1200,7 +1200,7 @@ describe("SessionRunnerLLM", () => {
           description: "A tool that declares a display name",
           input: Schema.Struct({}),
           output: Schema.Struct({}),
-          traits: { displayName: "Named\u001b]0;x\u0007\u001b[2K\u009b‮" },
+          traits: { displayName: "Named\u001b]0;x\u0007\u001b[2K\u009b\u202e" },
           execute: () => Effect.succeed({ output: {} }),
         },
       },

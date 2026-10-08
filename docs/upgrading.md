@@ -1162,7 +1162,8 @@ protocol, which accepts one more optional field.
 When a tool declares a `displayName`, the `session.tool.input.started` event now carries it, and the projected assistant
 tool message (`Session.Message.Assistant.Tool`) exposes it, so a client can show the name a tool chose for people. The
 name is stored with control and format characters written out (`ESC` as `\x1b`, a right-to-left override as `\u{202e}`),
-because the event is durable and outlives its source. A tool that declares none, and a provider-hosted tool, leave the
+because the event is durable and outlives its source. A session file imported with `orb session import` is escaped the same
+way. A tool that declares none, and a provider-hosted tool, leave the
 field out, and events written before this change decode as they did.
 
 **Affects:** SDK and client callers that read `session.tool.input.started` or assistant tool content, and the generated

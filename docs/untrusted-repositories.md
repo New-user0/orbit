@@ -88,9 +88,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
   with control and format characters written out. A plugin or a simulated tool supplies its `displayName` raw, but the
   publisher writes every declared name through `plain` (`@orbit/util/plain`) onto the durable `session.tool.input.started`
-  event, so the stored and projected `displayName` is always escaped; a client that draws it still passes it through
+  event, and `SessionTransfer.import` (`orb session import`, `POST /api/experimental/session/import`) writes an imported tool part's `displayName` through it too, so the stored and projected `displayName` is always escaped; a client that draws it still passes it through
   `plain` (escaping text that is already escaped changes nothing) and never unescapes it. Proof:
-  `session-runner-tool-events.test.ts` ("tool input started carries the declared display name"). The hints beside it (`readOnlyHint`, `destructiveHint`,
+  `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
   `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
   hints and permissions` in `core/test/mcp.test.ts`.
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a

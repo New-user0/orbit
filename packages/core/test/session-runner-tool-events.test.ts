@@ -517,7 +517,7 @@ const startedData = async (
 
 test("tool input started carries the declared display name, escaped, and only when declared", async () => {
   // A set-title sequence, one that erases the line, C1 CSI, and a right-to-left override.
-  const hostile = "\u001b]0;x\u0007a\u001b[2Kb\u009bc‮d"
+  const hostile = "\u001b]0;x\u0007a\u001b[2Kb\u009bc\u202ed"
   const escaped = "\\x1b]0;x\\x07a\\x1b[2Kb\\x9bc\\u{202e}d"
   const cases: ReadonlyArray<readonly [string, ((name: string) => string | undefined) | undefined, unknown]> = [
     ["plain name", () => "Read file", "Read file"],

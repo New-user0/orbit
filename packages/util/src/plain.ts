@@ -1,6 +1,7 @@
-// What a workflow, a suite or a run store says is text from a file, and a clone brings its own. It reaches a person
-// through the command line, the terminal UI and the titles of the sessions a run opens, so the escaping lives here, where
-// the CLI, the TUI and the runner all reach it.
+// Text from a file, a run store, an imported session or a tool server is not trusted, and a clone or a server brings its
+// own. It reaches a person through the command line, the terminal UI, the titles of the sessions a run opens and the
+// names tools choose for themselves (MCP servers and plugins), so the escaping lives in util, where core, the CLI, the
+// TUI and the runner all reach it.
 
 /**
  * Text from a file that is not trusted yet, such as a workflow a clone brings or the run store in its `.orbit`, on one
