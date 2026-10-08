@@ -140,6 +140,31 @@ await ctx.tool.transform((tools) => {
 })
 ```
 
+A tool can also declare `traits`: what it tells Orbit about itself beyond its schemas. `readOnly`, `concurrencySafe` and
+`destructive` are a boolean or a function of the decoded input that answers with a boolean or a Promise of one. The rest
+are plain values: `openWorld`, `requiresUserInteraction`, `cancelSiblingsOnFailure`, `interruptBehavior`,
+`maxResultChars`, `searchHint` and `displayName`. A trait you leave out takes its default, and the tool's context
+carries the answers for the call as `context.traits`.
+
+```ts
+tools.add({
+  name: "lookup",
+  description: "Look up a record",
+  input: Schema.Struct({ id: Schema.String }),
+  traits: {
+    readOnly: true,
+    concurrencySafe: async ({ id }) => id !== "*",
+    displayName: "Lookup",
+  },
+  execute: async ({ id }, context) => ({ content: context.traits.readOnly ? `read ${id}` : `wrote ${id}` }),
+})
+```
+
+A predicate that throws, rejects or answers with anything but a boolean is logged, and that call takes the
+conservative traits: not read-only, not concurrency-safe and destructive. Only `readOnly` may relax a permission
+decision, and a failing predicate never leaves it true. A registration with invalid traits, such as an empty
+`displayName` or a `maxResultChars` that is not positive, is skipped with a log line.
+
 ## Reloading A Domain
 
 When data captured by a transform changes, reload the affected domain:

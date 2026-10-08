@@ -7,6 +7,7 @@ import { SessionMessage } from "@orbit/schema/session-message"
 import type { Info } from "@orbit/schema/tool"
 import { Tool } from "../src/tool"
 import { definition, execute } from "../src/tool/runtime"
+import { ToolTraits } from "../src/tool/traits"
 
 const context = {
   sessionID: Session.ID.make("ses_tool_schema"),
@@ -14,6 +15,7 @@ const context = {
   messageID: SessionMessage.ID.make("msg_tool_schema"),
   id: Tool.CallID.make("call_tool_schema"),
   progress: () => Effect.void,
+  traits: ToolTraits.defaults,
 } satisfies Tool.Context
 
 test("tools are structural values", async () => {

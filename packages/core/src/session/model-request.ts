@@ -10,6 +10,7 @@ import {
   type Media,
   Message,
   SystemPart,
+  type ToolCall,
 } from "@orbit/ai"
 import type { StreamOptions } from "@orbit/ai/route"
 import type {
@@ -30,6 +31,7 @@ import { App } from "../app.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "../plugin/hooks.js"
 import { QuestionTool } from "../tool/plugin/question.js"
+import { ToolTraits } from "../tool/traits.js"
 import { Tool } from "../tool.js"
 import { SessionAffinity } from "./affinity.js"
 import { SessionModelTransport } from "./model-transport.js"
@@ -68,6 +70,10 @@ export interface Prepared<Event = SessionRequest> {
   readonly executeTool: (
     input: Parameters<Tool.Snapshot["execute"]>[0],
   ) => Effect.Effect<Tool.NormalizedResult, ExecuteError>
+  /** The traits of a call against the tools this request advertised, resolved before any hook runs. */
+  readonly toolTraits: (call: ToolCall) => Effect.Effect<Tool.ResolvedTraits>
+  /** The traits of an advertised tool that do not depend on the call, by the name the model uses. */
+  readonly describeTool: (name: string) => ToolTraits.Static | undefined
 }
 
 export interface Input {
@@ -235,9 +241,11 @@ export const layer = Layer.effect(
       const session = input.session
       const model = input.model
       const scope = { sessionID: session.id, agent: input.agent, model: model.ref, kind }
-      const tools = input.tools ?? {
+      const tools: Tool.Snapshot = input.tools ?? {
         definitions: [],
         execute: () => new Tool.Error({ message: "Tools are not available for this request" }),
+        traits: () => Effect.succeed(ToolTraits.conservative),
+        describe: () => undefined,
       }
       // Remember which tool each definition object came from. Hooks rename a tool by moving
       // its definition to a new key, so after the hook we find the tool by object identity.
@@ -403,6 +411,10 @@ export const layer = Layer.effect(
               (decline) => Effect.fail(decline),
             ),
           ),
+        // Both read the same map as `executeTool`, so a tool that a context hook renamed or removed resolves the
+        // way the call will execute.
+        toolTraits: (call: ToolCall) => tools.traits({ call, definitions: hooked }),
+        describeTool: (name: string) => tools.describe(name, hooked),
       }
     })
 

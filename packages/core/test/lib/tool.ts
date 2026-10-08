@@ -5,6 +5,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { toSessionError } from "@orbit/core/session/to-session-error"
 import type { SessionError } from "@orbit/schema/session-error"
 import { Tool } from "@orbit/core/tool"
+import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { Effect, type Scope } from "effect"
 import { host } from "../plugin/host"
@@ -16,6 +17,18 @@ export const toolIdentity = {
 
 export const toolDefinitions = (registry: Tool.Interface, permissions?: Permission.Ruleset) =>
   registry.snapshot(permissions).pipe(Effect.map((toolSet) => toolSet.definitions))
+
+/**
+ * A snapshot for fixtures that only need what a request advertises and how a call runs. Its calls resolve to the
+ * conservative traits and no tool has static traits, which is what a snapshot of tools that declare none answers.
+ */
+export const stubSnapshot = (
+  input: Pick<Tool.Snapshot, "definitions" | "execute"> & Partial<Pick<Tool.Snapshot, "codeModeCatalog">>,
+): Tool.Snapshot => ({
+  ...input,
+  traits: () => Effect.succeed(ToolTraits.conservative),
+  describe: () => undefined,
+})
 
 export const codeModeListings = (catalog: CodeModeCatalog.Inventory) =>
   CodeModeCatalog.summarize(catalog, { budget: Infinity }).namespaces.flatMap((namespace) => namespace.entries)

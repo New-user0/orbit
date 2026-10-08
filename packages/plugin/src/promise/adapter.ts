@@ -6,7 +6,7 @@ import type { Scope } from "effect"
 import { HttpApiEndpoint, HttpApiSchema } from "effect/unstable/httpapi"
 import { define } from "../effect/plugin.js"
 import type { Plugin } from "./plugin.js"
-import type { Info } from "./tool.js"
+import type { Info, Predicate } from "./tool.js"
 import type { RpcDomain, RpcHandlers } from "./rpc.js"
 
 type HostRegistration = { readonly dispose: Effect.Effect<void> }
@@ -259,6 +259,33 @@ export function fromPromise(plugin: Plugin) {
               { signal: context.signal },
             )
 
+        // Trait predicates cross the adapter in both directions: a Promise plugin declares and reads booleans and
+        // Promises, and the host stores and resolves booleans and Effects.
+        const promisePredicate = (predicate: Tool.Predicate<any>): Predicate<any> => {
+          if (typeof predicate !== "function") return predicate
+          return (input) => {
+            const answer = predicate(input)
+            return Effect.isEffect(answer) ? Effect.runPromiseWith(runtime)(answer) : answer
+          }
+        }
+
+        const promiseTraits = (traits: Tool.Info["traits"]): Info["traits"] => {
+          if (traits === undefined) return undefined
+          const { readOnly, concurrencySafe, destructive, ...rest } = traits
+          return {
+            ...rest,
+            ...(readOnly === undefined ? {} : { readOnly: promisePredicate(readOnly) }),
+            ...(concurrencySafe === undefined ? {} : { concurrencySafe: promisePredicate(concurrencySafe) }),
+            ...(destructive === undefined ? {} : { destructive: promisePredicate(destructive) }),
+          }
+        }
+
+        const promiseTool = <T extends Tool.Info>(tool: T) => ({
+          ...tool,
+          execute: promiseExecutor(tool.execute),
+          traits: promiseTraits(tool.traits),
+        })
+
         const adaptApiMethod = <PromiseMethod>(
           endpoint: HttpApiEndpoint.Top,
           method: (input: never) => Effect.Effect<unknown, unknown>,
@@ -464,35 +491,31 @@ export function fromPromise(plugin: Plugin) {
           },
           tool: {
             reload: () => run(host.tool.reload()),
-            list: () =>
-              run(host.tool.list()).then((tools) =>
-                tools.map((tool) => ({ ...tool, execute: promiseExecutor(tool.execute) })),
-              ),
+            list: () => run(host.tool.list()).then((tools) => tools.map(promiseTool)),
             transform: (callback) =>
               register(
                 host.tool.transform((editor) =>
                   callback({
-                    list: () => editor.list().map((tool) => ({ ...tool, execute: promiseExecutor(tool.execute) })),
+                    list: () => editor.list().map(promiseTool),
                     get: (id) => {
                       const tool = editor.get(id)
-                      return tool ? { ...tool, execute: promiseExecutor(tool.execute) } : undefined
+                      return tool ? promiseTool(tool) : undefined
                     },
                     namespace: editor.namespace,
                     add: (tool: Info) =>
                       editor.add({
                         ...tool,
                         execute: (input, context) => executePromiseTool(tool, input, context),
+                        traits: effectTraits(tool.traits),
                       }),
                     update: (id, update) =>
                       editor.update(id, (tool) => {
-                        const value: Info = {
-                          ...tool,
-                          execute: promiseExecutor(tool.execute),
-                        }
+                        const value: Info = promiseTool(tool)
                         update(value)
                         Object.assign(tool, value, {
                           output: value.output,
                           options: value.options,
+                          traits: effectTraits(value.traits),
                           execute: (input: Parameters<Info["execute"]>[0], context: Tool.Context) =>
                             executePromiseTool(value, input, context),
                         })
@@ -614,6 +637,23 @@ function attempt<A>(evaluate: (signal: AbortSignal) => PromiseLike<A>) {
 }
 
 type RuntimeSchema = Schema.Codec<unknown, unknown>
+
+// A rejection or a throw becomes a failure of the predicate's Effect.
+const effectPredicate = (predicate: Predicate<any>): Tool.Predicate<any> => {
+  if (typeof predicate !== "function") return predicate
+  return (input) => Effect.tryPromise({ try: async () => predicate(input), catch: (cause) => cause })
+}
+
+const effectTraits = (traits: Info["traits"]): Tool.Info["traits"] => {
+  if (traits === undefined) return undefined
+  const { readOnly, concurrencySafe, destructive, ...rest } = traits
+  return {
+    ...rest,
+    ...(readOnly === undefined ? {} : { readOnly: effectPredicate(readOnly) }),
+    ...(concurrencySafe === undefined ? {} : { concurrencySafe: effectPredicate(concurrencySafe) }),
+    ...(destructive === undefined ? {} : { destructive: effectPredicate(destructive) }),
+  }
+}
 
 const executePromiseTool = (tool: Info, input: any, context: Tool.Context) =>
   Effect.promise((signal) =>
