@@ -1461,3 +1461,33 @@ a step. No new event type is added.
 **Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
 
 **What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.
+
+### A failed shell call cancels the calls that ran with it
+
+When a `shell` call times out, is killed by a signal, cannot be started (on Linux and macOS; on Windows a shell that
+cannot start looks like exit 1 for now) or is removed by a client while it runs, the other calls of the same model response
+that have not finished no longer run on. Calls that have not started never start. A call that is still running is
+interrupted. Each of them ends with the error type `tool.cancelled` and a short note that names the tool, and the step
+carries on: the model sees those results and answers. A permission denial, a rejection with feedback, a call that
+failed validation and a non-zero exit code do not cancel anything. A plugin tool takes part by declaring
+`cancelSiblingsOnFailure` and returning `metadata.error: true`, on its result or on its `Tool.Error`. A subagent that
+is cancelled this way now also shows its child session ID in the failure message. Today a shell call runs alone, so in
+practice the calls cancelled are the ones queued behind it and the ones streamed after it.
+
+**Affects:** people who ask for several tool calls at once, clients that show tool results, and plugin tool authors.
+
+**What to do:** nothing. A client that matches on error types can treat `tool.cancelled` as "did not run to the end".
+
+### A new message from you cancels tools that can be cancelled
+
+Sending a message while a step is still running (the default delivery, "steer") now cancels the tool calls that are
+safe to drop, such as reads, searches and web lookups, including ones still waiting to start. The model sees them as
+cancelled and your message is delivered at the next step boundary. An open question from the agent is closed too.
+Tools that must finish, such as shell commands, subagents and tools from MCP servers, keep running, and calls queued
+behind them still run in order. If you cancel the steered message or move it back to the queue before it is delivered,
+calls already cancelled stay cancelled, and cancelable calls that stream in later in the same attempt are cancelled too. Queued messages and background
+completion notices never cancel anything. Before, every call ran to the end before your message was delivered.
+
+**Affects:** anyone who types or sends a prompt while Orbit is running tools, including SDK and API callers.
+
+**What to do:** Nothing. Send the message with delivery "queue" to let running calls finish first.
