@@ -1370,6 +1370,22 @@ together; clients that show tool progress, which may now see `{ "queued": true }
 **What to do:** nothing in most setups. To change how many safe calls run together, set `tool_execution.max_concurrency`
 to a positive whole number in your own config. A project's config cannot raise it above 10 until you trust the folder.
 
+### A failed certificate check is no longer retried
+
+When a connection to a model endpoint failed because its certificate could not be verified (a self-signed or unknown
+issuer, an untrusted chain, an expired or not yet valid certificate, or a host name that does not match), Orbit treated
+it like any other network failure and retried it for about 160 seconds before showing anything. A failed certificate
+check gives the same answer every time, so it is now shown at once, with the verification message. Other network
+failures, such as a reset or refused connection, still retry as before. This also covers the token request of a gateway
+provider. Under Node, a verification result that Node does not name (a weak signature digest, a name-constraint
+violation) is recognized by the generic `UNSPECIFIED` code on the cause of a failed fetch; under Bun every verification
+result has a name. Cloudflare workerd reports no code, so a failed check there still retries.
+
+**Affects:** people who reach a model endpoint behind a private certificate authority and have not yet told Orbit to
+trust it, and scripts that waited out the retries.
+
+**What to do:** trust the authority with `ORBIT_CA_CERTS` (or `NODE_EXTRA_CA_CERTS`), or fix the endpoint's certificate.
+
 ### New `fallback_model` setting
 
 The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
