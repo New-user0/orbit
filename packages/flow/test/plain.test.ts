@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { json, jsonLine, plain, progress } from "../src/plain"
+import { body, json, jsonLine, plain, progress } from "../src/plain"
 
 // A set-title sequence, one that erases the line, a right-to-left override and a line break: what a file that is not
 // trusted yet can put into a name or a message.
@@ -99,4 +99,12 @@ test("jsonLine leaves JSON that has nothing to write out as JSON.stringify makes
   const value = { a: [1, "x", { b: null }], c: "ü", d: {}, e: [] }
   expect(jsonLine(value)).toBe(JSON.stringify(value))
   expect(jsonLine(null)).toBe("null")
+})
+
+test("body keeps line breaks and tabs, writes out what plain does, and leaves emoji sequences whole", () => {
+  expect(body("a\tb\nc\r\nd")).toBe("a\tb\nc\nd")
+  expect(body(evil)).toBe("\\x1b]0;pwned\\x07a\\x1b[2K\\u{202e}b\nc")
+  expect(body("a\rb")).toBe("a\\x0db")
+  expect(body("\u007f\u009b؜\u2066")).toBe("\\x7f\\x9b\\u{61c}\\u{2066}")
+  expect(body("👨‍👩 ✔️ 世界")).toBe("👨‍👩 ✔️ 世界")
 })
