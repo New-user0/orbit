@@ -102,7 +102,7 @@ folder is trusted. Until then Orbit keeps what cannot run code, spend money or r
 rest:
 
 - **Left out whole:** `hooks`, `mcp`, `plugins`, `shell`, `providers`, `sandbox`, `formatter`, `lsp`, `skills`,
-  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update` and `default_agent`, and `disabled` on an
+  `references`, `worktree`, `experimental`, `share`, `enterprise`, `update`, `fallback_model` and `default_agent`, and `disabled` on an
   agent, whose entry goes with it. So are `mode` and `hidden` on an agent and `agent` on a command, because an agent's
   own rules come after yours and win: which agent a session starts as, which agent runs a command, and which agents the
   model may spawn as subagents choose between sets of rules, as `default_agent` does. A command from the project runs as
@@ -1207,3 +1207,18 @@ they send one request.
 **Affects:** people on an overloaded or unavailable provider, and plugins whose `retry` hook reads the proposed delay.
 
 **What to do:** nothing. A `retry` hook can still shorten or stop the wait.
+
+### New `fallback_model` setting
+
+The root `fallback_model` setting names a model, as `provider/model#variant` or as `{ providerID, model, variant }`, to
+use for the rest of a turn after the selected model is repeatedly overloaded. This change only adds and resolves the
+setting; the switch itself follows in a later change. A model that is unavailable, or is the session's own model, is
+ignored.
+
+In a folder that is not trusted yet, `fallback_model` is left out whole, like the other settings that choose where
+requests go and what they cost, so a repository cannot pick a model you pay for. Orbit uses your own setting until you
+trust the folder.
+
+**Affects:** people who want a backup model, and anyone reading `config.get`, which now lists the key.
+
+**What to do:** nothing. Set `fallback_model` in your own config to use it.

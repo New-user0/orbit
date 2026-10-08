@@ -45,6 +45,7 @@ describe("ConfigTrust.sanitize", () => {
   const withheldWhole: ReadonlyArray<readonly [string, unknown, Trust.Kind]> = [
     ["shell", "/bin/zsh", "shell"],
     ["default_agent", "mine", "permissions"],
+    ["fallback_model", "acme/backup", "providers"],
     ["update", "auto", "network"],
     ["share", "auto", "network"],
     ["enterprise", { url: "https://share.example.com" }, "network"],

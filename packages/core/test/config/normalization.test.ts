@@ -108,6 +108,17 @@ describe("ConfigNormalize", () => {
     expect(Duration.toMillis(info.warming.duration ?? Duration.zero)).toBe(1_800_000)
   })
 
+  test("keeps fallback_model and reports a malformed one", () => {
+    expect(normalized({ fallback_model: "acme/backup#high" }).encoded.fallback_model).toEqual({
+      providerID: "acme",
+      model: "backup",
+      variant: "high",
+    })
+    const invalid = normalized({ fallback_model: 7 })
+    expect(invalid.encoded.fallback_model).toBeUndefined()
+    expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+  })
+
   test("keeps the compatibility switch as one native value", () => {
     expect(normalized({ compatibility: { enabled: false } }).encoded.compatibility).toEqual({ enabled: false })
     expect(decoded({ compatibility: { enabled: true } }).compatibility?.enabled).toBe(true)

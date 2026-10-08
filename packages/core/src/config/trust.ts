@@ -181,6 +181,8 @@ export const classification = {
     $schema: inert,
     shell: withhold("shell"),
     model: inert,
+    // Picks a model the folder would spend on, so it waits for trust (owner decision on model, provider and budget fields).
+    fallback_model: withhold("providers"),
     // Which agent a session starts as decides which permission rules apply to it.
     default_agent: withhold("permissions"),
     output_style: inert,
