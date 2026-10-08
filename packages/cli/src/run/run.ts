@@ -26,6 +26,10 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
+  maxSteps?: number
+  maxCost?: number
+  maxTokens?: number
+  fallbackModel?: string
   auto?: boolean
 }
 
@@ -91,6 +95,16 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       fetch(request, { ...init, timeout: false } as BunFetchRequestInit)) as typeof fetch,
   })
   const explicit = parseRunModel(input.model)
+  const fallback = parseSessionTargetModel(input.fallbackModel)
+  const turn =
+    input.maxSteps === undefined && input.maxCost === undefined && input.maxTokens === undefined && !fallback
+      ? undefined
+      : {
+          ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
+          ...(input.maxCost === undefined ? {} : { maxCost: input.maxCost }),
+          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+          ...(fallback ? { fallbackModel: fallback } : {}),
+        }
   const target = await resolveSessionTarget({
     client,
     location: prepared.directory ? { directory: prepared.directory } : undefined,
@@ -148,6 +162,7 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     thinking: input.thinking ?? false,
     format: input.format,
     jsonSchema: input.jsonSchema,
+    turn,
     auto: input.auto ?? false,
     attached: options.attached ?? true,
     compatibility: options.compatibility,

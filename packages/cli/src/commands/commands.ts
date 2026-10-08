@@ -65,6 +65,26 @@ const HeadlessParams = {
   ),
   title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
   thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
+  maxSteps: Flag.integer("max-steps").pipe(
+    Flag.withAlias("max-turns"),
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription("Stop after this many model calls; the result then has subtype error_max_steps"),
+    Flag.optional,
+  ),
+  maxCost: Flag.float("max-cost").pipe(
+    Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0))),
+    Flag.withDescription("Stop once the run has cost this many US dollars; needs a model with a known price"),
+    Flag.optional,
+  ),
+  maxTokens: Flag.integer("max-tokens").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription("Stop once the run has used this many tokens"),
+    Flag.optional,
+  ),
+  fallbackModel: Flag.string("fallback-model").pipe(
+    Flag.withDescription("Model to switch to when the main model keeps failing, in the format provider/model#variant"),
+    Flag.optional,
+  ),
 }
 
 // The flags that only `orb -p` takes, which the root command lists so that --help shows them.
@@ -839,6 +859,11 @@ export const RootValueFlags = {
     "agent",
     "output-format",
     "json-schema",
+    "max-steps",
+    "max-turns",
+    "max-cost",
+    "max-tokens",
+    "fallback-model",
     "file",
     "title",
     "completions",

@@ -17,6 +17,7 @@ export const ChildSessionUpdatesCapability = "orbit/child-session-updates"
 export const ChildSessionUpdateMethod = "orbit/session/child_update"
 const RetryMeta = "orbit/retry"
 const CompactionMeta = "orbit/compaction"
+const NoticeMeta = "orbit/notice"
 
 export type TurnStart = { readonly type: "input" | "compaction"; readonly id: string }
 
@@ -204,6 +205,25 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
         outputs: send({ sessionUpdate: "session_info_update", _meta: { [RetryMeta]: retry } }),
       }
     }
+    case "session.synthetic": {
+      // Any synthetic message that names a notice is shown to the person; the rest are reminders for the model only.
+      const notice = event.data.metadata?.notice
+      if (child || typeof notice !== "string") return { state, outputs: [] }
+      const replaces = event.data.metadata?.replaces
+      return {
+        state,
+        outputs: send({
+          sessionUpdate: "session_info_update",
+          _meta: {
+            [NoticeMeta]: {
+              notice,
+              ...(event.data.description === undefined ? {} : { description: event.data.description }),
+              ...(typeof replaces === "string" ? { replaces } : {}),
+            },
+          },
+        }),
+      }
+    }
     case "session.compaction.started":
     case "session.compaction.ended":
     case "session.compaction.failed": {
@@ -347,6 +367,8 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
 
 /** The ACP failure a settled turn reports instead of a response, if any. */
 export function failure(state: TurnState) {
+  // A turn that reached its limit ends normally with a stop reason of its own, so it is not a service failure.
+  if (limited(state)) return undefined
   const error = state.stepError ?? state.executionError
   if (error?.type === "provider.auth") return new ACPError.AuthRequiredError()
   if (error && error.type !== "aborted" && error.type !== "provider.content-filter") {
@@ -357,6 +379,10 @@ export function failure(state: TurnState) {
     })
   }
   return undefined
+}
+
+function limited(state: TurnState) {
+  return state.executionError?.type.startsWith("limit.") === true
 }
 
 export function response(state: TurnState, sessionID: string, terminal: Terminal): PromptResponse {
@@ -372,7 +398,7 @@ export function response(state: TurnState, sessionID: string, terminal: Terminal
       }
     : undefined
   const error = (state.stepError ?? state.executionError)?.type
-  const stopReason = resolveStopReason({ terminal, finish: state.finish, error })
+  const stopReason = resolveStopReason({ terminal, finish: state.finish, error, limited: limited(state) })
   // Only an interrupt during backoff leaves a retry pending. Interruption clears the projected retry, so report it here.
   const retry = state.retries.get(sessionID)
   return { stopReason, ...(usage ? { usage } : {}), _meta: retry ? { [RetryMeta]: retry } : {} }
@@ -623,8 +649,10 @@ function resolveStopReason(input: {
   readonly terminal: Terminal
   readonly finish: SessionMessageAssistant["finish"]
   readonly error?: string
+  readonly limited?: boolean
 }): PromptResponse["stopReason"] {
   if (input.terminal === "interrupted" || input.error === "aborted") return "cancelled"
+  if (input.limited) return "max_turn_requests"
   if (input.finish === "length") return "max_tokens"
   if (input.finish === "content-filter" || input.error === "provider.content-filter") return "refusal"
   return "end_turn"

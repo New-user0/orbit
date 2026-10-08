@@ -25,6 +25,8 @@ test.each([
   [["-p", "x", "--", "-p", "run"], ["--print=true", "x", "--", "-p", "run"]],
   [["--title", "-p", "-p", "x"], ["--title", "-p", "--print=true", "x"]],
   [["-p"], ["--print=true"]],
+  [["-p", "--max-turns", "3", "yes"], ["--print=true", "--max-turns", "3", "yes"]],
+  [["--max-cost", "0.5", "-p", "run"], ["--max-cost", "0.5", "--print=true", "run"]],
   [["-p", "--thinking", "yes"], ["--print=true", "--thinking=true", "yes"]],
   [["-p", "--bare=false", "x"], ["--print=true", "--bare=false", "x"]],
   [["-p", "--no-thinking", "yes", "do", "it"], ["--print=true", "--thinking=false", "yes", "do", "it"]],
@@ -72,8 +74,16 @@ async function helpFlags(args: string[]) {
   })
   const [, help] = await Promise.all([child.exited, new Response(child.stdout).text()])
   return help.split(/\r?\n/).flatMap((line) => {
-    const match = line.match(/^ {2}--([\w-]+)(?:, -(\w))?(?: (string|integer|float|choice|<[^>]+>))?(?: {2,}|$)/)
-    return match ? [{ long: match[1], short: match[2], value: match[3] !== undefined }] : []
+    // A flag can list a second long name as its alias, such as `--max-steps, --max-turns`.
+    const match = line.match(
+      /^ {2}--([\w-]+)(?:, (?:-(\w)|--([\w-]+)))?(?: (string|integer|float|number|choice|<[^>]+>))?(?: {2,}|$)/,
+    )
+    if (!match) return []
+    const value = match[4] !== undefined
+    return [
+      { long: match[1], short: match[2], value },
+      ...(match[3] ? [{ long: match[3], short: undefined, value }] : []),
+    ]
   })
 }
 

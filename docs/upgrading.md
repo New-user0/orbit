@@ -1431,3 +1431,23 @@ a step. No new event type is added.
 **Affects:** anyone with `fallback_model` or `turn.fallbackModel` set, and clients that print `synthetic` messages.
 
 **What to do:** nothing. Without a fallback model, an overloaded step keeps retrying the selected model as before.
+
+### `orb run` takes limits and a fallback model, and its result says why it stopped
+
+`orb run` and `orb -p` take `--max-steps` (alias `--max-turns`), `--max-cost` (US dollars), `--max-tokens` and
+`--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
+them. A run that reaches a limit exits 1 and says which: the result object of `--format result` and `--json-schema`
+gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
+(steps, cost and tokens of this run) and `truncated` (the last step stopped at the output limit, which also prints a
+warning). A `--max-cost` that the model's missing price cannot check fails the run with subtype `error` instead of
+running without a bound. If the server does not echo the limits back, because it is an older version that drops fields it
+does not know, the run interrupts its session and fails with a version error rather than run unbounded.
+
+Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
+now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and
+`stream-json`. Over ACP, a turn that reached a limit stops with `max_turn_requests` instead of failing, and every
+notice is sent as a `session_info_update` with `orbit/notice` in `_meta`.
+
+**Affects:** scripts that call `orb run` and read its result object or exit code, and ACP clients.
+
+**What to do:** nothing; the new fields are additive. A script that passes a limit should check `subtype`.
