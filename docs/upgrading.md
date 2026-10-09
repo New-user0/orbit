@@ -1690,9 +1690,10 @@ project for `external_directory`, the method and URL for a fetch (`POST https://
 MCP tool or an agent. A file edit shows the diff the server will write, taken from the request's `metadata.files`, so an
 edit of a file with CRLF line endings is no longer shown as no change. The approval prompts of the terminal interface
 and of Mini (`orb mini`) also name the method of a Code Mode fetch other than GET and HEAD, as `WebFetch POST <url>` with
-a `Method:` line. A caller's own input contributes only the fields its tool declares (a path, a pattern, a URL, a
-command), never extra keys the model added to it, and a diff or a `<n> files` title appears only for an edit, write,
-notebook edit or patch.
+a `Method:` line. A built-in tool's own input contributes only the fields that tool declares, never extra keys the model
+added to it: a `cwd` on a shell call does not change the folder shown, which is the one the command runs in, and a
+`method` on a fetch does not change its title. An MCP tool or a skill shows the arguments it sends in `rawInput`. A diff
+or a `<n> files` title appears only for an edit, write, notebook edit or patch.
 
 **Affects:** ACP clients that read the title, locations or `rawInput` of a permission request, and anyone who approves
 Code Mode fetches.

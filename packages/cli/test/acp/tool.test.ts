@@ -40,6 +40,25 @@ describe("acp tools", () => {
     })
   })
 
+  // The shell tools declare `workdir`; a `cwd` or `cmd` the model adds to its input neither moves the command nor names it.
+  test.each(["Bash", "PowerShell"])("a %s call shows the folder it runs in, not a cwd the model added", (name) => {
+    const input = { command: "sh setup.sh", cwd: "/decoy", cmd: "rm -rf /" }
+    expect(toLocations(name, input, "/workspace")).toEqual([{ path: "/workspace" }])
+    expect(pendingToolCall({ toolCallId: "call", toolName: name, state: { input }, cwd: "/workspace" })).toMatchObject({
+      title: "sh setup.sh",
+      locations: [{ path: "/workspace" }],
+      rawInput: { command: "sh setup.sh", cwd: "/workspace", cmd: "rm -rf /" },
+    })
+    expect(
+      pendingToolCall({
+        toolCallId: "call",
+        toolName: name,
+        state: { input: { ...input, workdir: "sub" } },
+        cwd: "/workspace",
+      }).rawInput,
+    ).toEqual({ command: "sh setup.sh", workdir: "sub", cmd: "rm -rf /" })
+  })
+
   test("extracts file locations from tool input", () => {
     expect(toLocations("read", { path: "/tmp/a.ts" }, "/workspace")).toEqual([{ path: "/tmp/a.ts" }])
     expect(toLocations("edit", { path: "/tmp/b.ts", oldString: "a", newString: "b" }, "/workspace")).toEqual([

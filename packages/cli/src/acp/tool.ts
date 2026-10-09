@@ -45,7 +45,8 @@ export function toLocations(toolName: string, input: ToolInput, cwd: string): To
     case "bash":
     case "powershell":
     case "shell":
-      return locationFrom(cwd, stringValue(input.workdir) ?? stringValue(input.cwd) ?? cwd)
+      // The shell tools declare `workdir`; a `cwd` key the model adds to its input does not move the command.
+      return locationFrom(cwd, stringValue(input.workdir) ?? cwd)
     case "read":
     case "edit":
     case "write":
@@ -172,13 +173,15 @@ function toolContent(content: ToolContent): ToolCallContent[] {
 }
 
 function toolTitle(toolName: string, input: ToolInput, fallback: string | undefined) {
-  if (isShell(toolName)) return stringValue(input.command) ?? stringValue(input.cmd) ?? fallback ?? toolName
+  if (isShell(toolName)) return stringValue(input.command) ?? fallback ?? toolName
   return fallback || toolName
 }
 
 function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {
-  if (!isShell(toolName) || input.cwd || input.workdir) return input
-  return { ...input, cwd }
+  if (!isShell(toolName)) return input
+  // The command runs in its workdir or in the session's folder, never in a `cwd` the model added to its input.
+  const declared = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "cwd"))
+  return input.workdir ? declared : { ...declared, cwd }
 }
 
 function isShell(toolName: string) {

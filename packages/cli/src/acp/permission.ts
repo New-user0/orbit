@@ -53,7 +53,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
   const caller = input.tool && ToolNames.owns(request.action, input.tool.name) ? input.tool : undefined
   const toolName = caller?.name ?? request.action
   const toolInput: ToolInput = caller
-    ? { ...declaredFields(request.action, caller.input), ...request.metadata }
+    ? { ...declaredFields(caller.name, caller.input), ...request.metadata }
     : { ...request.metadata, resources: request.resources }
   const previews = yield* permissionPreviews(
     toolName,
@@ -99,36 +99,55 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
   return `${prefix}: ${title}`
 }
 
-// The fields each action's tool declares. A recorded call keeps the extra keys its schema drops at decode, so a model can
-// add any key to its own input; only a declared one describes what the person is asked to approve.
+// The input fields each built-in tool declares, by its current name, with the old names a recorded call may carry. A
+// recorded call keeps the extra keys its schema drops at decode, so a model can add any key to its own input; only a
+// declared one describes what the person is asked to approve. A tool with no row, such as an MCP tool, keeps its
+// arguments: the prompt shows them only as the raw input.
+const shell = ["command", "description", "workdir", "timeout", "run_in_background", "background"]
 const declared: Record<string, readonly string[]> = {
-  edit: [
+  Read: ["file_path", "offset", "limit", "path", "filePath"],
+  Edit: [
     "file_path",
-    "notebook_path",
-    "path",
-    "filePath",
-    "content",
     "old_string",
     "new_string",
+    "replace_all",
+    "path",
+    "filePath",
     "oldString",
     "newString",
-    "replace_all",
     "replaceAll",
   ],
-  patch: ["patchText"],
-  read: ["file_path", "path", "filePath"],
-  lsp: ["file_path", "path", "filePath"],
-  list: ["path", "pattern"],
-  glob: ["path", "pattern"],
-  grep: ["path", "pattern"],
-  shell: ["command", "cmd", "workdir", "cwd", "description"],
-  webfetch: ["url", "method", "format"],
-  websearch: ["query"],
-  subagent: ["agent", "prompt", "description"],
+  Write: ["file_path", "content", "path", "filePath"],
+  NotebookEdit: ["notebook_path", "mode", "cellId", "index", "source", "cellType", "path"],
+  LSP: ["action", "path", "line", "character"],
+  Glob: ["pattern", "path", "hidden", "limit"],
+  Grep: [
+    "pattern",
+    "path",
+    "include",
+    "literal",
+    "caseSensitive",
+    "limit",
+    "offset",
+    "outputMode",
+    "type",
+    "multiline",
+    "context",
+    "before",
+    "after",
+  ],
+  Bash: shell,
+  PowerShell: shell,
+  WebFetch: ["url", "format", "timeout", "prompt"],
+  WebSearch: ["query", "allowedDomains", "blockedDomains"],
+  Agent: ["agent", "description", "prompt", "model", "sessionID", "background"],
+  Patch: ["patchText"],
+  Skill: ["id"],
 }
 
-function declaredFields(action: string, input: ToolInput): ToolInput {
-  const fields = declared[ToolNames.legacy(action).toLowerCase()] ?? declared[action.toLowerCase()] ?? []
+function declaredFields(tool: string, input: ToolInput): ToolInput {
+  const fields = declared[ToolNames.canonical(tool)]
+  if (!fields) return input
   return Object.fromEntries(fields.flatMap((key) => (key in input ? [[key, input[key]]] : [])))
 }
 
