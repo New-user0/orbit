@@ -1525,7 +1525,10 @@ describe("ShellTool", () => {
               agent: toolIdentity.agent,
               tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
             } as never)
-            expect(event.system[0]?.text).toBe("Use PowerShell for it.\n\n# Output style: Terse\nPrefer Git Bash.")
+            // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
+            expect(event.system[0]?.text).toBe(
+              `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
+            )
           }),
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),

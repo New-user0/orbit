@@ -255,7 +255,7 @@ test("a failed step is counted in the steps and the tokens", async () => {
 }, 120_000)
 
 test("the steps of a subagent are counted with the steps of the run", async () => {
-  const call = { name: "subagent", input: { agent: "general", description: "child work", prompt: "answer" } }
+  const call = { name: "Agent", input: { agent: "general", description: "child work", prompt: "answer" } }
   await scripted([{ tool: call }, "from the child", "done"], async (own, home) => {
     const run = await print(own, home, ["say ok"])
 
@@ -339,7 +339,7 @@ test("an answer that is not JSON under --json-schema is an error in every format
 test("a run whose write was rejected prints one summary on stderr and exits 0", async () => {
   // A file outside the folder of the run needs a permission that nobody can give.
   const target = path.join(root, "rejected.txt")
-  const outside = { name: "write", input: { path: target, content: "x" } }
+  const outside = { name: "Write", input: { file_path: target, content: "x" } }
   await scripted([{ tool: outside }, "done"], async (own, home) => {
     const text = await print(own, home, ["say ok"], "text")
 
@@ -359,7 +359,7 @@ test("a run whose write was rejected prints one summary on stderr and exits 0", 
 }, 180_000)
 
 test("--verbose shows tool output and one usage line per step on stderr", async () => {
-  const call = { name: "read", input: { path: path.join(workspace, "AGENTS.md") } }
+  const call = { name: "Read", input: { file_path: path.join(workspace, "AGENTS.md") } }
   await scripted([{ tool: call }, "done"], async (own, home) => {
     const verbose = await print(own, home, ["--verbose", "say ok"], "text")
 
@@ -379,7 +379,7 @@ test("--verbose shows tool output and one usage line per step on stderr", async 
 test("--verbose tool output keeps tabs and writes out the characters that act on a terminal", async () => {
   const file = path.join(workspace, "tabbed.txt")
   await Bun.write(file, "col\tone\n\u001b[31mred\u001b[0m\rlone\n")
-  const call = { name: "read", input: { path: file } }
+  const call = { name: "Read", input: { file_path: file } }
   const verbose = await scripted([{ tool: call }, "done"], (own, home) =>
     print(own, home, ["--verbose", "say ok"], "text"),
   )
@@ -492,15 +492,15 @@ const sinks: Array<{
   },
   {
     sink: "description",
-    name: "read",
-    input: (value) => ({ path: path.join(workspace, "AGENTS.md"), note: value }),
+    name: "Read",
+    input: (value) => ({ file_path: path.join(workspace, "AGENTS.md"), note: value }),
     hostile: evil,
     escaped: "e\\x1b]0;pwned\\x07",
   },
   // The command is the title of the block; a comment keeps the shell from running the characters.
   {
     sink: "block title",
-    name: "shell",
+    name: "Bash",
     input: (value) => ({ command: `echo marker # ${value}`, description: "marker" }),
     hostile: evil,
     escaped: "e\\x1b]0;pwned\\x07",
@@ -508,7 +508,7 @@ const sinks: Array<{
   // The shell writes the escape sequence itself, so the title holds only its spelling and the output holds the bytes.
   {
     sink: "block body",
-    name: "shell",
+    name: "Bash",
     input: (value) => ({ command: `printf '${value}\\n'`, description: "marker" }),
     hostile: "e\\033]0;pwned\\007\\233",
     escaped: "e\\x1b]0;pwned\\x07",

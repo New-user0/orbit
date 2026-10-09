@@ -156,6 +156,11 @@ describe("tool names", () => {
       delete again[old]
       again[old] = "x"
       expect(Object.values(ToolNames.lowerInput(tool, again))).toContain("x")
+      // A write through the old name followed by a delete of it is a withdrawal too, not a surviving write.
+      const wrote = ToolNames.view(tool, input) as Record<string, unknown>
+      wrote[old] = "/b"
+      delete wrote[old]
+      expect(ToolNames.lowerInput(tool, wrote)).toEqual(left)
     }
   })
 

@@ -161,6 +161,8 @@ export function view(tool: string, input: unknown): unknown {
       get: () => copy[next],
       set: (value: unknown) => {
         copy[next] = value
+        // A write through the old name is a write: deleting the old name afterwards withdraws that value.
+        defined.set(next, { old, value })
       },
       enumerable: false,
       configurable: true,
