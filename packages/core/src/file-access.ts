@@ -86,7 +86,7 @@ export interface Interface {
    * link in it leads out of while it is not trusted, each with its real place and an `escaped` external directory. Nothing else about the files is refused
    * or asked: they are paths that a shell command names in its text, not paths a tool was given.
    */
-  readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error>
+  readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error | ToolFailure>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -98,6 +98,11 @@ export const resolvePath = (directory: string, input: string, home = Global.Path
 // A share or device path on Windows: `\\server\share`, `\\?\Volume{...}` or `\\.\...`. `resolvePath` already writes the
 // drive forms of a `\\?\` path as the drive.
 const isShare = (file: string) => process.platform === "win32" && file.startsWith("\\\\")
+const shareFailure = (spelled: string) =>
+  new ToolFailure({
+    message: `${spelled} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
+    code: Tool.ErrorCode.FileSpelling,
+  })
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({
   sessionID: context.sessionID,
@@ -165,18 +170,13 @@ const layer = Layer.effect(
     // A target outside the project, or one that a link in an untrusted project leads out to, which is `escapes`.
     const external = Effect.fnUntraced(function* (absolute: AbsolutePath, kind: Kind | undefined, escapes?: string) {
       const place = escapes ?? absolute
-      // A link in the repository can lead to a share. Reading it, or the folders above it for a `.git`, would connect to
-      // that share before anyone is asked, so it is named as the link says and read by nobody.
-      const share = isShare(place)
       const type =
         kind === "directory"
           ? "Directory"
           : kind === "file"
             ? "File"
-            : share
-              ? undefined
-              : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
-                  ?.type
+            : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
+                ?.type
       const directory = AbsolutePath.make(type === "Directory" ? place : path.dirname(place))
       return {
         absolute,
@@ -186,7 +186,7 @@ const layer = Layer.effect(
           action: "external_directory",
           directory,
           resource: slash(path.join(directory, "*")),
-          save: slash(path.join((share ? undefined : yield* Project.root(fs, directory)) ?? directory, "*")),
+          save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
           ...(escapes === undefined ? {} : { escaped: true as const }),
         },
       } satisfies Target
@@ -228,11 +228,7 @@ const layer = Layer.effect(
       // A share path (`\\localhost\C$\...`) or a device path (`\\?\Volume{...}`, `\\.\...`) names a folder of the
       // project in a spelling that no rule is written for, and opening one connects to a share. No tool needs one, so it
       // is refused before any disk is read, unless the path is in the project's folder.
-      if (named === undefined && isShare(lexical))
-        return yield* new ToolFailure({
-          message: `${input.path} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
-          code: Tool.ErrorCode.FileSpelling,
-        })
+      if (named === undefined && isShare(lexical)) return yield* shareFailure(input.path)
       // A part below a folder of the project is named in that folder as the disk names it, and a path outside from its
       // root, so that an 8.3 short name does not hide the name that rules are written for.
       const long = AbsolutePath.make(yield* longNames(lexical, named))
@@ -249,6 +245,11 @@ const layer = Layer.effect(
       // Until the project is trusted, a link in it that leads out of it does not make the target the project's own: the
       // repository ships its links, and one to the user's other files would be read or written without a question.
       const escapes = yield* trust.escapes(absolute)
+      // A link of the repository can lead to a share, whatever host the share names, a local one included (`\localhost\C$`).
+      // The person's rules name the folder as a drive path, so a question about the share's spelling would let their deny
+      // become an ask, and approving it would connect to the host. It is refused as a share given directly is, before
+      // anything is asked or opened.
+      if (escapes !== undefined && isShare(escapes)) return yield* shareFailure(input.path)
       if (escapes !== undefined) return yield* external(absolute, input.kind, escapes)
       return {
         absolute,
@@ -315,6 +316,7 @@ const layer = Layer.effect(
             : yield* anchor(AbsolutePath.make(file))
           if (absolute === undefined) return []
           const escapes = yield* trust.escapes(absolute)
+          if (escapes !== undefined && isShare(escapes)) return yield* shareFailure(file)
           return escapes === undefined ? [] : [yield* external(absolute, undefined, escapes)]
         }),
       )

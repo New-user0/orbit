@@ -580,7 +580,8 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Build the link as a directory junction on Windows, which needs no privilege, and as a real symlink where `canLinkFile`
   allows it (`packages/core/test/fixture/symlink.ts`). For every reader in the list cover a link to a file, a link to a
   folder, a dangling link, a loop, a not-yet-existing target through a link, a `..` name and a UNC path. For UNC, assert
-  that no disk access happens: a share test that waits 5 seconds means the check came too late.
+  that no disk access happens: record the paths the file system is called with (`packages/core/test/fixture/recorded-fs.ts`)
+  and assert that none names the share, rather than a time limit, which a fast failing host meets either way.
 - Untrusted: the file is not read and `config file skipped` is logged once. After a grant the file appears without a
   restart. The trusted control follows links as before.
 - For a tool, point the link at a folder that Orbit allows by itself, such as the global config folder, so that only the
@@ -1632,13 +1633,22 @@ fixes it or asks.
   rule covers the folder. Task `permissions-3` (M6) carries a Read check for each file a search returns.
 - **A share named before anyone is asked (closed for the file tools by `permissions-23`).** `FileAccess.resolve` now
   refuses a UNC, `\\?\Volume{…}` or `\\.\` path with `file.spelling` before any disk is read, unless the path is in
-  the project's folder, and `ProjectTrust.escapes` reads a link's target one part at a time and names a share as the
-  link says without opening it; `FileAccess` then neither reads that place's kind nor looks above it for a `.git`. A
-  part with `~` below a repository link to a share is refused with `file.spelling` as well, because looking up its long
-  name would read the folder the link leads to (the review of the first version found this one: it took 6 seconds to
-  connect to the host). `file-access-spelling.test.ts` pins these with a host name of its own to each run and a time
-  limit on every row (the link rows need Developer Mode, and fail instead of passing without it); a share given directly (`\\host\share`, `//host/share`, `\\?\UNC\host\share`) on a host of its own to each run is refused within one second, so a disk read before the refusal would fail the row. What remains: a share named in a shell command's text or in a path that a loader other than the file tools
-  reads, such as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
+  the project's folder. `ProjectTrust.escapes` reads a link's target one part at a time and names a share as the link
+  says without opening it, and `FileAccess` refuses a place that a repository link leads to when it is a share, in any
+  spelling (`\\localhost\C$\…` included, which names a local folder that the person's rules write as a drive path, so a
+  question about it would have turned their deny into an ask), with the same `file.spelling` failure, before any
+  question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir`) and for the plain
+  words of a shell command (`escaped`). A part with `~` below such a link is refused the same way, because looking up
+  its long name would read the folder the link leads to. The first review found the `~` case (6 seconds to connect to
+  the host), the third the admin-share target. `file-access-spelling.test.ts` wraps `FSUtil.Service` in the test layer,
+  records every path it is called with, and asserts that none starts with `\\` or `//` in the rows for a share given
+  directly (nine spellings, trusted and not, `resolve` and `escaped`), for a link to a share in six spellings
+  (every kind of path a tool resolves, `~` parts, a shell word), and for the person's deny row beside the junction
+  control; the link rows need Developer Mode and fail instead of passing without it. The `orb acp` table in
+  `permission-files.subprocess.test.ts` crosses every row of `linkRows` with the six link targets untrusted, and the
+  first with the person's deny and with a trusted control. What remains: a share named in a shell command's text
+  directly, which is asked about as the shell asks, or in a path that a loader other than the file tools reads, such
+  as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
 - **Other spellings of the project folder (closed for the file tools by `permissions-23`).** A path that named the
   project through another spelling of its own folder (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`,
   or a link to the project) was decided as outside the project by its spelling, so a repository link inside it was not

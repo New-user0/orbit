@@ -810,6 +810,116 @@ for (const row of refusedRows)
         90_000,
       )
 
+// A link of the repository whose target is a share, in any spelling of it, including one that names the person's own
+// config folder through `\\localhost\C$`. The person's rules name that folder as a drive path, so a question about the
+// share's spelling would turn their deny into an ask, and approving it connects to the host. The place the link leads to
+// is refused as a share given directly is: `file.spelling`, before any question and before anything is opened, whatever
+// the tool. The deny row and the trusted row are the controls, as are the junction rows above (class 4, class 8,
+// class 12; permissions-23). A symlink to a share needs Developer Mode, so these rows run on Windows with it.
+const shareTargets =
+  process.platform === "win32" && canLinkDirectory
+    ? [
+        {
+          name: "a localhost admin share",
+          target: (root: string) => `\\\\localhost\\${root[0]}$\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a 127.0.0.1 admin share",
+          target: (root: string) => `\\\\127.0.0.1\\${root[0]}$\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a \\\\?\\UNC admin share",
+          target: (root: string) => `\\\\?\\UNC\\localhost\\${root[0]}$\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a \\\\?\\Volume path",
+          target: (root: string) => `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a \\\\.\\Volume path",
+          target: (root: string) => `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${root.slice(3)}\\config`,
+        },
+        { name: "a share host", target: () => "\\\\orbit-share-host.invalid\\share\\config" },
+      ]
+    : []
+const shareLinkSetup = (target: (root: string) => string) => async (root: string) => {
+  await Bun.write(path.join(root, "config", "AGENTS.md"), "The person's own instructions.\n")
+  await Bun.write(path.join(root, "config", globMarker), "marker\n")
+  await fs.symlink(target(root), path.join(root, "workspace", "cfg"), "dir")
+}
+const refusedAsShare = async (run: Run, row: (typeof linkRows)[number]) => {
+  expect(run.permissions).toHaveLength(0)
+  expect(await row.acted(run.root, run.bodies)).toBe(false)
+  expect(toolResult(run)).toContain("file.spelling")
+}
+for (const row of linkRows)
+  for (const share of shareTargets) {
+    test(
+      `an untrusted ${row.name} through a repository link to ${share.name} is refused as a share, with no question, answered once`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            rule: row.rule,
+            shell: "shell" in row ? row.shell : undefined,
+            reply: "once",
+            args: () => row.args,
+            setup: shareLinkSetup(share.target),
+          },
+          (run) => refusedAsShare(run, row),
+        ),
+      90_000,
+    )
+    if (share !== shareTargets[0]) continue
+    test(
+      `an untrusted ${row.name} through a repository link to ${share.name} under the person's deny of the config folder is refused as a share, not asked about`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            rule: row.rule,
+            shell: "shell" in row ? row.shell : undefined,
+            permissions: (root) => [
+              { action: row.rule, resource: "*", effect: "ask" },
+              {
+                action: "external_directory",
+                resource: `${path.join(root, "config").replaceAll("\\", "/")}/*`,
+                effect: "deny",
+              },
+            ],
+            reply: "once",
+            args: () => row.args,
+            setup: shareLinkSetup(share.target),
+          },
+          (run) => refusedAsShare(run, row),
+        ),
+      90_000,
+    )
+    // The owner trusted the folder: its links are its own, so no spelling refuses the call and no folder is asked about.
+    test(
+      `a trusted ${row.name} through a repository link to ${share.name} is not refused and asks no folder question (control)`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            rule: row.rule,
+            shell: "shell" in row ? row.shell : undefined,
+            trusted: true,
+            reply: "once",
+            args: () => row.args,
+            setup: shareLinkSetup(share.target),
+          },
+          (run) => {
+            expect(toolResult(run)).not.toContain("file.spelling")
+            expect(run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))).toEqual(
+              [],
+            )
+          },
+        ),
+      90_000,
+    )
+  }
+
 type Run = {
   readonly root: string
   readonly workspace: string

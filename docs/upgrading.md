@@ -1195,9 +1195,10 @@ which part of the path is really inside the project, and decide the rest under t
 the project-relative name, a repository link below it is followed and asked about as for the plain spelling, and an
 approval names the place the tool acts on. An 8.3 short name of the project's folder, or of a folder above it, is decided as the project, too. A share or device path (`\\server\share\…`, `\\localhost\C$\…`,
 `\\?\Volume{…}\…`, `\\.\…`) is refused with the error type `file.spelling` before any disk is read, unless the path
-is in the project's folder. A repository link whose target is a share is named as the link says and never opened to
-decide the question; a part with `~` (an 8.3 short name) below such a link is refused too, as its long name could only
-be found by opening the share. The words a shell command names are followed through a repository link in these
+is in the project's folder. A repository link whose target is a share, in any of these spellings (a local
+`\\localhost\C$\…` included), is refused the same way, with no question, for a tool's path and for the plain words of a
+shell command, and is never opened; a part with `~` (an 8.3 short name) below such a link is refused too, as its long
+name could only be found by opening the share. The words a shell command names are followed through a repository link in these
 spellings as well, and a drive made from the project's folder (`subst`) is the project. The lock that serializes edits of one file now takes the long name without the periods and spaces
 Windows drops, so `new.txt.` and `new.txt` wait for each other.
 

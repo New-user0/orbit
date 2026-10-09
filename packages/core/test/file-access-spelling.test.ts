@@ -13,13 +13,15 @@ import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { FSUtil } from "@orbit/util/fs-util"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
+import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
 
-const provideProject = (directory: string, trusted: boolean) =>
+const provideProject = (directory: string, trusted: boolean, recorded?: ReturnType<typeof recordedFileSystem>) =>
   Effect.provide(
     AppNodeBuilder.build(LayerNode.group([FileAccess.node, Location.node, ProjectTrust.node]), [
       Location.node.replace(
@@ -27,6 +29,7 @@ const provideProject = (directory: string, trusted: boolean) =>
       ),
       Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
       ...(trusted ? [] : untrustedProjectNodes),
+      ...(recorded === undefined ? [] : [FSUtil.node.replace(recorded.layer)]),
     ]),
   )
 
@@ -168,51 +171,116 @@ describe("FileAccess for another spelling of the project's folder", () => {
     }),
   )
 
-  // A link of the repository whose target is a share is named as the link says and no disk is read for it: the host does
-  // not exist, so a connection to it would fail or wait. It needs a clone that makes symlinks (Developer Mode).
+  // A link of the repository whose target is a share, in any spelling, is refused as a share given directly is, before
+  // anything is asked: the person's rules name a folder as a drive path, so a question about the share's spelling would turn
+  // their deny into an ask, and approving it would connect to the host. The test layer records every path the file system
+  // is called with, so the rows pin that no share was touched, not how fast the answer came. It needs a clone that makes
+  // symlinks (Developer Mode), and fails visibly without one.
+  const shareLinks = (project: string, outside: string) => {
+    const drive = project.slice(0, 1)
+    const rest = outside.slice(3)
+    return [
+      { name: "a localhost admin share", target: `\\\\localhost\\${drive}$\\${rest}`, share: true },
+      { name: "a 127.0.0.1 admin share", target: `\\\\127.0.0.1\\${drive}$\\${rest}`, share: true },
+      { name: "a \\\\?\\UNC admin share", target: `\\\\?\\UNC\\localhost\\${drive}$\\${rest}`, share: undefined },
+      { name: "a \\\\?\\Volume path", target: `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: undefined },
+      { name: "a \\\\.\\Volume path", target: `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: undefined },
+      {
+        name: "a share host",
+        target: `\\\\orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid\\share\\dir`,
+        share: true,
+      },
+    ]
+  }
   ;(process.platform === "win32" ? it.live : it.live.skip)(
-    "names a repository link to a share without connecting to it",
+    "refuses a repository link to a share, in every spelling, with a typed failure and touches no share",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* layout
-        // A host name of its own to each run, so that the system's cache of an unreachable host cannot hide a connection.
-        const share = `\\\\orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid\\share\\dir`
-        // Fails visibly when this machine cannot make the link (Developer Mode), rather than passing without a check.
-        yield* Effect.promise(() => fs.symlink(share, path.join(project, "shared"), "dir"))
+        const { project, outside } = yield* layout
+        const links = shareLinks(project, outside)
+        // The spelling a link reads back as: the system may write a target as a drive path, which is then no share.
+        const reads = yield* Effect.promise(async () =>
+          Promise.all(
+            links.map(async (link, index) => {
+              await fs.symlink(link.target, path.join(project, `shared${index}`), "dir")
+              return (await fs.readlink(path.join(project, `shared${index}`))).startsWith("\\\\")
+            }),
+          ),
+        )
+        // The rows that must be shares as written, so that the table cannot pass without a check of one.
+        expect(links.flatMap((link, index) => (link.share === true ? [reads[index]] : []))).toEqual([true, true, true])
+        const recorded = recordedFileSystem()
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
-          const trust = yield* ProjectTrust.Service
-          const started = Date.now()
-          const target = yield* access.resolve({ path: "shared/sub/a.txt" })
-          expect(target.place).toBe(AbsolutePath.make(path.join(share, "sub", "a.txt")))
-          expect(target.externalDirectory).toMatchObject({
-            escaped: true,
-            directory: path.join(share, "sub"),
-            save: `${(path.join(share, "sub") as string).replaceAll("\\", "/")}/*`,
-          })
-          expect(yield* trust.escapes(path.join(project, "shared", "a.txt"))).toBe(path.join(share, "a.txt"))
-          expect(yield* trust.reachable(path.join(project, "shared", "a.txt"))).toBe(false)
-          expect(Date.now() - started).toBeLessThan(1_000)
-          // A part with `~` below the link would have its folder read for the long name, which connects to the share.
-          for (const below of ["shared/AB~1/a.txt", "shared/sub/AB~1/a.txt", "shared/PROJEC~1"]) {
-            const begun = Date.now()
-            const failure = yield* access.resolve({ path: below }).pipe(Effect.flip)
-            expect([below, failure]).toMatchObject([below, { code: "file.spelling" }])
-            expect(Date.now() - begun).toBeLessThan(1_000)
+          for (const [index, link] of links.entries()) {
+            if (!reads[index]) continue
+            recorded.touched.length = 0
+            // Every tool resolves a path through `resolve`; a shell command's plain words through `escaped`.
+            for (const below of [
+              `shared${index}`,
+              `shared${index}/a.txt`,
+              `shared${index}/sub/a.txt`,
+              `shared${index}/AB~1/a.txt`,
+              `shared${index}/sub/AB~1/a.txt`,
+              `shared${index}/PROJEC~1`,
+            ]) {
+              for (const kind of [undefined, "file", "directory"] as const) {
+                const failure = yield* access.resolve({ path: below, kind }).pipe(Effect.flip)
+                expect([link.name, below, kind, failure]).toMatchObject([link.name, below, kind, { code: "file.spelling" }])
+              }
+            }
+            const word = yield* access.escaped([path.join(project, `shared${index}`, "a.txt")]).pipe(Effect.flip)
+            expect([link.name, word]).toMatchObject([link.name, { code: "file.spelling" }])
+            expect([link.name, sharesTouched(recorded.touched)]).toEqual([link.name, []])
           }
-        }).pipe(provideProject(project, false))
+        }).pipe(provideProject(project, false, recorded))
       }),
   )
 
-  // Share and device spellings are refused before any disk is read. `Volume{…}` does not exist: a refusal that read the
-  // disk first would fail in another way.
+  // The same link under the person's deny of the folder it names, and the control through a junction to that folder.
   ;(process.platform === "win32" ? it.live : it.live.skip)(
-    "refuses a share or device spelling with a typed failure, whether or not the project is trusted",
+    "refuses a repository link to a share that names the person's denied folder, where a junction to it is denied",
+    () =>
+      Effect.gen(function* () {
+        const { project, outside } = yield* layout
+        const rules = [
+          { action: "external_directory", resource: "*", effect: "ask" },
+          { action: "external_directory", resource: `${outside.replaceAll("\\", "/")}/*`, effect: "deny" },
+        ] satisfies Permission.Ruleset
+        const target = `\\\\localhost\\${project.slice(0, 1)}$\\${outside.slice(3)}`
+        yield* Effect.promise(() => fs.symlink(target, path.join(project, "shared"), "dir"))
+        const recorded = recordedFileSystem()
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          const junction = yield* access.resolve({ path: "docs/notes.md" })
+          expect(junction.externalDirectory?.escaped).toBe(true)
+          expect(Permission.evaluate("external_directory", junction.externalDirectory!.resource, rules).effect).toBe(
+            "deny",
+          )
+          recorded.touched.length = 0
+          const failure = yield* access.resolve({ path: "shared/notes.md" }).pipe(Effect.flip)
+          expect(failure).toMatchObject({ code: "file.spelling" })
+          expect(sharesTouched(recorded.touched)).toEqual([])
+        }).pipe(provideProject(project, false, recorded))
+        // The owner trusted the folder: its link is its own, and nothing is refused.
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          const through = yield* access.resolve({ path: "shared/notes.md" })
+          expect([through.resource, through.externalDirectory]).toEqual(["shared/notes.md", undefined])
+        }).pipe(provideProject(project, true))
+      }),
+  )
+
+  // Share and device spellings are refused before any disk is read. `Volume{…}` does not exist, and the hosts are of
+  // their own to each run: the recorded paths show that none was stat'ed, opened or read.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "refuses a share or device spelling with a typed failure, whether or not the project is trusted, and touches no share",
     () =>
       Effect.gen(function* () {
         const { project } = yield* layout
         const drive = project.slice(0, 1)
         const rest = project.slice(3)
+        const host = `orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid`
         const spellings = [
           `\\\\localhost\\${drive}$\\${rest}\\secret\\key.txt`,
           `\\\\127.0.0.1\\${drive}$\\${rest}`,
@@ -220,38 +288,25 @@ describe("FileAccess for another spelling of the project's folder", () => {
           `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}\\secret\\key.txt`,
           `\\\\?\\UNC\\localhost\\${drive}$\\${rest}`,
           "//localhost/C$/Windows",
+          `\\\\${host}\\share\\a.txt`,
+          `//${host}/share/a.txt`,
+          `\\\\?\\UNC\\${host}\\share\\a.txt`,
         ]
-        for (const trusted of [false, true])
+        for (const trusted of [false, true]) {
+          const recorded = recordedFileSystem()
           yield* Effect.gen(function* () {
             const access = yield* FileAccess.Service
+            recorded.touched.length = 0
             for (const spelling of spellings) {
               const failure = yield* access.resolve({ path: spelling }).pipe(Effect.flip)
               expect([spelling, failure]).toMatchObject([spelling, { code: "file.spelling" }])
             }
-          }).pipe(provideProject(project, trusted))
-      }),
-  )
-
-  // A share or device path named directly is refused before the disk is read: a host of its own to each run, so that a
-  // stat or a connection to it would wait for the network.
-  ;(process.platform === "win32" ? it.live : it.live.skip)("refuses an unreachable share before reading the disk", () =>
-    Effect.gen(function* () {
-      const { project } = yield* layout
-      const host = `orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid`
-      yield* Effect.gen(function* () {
-        const access = yield* FileAccess.Service
-        for (const spelling of [
-          `\\\\${host}\\share\\a.txt`,
-          `//${host}/share/a.txt`,
-          `\\\\?\\UNC\\${host}\\share\\a.txt`,
-        ]) {
-          const begun = Date.now()
-          const failure = yield* access.resolve({ path: spelling }).pipe(Effect.flip)
-          expect([spelling, failure]).toMatchObject([spelling, { code: "file.spelling" }])
-          expect(Date.now() - begun).toBeLessThan(1_000)
+            // A command's plain word that is a share is asked about as the shell asks, and read by nobody.
+            expect(yield* access.escaped(spellings.map((spelling) => FileAccess.resolvePath(project, spelling)))).toEqual([])
+            expect(sharesTouched(recorded.touched)).toEqual([])
+          }).pipe(provideProject(project, trusted, recorded))
         }
-      }).pipe(provideProject(project, false))
-    }),
+      }),
   )
 
   it.live(
