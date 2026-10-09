@@ -101,8 +101,10 @@ const withTools = <A, E, R>(directory: string, body: (registry: Tool.Interface) 
     yield* sessions.create({ id: sessionID, title: "windows spelling test", location, model: sessionModel })
     const locations = yield* LocationServiceMap.Service
     return yield* Effect.gen(function* () {
-      yield* (yield* Plugin.Service).awaitActivation
-      return yield* body(yield* Tool.Service)
+      const plugins = yield* Plugin.Service
+      yield* plugins.awaitActivation
+      const registry = yield* Tool.Service
+      return yield* body(registry)
     }).pipe(Effect.provide(locations.get(location)), Effect.ensuring(locations.invalidate(location)))
   })
 

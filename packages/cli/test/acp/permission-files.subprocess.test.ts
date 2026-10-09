@@ -270,7 +270,7 @@ const shownAt = (locations: ReadonlyArray<{ path: string }> | undefined) =>
 const linkModes = [
   { trusted: false, reply: "once", link: "junction" },
   { trusted: false, reply: "reject", link: "junction" },
-  ...(canLinkDirectory ? [{ trusted: false, reply: "once", link: "symlink" }] : []),
+  ...(canLinkDirectory ? [{ trusted: false, reply: "once", link: "symlink" } as const] : []),
   { trusted: true, reply: "once", link: "junction" },
 ] as const
 for (const row of linkRows)
@@ -380,7 +380,7 @@ const spellingRows = [
   {
     name: "Read of the 8.3 name of .env under a Read ask of *.env asks about .env",
     tool: "Read",
-    permissions: [{ action: "Read", resource: "*.env", effect: "ask" }],
+    permissions: [{ action: "Read", resource: "*.env", effect: "ask" }] as const,
     reply: "once" as const,
     args: (root: string) => ({ file_path: shortName(path.join(root, "workspace"), ".env") }),
     check: async (run: Run) => {

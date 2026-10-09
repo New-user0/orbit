@@ -318,16 +318,16 @@ describe("FileAccess in a project that is not trusted", () => {
         path.join(outside, "notes.md"),
         path.join(project, "https:", "evil.example"),
       ]
-      const untrusted = yield* Effect.gen(function* () {
-        return yield* (yield* FileAccess.Service).escaped(files)
-      }).pipe(provideProject(project, requests, false))
-      expect(untrusted.map((target) => [target.place, target.externalDirectory?.escaped])).toEqual([
-        [path.join(outside, "notes.md"), true],
-        [path.join(outside, "new.txt"), true],
+      const escaped = Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        return yield* access.escaped(files)
+      })
+      const untrusted = yield* escaped.pipe(provideProject(project, requests, false))
+      expect(untrusted.map((target) => ({ place: target.place, escaped: target.externalDirectory?.escaped }))).toEqual([
+        { place: AbsolutePath.make(path.join(outside, "notes.md")), escaped: true },
+        { place: AbsolutePath.make(path.join(outside, "new.txt")), escaped: true },
       ])
-      const trusted = yield* Effect.gen(function* () {
-        return yield* (yield* FileAccess.Service).escaped(files)
-      }).pipe(provideProject(project, requests, true))
+      const trusted = yield* escaped.pipe(provideProject(project, requests, true))
       expect(trusted).toEqual([])
       expect(requests).toEqual([])
     })
