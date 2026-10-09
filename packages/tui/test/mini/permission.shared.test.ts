@@ -238,3 +238,22 @@ describe("mini permission with a decoy old field name", () => {
     }),
   )
 })
+
+describe("mini permission for a patch that changes several files", () => {
+  test("names every file and shows every diff", () => {
+    const files = [
+      { file: "README.md", patch: "--- README.md\n+typo fix" },
+      { file: ".orbit/config.json", patch: "--- .orbit/config.json\n+SECOND_FILE_CHANGE" },
+    ]
+    const info = permissionInfo(
+      req({
+        action: "Edit",
+        resources: files.map((item) => item.file),
+        metadata: { files, diff: files.map((item) => item.patch).join("\n") },
+      }),
+    )
+    expect(info.title).toContain("README.md")
+    expect(info.title).toContain(".orbit/config.json")
+    expect(JSON.stringify(info)).toContain("SECOND_FILE_CHANGE")
+  })
+})

@@ -46,3 +46,36 @@ describe("a call that names a file under both spellings", () => {
     ),
   )
 })
+
+// A patch asks once, as Edit, for every file it changes. The prompt must name each file and show each file's diff.
+describe("a patch that changes several files", () => {
+  const files = [
+    { file: "README.md", patch: "--- README.md\n+typo fix" },
+    { file: ".orbit/config.json", patch: "--- .orbit/config.json\n+SECOND_FILE_CHANGE" },
+  ]
+  ;[true, false].forEach((joined) =>
+    test(`names every file and shows every diff${joined ? "" : " (no joined diff)"}`, () => {
+      const shown = permissionPresentation({
+        action: "Edit",
+        tool: "Patch",
+        resources: files.map((item) => item.file),
+        metadata: { files, ...(joined ? { diff: files.map((item) => item.patch).join("\n") } : {}) },
+      })
+      expect(shown.title).toContain("README.md")
+      expect(shown.title).toContain(".orbit/config.json")
+      expect(shown.diff).toContain("+typo fix")
+      expect(shown.diff).toContain("SECOND_FILE_CHANGE")
+    }),
+  )
+
+  test("a single-file patch keeps the single-file prompt", () => {
+    const shown = permissionPresentation({
+      action: "Edit",
+      tool: "Patch",
+      resources: ["README.md"],
+      metadata: { files: [files[0]] },
+    })
+    expect(shown.title).toBe("Edit README.md")
+    expect(shown.lines).toEqual([])
+  })
+})

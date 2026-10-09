@@ -50,13 +50,28 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   const resources = source.resources.filter((item): item is string => typeof item === "string")
 
   if (action === "edit") {
-    const first = dict(Array.isArray(metadata.files) ? metadata.files[0] : undefined)
+    const files = (Array.isArray(metadata.files) ? metadata.files : []).map(dict)
+    const first = files[0] ?? {}
     const file = text(input.path) || text(first.file) || resources[0] || ""
-    const diff = text(first.patch) || text(first.diff) || text(metadata.diff) || undefined
+    // A patch asks once for every file it changes, so the prompt names all of them and shows every file's diff: showing
+    // only the first would hide part of what is approved.
+    const named = files.map((item) => text(item.file)).filter(Boolean)
+    const targets = named.length > 1 ? named : resources.length > 1 ? resources : []
+    const diff =
+      (targets.length > 1
+        ? text(metadata.diff) ||
+          files
+            .map((item) => text(item.patch) || text(item.diff))
+            .filter(Boolean)
+            .join("\n")
+        : text(first.patch) || text(first.diff) || text(metadata.diff)) || undefined
     return {
       icon: "→",
-      title: `Edit ${formatPath(file)}`,
-      lines: [],
+      title:
+        targets.length > 1
+          ? `Edit ${targets.length} files: ${targets.map(formatPath).join(", ")}`
+          : `Edit ${formatPath(file)}`,
+      lines: targets.length > 1 ? targets.map((target) => `Path: ${formatPath(target)}`) : [],
       diff,
       patch: diff ? undefined : text(input.patchText) || undefined,
       file,
