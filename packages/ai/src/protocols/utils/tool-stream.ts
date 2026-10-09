@@ -1,4 +1,4 @@
-import { Effect, Option, Stream } from "effect"
+import { Effect, Option, Ref, Stream } from "effect"
 import { AIError, LLMEvent, type ProviderMetadata, type ToolCall } from "../../schema/index.js"
 import { eventError, parseToolInput, type ToolAccumulator } from "../shared.js"
 import { parse } from "./partial-json.js"
@@ -69,7 +69,7 @@ const inputDelta = (tool: PendingTool, text: string) =>
     input: Option.getOrElse(parsePartialInput(tool.input), () => ({})),
   })
 
-const toolCall = (route: string, tool: PendingTool, inputOverride?: string) => {
+const toolCall = (route: string, tool: PendingTool, inputOverride?: string, emptyIsComplete = false) => {
   const raw = inputOverride ?? tool.input
   const call = (input: unknown, partialInput?: true) =>
     LLMEvent.toolCall({
@@ -85,7 +85,7 @@ const toolCall = (route: string, tool: PendingTool, inputOverride?: string) => {
   // that takes no arguments (some providers stream `""` for those). Marked, so it waits for the finish: `tool-calls` or
   // `stop` releases it with `{}`, any other finish drops it.
   return parseToolInput(route, tool.name, raw).pipe(
-    Effect.map((input) => (raw.trim() === "" && !tool.providerExecuted ? call(input, true) : call(input))),
+    Effect.map((input) => (raw.trim() === "" && !tool.providerExecuted && !emptyIsComplete ? call(input, true) : call(input))),
     Effect.catch((error) =>
       tool.providerExecuted
         ? Effect.fail(error)
@@ -240,7 +240,12 @@ export const finishWithInput = <K extends StreamKey>(route: string, tools: State
  * not emit per-tool stop events, so all accumulated calls finish independently
  * when the choice receives a terminal `finish_reason`.
  */
-export const finishAll = <K extends StreamKey>(route: string, tools: State<K>) =>
+export const finishAll = <K extends StreamKey>(
+  route: string,
+  tools: State<K>,
+  /** The stream ended with no finish reason to vouch either way: a call with no argument text is a no-argument call. */
+  options?: { readonly emptyIsComplete?: boolean },
+) =>
   Effect.gen(function* () {
     const pending = Object.values<PendingTool | undefined>(tools).filter(
       (tool): tool is PendingTool => tool !== undefined,
@@ -248,44 +253,105 @@ export const finishAll = <K extends StreamKey>(route: string, tools: State<K>) =
     return {
       tools: empty<K>(),
       events: yield* Effect.forEach(pending, (tool) =>
-        toolCall(route, tool).pipe(Effect.map((event) => finishEvents(tool, event))),
+        toolCall(route, tool, undefined, options?.emptyIsComplete).pipe(Effect.map((event) => finishEvents(tool, event))),
       ).pipe(Effect.map((events) => events.flat())),
     }
   })
 
+interface Held {
+  readonly event: ToolCall
+  /** Still waiting for the finish. A call behind a held one is queued with `hold: false` only to keep provider order. */
+  readonly hold: boolean
+}
+
 interface Gate {
-  readonly held: ReadonlyArray<ToolCall>
+  /** The oldest held call and every tool call that arrived after it, in arrival order. */
+  readonly queue: ReadonlyArray<Held>
   /**
    * The latest finish since the current step started was `tool-calls` or `stop`, so a marked call that arrives now has
    * nothing left to wait for.
    */
   readonly released: boolean
+  /** Ids of the blocks (tool input, text, reasoning) the provider started in this step, in order. */
+  readonly starts: ReadonlyArray<string>
+  /** Ids of tool inputs that streamed at least one argument character. */
+  readonly streamed: ReadonlySet<string>
 }
 
 /**
- * Hold calls rebuilt from incomplete JSON (`partialInput`) until the response says how it ended. A `tool-calls` or
- * `stop` finish releases them just before it. Any other finish drops them, and so does a stream that ends or fails
- * without one, so a response cut off by an output limit does not run a call whose arguments were half written. The
- * `tool-input-*` events of a dropped call still pass, which leaves an input that was started and never called for the
- * consumer to settle.
- * Unmarked calls pass in order, and a marked call that arrives after a releasing finish passes straight through until
- * the next step starts: each step is decided by its own finish.
+ * Hold calls rebuilt from incomplete JSON or from no argument text (`partialInput`) until the response says how it
+ * ended. A `tool-calls` or `stop` finish releases them just before it. Any other finish drops them, and so does a
+ * stream that ends or fails without one, so a response cut off by an output limit does not run a call whose arguments
+ * were half written. The `tool-input-*` events of a dropped call still pass, which leaves an input that was started and
+ * never called for the consumer to settle.
+ *
+ * Provider order is kept: every tool call that arrives behind a held one waits in the same queue and leaves with it.
+ * A call that streamed no argument text is also released as soon as the provider starts another block after it, since
+ * only the last block of a response can be cut off by an output limit. A finish that drops held calls still emits the
+ * calls queued behind them.
+ * A marked call that arrives after a releasing finish passes straight through until the next step starts: each step is
+ * decided by its own finish.
  */
 export const gateOnFinish = <E, R>(events: Stream.Stream<LLMEvent, E, R>) =>
-  events.pipe(Stream.mapAccumEffect((): Gate => ({ held: [], released: false }), gate))
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const state = yield* Ref.make<Gate>({ queue: [], released: false, starts: [], streamed: new Set() })
+      // A stream that ends or fails without a finish drops the held calls, and passes the ones queued behind them.
+      const unheld = Effect.map(Ref.get(state), (current) =>
+        Stream.fromIterable(current.queue.filter((item) => !item.hold).map((item) => item.event)),
+      )
+      return events.pipe(
+        Stream.mapEffect((event) =>
+          Effect.gen(function* () {
+            const [next, out] = yield* gate(yield* Ref.get(state), event)
+            yield* Ref.set(state, next)
+            return out
+          }),
+        ),
+        Stream.flattenIterable,
+        Stream.catch((error) => Stream.unwrap(unheld).pipe(Stream.concat(Stream.fail(error)))),
+        Stream.concat(Stream.unwrap(unheld)),
+      )
+    }),
+  )
 
 const gate = (state: Gate, event: LLMEvent): Effect.Effect<readonly [Gate, ReadonlyArray<LLMEvent>]> => {
   // An earlier step's clean finish does not vouch for a call from this one.
-  if (LLMEvent.is.stepStart(event)) return Effect.succeed([{ ...state, released: false }, [event]])
-  if (LLMEvent.is.toolCall(event) && event.partialInput)
-    return Effect.succeed(state.released ? [state, [event]] : [{ ...state, held: [...state.held, event] }, []])
+  if (LLMEvent.is.stepStart(event))
+    return Effect.succeed([{ ...state, released: false, starts: [], streamed: new Set() }, [event]])
+  if (LLMEvent.is.toolInputDelta(event))
+    return Effect.succeed([event.text === "" ? state : { ...state, streamed: new Set(state.streamed).add(event.id) }, [event]])
+  if (LLMEvent.is.toolInputStart(event) || LLMEvent.is.textStart(event) || LLMEvent.is.reasoningStart(event)) {
+    // A new block proves every earlier no-argument call was complete: release them and the calls queued behind them.
+    const next = { ...state, starts: [...state.starts, event.id] }
+    const queue = next.queue.map((item) => (item.hold && isComplete(next, item.event) ? { ...item, hold: false } : item))
+    const flushed = queue.findIndex((item) => item.hold)
+    const out = (flushed === -1 ? queue : queue.slice(0, flushed)).map((item) => item.event)
+    return Effect.succeed([{ ...next, queue: flushed === -1 ? [] : queue.slice(flushed) }, [...out, event]])
+  }
+  if (LLMEvent.is.toolCall(event)) {
+    if (state.queue.length > 0) {
+      const held = event.partialInput === true && !isComplete(state, event)
+      return Effect.succeed([{ ...state, queue: [...state.queue, { event, hold: held }] }, []])
+    }
+    if (event.partialInput !== true || state.released || isComplete(state, event)) return Effect.succeed([state, [event]])
+    return Effect.succeed([{ ...state, queue: [{ event, hold: true }] }, []])
+  }
   if (!LLMEvent.is.stepFinish(event) && !LLMEvent.is.finish(event)) return Effect.succeed([state, [event]])
   const released = event.reason.normalized === "tool-calls" || event.reason.normalized === "stop"
-  const next = [{ held: [], released }, released ? [...state.held, event] : [event]] as const
-  if (released || state.held.length === 0) return Effect.succeed(next)
+  const dropped = released ? 0 : state.queue.filter((item) => item.hold).length
+  const calls = state.queue.filter((item) => released || !item.hold).map((item) => item.event)
+  const next = [{ ...state, queue: [], released }, [...calls, event]] as const
+  if (dropped === 0) return Effect.succeed(next)
   return Effect.logWarning(
-    `Dropped ${state.held.length} tool call(s) rebuilt from incomplete input: the response finished with "${event.reason.normalized}"`,
+    `Dropped ${dropped} tool call(s) rebuilt from incomplete input: the response finished with "${event.reason.normalized}"`,
   ).pipe(Effect.as(next))
+}
+
+// A call that streamed no argument text is complete once the provider has started another block after it.
+const isComplete = (state: Gate, call: ToolCall) => {
+  const at = state.starts.lastIndexOf(call.id)
+  return at !== -1 && at < state.starts.length - 1 && !state.streamed.has(call.id)
 }
 
 export * as ToolStream from "./tool-stream.js"

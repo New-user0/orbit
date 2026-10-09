@@ -215,6 +215,26 @@ describe("a response that does not show it finished", () => {
     )
   })
 
+  // With `requireFinishReason: false` a stream that ends without one has nothing that cut the call off, so a call with
+  // no argument text is a call to a tool that takes none. A finish that says the response was cut off still holds it.
+  ;(
+    [
+      ["the stream ends without a finish_reason", [], 1, "tool-calls"],
+      ["the last chunk has an empty finish_reason", [deltaChunk({}, "")], 1, "tool-calls"],
+      ["finish_reason is tool_calls", [deltaChunk({}, "tool_calls")], 1, "tool-calls"],
+      ["finish_reason is length", [deltaChunk({}, "length")], 0, "length"],
+    ] as const
+  ).forEach(([name, end, calls, normalized]) => {
+    it.effect(`OpenAI Chat ${calls ? "runs" : "drops"} a call with no arguments when ${name}`, () =>
+      Effect.gen(function* () {
+        const result = yield* run(chat.request(false), sseEvents(...chat.calls([""]), ...end))
+
+        expect(result.calls).toHaveLength(calls)
+        expect(result.finishes[0].reason.normalized).toBe(normalized)
+      }),
+    )
+  })
+
   it.effect("OpenAI Chat fails a stream without a finish_reason by default and never calls the cut-off call", () =>
     Effect.gen(function* () {
       const result = yield* run(chat.request(), sseEvents(...chat.calls([cutOff])))

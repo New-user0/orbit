@@ -4551,6 +4551,23 @@ describe("SessionRunnerLLM", () => {
     expect(yield* tools.maxActive).toBe(1)
   })
 
+  // A call with no argument text waits for the finish, and the calls behind it wait with it: the runner sees them in the
+  // order the provider sent them, so a later call never starts first.
+  scenario("runs a held no-argument call before the calls the provider sent behind it", function* (s) {
+    yield* s.admit("No arguments, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-first", name: "mutate", input: { text: "first" }, partialInput: true }),
+        callOf("call-second", "mutate", "second"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["first", "second"])
+  })
+
   scenario("keeps the start order of a safe, a not safe and a safe call", function* (s) {
     yield* s.admit("Echo, mutate, echo")
     yield* s.llm.push(
