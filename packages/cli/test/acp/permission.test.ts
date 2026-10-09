@@ -811,6 +811,135 @@ describe("acp approval describes the request, not the calling tool", () => {
   })
 })
 
+// The server resolves the file a call acts on before it asks, and names it in the request's resources. The calling tool's
+// input can spell another one: filename recovery reads a sibling, an old field name can win over the current one, a
+// hook can rewrite the path. The approval names the request's file. NotebookEdit and LSP rows are controls that already
+// took their locations from the resources.
+describe("an approval about a file names the file its request resolved", () => {
+  const rows: ReadonlyArray<{
+    name: string
+    tool: string
+    input: Record<string, unknown>
+    action: string
+    resources: (cwd: string) => string[]
+    metadata?: Record<string, unknown>
+    file: (cwd: string) => string
+    title?: (cwd: string) => string
+  }> = [
+    {
+      name: "a Read recovered to a sibling file",
+      tool: "Read",
+      input: { file_path: "READEM.md" },
+      action: "Read",
+      resources: () => ["README.md"],
+      file: (cwd) => path.join(cwd, "README.md"),
+      title: () => "README.md",
+    },
+    {
+      name: "a Read whose old field name won",
+      tool: "Read",
+      input: { file_path: "README.md", path: ".env" },
+      action: "Read",
+      resources: () => [".env"],
+      file: (cwd) => path.join(cwd, ".env"),
+      title: () => ".env",
+    },
+    {
+      name: "an Edit outside the project",
+      tool: "Edit",
+      input: { file_path: "notes.md", old_string: "a", new_string: "b" },
+      action: "Edit",
+      resources: (cwd) => [path.join(cwd, "..", "outside", "notes.md").replaceAll("\\", "/")],
+      metadata: { files: [] },
+      file: (cwd) => path.join(cwd, "..", "outside", "notes.md").replaceAll("\\", "/"),
+      title: (cwd) => path.join(cwd, "..", "outside", "notes.md").replaceAll("\\", "/"),
+    },
+    {
+      name: "a Write into a subfolder",
+      tool: "Write",
+      input: { file_path: "a.txt", content: "c" },
+      action: "Edit",
+      resources: () => ["src/a.txt"],
+      file: (cwd) => path.join(cwd, "src", "a.txt"),
+      title: () => "src/a.txt",
+    },
+    {
+      name: "a NotebookEdit",
+      tool: "NotebookEdit",
+      input: { notebook_path: "a.ipynb", source: "s" },
+      action: "Edit",
+      resources: () => ["b.ipynb"],
+      file: (cwd) => path.join(cwd, "b.ipynb"),
+    },
+    {
+      name: "an LSP read",
+      tool: "LSP",
+      input: { action: "hover", path: "a.ts", line: 1, character: 1 },
+      action: "Read",
+      resources: () => ["b.ts"],
+      file: (cwd) => path.join(cwd, "b.ts"),
+    },
+  ]
+  for (const row of rows)
+    test(row.name, async () => {
+      await using dir = await tmpdir()
+      await using acp = await startWire({
+        onPrompt: ({ sessionID, id }) => [
+          delivered(sessionID, id),
+          toolStarted(sessionID, "call_file", row.tool),
+          toolCalled(sessionID, "call_file", row.input),
+          permissionAsked(sessionID, "perm_file", {
+            action: row.action,
+            resources: row.resources(dir.path),
+            metadata: row.metadata ?? {},
+            source: { type: "tool", messageID: "msg_file", id: "call_file" },
+          }),
+        ],
+        onPermissionReply: ({ sessionID }) => [succeeded(sessionID)],
+        permission: () => ({ outcome: { outcome: "selected", optionId: "reject" } }) as const,
+      })
+      await acp.initialize()
+      const session = await acp.newSession(dir.path)
+
+      await acp.prompt(session.sessionId, "hello")
+
+      const call = acp.permissions[0]?.toolCall
+      expect(call?.locations).toEqual([{ path: row.file(dir.path) }])
+      if (row.title) expect(call?.title).toBe(row.title(dir.path))
+      for (const item of call?.content ?? []) if (item.type === "diff") expect(item.path).toBe(row.file(dir.path))
+    })
+
+  // A server that sends no diff leaves the client to work one out, from the file the request names.
+  test("an Edit whose request carries no diff is previewed on the file the request names", async () => {
+    await using dir = await tmpdir()
+    await fs.mkdir(path.join(dir.path, "src"))
+    await fs.writeFile(path.join(dir.path, "src", "notes.md"), "a")
+    await using acp = await startWire({
+      onPrompt: ({ sessionID, id }) => [
+        delivered(sessionID, id),
+        toolStarted(sessionID, "call_old", "Edit"),
+        toolCalled(sessionID, "call_old", { file_path: "notes.md", old_string: "a", new_string: "b" }),
+        permissionAsked(sessionID, "perm_old", {
+          action: "Edit",
+          resources: ["src/notes.md"],
+          metadata: {},
+          source: { type: "tool", messageID: "msg_old", id: "call_old" },
+        }),
+      ],
+      onPermissionReply: ({ sessionID }) => [succeeded(sessionID)],
+      permission: () => ({ outcome: { outcome: "selected", optionId: "reject" } }) as const,
+    })
+    await acp.initialize()
+    const session = await acp.newSession(dir.path)
+
+    await acp.prompt(session.sessionId, "hello")
+
+    expect(acp.permissions[0]?.toolCall.content).toEqual([
+      { type: "diff", path: path.join(dir.path, "src", "notes.md"), oldText: "a", newText: "b" },
+    ])
+  })
+})
+
 function decisions(acp: Wire) {
   return acp.server.replies.map((reply) => [reply.requestID, reply.decision])
 }

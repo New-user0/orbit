@@ -68,6 +68,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
     toolName,
     toolInput,
     request.metadata ?? {},
+    request.resources,
     input.cwd,
     caller !== undefined,
   )
@@ -169,6 +170,7 @@ const permissionPreviews = Effect.fnUntraced(function* (
   toolName: string,
   input: ToolInput,
   metadata: ToolInput,
+  resources: ReadonlyArray<string>,
   cwd: string,
   owned: boolean,
 ) {
@@ -180,9 +182,11 @@ const permissionPreviews = Effect.fnUntraced(function* (
   if (served.length > 0) return served
   if (!owned) return []
   if (tool === "patch" || tool === "apply_patch") return yield* patchPreviews(input, cwd)
+  // The file the request names is the one the tool writes, as for the locations.
+  const files = resources.filter(isPath)
   const file = filePath(input)
-  if (!file) return []
-  const path = absolutePath(file, cwd)
+  const path = files.length === 1 ? resourcePath(files[0]!, cwd) : file && absolutePath(file, cwd)
+  if (!path) return []
   if (tool === "write") {
     const content = stringValue(input.content)
     if (content === undefined) return []
@@ -289,8 +293,15 @@ function permissionTitle(
     case "edit":
     case "write":
     case "patch":
-    case "apply_patch":
-      return filePath(input) ?? (previews[0]?.type === "diff" ? previews[0].path : undefined)
+    case "apply_patch": {
+      // The file the server resolved names a request about one file, whatever the calling tool's input spelled.
+      const files = resources.filter(isPath)
+      return (
+        (files.length === 1 ? files[0] : undefined) ??
+        filePath(input) ??
+        (previews[0]?.type === "diff" ? previews[0].path : undefined)
+      )
+    }
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
       return owned ? undefined : [toolName, ...resources.filter((resource) => resource !== "*")].join(" ")
@@ -303,20 +314,23 @@ function permissionLocations(
   resources: ReadonlyArray<string>,
   cwd: string,
 ): ToolCallLocation[] {
-  const locations = toLocations(toolName, input, cwd)
+  const paths = resources.filter(isPath)
   // Outside the project the request's own folder is the whole point of the prompt, so it is always listed.
   if (toolName.toLocaleLowerCase() === "external_directory")
     return Array.from(
       new Set([
-        ...locations.map((item) => item.path),
-        ...resources.filter(isPath).map((item) => resourcePath(wildcardDirectory(item), cwd)),
+        ...toLocations(toolName, input, cwd).map((item) => item.path),
+        ...paths.map((item) => resourcePath(wildcardDirectory(item), cwd)),
       ]),
       (path) => ({ path }),
     )
-  if (locations.length > 0) return locations
-  // Only a request about files has files for resources: an MCP tool's, an agent's and a fetch's are not places on disk.
-  if (!fileActions.has(ToolNames.legacy(toolName).toLowerCase())) return []
-  return resources.filter(isPath).map((path) => ({ path: resourcePath(path, cwd) }))
+  // A request about files names them in its resources as the server resolved them: what its rules were checked against
+  // and what the tool acts on, so they come before the calling tool's input, whose spelling a hook, filename recovery or
+  // an old field name can turn into another file. Only such a request has files for resources: an MCP tool's, an
+  // agent's and a fetch's are not places on disk.
+  if (fileActions.has(ToolNames.legacy(toolName).toLowerCase()) && paths.length > 0)
+    return paths.map((path) => ({ path: resourcePath(path, cwd) }))
+  return toLocations(toolName, input, cwd)
 }
 
 const fileActions = new Set(["edit", "write", "read", "patch", "apply_patch", "notebook_edit", "list", "lsp"])
