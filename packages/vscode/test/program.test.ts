@@ -38,7 +38,8 @@ async function decoy(directory: string) {
 
 async function script(directory: string) {
   const program = path.join(directory, "orb")
-  await Bun.write(program, `#!/bin/sh\necho "orb $*" >> "$(dirname "$0")/ran.txt"\n`)
+  // Only shell builtins: the tests start it with a PATH that holds just the workspace and `bin`, where `dirname` is not.
+  await Bun.write(program, `#!/bin/sh\necho "orb $*" >> "\${0%/*}/ran.txt"\n`)
   await fs.chmod(program, 0o755)
   const marker = path.join(directory, "ran.txt")
   return async () =>
