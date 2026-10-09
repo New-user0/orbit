@@ -1731,7 +1731,11 @@ describe("ShellTool", () => {
                   expect(assertions[0]).toMatchObject({ resources: ["echo $((1 + 1))"], save: ["echo *"] })
                   expect(assertions[2]).toMatchObject({ resources: ["pwd"], save: ["pwd *"] })
                   expect(assertions[3]).toMatchObject({ resources: ["pwd"], save: ["pwd *"] })
-                  return assertions.slice()
+                  // Each run works in its own temporary folder, which the shell's requests name as their workdir.
+                  const named = [realpathSync(tmp.path), tmp.path].map((item) => JSON.stringify(item).slice(1, -1))
+                  return JSON.parse(
+                    named.reduce((text, item) => text.replaceAll(item, "<tmp>"), JSON.stringify(assertions)),
+                  ) as unknown
                 }),
               (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
             ),
