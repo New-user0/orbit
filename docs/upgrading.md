@@ -1662,3 +1662,19 @@ notice is sent as a `session_info_update` with `orbit/notice` in `_meta`.
 **Affects:** scripts that call `orb run` and read its result object or exit code, and ACP clients.
 
 **What to do:** nothing; the new fields are additive. A script that passes a limit should check `subtype`.
+
+### Over ACP, an approval describes what is asked, and a Code Mode write says its method
+
+`orb acp` used to build an approval from the call that raised it, so a Read that followed a link out of the project was
+shown as a read of the project file, and a Code Mode fetch, an MCP call and a Workflow agent were all shown as
+`Execute` or `Workflow`. It now shows the caller's name and input only when the caller owns the request (the same table
+the terminal interface uses, `ToolNames.owns`) and builds the prompt from the request otherwise: the folder outside the
+project for `external_directory`, the method and URL for a fetch (`POST https://...`), the action and resources for an
+MCP tool or an agent. A file edit shows the diff the server will write, taken from the request's `metadata.files`, so an
+edit of a file with CRLF line endings is no longer shown as no change. The terminal interface and `orb run` in Mini
+mode also name the method of a Code Mode fetch other than GET and HEAD, as `WebFetch POST <url>` with a `Method:` line.
+
+**Affects:** ACP clients that read the title, locations or `rawInput` of a permission request, and anyone who approves
+Code Mode fetches.
+
+**What to do:** nothing. `rawInput` of a request the caller does not own carries the request's metadata and `resources`.
