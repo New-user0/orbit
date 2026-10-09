@@ -9,6 +9,9 @@ import { Effect, Layer } from "effect"
  */
 export const recordedFileSystem = () => {
   const touched: string[] = []
+  // Each call as `method path`, for a test that pins which folders were listed: a link's own path is a drive path, so a
+  // listing of the share it leads to shows in `touched` only under that path.
+  const calls: string[] = []
   const layer = Layer.effect(
     FSUtil.Service,
     Effect.gen(function* () {
@@ -18,6 +21,9 @@ export const recordedFileSystem = () => {
           const value: unknown = (target as unknown as Record<string | symbol, unknown>)[key]
           if (typeof value !== "function") return value
           return (...args: unknown[]) => {
+            calls.push(
+              ...args.filter((arg): arg is string => typeof arg === "string").map((arg) => `${String(key)} ${arg}`),
+            )
             touched.push(...args.filter((arg): arg is string => typeof arg === "string"))
             return value.apply(target, args)
           }
@@ -25,7 +31,7 @@ export const recordedFileSystem = () => {
       })
     }),
   ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
-  return { layer, touched }
+  return { layer, touched, calls }
 }
 
 /** The recorded paths that name a share or a device (`\\host\share`, `//host/share`, `\\?\...`, `\\.\...`). */

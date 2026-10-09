@@ -581,7 +581,10 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   allows it (`packages/core/test/fixture/symlink.ts`). For every reader in the list cover a link to a file, a link to a
   folder, a dangling link, a loop, a not-yet-existing target through a link, a `..` name and a UNC path. For UNC, assert
   that no disk access happens: record the paths the file system is called with (`packages/core/test/fixture/recorded-fs.ts`)
-  and assert that none names the share, rather than a time limit, which a fast failing host meets either way.
+  and assert that none names the share, rather than a time limit, which a fast failing host meets either way. A link's own path is a drive path, so a listing
+  of the share it leads to shows under the link's path: the recorder also keeps each call as `method path` (`calls`), and
+  the share-link rows assert that no `readDirectoryEntries` names the link (the 8.3 short-name lookup), which fails when
+  `refuseShare` is removed.
 - Untrusted: the file is not read and `config file skipped` is logged once. After a grant the file appears without a
   restart. The trusted control follows links as before.
 - For a tool, point the link at a folder that Orbit allows by itself, such as the global config folder, so that only the

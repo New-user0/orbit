@@ -5,7 +5,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Array, Context, Effect, Layer, Schema } from "effect"
-import { lstat, readdir } from "fs/promises"
+import { lstat } from "fs/promises"
 import path from "path"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
@@ -138,7 +138,14 @@ const layer = Layer.effect(
         (folder, part) => {
           if (!part.includes("~")) return Effect.succeed(path.join(folder, part))
           return refuseShare(folder, file).pipe(
-            Effect.andThen(Effect.promise(() => longName(folder, part))),
+            // The listing goes through `FSUtil` so a test sees which folder was read.
+            Effect.andThen(() =>
+              fs.readDirectoryEntries(folder).pipe(
+                Effect.map((list) => list.map((entry) => entry.name)),
+                Effect.orElseSucceed(() => undefined),
+              ),
+            ),
+            Effect.flatMap((entries) => Effect.promise(() => longName(folder, part, entries))),
             Effect.flatMap((name) =>
               name === undefined
                 ? new ToolFailure({
@@ -336,8 +343,7 @@ export const node = makeLocationNode({
 // The name in `folder` that `part` stands for: `part` itself when the folder has an entry of that name or nothing is
 // there, and otherwise the one entry that is the same file, which is the long name of an 8.3 short name. Undefined when
 // something is there under `part` but no single entry is it.
-async function longName(folder: string, part: string) {
-  const entries = await readdir(folder).catch(() => undefined)
+async function longName(folder: string, part: string, entries: readonly string[] | undefined) {
   if (entries === undefined || entries.some((entry) => entry.toLowerCase() === part.toLowerCase())) return part
   const file = await lstat(path.join(folder, part), { bigint: true }).catch(() => undefined)
   if (file === undefined) return part

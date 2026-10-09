@@ -121,11 +121,13 @@ describe("FileAccess for another spelling of the project's folder", () => {
   )
 
   // Fails visibly on a Windows volume that makes no 8.3 names, rather than passing without a check of them.
-  ;(process.platform === "win32" ? it.live : it.live.skip)("has 8.3 short-name spellings of the project to decide", () =>
-    Effect.gen(function* () {
-      const { spellings } = yield* layout
-      expect(spellings.filter((item) => item.name.includes("short name")).length).toBe(2)
-    }),
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "has 8.3 short-name spellings of the project to decide",
+    () =>
+      Effect.gen(function* () {
+        const { spellings } = yield* layout
+        expect(spellings.filter((item) => item.name.includes("short name")).length).toBe(2)
+      }),
   )
 
   it.live("follows the link of a trusted project as for the plain spelling, with no folder question", () =>
@@ -183,8 +185,16 @@ describe("FileAccess for another spelling of the project's folder", () => {
       { name: "a localhost admin share", target: `\\\\localhost\\${drive}$\\${rest}`, share: true },
       { name: "a 127.0.0.1 admin share", target: `\\\\127.0.0.1\\${drive}$\\${rest}`, share: true },
       { name: "a \\\\?\\UNC admin share", target: `\\\\?\\UNC\\localhost\\${drive}$\\${rest}`, share: true },
-      { name: "a \\\\?\\Volume path", target: `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: true },
-      { name: "a \\\\.\\Volume path", target: `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: true },
+      {
+        name: "a \\\\?\\Volume path",
+        target: `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`,
+        share: true,
+      },
+      {
+        name: "a \\\\.\\Volume path",
+        target: `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`,
+        share: true,
+      },
       {
         name: "a share host",
         target: `\\\\orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid\\share\\dir`,
@@ -217,6 +227,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
           for (const [index, link] of links.entries()) {
             if (!reads[index]) continue
             recorded.touched.length = 0
+            recorded.calls.length = 0
             // Every tool resolves a path through `resolve`; a shell command's plain words through `escaped`.
             for (const below of [
               `shared${index}`,
@@ -228,12 +239,26 @@ describe("FileAccess for another spelling of the project's folder", () => {
             ]) {
               for (const kind of [undefined, "file", "directory"] as const) {
                 const failure = yield* access.resolve({ path: below, kind }).pipe(Effect.flip)
-                expect([link.name, below, kind, failure]).toMatchObject([link.name, below, kind, { code: "file.spelling" }])
+                expect([link.name, below, kind, failure]).toMatchObject([
+                  link.name,
+                  below,
+                  kind,
+                  { code: "file.spelling" },
+                ])
               }
             }
             const word = yield* access.escaped([path.join(project, `shared${index}`, "a.txt")]).pipe(Effect.flip)
             expect([link.name, word]).toMatchObject([link.name, { code: "file.spelling" }])
             expect([link.name, sharesTouched(recorded.touched)]).toEqual([link.name, []])
+            // The short-name rows must not list the link's folder, which is the connection to the share.
+            expect([
+              link.name,
+              recorded.calls.filter((call) =>
+                call
+                  .toLowerCase()
+                  .startsWith(`readdirectoryentries ${path.join(project, `shared${index}`).toLowerCase()}`),
+              ),
+            ]).toEqual([link.name, []])
           }
         }).pipe(provideProject(project, false, recorded))
       }),
@@ -304,7 +329,9 @@ describe("FileAccess for another spelling of the project's folder", () => {
               expect([spelling, failure]).toMatchObject([spelling, { code: "file.spelling" }])
             }
             // A command's plain word that is a share is asked about as the shell asks, and read by nobody.
-            expect(yield* access.escaped(spellings.map((spelling) => FileAccess.resolvePath(project, spelling)))).toEqual([])
+            expect(
+              yield* access.escaped(spellings.map((spelling) => FileAccess.resolvePath(project, spelling))),
+            ).toEqual([])
             expect(sharesTouched(recorded.touched)).toEqual([])
           }).pipe(provideProject(project, trusted, recorded))
         }
