@@ -3,7 +3,7 @@
 This is what Orbit's native TypeScript provider implements to call Tachyon **without** `tachyon_sdk`.
 
 It was established on 2026-10-02 from two sources:
-- **Probe runs** (`tools/tachyon-probe/probe.py` v2 and v3) against the live gateway, using tachyon-sdk 2.1.201 on Windows 11 with three models: `claude-opus-4-5@20251101`, `gpt-5.4` and `gpt4o`.
+- **Probe runs** of a one-time discovery script (`tools/tachyon-probe/probe.py` v2 and v3, removed once this spec was written; it is in the git history at 7845c97) against the live gateway, using tachyon-sdk 2.1.201 on Windows 11 with three models: `claude-opus-4-5@20251101`, `gpt-5.4` and `gpt4o`.
 - **The SDK's own source:** `common/apigee.py`, `langchain_client/langchain_client.py` and `common/sdk_metadata.py`.
 
 The probe's `--native-check` replayed this recipe with plain `httpx` and no SDK. Both the plain and the streaming call returned 200.
