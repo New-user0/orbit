@@ -1691,11 +1691,36 @@ MCP tool or an agent. A file edit shows the diff the server will write, taken fr
 edit of a file with CRLF line endings is no longer shown as no change. The approval prompts of the terminal interface
 and of Mini (`orb mini`) also name the method of a Code Mode fetch other than GET and HEAD, as `WebFetch POST <url>` with
 a `Method:` line. A built-in tool's own input contributes only the fields that tool declares, never extra keys the model
-added to it: a `cwd` on a shell call does not change the folder shown, which is the one the command runs in, and a
-`method` on a fetch does not change its title. An MCP tool or a skill shows the arguments it sends in `rawInput`. A diff
-or a `<n> files` title appears only for an edit, write, notebook edit or patch.
+added to it: a `cwd` on a shell call does not change the folder shown, and a `method` on a fetch does not change its
+title. An MCP tool or a skill shows the arguments it sends in `rawInput`. A diff or a `<n> files` title appears only for
+an edit, write, notebook edit or patch.
 
 **Affects:** ACP clients that read the title, locations or `rawInput` of a permission request, and anyone who approves
 Code Mode fetches.
 
 **What to do:** nothing. `rawInput` of a request the caller does not own carries the request's metadata and `resources`.
+
+### Approvals show a path where the tool acts, `~` included
+
+The tools read a leading `~`, `~/` or (on Windows) `~\` in a path as your home folder, and a Git Bash, Cygwin or WSL
+drive spelling such as `/c/Users/...` as that Windows drive. `orb acp` resolved the same path against the session's
+folder instead, so a shell `workdir`, a Grep or Glob `path` or a Read, Edit, Write or Patch file of `~/config` was shown
+in the approval and in the tool updates as `<project>/~/config` while the tool acted in your home folder. `orb acp` now
+resolves a path from a tool's input as the tools do, `..` included, and shows an absolute path normalized, so on Windows
+a path that starts with `/` is shown with a drive letter.
+
+The server also names the place on the request. A shell approval carries `metadata.workdir`, the absolute folder the
+command runs in, and the `metadata.path` of a Grep or Glob approval is now the absolute place searched rather than the
+path as the model wrote it. An ACP approval for a Read, Edit, Write or Patch takes its locations from the request's
+resources, which are the files the server resolved and checked your rules against, rather than from the calling tool's
+input, and a Read, Edit or Write approval takes its title from them too. The approval prompts of the terminal interface
+and of Mini (`orb mini`) name that file for a Read or an Edit as well: Mini showed
+`~/../<you>/.config/orbit/orbit.json` as a file of the project. Their tool rows, such as a shell row's `cd <folder>`,
+now draw a path from a tool's input the way the tools read it too, where they used to show `~/../<you>/.config/orbit` as
+`<you>/.config/orbit` in the project. A path from a server on another kind of system is drawn as before.
+
+**Affects:** ACP clients that read the locations or title of a tool call or an approval, people who approve reads and
+edits in the terminal interface or Mini, and plugins or SDK callers that read `metadata.path` of a Grep or Glob
+permission request.
+
+**What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.

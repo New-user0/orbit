@@ -91,8 +91,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   event, and `SessionTransfer.import` (`orb session import`, `POST /api/experimental/session/import`) writes an imported tool part's `displayName` through it too, so the stored and projected `displayName` is always escaped; a client that draws it still passes it through
   `plain` (escaping text that is already escaped changes nothing) and never unescapes it. Proof:
   `session-runner-tool-events.test.ts` ("tool input started carries the declared display name") and `server/test/session-import-display-name.test.ts`. The hints beside it (`readOnlyHint`, `destructiveHint`,
-  `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and `MCP
-  hints and permissions` in `core/test/mcp.test.ts`.
+  `openWorldHint`) drive scheduling and display only and never declare `readOnly`. Proof: `MCP tool traits` and
+  `MCP hints and permissions` in `core/test/mcp.test.ts`.
 - A tool call, whichever door it came through: every call that Orbit makes runs through `Tool.Snapshot.execute`, so a
   model call, a session runner step (which is also how an SDK host or a flow node, both of which run sessions, reach
   a tool), a Code Mode inner call, an MCP tool, a Promise plugin's tool and a desktop browser tool all pass the registry
@@ -227,8 +227,8 @@ every other extension):
   with a status or with a 404, nothing that names a location goes out (`usable` in `Controller`): `models` returns
   nothing, choosing a model or a mode on a session changes only the local choice, `outputStyle` is not written (it
   names no folder, so the server would boot its own working folder), and `send` posts an error and creates no
-  session; while nothing has answered each of them reads again first. When the server answered 404, `send` names `orb
-  service restart`. In both states the only requests the server sees are the trust read, the event stream, the
+  session; while nothing has answered each of them reads again first. When the server answered 404, `send` names
+  `orb service restart`. In both states the only requests the server sees are the trust read, the event stream, the
   session list of the history picker and the reads of a session opened from history, which name no folder. After a grant, the folder
   VS Code opened is read again and must itself answer trusted: a re-read that fails or is late confirms nothing, the
   banner stays and the chat says it could not trust the folder. `orb run` stops on the same failures because it cannot
@@ -800,6 +800,12 @@ runs" is a permission.
 - Show the whole thing that is approved: the full span and not just the commands that the scanner found
   (`ConfigCommandPlugin` asks about the span as written when its commands alone would mislead), the method and the URL
   (`PermissionWeb.request` metadata), the folder.
+- Show a place where the tool acts. A client prefers what the request carries: the resources of a request about files,
+  `metadata.workdir` of a shell request and `metadata.path` of a Grep or Glob request, all resolved by the server. A
+  path it takes from a tool's input goes through `FSUtil.resolveFrom`, which the tools use too, so `~` is the home
+  folder and `/c/...` the Windows drive. `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP,
+  `permission-files.subprocess.test.ts` the rows over a real `orb acp`, and `packages/tui/test/util/path-format.test.ts`
+  the terminal interface's and Mini's.
 
 **How to test:**
 
@@ -1493,9 +1499,9 @@ fixes it or asks.
   same route.
 - **VS Code, more than one folder.** The chat works in one folder, the one in view when it first connected, and its
   trust question and banner are about that folder. The Runs view and the terminals follow the editor in view, so in a
-  workspace of several folders they can act in another one. What they start gates itself in its own process (`orb flow
-  resume` refuses an untrusted folder, `packages/cli/test/trust.test.ts`), but the extension does not ask about that
-  folder. No task yet.
+  workspace of several folders they can act in another one. What they start gates itself in its own process
+  (`orb flow resume` refuses an untrusted folder, `packages/cli/test/trust.test.ts`), but the extension does not ask
+  about that folder. No task yet.
 - **VS Code, the part that loads `vscode`.** `extension.ts`, `runs-view.ts` and the webview import `vscode` or the DOM,
   so no test loads them. What they do with trust (the banner, the status bar item, the dialog, the command and the
   terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`,
