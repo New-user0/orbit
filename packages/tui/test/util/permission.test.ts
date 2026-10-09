@@ -23,21 +23,23 @@ test("preserves permission roots and self-contained metadata", () => {
 })
 
 // The runner drops an old field name that arrives beside the current one, so the prompt must name the file that runs.
+// NotebookEdit asks as Edit, so the tool's own name has to pick its field names.
 const decoys = [
-  { action: "Read", real: ".env", current: "file_path" },
-  { action: "Edit", real: ".github/workflows/ci.yml", current: "file_path" },
+  { action: "Read", tool: "Read", real: ".env", current: "file_path" },
+  { action: "Edit", tool: "Edit", real: ".github/workflows/ci.yml", current: "file_path" },
+  { action: "Edit", tool: "NotebookEdit", real: "analysis.ipynb", current: "notebook_path" },
 ] as const
 
 describe("a call that names a file under both spellings", () => {
   decoys.forEach((row) =>
     [false, true].forEach((reversed) =>
-      test(`${row.action} shows the current field${reversed ? " (decoy first)" : ""}`, () => {
+      test(`${row.tool} shows the current field${reversed ? " (decoy first)" : ""}`, () => {
         const pair = [
           [row.current, row.real],
           ["path", "README.md"],
         ]
         const input = Object.fromEntries(reversed ? pair.reverse() : pair)
-        const shown = permissionPresentation({ action: row.action, resources: [row.real], input })
+        const shown = permissionPresentation({ action: row.action, tool: row.tool, resources: [row.real], input })
         expect(shown.title).toContain(row.real)
         expect(JSON.stringify(shown)).not.toContain("README.md")
       }),

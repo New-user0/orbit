@@ -216,4 +216,25 @@ describe("mini permission with a decoy old field name", () => {
       expect(JSON.stringify(info)).not.toContain("README.md")
     }),
   )
+  ;[false, true].forEach((reversed) =>
+    test(`names the notebook that runs when NotebookEdit asks as Edit${reversed ? " (decoy first)" : ""}`, () => {
+      const pair = [
+        ["notebook_path", "analysis.ipynb"],
+        ["path", "README.md"],
+      ]
+      const info = permissionInfo(
+        req({
+          action: "Edit",
+          resources: ["analysis.ipynb"],
+          tool: canonicalToolPart("NotebookEdit", {
+            status: "running",
+            input: Object.fromEntries(reversed ? pair.reverse() : pair),
+            metadata: {},
+          }),
+        }),
+      )
+      expect(info.title).toContain("analysis.ipynb")
+      expect(JSON.stringify(info)).not.toContain("README.md")
+    }),
+  )
 })
