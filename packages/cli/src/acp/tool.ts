@@ -1,6 +1,8 @@
 import { isAbsolute, resolve } from "node:path"
 import type { ToolCall, ToolCallContent, ToolCallLocation, ToolCallUpdate, ToolKind } from "@agentclientprotocol/sdk"
 import { readDisplayText } from "@orbit/tui/mini/tool"
+import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
 import { Patch } from "@orbit/util/patch"
 import { Result } from "effect"
 
@@ -44,9 +46,12 @@ export function toLocations(toolName: string, input: ToolInput, cwd: string): To
   switch (toolName.toLocaleLowerCase()) {
     case "bash":
     case "powershell":
-    case "shell":
-      // The shell tools declare `workdir`; a `cwd` key the model adds to its input does not move the command.
-      return locationFrom(cwd, stringValue(input.workdir) ?? cwd)
+    case "shell": {
+      // The shell tools declare `workdir`; a `cwd` key the model adds to its input does not move the command, and an
+      // empty one runs it in the session's folder.
+      const workdir = stringValue(input.workdir)
+      return workdir ? locationFrom(cwd, workdir) : [{ path: cwd }]
+    }
     case "read":
     case "edit":
     case "write":
@@ -57,10 +62,15 @@ export function toLocations(toolName: string, input: ToolInput, cwd: string): To
         cwd,
         ...patchHunks(input).flatMap((hunk) => [hunk.path, hunk.type === "update" ? hunk.movePath : undefined]),
       )
-    case "external_directory":
-      return locationFrom(cwd, input.filepath)
-    case "grep":
+    case "external_directory": {
+      // The request's own metadata, which the server resolved: not a path in a tool's input.
+      const file = stringValue(input.filepath)
+      return file ? [{ path: resourcePath(file, cwd) }] : []
+    }
     case "glob":
+      // Glob searches the session's folder when the model spells its path `undefined` or `null`.
+      return input.path === "undefined" || input.path === "null" ? [] : locationFrom(cwd, input.path)
+    case "grep":
     case "context":
     case "context7_resolve_library_id":
     case "context7_get_library_docs":
@@ -213,7 +223,16 @@ export function patchHunks(input: ToolInput) {
   return Result.isSuccess(parsed) ? parsed.success : []
 }
 
+/** A path from a tool's input, at the place the tool resolves it to: a leading `~` is the home folder, as it is there. */
 export function absolutePath(path: string, cwd: string) {
+  return FSUtil.resolveFrom(cwd, path, Global.Path.home)
+}
+
+/**
+ * A path the server already resolved, such as a request's resource or a served diff's file: absolute or relative to the
+ * session's folder, and never a `~` to expand, because a project can have a folder named `~`.
+ */
+export function resourcePath(path: string, cwd: string) {
   return isAbsolute(path) ? path : resolve(cwd, path)
 }
 

@@ -272,6 +272,23 @@ export namespace FSUtil {
       .replace(/^\/mnt\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
   }
 
+  /**
+   * The place a path in a tool call names: a leading `~`, `~/` or, on Windows, `~\` is `home`, a Git Bash, Cygwin or WSL
+   * drive spelling is that Windows drive, and anything else is resolved from `directory`. The tools resolve their paths
+   * with it, and so does every display of where a call acts, so the two cannot name different places.
+   */
+  export function resolveFrom(directory: string, input: string, home: string) {
+    const normalized = windowsPath(input)
+    return path.resolve(
+      directory,
+      normalized === "~"
+        ? home
+        : normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))
+          ? path.join(home, normalized.slice(2))
+          : normalized,
+    )
+  }
+
   export function overlaps(a: string, b: string) {
     return contains(a, b) || contains(b, a)
   }

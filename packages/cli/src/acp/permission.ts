@@ -5,7 +5,16 @@ import { Patch } from "@orbit/util/patch"
 import { Cause, Effect } from "effect"
 import type { ACPConnection } from "./connection"
 import { ACPPromise } from "./promise"
-import { absolutePath, filePath, patchHunks, pendingToolCall, stringValue, toLocations, type ToolInput } from "./tool"
+import {
+  absolutePath,
+  filePath,
+  patchHunks,
+  pendingToolCall,
+  resourcePath,
+  stringValue,
+  toLocations,
+  type ToolInput,
+} from "./tool"
 
 type PermissionEvent = Extract<EventSubscribeOutput, { type: "permission.asked" }>
 type Tool = { readonly name: string; readonly input: ToolInput }
@@ -219,7 +228,7 @@ function servedPreviews(input: ToolInput, cwd: string): ToolCallContent[] {
         after.push(text)
       }
     })
-    return [diff(absolutePath(name, cwd), before.join("\n"), after.join("\n"))]
+    return [diff(resourcePath(name, cwd), before.join("\n"), after.join("\n"))]
   })
 }
 
@@ -300,14 +309,14 @@ function permissionLocations(
     return Array.from(
       new Set([
         ...locations.map((item) => item.path),
-        ...resources.filter(isPath).map((item) => absolutePath(wildcardDirectory(item), cwd)),
+        ...resources.filter(isPath).map((item) => resourcePath(wildcardDirectory(item), cwd)),
       ]),
       (path) => ({ path }),
     )
   if (locations.length > 0) return locations
   // Only a request about files has files for resources: an MCP tool's, an agent's and a fetch's are not places on disk.
   if (!fileActions.has(ToolNames.legacy(toolName).toLowerCase())) return []
-  return resources.filter(isPath).map((path) => ({ path: absolutePath(path, cwd) }))
+  return resources.filter(isPath).map((path) => ({ path: resourcePath(path, cwd) }))
 }
 
 const fileActions = new Set(["edit", "write", "read", "patch", "apply_patch", "notebook_edit", "list", "lsp"])

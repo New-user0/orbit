@@ -67,18 +67,9 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
 
-/** Expand a leading ~ and normalize Windows shell paths before lexical resolution. */
-export const resolvePath = (directory: string, input: string, home = Global.Path.home) => {
-  const normalized = FSUtil.windowsPath(input)
-  return path.resolve(
-    directory,
-    normalized === "~"
-      ? home
-      : normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))
-        ? path.join(home, normalized.slice(2))
-        : normalized,
-  )
-}
+/** Expand a leading ~ and normalize Windows shell paths before lexical resolution, as the clients that show a call do. */
+export const resolvePath = (directory: string, input: string, home = Global.Path.home) =>
+  FSUtil.resolveFrom(directory, input, home)
 
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({

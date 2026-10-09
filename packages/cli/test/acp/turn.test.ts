@@ -332,7 +332,7 @@ describe("acp turn events over the wire", () => {
     })
     expect(updates[7]?.update).toMatchObject({
       kind: "read",
-      locations: [{ path: "/workspace/missing.ts" }],
+      locations: [{ path: resolve("/workspace/missing.ts") }],
       content: [
         { type: "content", content: { type: "text", text: "opening" } },
         { type: "content", content: { type: "text", text: "not found" } },
@@ -403,12 +403,12 @@ describe("acp turn events over the wire", () => {
         "locations" in item.update ? item.update.locations : undefined,
       ])
     expect(locations).toEqual([
-      ["call_edit", "in_progress", [{ path: "/workspace/src/a.ts" }]],
-      ["call_edit", "completed", [{ path: "/workspace/src/a.ts" }]],
-      ["call_write", "in_progress", [{ path: "/workspace/src/b.ts" }]],
-      ["call_write", "completed", [{ path: "/workspace/src/b.ts" }]],
-      ["call_patch", "in_progress", [{ path: "/workspace/src/c.ts" }]],
-      ["call_patch", "completed", [{ path: "/workspace/src/c.ts" }]],
+      ["call_edit", "in_progress", [{ path: resolve("/workspace/src/a.ts") }]],
+      ["call_edit", "completed", [{ path: resolve("/workspace/src/a.ts") }]],
+      ["call_write", "in_progress", [{ path: resolve("/workspace/src/b.ts") }]],
+      ["call_write", "completed", [{ path: resolve("/workspace/src/b.ts") }]],
+      ["call_patch", "in_progress", [{ path: resolve("/workspace/src/c.ts") }]],
+      ["call_patch", "completed", [{ path: resolve("/workspace/src/c.ts") }]],
     ])
   })
 })

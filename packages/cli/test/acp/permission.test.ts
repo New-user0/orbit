@@ -24,7 +24,16 @@ import {
 
 // A unified patch of one changed line, as the server's `fileDiff` writes it for a permission request.
 const unified = (file: string, before: string, after: string) =>
-  [`Index: ${file}`, "=".repeat(67), `--- ${file}`, `+++ ${file}`, "@@ -1,1 +1,1 @@", `-${before}`, `+${after}`, ""].join("\n")
+  [
+    `Index: ${file}`,
+    "=".repeat(67),
+    `--- ${file}`,
+    `+++ ${file}`,
+    "@@ -1,1 +1,1 @@",
+    `-${before}`,
+    `+${after}`,
+    "",
+  ].join("\n")
 
 const allowOnce = () => ({ outcome: { outcome: "selected", optionId: "once" } }) as const
 
@@ -76,7 +85,7 @@ describe("acp permissions over the wire", () => {
         status: "pending",
         title: "/workspace/file.ts",
         kind: "read",
-        locations: [{ path: "/workspace/file.ts" }],
+        locations: [{ path: path.resolve("/workspace/file.ts") }],
         rawInput: { path: "/workspace/file.ts" },
       },
     })
@@ -514,6 +523,35 @@ describe("acp edit previews over the wire", () => {
       { type: "diff", path: path.join(dir.path, "first.ts"), oldText: "one", newText: "two" },
     ])
     expect(decisions(acp)).toEqual([["perm_patch", "once"]])
+  })
+
+  // The server sends a file inside the project relative to the project, so its `~/notes.md` is the project's own folder
+  // named `~`, not the home folder that a `~` in a tool's input is.
+  test("shows a file the server resolved into the project's folder named ~ in that folder", async () => {
+    await using dir = await tmpdir()
+    const file = path.join(dir.path, "~", "notes.md")
+    await using acp = await startWire({
+      onPrompt: ({ sessionID, id }) => [
+        delivered(sessionID, id),
+        toolStarted(sessionID, "call_tilde", "Edit"),
+        toolCalled(sessionID, "call_tilde", { file_path: "./~/notes.md", old_string: "a", new_string: "b" }),
+        permissionAsked(sessionID, "perm_tilde", {
+          action: "Edit",
+          resources: ["~/notes.md"],
+          metadata: { files: [{ file: "~/notes.md", patch: unified("~/notes.md", "a", "b") }] },
+          source: { type: "tool", messageID: "msg_tilde", id: "call_tilde" },
+        }),
+      ],
+      onPermissionReply: ({ sessionID }) => [succeeded(sessionID)],
+      permission: allowOnce,
+    })
+    await acp.initialize()
+    const session = await acp.newSession(dir.path)
+
+    await acp.prompt(session.sessionId, "hello")
+
+    expect(acp.permissions[0]?.toolCall).toMatchObject({ locations: [{ path: file }] })
+    expect(acp.permissions[0]?.toolCall.content).toEqual([{ type: "diff", path: file, oldText: "a", newText: "b" }])
   })
 
   test("reports the same absolute locations for a moved file in the permission and tool updates", async () => {
