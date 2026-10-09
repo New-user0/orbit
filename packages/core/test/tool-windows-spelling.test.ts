@@ -123,9 +123,10 @@ type Row = {
   readonly tool: string
   readonly input: (names: { env: string; script: string }) => Record<string, unknown>
   readonly rules: Permission.Ruleset
-  // `spelling`: refused before any question. `denied`: the person's deny rule decides it. `asked`: the person's ask rule
-  // is asked about this resource. `done`: a control that no rule stops.
-  readonly expect: "spelling" | "denied" | { readonly asked: string } | "done"
+  // `spelling`: refused before any question. `refused`: the same, from the shell, which reports it as a failure to
+  // execute. `denied`: the person's deny rule decides it. `asked`: the person's ask rule is asked about this resource.
+  // `done`: a control that no rule stops.
+  readonly expect: "spelling" | "refused" | "denied" | { readonly asked: string } | "done"
   // Read first, so that a change of a file the session has seen gets as far as its approval.
   readonly read?: string
   // What must not be on the disk afterwards.
@@ -139,6 +140,37 @@ const editAsk = rules("Edit", "*.sh", "ask")
 const patch = (body: string) => ({ patchText: `*** Begin Patch\n${body}\n*** End Patch` })
 
 const rows: ReadonlyArray<Row> = [
+  // The paths that the searches and the shell resolve as the file tools do.
+  {
+    name: "a stream",
+    tool: "Grep",
+    input: () => ({ pattern: "API_KEY", path: ".env::$DATA" }),
+    rules: readDeny,
+    expect: "spelling",
+  },
+  {
+    name: "a folder's stream",
+    tool: "Glob",
+    input: () => ({ pattern: "*", path: "src::$INDEX_ALLOCATION" }),
+    rules: readDeny,
+    expect: "spelling",
+  },
+  {
+    name: "a folder's stream as its workdir",
+    tool: "Bash",
+    input: () => ({ command: "echo ran > ran.txt", workdir: "src::$INDEX_ALLOCATION" }),
+    rules: readDeny,
+    expect: "refused",
+    absent: path.join("src", "ran.txt"),
+  },
+  {
+    name: "a drive that is not a disk in its cd",
+    tool: "Bash",
+    input: () => ({ command: "cd 'HKLM:\\Software'; echo ran > ran.txt" }),
+    rules: readDeny,
+    expect: "refused",
+    absent: "ran.txt",
+  },
   { name: "a stream", tool: "Read", input: () => ({ file_path: ".env::$DATA" }), rules: readDeny, expect: "spelling" },
   { name: "a short name", tool: "Read", input: (n) => ({ file_path: n.env }), rules: readDeny, expect: "denied" },
   {
@@ -315,6 +347,7 @@ describe.skipIf(process.platform !== "win32")("file tools and Windows spellings 
                 await fs.writeFile(path.join(directory, "deploy-script.sh"), "echo\n")
                 await fs.writeFile(path.join(directory, "notes.ipynb"), notebook)
                 await fs.writeFile(path.join(directory, "README.md"), "readme\n")
+                await fs.mkdir(path.join(directory, "src"))
               })
               const names = { env: shortName(directory, ".env"), script: shortName(directory, "deploy-script.sh") }
               // The volume of the test folder makes 8.3 names, as the system volume does by default.
@@ -346,6 +379,10 @@ describe.skipIf(process.platform !== "win32")("file tools and Windows spellings 
                   if (row.expect === "spelling") {
                     expect(result).toMatchObject({ status: "error", error: { type: "file.spelling" } })
                     expect(decided).toEqual([])
+                  }
+                  if (row.expect === "refused") {
+                    expect(result.status).toBe("error")
+                    expect(state.assertions).toEqual([])
                   }
                   if (row.expect === "denied") {
                     expect(result.status).toBe("error")
