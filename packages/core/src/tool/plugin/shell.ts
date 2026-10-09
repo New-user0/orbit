@@ -145,6 +145,8 @@ export const Plugin = {
           action: name,
           resources: parsed.commands.map((command) => command.resource),
           save: parsed.commands.map((command) => command.save),
+          // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling.
+          metadata: { workdir: target.absolute },
           sessionID: context.sessionID,
           agent: context.agent,
           source,

@@ -1208,6 +1208,50 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
+  // A client shows the folder a command runs in from the request, so the request names it as resolved here, whatever
+  // spelling the call used: `~` is the home folder (class 8, approval display).
+  const spellings = (active: string, outside: string) => [
+    { workdir: `~/${path.relative(Global.Path.home, outside)}`, runs: outside },
+    { workdir: `../${path.basename(outside)}`, runs: outside },
+    { workdir: outside, runs: outside },
+    { workdir: "src", runs: path.join(active, "src") },
+    ...(isWindows
+      ? [{ workdir: `/${outside[0]!.toLowerCase()}${outside.slice(2).replaceAll("\\", "/")}`, runs: outside }]
+      : []),
+  ]
+  it.live(
+    "names the resolved folder on the shell approval for each workdir spelling",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        ([active, outside]) =>
+          Effect.promise(() => fs.mkdir(path.join(active.path, "src"))).pipe(
+            Effect.andThen(
+              Effect.forEach(spellings(active.path, outside.path), (row) => {
+                reset()
+                return withSession(active.path, (registry) =>
+                  executeTool(registry, call({ command: cwdCommand, workdir: row.workdir })),
+                ).pipe(
+                  Effect.andThen(
+                    Effect.sync(() =>
+                      expect([row.workdir, assertions.find((item) => item.action === "Bash")?.metadata]).toEqual([
+                        row.workdir,
+                        { workdir: row.runs },
+                      ]),
+                    ),
+                  ),
+                )
+              }),
+            ),
+          ),
+        ([active, outside]) =>
+          Effect.promise(() =>
+            Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+          ),
+      ),
+    { timeout: 60_000 },
+  )
+
   it.live(
     "deduplicates external directory approvals across workdir and directory-change commands",
     () =>
@@ -1507,32 +1551,34 @@ describe("ShellTool", () => {
   }
 
   // An output style is the person's own text and is appended to the base prompt before the tool is offered as PowerShell.
-  productionIt.live("rewrites the shell name in the base prompt and leaves an output style as written", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) =>
-        withSession(tmp.path, () =>
-          Effect.gen(function* () {
-            const selection = yield* ShellSelect.Service
-            yield* selection.transform((editor) => editor.configure("powershell"))
-            const hooks = yield* PluginHooks.Service
-            const event = yield* hooks.trigger("session", "context", {
-              sessionID,
-              model: sessionModel,
-              system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
-              messages: [],
-              options: {},
-              agent: toolIdentity.agent,
-              tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
-            } as never)
-            // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
-            expect(event.system[0]?.text).toBe(
-              `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
-            )
-          }),
-        ),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
+  productionIt.live(
+    "rewrites the shell name in the base prompt and leaves an output style as written",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          withSession(tmp.path, () =>
+            Effect.gen(function* () {
+              const selection = yield* ShellSelect.Service
+              yield* selection.transform((editor) => editor.configure("powershell"))
+              const hooks = yield* PluginHooks.Service
+              const event = yield* hooks.trigger("session", "context", {
+                sessionID,
+                model: sessionModel,
+                system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
+                messages: [],
+                options: {},
+                agent: toolIdentity.agent,
+                tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
+              } as never)
+              // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
+              expect(event.system[0]?.text).toBe(
+                `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
+              )
+            }),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
     { timeout: 30_000 },
   )
 

@@ -73,7 +73,8 @@ export const Plugin = {
                 save: ["*"],
                 metadata: {
                   root: searchPath ?? ".",
-                  path: searchPath,
+                  // The searched folder as resolved here, so a client shows it rather than the input's spelling.
+                  path: target.absolute,
                   hidden: input.hidden,
                   limit: input.limit,
                 },

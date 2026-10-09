@@ -16,6 +16,7 @@ import { Session } from "@orbit/core/session"
 import { GlobTool } from "@orbit/core/tool/plugin/glob"
 import { GrepTool } from "@orbit/core/tool/plugin/grep"
 import { Tool } from "@orbit/core/tool"
+import { Global } from "@orbit/util/global"
 import { location } from "./fixture/location"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -373,6 +374,56 @@ describe("search tools", () => {
         ),
     ),
   )
+
+  // A client shows the searched folder from the request, so the request names it as resolved here, whatever spelling
+  // the call used: `~` is the home folder (class 8, approval display).
+  for (const name of ["Glob", "Grep"] as const)
+    it.live(`${name} names the resolved folder on its approval for each path spelling`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        ([active, outside]) => {
+          const rows = [
+            { path: `~/${path.relative(Global.Path.home, outside.path)}`, searches: outside.path },
+            { path: `../${path.basename(outside.path)}`, searches: outside.path },
+            { path: outside.path, searches: outside.path },
+            { path: "src", searches: path.join(active.path, "src") },
+            ...(process.platform === "win32"
+              ? [
+                  {
+                    path: `/${outside.path[0]!.toLowerCase()}${outside.path.slice(2).replaceAll("\\", "/")}`,
+                    searches: outside.path,
+                  },
+                ]
+              : []),
+          ]
+          return Effect.promise(() => fs.mkdir(path.join(active.path, "src"))).pipe(
+            Effect.andThen(
+              Effect.forEach(rows, (row) => {
+                const assertions: Permission.AssertInput[] = []
+                return withTools(
+                  active.path,
+                  (registry) => executeTool(registry, call(name, { path: row.path, pattern: "needle" })),
+                  assertions,
+                ).pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() =>
+                      expect([row.path, assertions.find((item) => item.action === name)?.metadata?.path]).toEqual([
+                        row.path,
+                        row.searches,
+                      ]),
+                    ),
+                  ),
+                )
+              }),
+            ),
+          )
+        },
+        ([active, outside]) =>
+          Effect.promise(() =>
+            Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+          ),
+      ),
+    )
 
   it.live("globs through an in-location external symlink without external approval", () =>
     Effect.acquireUseRelease(

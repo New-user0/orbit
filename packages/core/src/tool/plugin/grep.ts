@@ -133,7 +133,8 @@ export const Plugin = {
                 save: ["*"],
                 metadata: {
                   root: ".",
-                  path: input.path,
+                  // The searched place as resolved here, so a client shows it rather than the input's spelling.
+                  path: target.absolute,
                   include: input.include,
                   literal: input.literal,
                   caseSensitive: input.caseSensitive,
