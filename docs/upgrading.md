@@ -1193,7 +1193,7 @@ for the project's own names turned into questions.
 Now the file tools (Read, Write, Edit, NotebookEdit, Patch, LSP, and the paths of Grep, Glob and a shell `workdir`) find
 which part of the path is really inside the project, and decide the rest under the project's own folder: the rules see
 the project-relative name, a repository link below it is followed and asked about as for the plain spelling, and an
-approval names the place the tool acts on. A share or device path (`\\server\share\…`, `\\localhost\C$\…`,
+approval names the place the tool acts on. An 8.3 short name of the project's folder, or of a folder above it, is decided as the project, too. A share or device path (`\\server\share\…`, `\\localhost\C$\…`,
 `\\?\Volume{…}\…`, `\\.\…`) is refused with the error type `file.spelling` before any disk is read, unless the path
 is in the project's folder. A repository link whose target is a share is named as the link says and never opened to
 decide the question; a part with `~` (an 8.3 short name) below such a link is refused too, as its long name could only

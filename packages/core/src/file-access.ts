@@ -240,8 +240,11 @@ const layer = Layer.effect(
       // system junction (`C:\Documents and Settings` for `C:\Users`) or a link to it. It is decided where it really is,
       // under the folder of the project it is in, so that a link in the repository below it is followed as for the plain
       // spelling.
-      const absolute = named === undefined ? ((yield* anchor(long)) ?? long) : long
-      const internal = named !== undefined || absolute !== long
+      // Expanding an 8.3 short name can make `long` the project's own name, so what the anchor found, not a difference
+      // from `long`, says that the path is in the project.
+      const anchored = named === undefined ? yield* anchor(long) : undefined
+      const absolute = anchored ?? long
+      const internal = named !== undefined || anchored !== undefined
       if (!internal) return yield* external(absolute, input.kind)
       // Until the project is trusted, a link in it that leads out of it does not make the target the project's own: the
       // repository ships its links, and one to the user's other files would be read or written without a question.

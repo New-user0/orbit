@@ -5,6 +5,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 import { isolatedEnv } from "../fixture/environment"
 
 const patch = (name: string) =>
@@ -547,12 +548,33 @@ const present = await Promise.all(
   ),
 )
 // Each spelling of the workspace folder, from the folder the run is made in (`root`, below the temporary folder).
+// The 8.3 short name of the workspace folder, as the volume makes it. A volume that makes none fails the row visibly,
+// as a short name that equals the long one would decide nothing.
+const shortWorkspace = (root: string) => {
+  const folder = path.join(root, "workspace")
+  const short = spawnSync("cmd", ["/d", "/c", `for %I in ("${folder}") do @echo %~sI`], {
+    encoding: "utf8",
+    windowsVerbatimArguments: true,
+  }).stdout.trim()
+  if (short === "" || short.toLowerCase() === folder.toLowerCase())
+    throw new Error("this volume makes no 8.3 short names")
+  return short
+}
 const realSpellings = [
   { name: "a link to the project", spelled: (root: string) => path.join(root, "wsalias") },
   ...present.flat().map((item) => ({
     name: item.name,
     spelled: (root: string) => path.join(item.temporary, path.basename(root), "workspace"),
   })),
+  ...(process.platform === "win32"
+    ? [
+        {
+          name: "the 8.3 short name of the workspace folder",
+          spelled: (root: string) => path.join(root, path.basename(shortWorkspace(root))),
+        },
+        { name: "the 8.3 short name of the workspace folder and the ones above it", spelled: shortWorkspace },
+      ]
+    : []),
 ]
 const refusedSpellings =
   process.platform === "win32"

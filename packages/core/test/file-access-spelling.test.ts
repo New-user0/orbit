@@ -4,6 +4,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
+import { spawnSync } from "child_process"
 import { Effect, Layer } from "effect"
 import { FileAccess } from "@orbit/core/file-access"
 import { Location } from "@orbit/core/location"
@@ -33,7 +34,7 @@ const provideProject = (directory: string, trusted: boolean) =>
 // this machine has: a link to it from outside (every platform) and the system junctions of Windows.
 const layout = Effect.gen(function* () {
   const tmp = (yield* tmpdirScoped()).path
-  const project = path.join(tmp, "project")
+  const project = path.join(tmp, "workspace-project")
   const outside = path.join(tmp, "outside")
   yield* Effect.promise(async () => {
     await fs.mkdir(path.join(project, "secret"), { recursive: true })
@@ -53,7 +54,16 @@ const layout = Effect.gen(function* () {
       spelled: project.replace(/^(.*?\\Users\\[^\\]+)\\AppData\\Local\\/i, "$1\\Local Settings\\"),
     },
   ].filter((item) => process.platform === "win32" && item.spelled !== project)
-  const spellings = [{ name: "a link to the project", spelled: path.join(tmp, "alias") }, ...windows]
+  // The 8.3 short names of the project's folder, and of it and the folders above it. Only where the volume makes them.
+  const shortened = process.platform === "win32" ? shortPath(project) : project
+  const short =
+    shortened === project
+      ? []
+      : [
+          { name: "the short name of the project's folder", spelled: path.join(tmp, path.basename(shortened)) },
+          { name: "the short name of the project's folder and the ones above it", spelled: shortened },
+        ]
+  const spellings = [{ name: "a link to the project", spelled: path.join(tmp, "alias") }, ...windows, ...short]
   const existing = yield* Effect.promise(() =>
     Promise.all(
       spellings.map((item) =>
@@ -66,6 +76,14 @@ const layout = Effect.gen(function* () {
   )
   return { project, outside, spellings: existing.flat() }
 })
+
+function shortPath(file: string) {
+  const result = spawnSync("cmd", ["/d", "/c", `for %I in ("${file}") do @echo %~sI`], {
+    encoding: "utf8",
+    windowsVerbatimArguments: true,
+  })
+  return result.stdout.trim() || file
+}
 
 describe("FileAccess for another spelling of the project's folder", () => {
   it.live("decides every spelling as the project's own name, and follows a repository link below it", () =>
@@ -96,6 +114,14 @@ describe("FileAccess for another spelling of the project's folder", () => {
           }
         }
       }).pipe(provideProject(project, false))
+    }),
+  )
+
+  // Fails visibly on a Windows volume that makes no 8.3 names, rather than passing without a check of them.
+  ;(process.platform === "win32" ? it.live : it.live.skip)("has 8.3 short-name spellings of the project to decide", () =>
+    Effect.gen(function* () {
+      const { spellings } = yield* layout
+      expect(spellings.filter((item) => item.name.includes("short name")).length).toBe(2)
     }),
   )
 
@@ -204,6 +230,28 @@ describe("FileAccess for another spelling of the project's folder", () => {
             }
           }).pipe(provideProject(project, trusted))
       }),
+  )
+
+  // A share or device path named directly is refused before the disk is read: a host of its own to each run, so that a
+  // stat or a connection to it would wait for the network.
+  ;(process.platform === "win32" ? it.live : it.live.skip)("refuses an unreachable share before reading the disk", () =>
+    Effect.gen(function* () {
+      const { project } = yield* layout
+      const host = `orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid`
+      yield* Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        for (const spelling of [
+          `\\\\${host}\\share\\a.txt`,
+          `//${host}/share/a.txt`,
+          `\\\\?\\UNC\\${host}\\share\\a.txt`,
+        ]) {
+          const begun = Date.now()
+          const failure = yield* access.resolve({ path: spelling }).pipe(Effect.flip)
+          expect([spelling, failure]).toMatchObject([spelling, { code: "file.spelling" }])
+          expect(Date.now() - begun).toBeLessThan(1_000)
+        }
+      }).pipe(provideProject(project, false))
+    }),
   )
 
   it.live(

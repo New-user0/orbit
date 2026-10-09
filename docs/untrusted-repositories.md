@@ -1637,7 +1637,7 @@ fixes it or asks.
   part with `~` below a repository link to a share is refused with `file.spelling` as well, because looking up its long
   name would read the folder the link leads to (the review of the first version found this one: it took 6 seconds to
   connect to the host). `file-access-spelling.test.ts` pins these with a host name of its own to each run and a time
-  limit on every row (the link rows need Developer Mode, and fail instead of passing without it). What remains: a share named in a shell command's text or in a path that a loader other than the file tools
+  limit on every row (the link rows need Developer Mode, and fail instead of passing without it); a share given directly (`\\host\share`, `//host/share`, `\\?\UNC\host\share`) on a host of its own to each run is refused within one second, so a disk read before the refusal would fail the row. What remains: a share named in a shell command's text or in a path that a loader other than the file tools
   reads, such as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
 - **Other spellings of the project folder (closed for the file tools by `permissions-23`).** A path that named the
   project through another spelling of its own folder (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`,
@@ -1655,7 +1655,7 @@ fixes it or asks.
   redirect, PowerShell, Grep, Glob, Read, Write) with every real spelling, untrusted with `once` and `reject`, trusted,
   and under a person's deny of the config folder, and the refused spellings with Bash workdir, Grep and Write. A drive
   that is made from the project's folder (`subst Q: <project>`) is anchored too, because the root is the first part
-  asked about. What remains: a path that goes through a link that is not in the project and that leads into it by a
+  asked about. An 8.3 short name of the project's folder, or of a folder above it, is expanded to the long name first, and the anchor, not a difference from the long name, says the path is in the project (the review found that the first version decided such a spelling as outside it, because the expansion gave the project's own name). The core table and the `orb acp` table have these rows, and fail on a Windows volume that makes no 8.3 names rather than pass without them. What remains: a path that goes through a link that is not in the project and that leads into it by a
   route this walk cannot read (a mapped network drive); a word of a command that a shell builds as it runs.
 - **A rule of the person's with the value of one of Orbit's own allows (closed by `permissions-23`).** A place a link
   leads to is decided without Orbit's own allows (`Agent.folders`). They are now marked where they are made (the rule
