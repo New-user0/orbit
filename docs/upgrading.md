@@ -1355,6 +1355,11 @@ period ended, runs without limits, and a steered prompt with its own options sta
 limited turn is finishing joins that turn, and fails at once if the limit is already spent. Only responses that ended
 count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
 responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
+These limits, the subagent binding above and the side-query and compaction totals of `orb stats` read two tables that the
+session projector always fills (`session_usage`, `session_admission`), not the event log, which a server keeps only when
+it is built to persist events. `orb serve`, the background service and `--standalone` do not, so before this change a
+title or compaction cost was missing from the limits and from `orb stats` there, and a background subagent was not bound
+to its parent's turn. A database that kept its events has them copied into `session_usage` when it migrates.
 
 A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It is refused with
 `limit.cost-unknown`, a refusal and not a limit that was reached, when the model has no tier-less price above zero (a

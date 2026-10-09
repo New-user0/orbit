@@ -6,9 +6,6 @@ import { DateTime, Effect, Option, Schema } from "effect"
 import { Model } from "@orbit/schema/model"
 import { Options } from "@orbit/schema/session-turn"
 import { Database } from "../database/database.js"
-import { Event } from "@orbit/schema/event"
-import { EventTable } from "../event/sql.js"
-import { SessionEvent } from "@orbit/schema/session-event"
 import { MessageDecodeError } from "./error.js"
 import { SessionHistory } from "./history.js"
 import { SessionSchema } from "./schema.js"
@@ -233,8 +230,6 @@ const wakeUpOptions = Effect.fnUntraced(function* (
   return (yield* current(db, sessionID, { seq: boundary })).options
 })
 
-const decodeUsage = Schema.decodeUnknownOption(SessionEvent.UsageRecorded.data)
-const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 
 export interface Usage {
   /** Responses in the Session that ended with finish `stop`, `length`, `tool-calls` or `content-filter`. */
@@ -290,37 +285,25 @@ export const usage = Effect.fn("SessionTurn.usage")(function* (
             OR (session_id IN (SELECT id FROM descendants) AND time_created >= ${time}))`,
     )
     .pipe(Effect.orDie)
-  const records = yield* db
-    .all<{ data: string }>(
+  // Read from the projected table: the event log is empty unless the Bus persists, which CLI servers do not.
+  const recorded = yield* db
+    .get<{ cost: number | null; tokens: number | null; unknown: number | null }>(
       sql`${descendants}
-        SELECT data FROM event
-        WHERE type = ${Event.versionedType(SessionEvent.UsageRecorded.type, SessionEvent.UsageRecorded.durable.version)}
-          AND ((aggregate_id = ${sessionID} AND seq > ${since.seq})
-            OR (aggregate_id IN (SELECT id FROM descendants) AND created >= ${time}))`,
+        SELECT
+          sum(cost) AS cost,
+          sum(tokens_input + tokens_cache_write + tokens_output + tokens_reasoning) AS tokens,
+          sum(CASE WHEN cost = 0 AND tokens_input + tokens_cache_read + tokens_cache_write + tokens_output + tokens_reasoning > 0 THEN 1 ELSE 0 END) AS unknown
+        FROM session_usage
+        WHERE kind = 'usage'
+          AND ((session_id = ${sessionID} AND seq > ${since.seq})
+            OR (session_id IN (SELECT id FROM descendants) AND time_created >= ${time}))`,
     )
     .pipe(Effect.orDie)
-  // The raw read returns the stored text, so a row that is not JSON is a record that cannot be counted.
-  const decoded = records.map((row) => Option.flatMap(parseJson(row.data), decodeUsage))
-  const recorded = decoded.flatMap((item) => (Option.isSome(item) ? [item.value] : []))
   return {
     steps: messages?.steps ?? 0,
-    cost: (messages?.cost ?? 0) + recorded.reduce((total, item) => total + item.cost, 0),
-    tokens:
-      (messages?.tokens ?? 0) +
-      recorded.reduce(
-        (total, item) =>
-          total + item.tokens.input + item.tokens.cache.write + item.tokens.output + item.tokens.reasoning,
-        0,
-      ),
-    unknown:
-      (messages?.unknown ?? 0) +
-      decoded.length -
-      recorded.length +
-      recorded.filter(
-        (item) =>
-          item.cost === 0 &&
-          item.tokens.input + item.tokens.cache.read + item.tokens.cache.write + item.tokens.output + item.tokens.reasoning > 0,
-      ).length,
+    cost: (messages?.cost ?? 0) + (recorded?.cost ?? 0),
+    tokens: (messages?.tokens ?? 0) + (recorded?.tokens ?? 0),
+    unknown: (messages?.unknown ?? 0) + (recorded?.unknown ?? 0),
   } satisfies Usage
 })
 
@@ -385,22 +368,14 @@ export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
       .get()
       .pipe(Effect.orDie)
   // When the latest user prompt of the Session was admitted, delivered or still waiting in its inbox: the limit is
-  // checked before a continuation prompt is delivered. The enqueue event survives delivery, so a prompt that reaches
-  // the Session after its parent's turn ended is still bound to the turn that admitted it. A Session without enqueue
-  // events (an import or a fork) falls back to the time its messages were written.
-  const enqueued = sql`SELECT created AS time FROM event
-    WHERE type = ${Event.versionedType(SessionEvent.InboxEnqueued.type, SessionEvent.InboxEnqueued.durable.version)}
-      AND json_extract(data, '$.item.type') = 'user'
-      AND NOT EXISTS (
-        SELECT 1 FROM event AS cancelled
-        WHERE cancelled.type = ${Event.versionedType(SessionEvent.InboxCancelled.type, SessionEvent.InboxCancelled.durable.version)}
-          AND cancelled.aggregate_id = event.aggregate_id
-          AND json_extract(cancelled.data, '$.inboxID') = json_extract(event.data, '$.inboxID'))`
+  // checked before a continuation prompt is delivered. The admission row survives delivery, so a prompt that reaches
+  // the Session after its parent's turn ended is still bound to the turn that admitted it. A Session without
+  // admission rows (an import or a fork) falls back to the time its messages were written.
   const prompted = (id: SessionSchema.ID) =>
     db
       .get<{ time: number | null }>(
         sql`SELECT coalesce(
-          (SELECT max(time) FROM (${enqueued} AND aggregate_id = ${id})),
+          (SELECT max(time_created) FROM session_admission WHERE session_id = ${id}),
           (SELECT max(time) FROM (
             SELECT time_created AS time FROM session_message WHERE session_id = ${id} AND type = 'user'
             UNION ALL
