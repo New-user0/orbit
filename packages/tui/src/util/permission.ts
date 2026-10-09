@@ -52,11 +52,14 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   const input = owned ? normalizeInput(action, source.input, source.tool) : {}
   const metadata = { ...(owned ? dict(source.toolMetadata) : {}), ...dict(source.metadata) }
   const resources = source.resources.filter((item): item is string => typeof item === "string")
+  // A request about files names them in its resources as the server resolved them, and the tool acts on those: the
+  // caller's input can spell another place (`~/..` is not a folder in the project, filename recovery reads a sibling).
+  const resolved = resources.find((item) => item !== "*") ?? ""
 
   if (action === "edit") {
     const files = (Array.isArray(metadata.files) ? metadata.files : []).map(dict)
     const first = files[0] ?? {}
-    const file = text(input.path) || text(first.file) || resources[0] || ""
+    const file = resolved || text(first.file) || text(input.path)
     // A patch asks once for every file it changes, so the prompt names all of them and shows every file's diff: showing
     // only the first would hide part of what is approved. A moved file's old name is only in the resources, and each
     // per-file entry carries the new one, so the names come from both.
@@ -95,7 +98,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 
   if (action === "read" || action === "list") {
-    const value = text(input.path) || resources[0] || ""
+    const value = resolved || text(input.path)
     const title = action === "read" ? "Read" : "List"
     return {
       icon: "→",

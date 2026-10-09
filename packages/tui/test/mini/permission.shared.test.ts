@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import os from "node:os"
+import path from "node:path"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
@@ -268,4 +270,39 @@ describe("mini permission for a patch that changes several files", () => {
     expect(mono.lines.join("\n")).toContain("+typo fix")
     expect(mono.lines.join("\n")).toContain("SECOND_FILE_CHANGE")
   })
+})
+
+// The tools read `~/../<home folder name>/...` from the home folder, while Mini's path formatter would read the caller's
+// spelling from the project folder and show a file of the project. The request's resources name the file the server
+// resolved, which is the one the tool acts on.
+describe("mini permission names the file its request resolved", () => {
+  const home = os.homedir()
+  const file = path.join(home, ".config", "orbit", "orbit.json").replaceAll("\\", "/")
+  const spelled = `~/../${path.basename(home)}/.config/orbit/orbit.json`
+  const patch = '--- orbit.json\n+++ orbit.json\n@@ -1,1 +1,1 @@\n-{}\n+{ "permissions": [] }\n'
+  const rows: ReadonlyArray<{ tool: string; action: string; input: Record<string, string | number>; diff: boolean }> = [
+    { tool: "Read", action: "Read", input: { file_path: spelled }, diff: false },
+    { tool: "LSP", action: "Read", input: { action: "hover", path: spelled, line: 1, character: 1 }, diff: false },
+    {
+      tool: "Edit",
+      action: "Edit",
+      input: { file_path: spelled, old_string: "{}", new_string: '{ "permissions": [] }' },
+      diff: true,
+    },
+    { tool: "Write", action: "Edit", input: { file_path: spelled, content: "{}" }, diff: true },
+  ]
+  for (const row of rows)
+    test(row.tool, () => {
+      const info = permissionInfo(
+        req({
+          action: row.action,
+          resources: [file],
+          metadata: row.diff ? { files: [{ file, patch }] } : {},
+          tool: canonicalToolPart(row.tool, { status: "running", input: row.input, metadata: {} }),
+        }),
+        path.resolve("/project"),
+      )
+      expect(info.title).toBe(`${row.action} ~/.config/orbit/orbit.json`)
+      expect([info.title, ...info.lines].join("\n")).not.toContain(`${path.basename(home)}/.config`)
+    })
 })

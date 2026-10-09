@@ -47,6 +47,33 @@ describe("a call that names a file under both spellings", () => {
   )
 })
 
+// The request's resources name the file the server resolved and the tool acts on; the caller's input can spell another
+// one (filename recovery reads a sibling, `~/..` leaves the home folder), so the prompt names the resource.
+describe("a file the request resolved differently from the caller's spelling", () => {
+  const rows = [
+    { action: "Read", tool: "Read", input: { file_path: "READEM.md" }, resource: "README.md" },
+    { action: "Read", tool: "LSP", input: { path: "~/../other/a.ts" }, resource: "/home/other/a.ts" },
+    {
+      action: "Edit",
+      tool: "Edit",
+      input: { file_path: "~/config/orbit.json" },
+      resource: "/home/me/config/orbit.json",
+    },
+    { action: "Edit", tool: "Write", input: { file_path: "draft.md", content: "x" }, resource: "src/notes.md" },
+  ] as const
+  for (const row of rows)
+    test(`${row.tool} names ${row.resource}`, () => {
+      const shown = permissionPresentation({
+        action: row.action,
+        tool: row.tool,
+        resources: [row.resource],
+        input: row.input,
+      })
+      expect(shown.title).toBe(`${row.action} ${row.resource}`)
+      expect(JSON.stringify(shown)).not.toContain(Object.values(row.input)[0])
+    })
+})
+
 // A patch asks once, as Edit, for every file it changes. The prompt must name each file and show each file's diff.
 describe("a patch that changes several files", () => {
   const files = [
