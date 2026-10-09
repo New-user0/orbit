@@ -204,6 +204,37 @@ describe("FileMutation", () => {
     ),
   )
 
+  // Windows opens `new.txt.` and `new.txt ` as `new.txt`, so the three names of a file that is not there yet are one lock.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "serializes transaction locks for the spellings of one name that Windows trims",
+    () =>
+      withTempDir(({ path: directory }) =>
+        Effect.gen(function* () {
+          const files = yield* FileMutation.Service
+          for (const spelling of ["new.txt.", "new.txt ", "new.txt. "]) {
+            const firstStarted = yield* Deferred.make<void>()
+            const releaseFirst = yield* Deferred.make<void>()
+            const secondStarted = yield* Deferred.make<void>()
+            const first = yield* files
+              .withLock([path.join(directory, "new.txt")])(
+                Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(releaseFirst))),
+              )
+              .pipe(Effect.forkChild)
+            yield* Deferred.await(firstStarted)
+            const second = yield* files
+              .withLock([path.join(directory, spelling)])(Deferred.succeed(secondStarted, undefined))
+              .pipe(Effect.forkChild)
+            yield* Effect.yieldNow
+            expect([spelling, yield* Deferred.isDone(secondStarted)]).toEqual([spelling, false])
+            yield* Deferred.succeed(releaseFirst, undefined)
+            yield* Deferred.await(secondStarted)
+            yield* Fiber.join(first)
+            yield* Fiber.join(second)
+          }
+        }).pipe(provide(directory)),
+      ),
+  )
+
   it.live("allows distinct absolute targets to proceed independently", () =>
     withTempDir(({ path: directory }) =>
       Effect.gen(function* () {

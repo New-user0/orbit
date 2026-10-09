@@ -2,6 +2,7 @@ export * as FileMutation from "./file-mutation.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, Effect, Layer } from "effect"
+import path from "path"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Bom } from "@orbit/util/bom"
@@ -69,7 +70,12 @@ const layer = Layer.effect(
     const environment = yield* Environment.Service
     const locks = KeyedMutex.makeUnsafe<string>()
     const withLock: Interface["withLock"] = (targets) => (effect) =>
-      [...new Set(targets.map(FSUtil.resolve))]
+      // The key is the file's long name with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock.
+      [
+        ...new Set(
+          targets.map((target) => FSUtil.resolve(FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target))))),
+        ),
+      ]
         .sort()
         .reduceRight((result, target) => transactionLocks.withLock(target)(result), effect)
     const withTargetLock =

@@ -806,6 +806,7 @@ for `cd ~/.ssh && cat id_rsa` (#6).
 
 **In M2:** approvals showed something other than what the tool acted on, and verification found the members one at a
 time:
+
 - an old field name `path` beside the field the tool runs (`file_path`, or NotebookEdit's `notebook_path`) in the
   terminal UI, Mini and VS Code (round 4);
 - the calling Code Mode (`Execute`), Workflow or Patch call's own input in place of the request, in the terminal UI and
@@ -1629,24 +1630,36 @@ fixes it or asks.
 - **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
   rule covers the folder. Task `permissions-3` (M6) carries a Read check for each file a search returns.
-- **A share named before anyone is asked.** For a target outside the project, `FileAccess.resolve` reads the place
-  (its kind, and the folders above it for a `.git`) before the folder question, so a UNC path that a call names
-  connects to the share first; and `ProjectTrust.escapes` follows a link in the project whose target is a share before
-  any question. A link to a share needs a clone that makes symlinks (Developer Mode on Windows). Task `permissions-23`
-  (M3) refuses UNC forms before any disk access.
-- **Other spellings of the project folder.** A path that names the project through another spelling of its own folder
-  (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`, `\\localhost\C$\…`, `\\?\Volume{…}\…`,
-  `\\.\Volume{…}\…`) is decided as outside the project by its spelling, so a repository link inside it is not
-  followed: the folder question names the link's path while the tool reads, writes or runs where the link leads. M2's
-  final check showed it over a real `orb acp` in an untrusted folder (the global config folder's files moved aside, and
-  its provider key sent to the model). The same spellings turn a person's absolute-path deny rule into an ask. The fix
-  decides containment on the real path for every spelling. The owner chose it on 2026-10-09 as the first M3 fix (task
-  `permissions-23`).
-- **A rule of the person's with the value of one of Orbit's own allows.** A place a link leads to is decided without
-  Orbit's own allows (`Agent.folders`), which `Permission` recognises by value, because an agent may copy them. A rule
-  the person wrote with exactly the same action, folder and effect is taken for Orbit's and does not decide that place,
-  so the person is asked; it fails closed. Saved approvals are not affected. Task `permissions-23` (M3) marks Orbit's
-  allows by where they come from.
+- **A share named before anyone is asked (closed for the file tools by `permissions-23`).** `FileAccess.resolve` now
+  refuses a UNC, `\\?\Volume{…}` or `\\.\` path with `file.spelling` before any disk is read, unless the project is on
+  that share, and `ProjectTrust.escapes` reads a link's target one part at a time and names a share as the link says
+  without opening it; `FileAccess` then neither reads that place's kind nor looks above it for a `.git`.
+  `file-access-spelling.test.ts` pins both (the link row needs Developer Mode, and fails in 5 seconds on the old
+  code). What remains: a share named in a shell command's text or in a path that a loader other than the file tools
+  reads, such as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
+- **Other spellings of the project folder (closed for the file tools by `permissions-23`).** A path that named the
+  project through another spelling of its own folder (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`,
+  or a link to the project) was decided as outside the project by its spelling, so a repository link inside it was not
+  followed (shown over a real `orb acp` in M2's final check: the global config folder's files moved aside, and its
+  provider key sent to the model). `FileAccess.resolve` now resolves each part of such a path from its root, takes the
+  first part that is really inside the project as the start, and decides the rest under the project's own folder, so
+  `ProjectTrust.escapes` follows the repository's links and `Target.place` and `escaped` are set as for the plain
+  spelling, and the rules see the project-relative name. `\\localhost\C$\…`, `\\?\Volume{…}\…` and `\\.\Volume{…}\…`
+  are refused (see the entry above). Pinned by the table in `file-access-spelling.test.ts` (deny, ask and trusted rows
+  for each spelling) and by the `orb acp` table in `permission-files.subprocess.test.ts`, which fail on the code before
+  the change. What remains: the paths a shell command names in its text (`FileAccess.escaped`) are matched to the
+  project by name, so a shell word in one of these spellings is not followed through a repository link; the question
+  for a command still names its folder.
+- **A rule of the person's with the value of one of Orbit's own allows (closed by `permissions-23`).** A place a link
+  leads to is decided without Orbit's own allows (`Agent.folders`). They are now marked where they are made (the rule
+  objects are kept in a `WeakSet`, so the mark is not a field that a config file, stored rule or decoded value can
+  carry), and `Permission` leaves out the marked rules instead of comparing values, so a rule of the person's with the
+  same action, folder and effect decides that place, as an allow, an ask or a deny (`permission.test.ts`, "lets the
+  person's rule with the value of one of Orbit's own allows decide a folder a link leads to"; `agent.test.ts` pins the
+  mark on a new agent). What remains: the mark follows the object, so a copy of a rule (a spread, a structured clone, a
+  JSON round trip or a schema decode) counts as the person's, which is the looser reading. The production plugin host
+  hands the agent editor over without copying, so Explore's rules keep the mark by reference; the copying `agentHost`
+  of the test fixtures does not, and no test pins Explore's.
 - **Approvals not yet built only from the request.** Since M2 the server puts the resolved file or folder on file,
   shell, Grep and Glob requests, and the terminal UI, Mini and ACP prefer it. Parts of an approval still come from the
   call's recorded input, or are missing: the terminal UI, Mini and VS Code name no folder on a shell, Grep or Glob

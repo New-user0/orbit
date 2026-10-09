@@ -29,13 +29,25 @@ export { Event } from "@orbit/schema/agent"
  * the temporary folder and the global config folder. They never decide a place that a link in a project that is not
  * trusted leads out to (`Permission.AssertInput.escaped`): only the person's own rules and approvals do, so that a link
  * the repository ships into the global config folder is asked about.
+ *
+ * Each rule is marked where it is made (`isOwnFolder`), not recognised by its value, so a rule of the person's with the
+ * very same value is the person's. The mark is the rule object itself: an agent that takes the object over by reference
+ * keeps it, and a copy of the object, a stored rule or a decoded one does not carry it, so such a copy counts as the
+ * person's.
  */
-export const folders = (global: Pick<Global.Interface, "data" | "tmp" | "config">): Info["permissions"] => [
-  { action: "external_directory", resource: SHELL_OUTPUT_GLOB(global.data), effect: "allow" },
-  { action: "external_directory", resource: TOOL_OUTPUT_GLOB(global.data), effect: "allow" },
-  { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" },
-  { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" },
-]
+export const folders = (global: Pick<Global.Interface, "data" | "tmp" | "config">): Info["permissions"] => {
+  const rules = [
+    { action: "external_directory", resource: SHELL_OUTPUT_GLOB(global.data), effect: "allow" as const },
+    { action: "external_directory", resource: TOOL_OUTPUT_GLOB(global.data), effect: "allow" as const },
+    { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" as const },
+    { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" as const },
+  ]
+  rules.forEach((rule) => orbitOwn.add(rule))
+  return rules
+}
+
+const orbitOwn = new WeakSet<object>()
+export const isOwnFolder = (rule: object) => orbitOwn.has(rule)
 
 export interface Selection {
   readonly id: ID

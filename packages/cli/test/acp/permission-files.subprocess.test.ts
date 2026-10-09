@@ -516,6 +516,180 @@ if (process.platform === "win32")
       90_000,
     )
 
+// A path that names the project through another spelling of its own folder is decided where it really is. Over a real
+// `orb acp` in an untrusted folder, a call under such a spelling meets the same folder question and the same rules as
+// the plain spelling, and the link of the repository below it is followed in none of them; a share or device spelling is
+// refused with no question. The trusted rows are the controls (class 3, class 4, class 8, class 12; permissions-23).
+const temporary = os.tmpdir()
+const junctions = (
+  process.platform === "win32"
+    ? [
+        {
+          name: "Documents and Settings",
+          temporary: temporary.replace(/^([A-Za-z]:)\\Users\\/i, "$1\\Documents and Settings\\"),
+        },
+        {
+          name: "Local Settings",
+          temporary: temporary.replace(/^(.*?\\Users\\[^\\]+)\\AppData\\Local\\/i, "$1\\Local Settings\\"),
+        },
+      ]
+    : []
+).filter((item) => item.temporary !== temporary)
+const present = await Promise.all(
+  junctions.map((item) =>
+    fs.stat(item.temporary).then(
+      () => [item],
+      () => [],
+    ),
+  ),
+)
+// Each spelling of the workspace folder, from the folder the run is made in (`root`, below the temporary folder).
+const realSpellings = [
+  { name: "a link to the project", spelled: (root: string) => path.join(root, "wsalias") },
+  ...present.flat().map((item) => ({
+    name: item.name,
+    spelled: (root: string) => path.join(item.temporary, path.basename(root), "workspace"),
+  })),
+]
+const refusedSpellings =
+  process.platform === "win32"
+    ? [
+        {
+          name: "a UNC admin share",
+          spelled: (root: string) => `\\\\localhost\\${root[0]}$\\${root.slice(3)}\\workspace`,
+        },
+        {
+          name: "a \\\\?\\Volume path",
+          spelled: (root: string) => `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${root.slice(3)}\\workspace`,
+        },
+        {
+          name: "a \\\\.\\Volume path",
+          spelled: (root: string) => `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${root.slice(3)}\\workspace`,
+        },
+      ]
+    : []
+const spellingLinks = async (root: string) => {
+  await linkSetup("junction")(root)
+  await Bun.write(path.join(root, "workspace", "secret", "key.txt"), "DENY-MARKER\n")
+  await (process.platform === "win32"
+    ? fs.symlink(path.join(root, "workspace"), path.join(root, "wsalias"), "junction")
+    : fs.symlink(path.join(root, "workspace"), path.join(root, "wsalias"), "dir"))
+}
+const denyMarkerSent = (run: Run) => run.bodies.some((body) => body.includes("DENY-MARKER"))
+for (const spelling of realSpellings) {
+  const through = (root: string) => path.join(spelling.spelled(root), "cfg", "orbit.json")
+  test(
+    `an untrusted Read through ${spelling.name} and the repository's link into the config folder is asked about as the plain spelling is`,
+    () =>
+      approval(
+        { tool: "Read", reply: "reject", args: (root) => ({ file_path: through(root) }), setup: spellingLinks },
+        async (run) => {
+          expect(String(run.permissions[0]?.toolCall.title)).toContain("external directory")
+          expect(shownAt(run.permissions[0]?.toolCall.locations)).toContain(path.join(run.root, "config"))
+          expect(run.permissions).toHaveLength(1)
+          expect(keySent(run.root, run.bodies)).toBe(false)
+        },
+      ),
+    90_000,
+  )
+  test(
+    `an untrusted Read through ${spelling.name} and the repository's link, after the folder is allowed, names the folder it reads`,
+    () =>
+      approval(
+        { tool: "Read", reply: "once", args: (root) => ({ file_path: through(root) }), setup: spellingLinks },
+        async (run) => {
+          expect(run.permissions).toHaveLength(2)
+          expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([path.join(run.root, "config", "orbit.json")])
+        },
+      ),
+    90_000,
+  )
+  test(
+    `an untrusted Read of secret/key.txt through ${spelling.name} under the person's deny of secret/* is denied`,
+    () =>
+      approval(
+        {
+          tool: "Read",
+          permissions: [
+            { action: "Read", resource: "*", effect: "ask" },
+            { action: "Read", resource: "secret/*", effect: "deny" },
+          ],
+          reply: "once",
+          args: (root) => ({ file_path: path.join(spelling.spelled(root), "secret", "key.txt") }),
+          setup: spellingLinks,
+        },
+        async (run) => {
+          expect(run.permissions).toHaveLength(0)
+          expect(denyMarkerSent(run)).toBe(false)
+          expect(toolResult(run)).toContain("denied")
+        },
+      ),
+    90_000,
+  )
+  test(
+    `an untrusted Read of secret/key.txt through ${spelling.name} under the person's ask of secret/* asks about secret/key.txt`,
+    () =>
+      approval(
+        {
+          tool: "Read",
+          permissions: [{ action: "Read", resource: "secret/*", effect: "ask" }],
+          reply: "reject",
+          args: (root) => ({ file_path: path.join(spelling.spelled(root), "secret", "key.txt") }),
+          setup: spellingLinks,
+        },
+        async (run) => {
+          expect(run.permissions).toHaveLength(1)
+          expect(shownAt(run.permissions[0]?.toolCall.locations)).toEqual([
+            path.join(run.workspace, "secret", "key.txt"),
+          ])
+          expect(denyMarkerSent(run)).toBe(false)
+        },
+      ),
+    90_000,
+  )
+  test(
+    `a trusted Read through ${spelling.name} and the repository's link is the project's own, with no folder question (control)`,
+    () =>
+      approval(
+        {
+          tool: "Read",
+          trusted: true,
+          reply: "once",
+          args: (root) => ({ file_path: through(root) }),
+          setup: spellingLinks,
+        },
+        async (run) => {
+          expect(run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))).toEqual(
+            [],
+          )
+          expect(keySent(run.root, run.bodies)).toBe(true)
+        },
+      ),
+    90_000,
+  )
+}
+for (const spelling of refusedSpellings)
+  for (const trusted of [false, true])
+    test(
+      `${trusted ? "a trusted" : "an untrusted"} Read through ${spelling.name} is refused before any question`,
+      () =>
+        approval(
+          {
+            tool: "Read",
+            trusted,
+            reply: "once",
+            args: (root) => ({ file_path: path.join(spelling.spelled(root), "cfg", "orbit.json") }),
+            setup: spellingLinks,
+          },
+          async (run) => {
+            expect(run.permissions).toHaveLength(0)
+            expect(keySent(run.root, run.bodies)).toBe(false)
+            expect(toolResult(run)).toContain("file.spelling")
+          },
+        ),
+      90_000,
+    )
+
 type Run = {
   readonly root: string
   readonly workspace: string

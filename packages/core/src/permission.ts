@@ -159,17 +159,10 @@ const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const hooks = yield* PluginHooks.Service
-    const global = yield* Global.Service
     const pending = new Map<ID, Pending>()
-    // Orbit's own allows, compared by value: a copy that an agent took of them, as Explore does, is still Orbit's.
-    const folders = Agent.folders(global)
-    const own = (rules: Permission.Ruleset) =>
-      rules.filter(
-        (rule) =>
-          !folders.some(
-            (item) => item.action === rule.action && item.resource === rule.resource && item.effect === rule.effect,
-          ),
-      )
+    // Orbit's own allows are marked where `Agent.folders` makes them, not recognised by value: a copy that an agent took
+    // of them, as Explore does, keeps the mark, and a rule of the person's with the same value does not have it.
+    const own = (rules: Permission.Ruleset) => rules.filter((rule) => !Agent.isOwnFolder(rule))
     // Saved approvals are the person's own answers, so they join after Orbit's allows are taken out: one that has the
     // same value as an allow of Orbit's (an "always" for the global config folder) still decides a place a link leads to.
     const decide = (

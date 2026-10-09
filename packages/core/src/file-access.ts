@@ -94,6 +94,9 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/FileA
 export const resolvePath = (directory: string, input: string, home = Global.Path.home) =>
   FSUtil.resolveFrom(directory, input, home)
 
+// A share or device path on Windows: `\\server\share`, `\\?\Volume{...}` or `\\.\...`. `resolvePath` already writes the
+// drive forms of a `\\?\` path as the drive.
+const isShare = (file: string) => process.platform === "win32" && file.startsWith("\\\\")
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({
   sessionID: context.sessionID,
@@ -111,6 +114,8 @@ const layer = Layer.effect(
     const worktree = path.resolve(location.project.directory)
     // The project's folders by name: a target in one is the project's own, unless a link leads it out.
     const folders = [location.directory, ...(worktree === path.parse(worktree).root ? [] : [worktree])]
+    // Those folders as the disk has them, for finding a path that names the project through another spelling of it.
+    const real = yield* Effect.forEach(folders, fs.resolve)
 
     // Windows opens a file by its 8.3 short name too: `ENV~1` is `.env`, and `PROJEC~1` the project's folder. Each part
     // below `from` that is such a name is replaced by the name it stands for, so rules and the project's folders see the
@@ -143,13 +148,18 @@ const layer = Layer.effect(
     // A target outside the project, or one that a link in an untrusted project leads out to, which is `escapes`.
     const external = Effect.fnUntraced(function* (absolute: AbsolutePath, kind: Kind | undefined, escapes?: string) {
       const place = escapes ?? absolute
+      // A link in the repository can lead to a share. Reading it, or the folders above it for a `.git`, would connect to
+      // that share before anyone is asked, so it is named as the link says and read by nobody.
+      const share = isShare(place)
       const type =
         kind === "directory"
           ? "Directory"
           : kind === "file"
             ? "File"
-            : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
-                ?.type
+            : share
+              ? undefined
+              : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
+                  ?.type
       const directory = AbsolutePath.make(type === "Directory" ? place : path.dirname(place))
       return {
         absolute,
@@ -159,10 +169,30 @@ const layer = Layer.effect(
           action: "external_directory",
           directory,
           resource: slash(path.join(directory, "*")),
-          save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
+          save: slash(path.join((share ? undefined : yield* Project.root(fs, directory)) ?? directory, "*")),
           ...(escapes === undefined ? {} : { escaped: true as const }),
         },
       } satisfies Target
+    })
+
+    // The path under the project's folder, by that folder's name, that `file` really is in. Each part of `file` from its
+    // root is resolved on the disk, and the first one that is inside the project is the start: what follows it keeps its
+    // name, so a link of the repository below it is followed afterwards as for the plain spelling, not here. Undefined
+    // when no part of it is in the project.
+    const anchor = Effect.fnUntraced(function* (file: AbsolutePath) {
+      const root = path.parse(file).root
+      const parts = path.relative(root, file).split(path.sep)
+      for (const index of parts.keys()) {
+        const prefix = path.join(root, ...parts.slice(0, index + 1))
+        if ((yield* fs.stat(prefix).pipe(Effect.orElseSucceed(() => undefined))) === undefined) return undefined
+        const where = yield* fs.resolve(prefix)
+        const folder = real.findIndex((item) => FSUtil.contains(item, where))
+        if (folder !== -1)
+          return AbsolutePath.make(
+            path.join(folders[folder]!, path.relative(real[folder]!, where), ...parts.slice(index + 1)),
+          )
+      }
+      return undefined
     })
 
     const resolve = Effect.fn("FileAccess.resolve")(function* (input: ResolveInput) {
@@ -175,15 +205,24 @@ const layer = Layer.effect(
           message: `${input.path} has a ":" after its drive, which on Windows names a data stream of a file or a drive that is not a disk. Use the plain path of the file or folder.`,
           code: Tool.ErrorCode.FileSpelling,
         })
+      const named = folders.find((folder) => FSUtil.contains(folder, lexical))
+      // A share path (`\\localhost\C$\...`) or a device path (`\\?\Volume{...}`, `\\.\...`) names a folder of the
+      // project in a spelling that no rule is written for, and opening one connects to a share. No tool needs one, so it
+      // is refused before any disk is read, unless the project itself is on that share.
+      if (named === undefined && isShare(lexical))
+        return yield* new ToolFailure({
+          message: `${input.path} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
+          code: Tool.ErrorCode.FileSpelling,
+        })
       // A part below a folder of the project is named in that folder as the disk names it, and a path outside from its
       // root, so that an 8.3 short name does not hide the name that rules are written for.
-      const absolute = AbsolutePath.make(
-        yield* longNames(
-          lexical,
-          folders.find((folder) => FSUtil.contains(folder, lexical)),
-        ),
-      )
-      const internal = folders.some((folder) => FSUtil.contains(folder, absolute))
+      const long = AbsolutePath.make(yield* longNames(lexical, named))
+      // A path outside the project by name can still be in it by another spelling of the project's folder, such as a
+      // system junction (`C:\Documents and Settings` for `C:\Users`) or a link to it. It is decided where it really is,
+      // under the folder of the project it is in, so that a link in the repository below it is followed as for the plain
+      // spelling.
+      const absolute = named === undefined ? ((yield* anchor(long)) ?? long) : long
+      const internal = named !== undefined || absolute !== long
       if (!internal) return yield* external(absolute, input.kind)
       // Until the project is trusted, a link in it that leads out of it does not make the target the project's own: the
       // repository ships its links, and one to the user's other files would be read or written without a question.

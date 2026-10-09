@@ -162,6 +162,15 @@ describe("Agent", () => {
         Permission.evaluate("external_directory", path.join(global.tmp, "*"), info?.permissions ?? []).effect,
       ).toBe("allow")
 
+      // Orbit's own folder allows keep their mark in the agent, so that `Permission` leaves them out for a place a link
+      // leads to; a rule of the person's with the same value has none (permissions-23).
+      const folders = (info?.permissions ?? []).filter(
+        (rule) => rule.action === "external_directory" && rule.effect === "allow",
+      )
+      expect(folders).toHaveLength(4)
+      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true])
+      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false])
+
       yield* agent.transform((editor) => editor.remove(id))
       expect(yield* agent.get(id)).toBeUndefined()
     }),
