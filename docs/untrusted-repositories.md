@@ -1639,7 +1639,9 @@ fixes it or asks.
   question about it would have turned their deny into an ask), with the same `file.spelling` failure, before any
   question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir`) and for the plain
   words of a shell command (`escaped`). A part with `~` below such a link is refused the same way, because looking up
-  its long name would read the folder the link leads to. The first review found the `~` case (6 seconds to connect to
+  its long name would read the folder the link leads to. A link to a device path (`\\?\Volume{…}`, `\\.\…`) reads
+  back in the NT form `\??\…`, which `ProjectTrust.escapes` names as the device path it is (the `orb acp` rows found
+  that a first version took it for a folder named `??` and asked). The first review found the `~` case (6 seconds to connect to
   the host), the third the admin-share target. `file-access-spelling.test.ts` wraps `FSUtil.Service` in the test layer,
   records every path it is called with, and asserts that none starts with `\\` or `//` in the rows for a share given
   directly (nine spellings, trusted and not, `resolve` and `escaped`), for a link to a share in six spellings

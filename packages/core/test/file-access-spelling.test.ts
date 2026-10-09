@@ -182,9 +182,9 @@ describe("FileAccess for another spelling of the project's folder", () => {
     return [
       { name: "a localhost admin share", target: `\\\\localhost\\${drive}$\\${rest}`, share: true },
       { name: "a 127.0.0.1 admin share", target: `\\\\127.0.0.1\\${drive}$\\${rest}`, share: true },
-      { name: "a \\\\?\\UNC admin share", target: `\\\\?\\UNC\\localhost\\${drive}$\\${rest}`, share: undefined },
-      { name: "a \\\\?\\Volume path", target: `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: undefined },
-      { name: "a \\\\.\\Volume path", target: `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: undefined },
+      { name: "a \\\\?\\UNC admin share", target: `\\\\?\\UNC\\localhost\\${drive}$\\${rest}`, share: true },
+      { name: "a \\\\?\\Volume path", target: `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: true },
+      { name: "a \\\\.\\Volume path", target: `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${rest}`, share: true },
       {
         name: "a share host",
         target: `\\\\orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid\\share\\dir`,
@@ -203,12 +203,14 @@ describe("FileAccess for another spelling of the project's folder", () => {
           Promise.all(
             links.map(async (link, index) => {
               await fs.symlink(link.target, path.join(project, `shared${index}`), "dir")
-              return (await fs.readlink(path.join(project, `shared${index}`))).startsWith("\\\\")
+              const read = await fs.readlink(path.join(project, `shared${index}`))
+              return read.startsWith("\\\\") || read.startsWith("\\??\\")
             }),
           ),
         )
-        // The rows that must be shares as written, so that the table cannot pass without a check of one.
-        expect(links.flatMap((link, index) => (link.share === true ? [reads[index]] : []))).toEqual([true, true, true])
+        // Every row reads back as a share (`\\host`, or the NT form `\??\` of a device path), so the table cannot pass
+        // without checking one.
+        expect(reads).toEqual(links.map(() => true))
         const recorded = recordedFileSystem()
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service

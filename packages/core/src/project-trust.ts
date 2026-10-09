@@ -118,6 +118,10 @@ const layer = Layer.effect(
           const named = path.join(path.parse(file).root, ...parts.slice(0, index + 1))
           const target = yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined))
           if (target === undefined) continue
+          // A link to a device path (`\\?\Volume{…}\…`, `\\.\…`) reads back in the NT form `\??\…`, which `path.resolve`
+          // would take for a folder named `??` on the current drive. It is named as the device path it is.
+          if (target.startsWith("\\??\\"))
+            return path.join(`\\\\?\\${target.slice(4)}`, ...parts.slice(index + 1))
           const leads = path.join(path.resolve(path.dirname(named), target), ...parts.slice(index + 1))
           if (leads.startsWith("\\\\")) return leads
           const deeper = yield* share(leads, depth + 1)
