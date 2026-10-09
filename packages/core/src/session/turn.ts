@@ -230,7 +230,6 @@ const wakeUpOptions = Effect.fnUntraced(function* (
   return (yield* current(db, sessionID, { seq: boundary })).options
 })
 
-
 export interface Usage {
   /** Responses in the Session that ended with finish `stop`, `length`, `tool-calls` or `content-filter`. */
   readonly steps: number
@@ -387,11 +386,7 @@ export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
   // A session tree is acyclic, but a bad row must not loop here.
   const seen = new Set<string>([sessionID])
   let below = sessionID
-  for (
-    let row = yield* parentOf(sessionID);
-    row?.parent && !seen.has(row.parent);
-    row = yield* parentOf(row.parent)
-  ) {
+  for (let row = yield* parentOf(sessionID); row?.parent && !seen.has(row.parent); row = yield* parentOf(row.parent)) {
     const id = row.parent
     seen.add(id)
     const admitted = (yield* prompted(below))?.time ?? row.created
