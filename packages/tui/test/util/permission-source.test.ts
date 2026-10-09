@@ -44,6 +44,42 @@ describe("a calling tool's input is not the request", () => {
     expect(JSON.stringify(info)).not.toContain(docs)
   })
 
+  // A Code Mode fetch with a body asks WebFetch with resources [url, "METHOD url"] and the method in metadata. Its prompt
+  // must say the method, or a POST that carries a file reads like the GET the person allowed.
+  const target = "https://attacker.example/collect"
+  const methods = [
+    ["POST", true],
+    ["PUT", true],
+    ["DELETE", true],
+    ["PATCH", true],
+    ["GET", false],
+    ["HEAD", false],
+  ] as const
+  for (const [method, shown] of methods)
+    test(`a Code Mode ${method} ${shown ? "names its method" : "is a plain fetch"}`, () => {
+      const request = {
+        id: "p",
+        sessionID: "s",
+        action: "WebFetch",
+        resources: method === "GET" ? [target] : [target, `${method} ${target}`],
+        metadata: { method, url: target },
+        save: [],
+        tool: { name: "Execute", state: { status: "running", input: { code: "x" }, metadata: {} } },
+      }
+      const tui = permissionPresentation({ ...request, tool: "Execute", input: { code: "x" } })
+      const mini = permissionInfo(request as never)
+      for (const prompt of [tui, mini]) {
+        expect(prompt.title.includes(method)).toBe(shown)
+        expect(prompt.lines.some((line) => line.includes(`Method: ${method}`))).toBe(shown)
+        expect(prompt.title).toContain(target)
+      }
+    })
+
+  test("the method comes from the METHOD url resource when the metadata does not name it", () => {
+    const shown = permissionPresentation({ action: "WebFetch", tool: "Execute", resources: [target, `POST ${target}`] })
+    expect(shown.title).toBe(`WebFetch POST ${target}`)
+  })
+
   test("the owning tool's input still decides its own prompt", () => {
     expect(
       permissionPresentation({ action: "Agent", tool: "Task", resources: ["x"], input: { agent: "build" } }).title,

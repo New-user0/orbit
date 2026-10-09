@@ -1,3 +1,4 @@
+import { ToolNames } from "@orbit/schema/tool-names"
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
 import { canonicalToolName, finiteNumber, legacyToolInput, webSearchProviderLabel } from "./tool-display"
@@ -120,10 +121,14 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   if (action === "webfetch") {
     // The request's own URL is what gets fetched, so it comes before anything the calling input says.
     const url = text(dict(source.metadata).url) || resources[0] || text(input.url) || text(metadata.url)
+    // A Code Mode fetch can write, and its prompt must not read like the read the person allowed: the method is part of
+    // what is approved. The request's own metadata names it; a plain fetch is a GET.
+    const method = (text(dict(source.metadata).method) || (resources.find((item) => /^[A-Z][A-Z-]* \S/.test(item)) ?? "").split(" ")[0]!).toUpperCase()
+    const writes = method !== "" && method !== "GET" && method !== "HEAD"
     return {
       icon: "%",
-      title: `WebFetch ${url}`,
-      lines: url ? [`URL: ${url}`] : [],
+      title: writes ? `WebFetch ${method} ${url}` : `WebFetch ${url}`,
+      lines: [...(writes ? [`Method: ${method}`] : []), ...(url ? [`URL: ${url}`] : [])],
     }
   }
 
@@ -179,24 +184,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 }
 
-// The tools whose own input describes a request of this action; LSP asks as Read and Write, NotebookEdit as Edit.
-const owners: Record<string, string[]> = {
-  edit: ["edit", "write", "notebook_edit", "multiedit"],
-  read: ["read", "lsp"],
-  list: ["list", "glob"],
-  glob: ["glob"],
-  grep: ["grep"],
-  shell: ["shell"],
-  subagent: ["subagent", "task"],
-  webfetch: ["webfetch"],
-  websearch: ["websearch"],
-  lsp: ["lsp"],
-}
-
-function ownsAction(action: string, tool?: string) {
-  if (tool === undefined) return true
-  return (owners[action] ?? [action]).includes(canonicalToolName(tool).toLowerCase())
-}
+const ownsAction = ToolNames.owns
 
 function wildcardDirectory(value: string) {
   const wildcard = value.indexOf("*")
