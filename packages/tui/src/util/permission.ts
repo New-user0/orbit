@@ -42,13 +42,16 @@ export function permissionPresentation(
 
 function present(source: PermissionPresentationInput, formatPath: (value: string) => string): PermissionPresentation {
   const action = canonicalToolName(source.action)
-  const input = normalizeInput(action, source.input, source.tool)
-  const metadata = { ...dict(source.toolMetadata), ...dict(source.metadata) }
+  // The source call is not always the call the request is about: a Code Mode fetch, a Workflow agent and a Patch edit
+  // all ask under their caller's ID, so a caller's own input is shown only when the caller is the tool that asks.
+  const owned = ownsAction(action, source.tool)
+  const input = owned ? normalizeInput(action, source.input, source.tool) : {}
+  const metadata = { ...(owned ? dict(source.toolMetadata) : {}), ...dict(source.metadata) }
   const resources = source.resources.filter((item): item is string => typeof item === "string")
 
   if (action === "edit") {
-    const file = text(input.path) || resources[0] || ""
     const first = dict(Array.isArray(metadata.files) ? metadata.files[0] : undefined)
+    const file = text(input.path) || text(first.file) || resources[0] || ""
     const diff = text(first.patch) || text(first.diff) || text(metadata.diff) || undefined
     return {
       icon: "→",
@@ -90,7 +93,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 
   if (action === "subagent") {
-    const agent = text(input.agent) || "general"
+    const agent = text(input.agent) || (owned ? "" : resources[0]) || "general"
     const description = text(input.description)
     return {
       icon: "#",
@@ -100,7 +103,8 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 
   if (action === "webfetch") {
-    const url = text(input.url) || text(metadata.url)
+    // The request's own URL is what gets fetched, so it comes before anything the calling input says.
+    const url = text(dict(source.metadata).url) || resources[0] || text(input.url) || text(metadata.url)
     return {
       icon: "%",
       title: `WebFetch ${url}`,
@@ -158,6 +162,25 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     title: `Call tool ${source.action}`,
     lines: [`Tool: ${source.action}`],
   }
+}
+
+// The tools whose own input describes a request of this action; LSP asks as Read and Write, NotebookEdit as Edit.
+const owners: Record<string, string[]> = {
+  edit: ["edit", "write", "notebook_edit", "multiedit"],
+  read: ["read", "lsp"],
+  list: ["list", "glob"],
+  glob: ["glob"],
+  grep: ["grep"],
+  shell: ["shell"],
+  subagent: ["subagent", "task"],
+  webfetch: ["webfetch"],
+  websearch: ["websearch"],
+  lsp: ["lsp"],
+}
+
+function ownsAction(action: string, tool?: string) {
+  if (tool === undefined) return true
+  return (owners[action] ?? [action]).includes(canonicalToolName(tool).toLowerCase())
 }
 
 function wildcardDirectory(value: string) {
