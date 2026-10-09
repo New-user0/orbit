@@ -170,11 +170,6 @@ const allowlist: readonly Entry[] = [
   },
   {
     allow: "names",
-    paths: ["tools/tachyon-probe/**"],
-    reason: "The probe sends the same requests to several vendors' models through the gateway it measures.",
-  },
-  {
-    allow: "names",
     paths: ["packages/*/test/**", "**/*.test.ts", "**/*.test.tsx"],
     reason:
       "Tests use real vendor ids and formats as fixtures. They may not name other products' files: those go through packages/compat.",
