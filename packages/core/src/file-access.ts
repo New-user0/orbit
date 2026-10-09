@@ -57,7 +57,9 @@ export type Invocation = Pick<Tool.Context, "sessionID" | "agent" | "messageID" 
 
 export interface ReadOptions {
   /** A target already authorized by this invocation, used for filename recovery. */
-  readonly siblingOf: Target
+  readonly siblingOf?: Target
+  /** Selects the external approval boundary, as for `resolve`; a sibling is a file. */
+  readonly kind?: Kind
 }
 
 export interface Interface {
@@ -216,8 +218,9 @@ const layer = Layer.effect(
       context: Invocation,
       options?: ReadOptions,
     ) {
-      const target = yield* resolve({ path: file, kind: options ? "file" : undefined })
-      const sibling = options && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
+      const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
+      const sibling =
+        options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
 
       // Filename recovery shares the directory approval, but checks the recovered file's own read rules.
       if (!sibling) yield* authorizeExternal([target], context)

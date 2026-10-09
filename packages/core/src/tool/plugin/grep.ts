@@ -125,8 +125,9 @@ export const Plugin = {
           execute: (input, context) =>
             Effect.gen(function* () {
               const source = { type: "tool" as const, messageID: context.messageID, id: context.id }
-              const target = yield* access.resolve({ path: input.path ?? "." })
-              yield* access.authorizeExternal([target], context)
+              // A search reads what it searches, so the person's Read rules for that path decide it as they decide a
+              // Read of it: a Read deny of `*.env` covers a search of `.env`. The pattern is asked about below.
+              const target = yield* access.authorizeRead(input.path ?? ".", context)
               yield* permission.assert({
                 action: name,
                 resources: [input.pattern],

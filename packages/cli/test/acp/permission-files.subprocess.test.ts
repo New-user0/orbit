@@ -428,6 +428,32 @@ if (process.platform === "win32")
       90_000,
     )
 
+// Grep keyed its rules on its pattern, so a Read deny of `*.env` did not cover a Grep of `.env`, and the search sent the
+// secret to the model. A search now asks the person's Read rules about its path, as a Read of it does (class 8).
+if (Bun.which("rg"))
+  for (const row of [
+    { path: ".env", sent: false },
+    { path: "README.md", sent: true },
+  ])
+    test(
+      `an untrusted Grep of ${row.path} under a Read deny of *.env ${row.sent ? "searches it (control)" : "is denied"}`,
+      () =>
+        approval(
+          {
+            tool: "Grep",
+            permissions: readDeny,
+            args: () => ({ pattern: "MARKER", path: row.path }),
+            setup: spellingSetup,
+          },
+          async (run) => {
+            expect(run.permissions).toHaveLength(0)
+            expect(secretSent(run.bodies)).toBe(false)
+            expect(run.bodies.some((body) => body.includes("README-MARKER"))).toBe(row.sent)
+          },
+        ),
+      90_000,
+    )
+
 // Windows starts a process in `cfg.` or `cfg ` as in `cfg`, while Bun's own `stat` finds neither, so the link was not
 // seen and the command ran in the person's config folder with no folder question.
 if (process.platform === "win32")
