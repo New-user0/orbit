@@ -804,6 +804,21 @@ and run shell (#2). `default_agent`, `agents.*.disabled` and `warming` were clas
 `agent` and an agent's `mode` and `hidden` followed one field at a time (#22 round 3). Approvers saw only `cat id_rsa`
 for `cd ~/.ssh && cat id_rsa` (#6).
 
+**In M2:** approvals showed something other than what the tool acted on, and verification found the members one at a
+time:
+- an old field name `path` beside the field the tool runs (`file_path`, or NotebookEdit's `notebook_path`) in the
+  terminal UI, Mini and VS Code (round 4);
+- the calling Code Mode (`Execute`), Workflow or Patch call's own input in place of the request, in the terminal UI and
+  Mini (round 5), and in ACP (round 6);
+- only the first file of a multi-file patch (round 5), a moved file without its old name, and a Code Mode `POST`, `PUT`
+  or `DELETE` titled as a `GET` (round 6);
+- in ACP, keys the model added to its own input: a `files` array drawn as diffs and a `cwd` drawn as the folder a shell
+  command runs in (round 6 re-checks);
+- in ACP, `~` and drive spellings drawn inside the project while the tool acted in the home folder (the final check,
+  past the round cap).
+
+Each client worked out what to show from the model's raw input, so each fix closed one member and left the next.
+
 **Ask early:** at the classification table. The first-wave reviews of #2 and #4 had already shown that "which agent
 runs" is a permission.
 
@@ -831,6 +846,14 @@ runs" is a permission.
 - Show the whole thing that is approved: the full span and not just the commands that the scanner found
   (`ConfigCommandPlugin` asks about the span as written when its commands alone would mislead), the method and the URL
   (`PermissionWeb.request` metadata), the folder.
+- Build the approval from the permission request, never from the model's raw tool input. The server must put on the
+  request everything the approval shows: the resolved file or folder, with every spelling `FileAccess.resolvePath`
+  accepts (`~`, `~/` and `~\`, the Git Bash, Cygwin and WSL drive forms, relative paths and `..`) resolved as it
+  resolves them for the runner; the method and URL; the diff of each file. The terminal UI, Mini, ACP and VS Code take
+  the place, file, method and diff only from those values; the raw input may appear only in a view labelled as raw
+  input. A recorded call keeps the keys its schema drops at decode, so the raw input can carry a `cwd`, a `files` array
+  or an old field name that the runner never uses. When the request lacks a value, add it on the server in the same PR.
+  New and changed approval code follows this now; `clients-ux-61` (M3) moves the existing clients onto it (Known gaps).
 - Show a place where the tool acts. A client prefers what the request carries: the resources of a request about files,
   `metadata.workdir` of a shell request and `metadata.path` of a Grep or Glob request, all resolved by the server. A
   path it takes from a tool's input goes through `FSUtil.resolveFrom`, which the tools use too, so `~` is the home
@@ -857,6 +880,11 @@ runs" is a permission.
 - Plan mode: a config of `* * allow` must not make `general` spawnable.
 - Completeness: the classification table compiles only if every field of `Config.Info`, `ConfigAgent.Info` and
   `ConfigCommand.Info` is classified, and `packages/core/test/config/trust.test.ts` ("covers every field") checks it.
+- What is shown is what runs: `clients-ux-61` adds a matrix test (not on `main` yet) over every tool, every path
+  spelling the runner accepts, every key a model can add to its input and every client. It must fail if any client
+  shows a place, file, method or diff other than the one the runner uses, and it includes an `orb acp` subprocess row in
+  an untrusted folder with a trusted control. After it lands, a new tool, client or path form adds its row; before then,
+  a PR adds a table-driven test of the same shape for what it changes.
 
 **Review questions:**
 
@@ -864,6 +892,8 @@ runs" is a permission.
 - Does it pick a model, a provider or a budget? Then it is withheld as `providers`, never inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
+- Does any client work out what it shows from the model's raw input instead of the request's resolved values? Can a
+  key the model adds, or a `~`, Git Bash or relative spelling, make it show another place than the runner uses?
 - Does an allow that Orbit adds by itself decide something a repository can steer, such as a place a link leads to?
 - Which fields of the call do its rules key on, and is a path among the fields that no rule sees?
 - Does a default or fallback name an agent or a mode by constant instead of by configuration?
@@ -1411,7 +1441,7 @@ when the sentence becomes false, or rewrite the sentence.
 
 ## Working practices
 
-These come from how M1 was run, and they apply to any change in this area.
+These come from how M1 and M2 were run, and they apply to any change in this area.
 
 - **Fix the class, not the instance.** When a finding lands, list the members of its class from this page (surfaces,
   sinks, spellings, entry points) and close them all in one commit with a table-driven test. In M1 each round closed
@@ -1423,6 +1453,16 @@ These come from how M1 was run, and they apply to any change in this area.
   Node's and cross-spawn still found a bare name's `.exe` in the folder. Before you call a class closed, list every
   lookup that can find what it names and plant a decoy for each. An audit may report "no holes" only with a table of the
   surfaces it checked and the evidence for each row. The round-1 audit found nothing where rounds 2 to 4 found five.
+- **Write the class matrix before the code.** When a finding lands, write its class as a matrix before you write the
+  fix, and put it in the PR body: for approval display, the clients (terminal UI, Mini, ACP, VS Code) × the tools × the
+  path spellings × the keys a model can add. Pin every cell with a test, and the review checks that every cell has one.
+  M2 had the "fix the class" rule, but no fix wrote its list down where a review could check it: the approval-display
+  class took rounds 4 to 6 and a check past the round cap across four clients, and is still open (Known gaps).
+- **Every claimed rule has a test that breaks with it.** A fix that says "only declared fields are shown" or "the prompt
+  shows every file" needs a test that fails when that rule is broken. In M2 the tests for a multi-file prompt checked
+  strings and never drew it, so a fix that hung the terminal UI and Mini prompts was committed, and only round 6 found
+  it. ACP's declared-fields filter was keyed by the permission action instead of the asking tool, and no test failed,
+  because no row added a key the tool does not declare.
 - **What blocks.** A finding blocks only if it breaks the promise at the top of this page on a default or demonstrated
   path. A hole that a clone can demonstrate is not a speculative edge case: fix it in the PR that finds it, and record
   the failure mode, the likelihood and the cost in the PR. Speculative hardening goes on a follow-up list. Waiting for
@@ -1607,6 +1647,12 @@ fixes it or asks.
   the person wrote with exactly the same action, folder and effect is taken for Orbit's and does not decide that place,
   so the person is asked; it fails closed. Saved approvals are not affected. Task `permissions-23` (M3) marks Orbit's
   allows by where they come from.
+- **Approvals not yet built only from the request.** Since M2 the server puts the resolved file or folder on file,
+  shell, Grep and Glob requests, and the terminal UI, Mini and ACP prefer it. Parts of an approval still come from the
+  call's recorded input, or are missing: the terminal UI, Mini and VS Code name no folder on a shell, Grep or Glob
+  approval; an MCP call through Code Mode is approved without its arguments; VS Code and ACP read NotebookEdit's fields
+  from the input; and ACP's ordinary tool call shows a link's own path. Task `clients-ux-61` (M3) moves every client
+  onto the request and adds the "what is shown is what runs" matrix test.
 
 ## Review checklist
 
@@ -1661,6 +1707,9 @@ a default or demonstrated path, and anything else goes on a follow-up list with 
       and plants `.exe` (`hg.exe`, `cmd.exe`, `node.exe`), `.bat` and `.cmd` decoys, and starts a `.cmd` by its full
       path, with a control (10).
 - [ ] The approver sees the whole thing that is approved: the full span, the method, the URL, the folder (8).
+- [ ] A new or changed approval takes its place, file, method and diff from the permission request's resolved values,
+      never from the model's raw input, and a value the request lacks was added on the server. Its rows are in the "what
+      is shown is what runs" matrix, or, before `clients-ux-61` lands, in a table-driven test of the same shape (8).
 - [ ] No default or fallback names an agent or a mode by constant instead of by configuration, and whose rules come last
       has been asked (8).
 - [ ] A decline or a refusal stops the whole execution, siblings included, and does not surface as an internal error
