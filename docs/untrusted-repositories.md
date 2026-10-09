@@ -1588,11 +1588,20 @@ fixes it or asks.
   Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis.
 - **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
-  rule covers the folder. No task yet.
+  rule covers the folder. Task `permissions-3` (M6) carries a Read check for each file a search returns.
 - **A share named before anyone is asked.** For a target outside the project, `FileAccess.resolve` reads the place
   (its kind, and the folders above it for a `.git`) before the folder question, so a UNC path that a call names
   connects to the share first; and `ProjectTrust.escapes` follows a link in the project whose target is a share before
-  any question. A link to a share needs a clone that makes symlinks (Developer Mode on Windows). No task yet.
+  any question. A link to a share needs a clone that makes symlinks (Developer Mode on Windows). Task `permissions-23`
+  (M3) refuses UNC forms before any disk access.
+- **Other spellings of the project folder.** A path that names the project through another spelling of its own folder
+  (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`, `\\localhost\C$\…`, `\\?\Volume{…}\…`,
+  `\\.\Volume{…}\…`) is decided as outside the project by its spelling, so a repository link inside it is not
+  followed: the folder question names the link's path while the tool reads, writes or runs where the link leads. M2's
+  final check showed it over a real `orb acp` in an untrusted folder (the global config folder's files moved aside, and
+  its provider key sent to the model). The same spellings turn a person's absolute-path deny rule into an ask. The fix
+  decides containment on the real path for every spelling. The owner chose it on 2026-10-09 as the first M3 fix (task
+  `permissions-23`).
 
 ## Review checklist
 
