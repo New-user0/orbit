@@ -1,5 +1,6 @@
-// Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule, a model-added key changes nothing
-// the approval shows: a WebFetch with a `files` array is the fetch it is, and a Bash call with a `cwd` runs in the workspace.
+// Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule, an approval shows the place the
+// call acts on: a model-added key changes nothing it shows, and a `~` path is the person's home folder, not a folder
+// named `~` in the project.
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -14,15 +15,18 @@ test(
   "an untrusted WebFetch with a model-added files array is titled by its URL and has no diffs",
   () =>
     approval(
-      "WebFetch",
-      () => ({
-        url,
-        files: [
-          { file: "README.md", patch: patch("README.md") },
-          { file: "docs.md", patch: patch("docs.md") },
-        ],
-      }),
-      (call) => {
+      {
+        tool: "WebFetch",
+        args: () => ({
+          url,
+          files: [
+            { file: "README.md", patch: patch("README.md") },
+            { file: "docs.md", patch: patch("docs.md") },
+          ],
+        }),
+      },
+      (run) => {
+        const call = run.permissions[0]?.toolCall
         expect(String(call?.title)).toContain("exfil.example")
         expect(call?.content ?? []).toHaveLength(0)
       },
@@ -35,21 +39,113 @@ test(
   "an untrusted Bash call with a model-added cwd is shown in the folder it runs in",
   () =>
     approval(
-      "Bash",
-      (root) => ({ command: "sh setup.sh", cwd: path.join(root, "my-tools") }),
-      (call, workspace) => {
+      { tool: "Bash", args: (root) => ({ command: "sh setup.sh", cwd: path.join(root, "my-tools") }) },
+      (run) => {
+        const call = run.permissions[0]?.toolCall
         expect(call?.title).toBe("sh setup.sh")
-        expect(call?.locations).toEqual([{ path: workspace }])
+        expect(call?.locations).toEqual([{ path: run.workspace }])
         expect(JSON.stringify(call)).not.toContain("my-tools")
       },
     ),
   90_000,
 )
 
+// The tools read a leading `~` as the home folder, which is `root` here, so `~/config` is the person's global config
+// folder: an external folder the default rules allow without asking. The person's own ask rule is the one approval, and
+// it, the ordinary tool call and what the tool did all name that folder. Each row runs in an untrusted folder and again
+// in a trusted one as the control. A PowerShell row needs PowerShell, a Grep row ripgrep.
+const powershell = process.platform === "win32" ? "powershell" : Bun.which("pwsh") ? "pwsh" : undefined
+const marker = "HOME-MARKER-CONTENT-7f3"
+const home = [
+  {
+    tool: "Bash",
+    rule: "Bash",
+    args: { command: "echo ran > ran-here.txt", workdir: "~/config" },
+    place: (root: string) => path.join(root, "config"),
+    acted: (root: string) => Bun.file(path.join(root, "config", "ran-here.txt")).exists(),
+  },
+  ...(powershell
+    ? [
+        {
+          tool: "PowerShell",
+          rule: "Bash",
+          shell: powershell,
+          args: { command: "echo ran > ran-here.txt", workdir: "~/config" },
+          place: (root: string) => path.join(root, "config"),
+          acted: (root: string) => Bun.file(path.join(root, "config", "ran-here.txt")).exists(),
+        },
+      ]
+    : []),
+  ...(Bun.which("rg")
+    ? [
+        {
+          tool: "Grep",
+          rule: "Grep",
+          args: { pattern: "HOME-MARKER", path: "~/config" },
+          place: (root: string) => path.join(root, "config"),
+          acted: (_root: string, bodies: string[]) => bodies.some((body) => body.includes(marker)),
+        },
+      ]
+    : []),
+  {
+    tool: "Read",
+    rule: "Read",
+    args: { file_path: "~/config/marker.txt" },
+    place: (root: string) => path.join(root, "config", "marker.txt"),
+    acted: (_root: string, bodies: string[]) => bodies.some((body) => body.includes(marker)),
+  },
+]
+for (const row of home)
+  for (const trusted of [false, true])
+    test(
+      `${trusted ? "a trusted" : "an untrusted"} ${row.tool} call on ~/config is shown in the person's config folder`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            rule: row.rule,
+            shell: "shell" in row ? row.shell : undefined,
+            trusted,
+            reply: "once",
+            args: () => row.args,
+            setup: (root) => Bun.write(path.join(root, "config", "marker.txt"), `${marker}\n`),
+          },
+          async (run) => {
+            const place = row.place(run.root)
+            // A served path may use forward slashes on Windows; the place is what matters.
+            const shown = (locations: ReadonlyArray<{ path: string }> | undefined) =>
+              (locations ?? []).map((item) => path.resolve(item.path))
+            expect(run.permissions).toHaveLength(1)
+            expect(shown(run.permissions[0]?.toolCall.locations)).toEqual([place])
+            // The ordinary updates once the call's input is known: running and completed.
+            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update" && item.locations)
+            expect(updates.map((item) => item.status)).toContain("completed")
+            for (const update of updates) expect(shown(update.locations)).toEqual([place])
+            expect(await row.acted(run.root, run.bodies)).toBe(true)
+          },
+        ),
+      90_000,
+    )
+
+type Run = {
+  readonly root: string
+  readonly workspace: string
+  readonly permissions: any[]
+  readonly updates: any[]
+  readonly bodies: string[]
+}
+
 async function approval(
-  tool: string,
-  args: (root: string) => Record<string, unknown>,
-  check: (call: any, workspace: string) => void,
+  input: {
+    tool: string
+    args: (root: string) => Record<string, unknown>
+    rule?: string
+    shell?: string
+    trusted?: boolean
+    reply?: "once" | "reject"
+    setup?: (root: string) => Promise<unknown>
+  },
+  check: (run: Run) => unknown,
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-acp-files-"))
   const workspace = path.join(root, "workspace")
@@ -57,12 +153,16 @@ async function approval(
   const models = path.join(root, "models.json")
   await Promise.all([fs.mkdir(workspace, { recursive: true }), fs.mkdir(config)])
   await Bun.write(models, "{}")
+  await input.setup?.(root)
+  const bodies: string[] = []
   let primary = 0
   const llm = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
-      const body: any = await request.json().catch(() => undefined)
+      const text = await request.text()
+      const body: any = JSON.parse(text || "null")
+      if (body?.tools) bodies.push(text)
       primary += body?.tools ? 1 : 0
       const call = Boolean(body?.tools) && primary === 1
       const delta = call
@@ -72,7 +172,7 @@ async function approval(
                 index: 0,
                 id: "call_1",
                 type: "function",
-                function: { name: tool, arguments: JSON.stringify(args(root)) },
+                function: { name: input.tool, arguments: JSON.stringify(input.args(root)) },
               },
             ],
           }
@@ -93,7 +193,8 @@ async function approval(
     JSON.stringify({
       update: "disable",
       model: "test/test-model",
-      permissions: [{ action: tool, resource: "*", effect: "ask" }],
+      ...(input.shell ? { shell: input.shell } : {}),
+      permissions: [{ action: input.rule ?? input.tool, resource: "*", effect: "ask" }],
       providers: {
         test: {
           name: "Test",
@@ -111,7 +212,7 @@ async function approval(
       },
     }),
   )
-  // ORBIT_TRUST_PROJECT is unset: the folder is untrusted.
+  // ORBIT_TRUST_PROJECT is unset unless the row is a trusted control: the folder is untrusted.
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
     cwd: path.join(import.meta.dir, "../.."),
     env: isolatedEnv(root, {
@@ -120,7 +221,7 @@ async function approval(
       ORBIT_CONFIG_CONTENT: undefined,
       ORBIT_DISABLE_AUTOUPDATE: "true",
       ORBIT_MODELS_PATH: models,
-      ORBIT_TRUST_PROJECT: undefined,
+      ORBIT_TRUST_PROJECT: input.trusted ? "1" : undefined,
     }),
     stdin: "pipe",
     stdout: "pipe",
@@ -129,6 +230,7 @@ async function approval(
   const stderr = new Response(child.stderr).text()
   const pending = new Map<number, (value: any) => void>()
   const permissions: any[] = []
+  const updates: any[] = []
   const write = async (message: unknown) => {
     child.stdin.write(`${JSON.stringify(message)}\n`)
     await child.stdin.flush()
@@ -143,13 +245,14 @@ async function approval(
         buffered = buffered.slice(buffered.indexOf("\n") + 1)
         if (!line) continue
         const message = JSON.parse(line)
+        if (message.method === "session/update") updates.push(message.params.update)
         if (message.method && message.id !== undefined) {
           if (message.method === "session/request_permission") {
             permissions.push(message.params)
             await write({
               jsonrpc: "2.0",
               id: message.id,
-              result: { outcome: { outcome: "selected", optionId: "reject" } },
+              result: { outcome: { outcome: "selected", optionId: input.reply ?? "reject" } },
             })
             continue
           }
@@ -179,7 +282,7 @@ async function approval(
     })
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
     await request("session/prompt", { sessionId: session.result.sessionId, prompt: [{ type: "text", text: "go" }] })
-    check(permissions[0]?.toolCall, workspace)
+    await check({ root, workspace, permissions, updates, bodies })
   } finally {
     child.stdin.end()
     const exited = await Promise.race([child.exited, Bun.sleep(5_000).then(() => undefined)])
