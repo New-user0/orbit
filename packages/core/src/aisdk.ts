@@ -726,7 +726,7 @@ function metadataProviderOptions(input: ProviderMetadata | undefined): SharedV3P
 }
 
 function streamLanguage(language: LanguageModelV3, options: LanguageModelV3CallOptions, http?: HttpMiddleware) {
-  const state: StreamState = { step: 0, toolNames: {}, open: {} }
+  const state: StreamState = { step: 0, toolNames: {}, streamedInput: {}, open: {} }
   return Stream.concat(
     Stream.make(LLMEvent.stepStart({ index: state.step })),
     Stream.unwrap(
@@ -757,6 +757,8 @@ type Fragment = "text" | "reasoning"
 type StreamState = {
   step: number
   toolNames: Record<string, string>
+  /** Tool calls that streamed at least one argument character. */
+  streamedInput: Record<string, true>
   open: Partial<Record<Fragment, string>>
 }
 
@@ -809,6 +811,7 @@ function streamPartEvents(
         }),
       ])
     case "tool-input-delta":
+      if (event.delta !== "") state.streamedInput[event.id] = true
       return Effect.succeed([
         LLMEvent.toolInputDelta({ id: event.id, name: state.toolNames[event.id] ?? "unknown", text: event.delta }),
       ])
@@ -829,6 +832,11 @@ function streamPartEvents(
             name: event.toolName,
             input,
             providerExecuted: event.providerExecuted,
+            // A call cut off before its first argument token looks like a call to a tool with no arguments, so it waits
+            // for the finish: `tool-calls` or `stop` releases it with `{}`, any other finish drops it.
+            ...(!event.providerExecuted && !state.streamedInput[event.toolCallId] && ["", "{}"].includes(event.input.trim())
+              ? { partialInput: true as const }
+              : {}),
             providerMetadata: providerMetadata(event.providerMetadata),
           }),
         ]),
@@ -846,6 +854,7 @@ function streamPartEvents(
       )
     case "tool-result":
       delete state.toolNames[event.toolCallId]
+      delete state.streamedInput[event.toolCallId]
       return Effect.succeed([
         LLMEvent.toolResult({
           id: event.toolCallId,
