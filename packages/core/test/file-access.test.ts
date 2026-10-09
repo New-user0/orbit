@@ -305,6 +305,34 @@ describe("FileAccess in a project that is not trusted", () => {
     },
   )
 
+  // The paths a shell command names in its text: only one that a link leads out of the project counts, and nothing about
+  // the others is asked or refused, a path outside by name included.
+  it.live("names only the paths of a command that a link leads out of the project", () => {
+    const requests: Permission.AssertInput[] = []
+    return Effect.gen(function* () {
+      const { project, outside } = yield* layout
+      const files = [
+        path.join(project, "own.md"),
+        path.join(project, "docs", "notes.md"),
+        path.join(project, "docs", "new.txt"),
+        path.join(outside, "notes.md"),
+        path.join(project, "https:", "evil.example"),
+      ]
+      const untrusted = yield* Effect.gen(function* () {
+        return yield* (yield* FileAccess.Service).escaped(files)
+      }).pipe(provideProject(project, requests, false))
+      expect(untrusted.map((target) => [target.place, target.externalDirectory?.escaped])).toEqual([
+        [path.join(outside, "notes.md"), true],
+        [path.join(outside, "new.txt"), true],
+      ])
+      const trusted = yield* Effect.gen(function* () {
+        return yield* (yield* FileAccess.Service).escaped(files)
+      }).pipe(provideProject(project, requests, true))
+      expect(trusted).toEqual([])
+      expect(requests).toEqual([])
+    })
+  })
+
   it.live("asks about the outside folder before a read through a link, and not once the project is trusted", () => {
     const requests: Permission.AssertInput[] = []
     return Effect.gen(function* () {

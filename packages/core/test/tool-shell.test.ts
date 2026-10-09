@@ -1327,13 +1327,19 @@ describe("ShellTool", () => {
           (active) =>
             Effect.gen(function* () {
               const global = yield* Global.Service
-              yield* Effect.promise(() => fs.symlink(global.config, path.join(active.path, "cfg"), "junction"))
+              yield* Effect.promise(async () => {
+                await fs.writeFile(path.join(global.config, "marker.txt"), "marker\n")
+                await fs.symlink(global.config, path.join(active.path, "cfg"), "junction")
+              })
               const config = FSUtil.resolve(global.config)
               const linked = path.join(active.path, "cfg")
               const folder = path.join(config, "*").replaceAll("\\", "/")
               const rows = [
                 { input: { command: cwdCommand, workdir: "cfg" }, workdir: trusted ? linked : config },
                 { input: { command: `cd cfg; ${cwdCommand}` }, workdir: active.path },
+                // A plain word of the command, and a file it writes to, through the link.
+                { input: { command: "cat cfg/marker.txt" }, workdir: active.path },
+                { input: { command: "echo planted > cfg/planted.txt" }, workdir: active.path },
                 // Windows starts a process in `cfg.` as in `cfg`, while Bun's own `stat` finds no `cfg.`.
                 ...(isWindows
                   ? [

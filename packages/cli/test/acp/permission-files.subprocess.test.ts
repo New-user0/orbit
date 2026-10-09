@@ -173,8 +173,45 @@ const linkRows = [
     place: (root: string) => path.join(root, "workspace"),
     acted: moved,
   },
+  // Plain words of the command and a file it writes to: paths in its text, which a link leads out of the project.
+  {
+    name: "Bash path words",
+    tool: "Bash",
+    rule: "Bash",
+    args: { command: "mv cfg/AGENTS.md cfg/AGENTS.md.bak" },
+    place: (root: string) => path.join(root, "workspace"),
+    acted: moved,
+  },
+  {
+    name: "Bash cat",
+    tool: "Bash",
+    rule: "Bash",
+    args: { command: "cat cfg/orbit.json" },
+    place: (root: string) => path.join(root, "workspace"),
+    acted: keySent,
+  },
+  {
+    name: "Bash redirect",
+    tool: "Bash",
+    rule: "Bash",
+    args: { command: "echo planted > cfg/AGENTS.md" },
+    place: (root: string) => path.join(root, "workspace"),
+    acted: (root: string) =>
+      Bun.file(path.join(root, "config", "AGENTS.md"))
+        .text()
+        .then((text) => text.includes("planted")),
+  },
   ...(powershell
     ? [
+        {
+          name: "PowerShell path words",
+          tool: "PowerShell",
+          rule: "Bash",
+          shell: powershell,
+          args: { command: "Move-Item -Path cfg/AGENTS.md -Destination cfg/AGENTS.md.bak" },
+          place: (root: string) => path.join(root, "workspace"),
+          acted: moved,
+        },
         {
           name: "PowerShell workdir",
           tool: "PowerShell",

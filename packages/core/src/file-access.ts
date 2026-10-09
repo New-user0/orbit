@@ -80,6 +80,12 @@ export interface Interface {
     context: Invocation,
     options?: ReadOptions,
   ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | Error | SessionErrors.NotFoundError>
+  /**
+   * The targets among absolute `files` that are in the project by name and that a link in it leads out of while it is
+   * not trusted, each with its real place and an `escaped` external directory. Nothing else about the files is refused
+   * or asked: they are paths that a shell command names in its text, not paths a tool was given.
+   */
+  readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -102,6 +108,9 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const permission = yield* Permission.Service
     const trust = yield* ProjectTrust.Service
+    const worktree = path.resolve(location.project.directory)
+    // The project's folders by name: a target in one is the project's own, unless a link leads it out.
+    const folders = [location.directory, ...(worktree === path.parse(worktree).root ? [] : [worktree])]
 
     // Windows opens a file by its 8.3 short name too: `ENV~1` is `.env`, and `PROJEC~1` the project's folder. Each part
     // below `from` that is such a name is replaced by the name it stands for, so rules and the project's folders see the
@@ -166,8 +175,6 @@ const layer = Layer.effect(
           message: `${input.path} has a ":" after its drive, which on Windows names a data stream of a file or a drive that is not a disk. Use the plain path of the file or folder.`,
           code: Tool.ErrorCode.FileSpelling,
         })
-      const worktree = path.resolve(location.project.directory)
-      const folders = [location.directory, ...(worktree === path.parse(worktree).root ? [] : [worktree])]
       // A part below a folder of the project is named in that folder as the disk names it, and a path outside from its
       // root, so that an 8.3 short name does not hide the name that rules are written for.
       const absolute = AbsolutePath.make(
@@ -233,7 +240,19 @@ const layer = Layer.effect(
       return target
     })
 
-    return Service.of({ resolve, authorizeExternal, authorizeRead })
+    const escaped = Effect.fn("FileAccess.escaped")(function* (files: readonly string[]) {
+      if (yield* trust.trusted()) return []
+      const targets = yield* Effect.forEach(
+        files.filter((file) => folders.some((folder) => FSUtil.contains(folder, file))),
+        Effect.fnUntraced(function* (file) {
+          const escapes = yield* trust.escapes(file)
+          return escapes === undefined ? [] : [yield* external(AbsolutePath.make(file), undefined, escapes)]
+        }),
+      )
+      return targets.flat()
+    })
+
+    return Service.of({ resolve, authorizeExternal, authorizeRead, escaped })
   }),
 )
 
