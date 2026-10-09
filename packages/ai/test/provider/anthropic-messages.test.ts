@@ -2017,6 +2017,52 @@ describe("Anthropic Messages route", () => {
     )
   })
 
+  // A no-argument call that a later block follows was complete, so it keeps its place in front of that block whatever
+  // the stop reason is. One that is the last block still waits for the finish.
+  ;(
+    [
+      ["tool_use", ["call_enter", "call_write"]],
+      ["end_turn", ["call_enter", "call_write"]],
+      ["max_tokens", ["call_enter", "call_write"]],
+    ] as const
+  ).forEach(([stopReason, order]) => {
+    it.effect(`keeps provider order for a no-argument call followed by another call on ${stopReason}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(writeRequest).pipe(
+          Effect.provide(
+            fixedResponse(
+              sseEvents(
+                { type: "message_start", message: { usage: { input_tokens: 5 } } },
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: { type: "tool_use", id: "call_enter", name: "enter_worktree", input: {} },
+                },
+                { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "" } },
+                { type: "content_block_stop", index: 0 },
+                {
+                  type: "content_block_start",
+                  index: 1,
+                  content_block: { type: "tool_use", id: "call_write", name: "write" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 1,
+                  delta: { type: "input_json_delta", partial_json: '{"path":"a.ts","content":"x"}' },
+                },
+                { type: "content_block_stop", index: 1 },
+                { type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: 8 } },
+                { type: "message_stop" },
+              ),
+            ),
+          ),
+        )
+
+        expect(response.toolCalls.map((call) => call.id)).toEqual(order)
+      }),
+    )
+  })
+
   it.effect("still calls a tool that finished before the output limit cut off a later one", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(writeRequest).pipe(

@@ -1,6 +1,7 @@
 export * as SessionTurn from "./turn.js"
 
-import { and, desc, eq, gt, gte, inArray, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm"
+import type { SQL } from "drizzle-orm"
 import { DateTime, Effect, Option, Schema } from "effect"
 import { Model } from "@orbit/schema/model"
 import { Options } from "@orbit/schema/session-turn"
@@ -8,6 +9,7 @@ import { Database } from "../database/database.js"
 import { Event } from "@orbit/schema/event"
 import { EventTable } from "../event/sql.js"
 import { SessionEvent } from "@orbit/schema/session-event"
+import { MessageDecodeError } from "./error.js"
 import { SessionHistory } from "./history.js"
 import { SessionSchema } from "./schema.js"
 import { SessionMessageTable, SessionTable } from "./sql.js"
@@ -31,6 +33,12 @@ export interface Current {
    * of is absent, whatever its name: the record has no prototype, so `constructor` or `toString` are not inherited.
    */
   readonly notices: Readonly<Partial<Record<string, number>>>
+}
+
+/** Reads the turn as the transcript stood before a sequence number, or at a time (inclusive). */
+export interface Until {
+  readonly seq?: number
+  readonly time?: number
 }
 
 const decodeModel = Schema.decodeUnknownOption(Model.Ref)
@@ -61,7 +69,20 @@ const decodeModel = Schema.decodeUnknownOption(Model.Ref)
  * cut or where the turn started, and nothing records either yet. For the fifth, the start could publish the terminal
  * event that it does not publish when it clears the claim.
  */
-export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+export const current: (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  until?: Until,
+) => Effect.Effect<Current, MessageDecodeError> = Effect.fn("SessionTurn.current")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  until?: Until,
+) {
+  // Rows after `until` do not exist yet, as far as this read is concerned.
+  const visible = and(
+    until?.seq === undefined ? undefined : lt(SessionMessageTable.seq, until.seq),
+    until?.time === undefined ? undefined : lte(SessionMessageTable.time_created, until.time),
+  )
   const notice = sql<string>`json_extract(${SessionMessageTable.data}, '$.metadata.notice')`
   const read = yield* db
     .transaction(() =>
@@ -69,7 +90,7 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
         const idle = yield* db
           .select({ seq: SessionMessageTable.seq })
           .from(SessionMessageTable)
-          .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "idle")))
+          .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "idle"), visible))
           .orderBy(desc(SessionMessageTable.seq))
           .limit(1)
           .get()
@@ -81,6 +102,7 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
             and(
               eq(SessionMessageTable.session_id, sessionID),
               inArray(SessionMessageTable.type, ["user", "synthetic"]),
+              visible,
               gt(SessionMessageTable.seq, idle?.seq ?? -1),
               sql`json_extract(${SessionMessageTable.data}, '$.delivery') = 'queue'`,
             ),
@@ -98,6 +120,7 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
             and(
               eq(SessionMessageTable.session_id, sessionID),
               eq(SessionMessageTable.type, "user"),
+              visible,
               gte(SessionMessageTable.seq, floor),
               sql`json_extract(${SessionMessageTable.data}, '$.turn') is not null`,
             ),
@@ -158,12 +181,13 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
     yield* Effect.logWarning("Ignoring a fallback notice whose model cannot be read").pipe(
       Effect.annotateLogs({ sessionID, messageID: named.id }),
     )
+  const own =
+    read.options && prompt?.type === "user" && prompt.turn
+      ? { ...prompt.turn, seq: read.options.seq, time: prompt.time.created }
+      : undefined
   return {
     boundary: read.boundary,
-    options:
-      read.options && prompt?.type === "user" && prompt.turn
-        ? { ...prompt.turn, seq: read.options.seq, time: prompt.time.created }
-        : undefined,
+    options: own ?? (yield* wakeUpOptions(db, sessionID, read.boundary, visible)),
     fallback: model?._tag === "Some" ? model.value : undefined,
     // fromEntries defines own properties, so a kind named `__proto__` is still a plain count, and assigning them onto an
     // object without a prototype keeps every other name from reading as an inherited member.
@@ -172,6 +196,43 @@ export const current = Effect.fn("SessionTurn.current")(function* (db: DatabaseS
       Object.fromEntries(read.counts.map((row) => [row.notice, row.count])),
     ),
   } satisfies Current
+})
+
+/**
+ * A background subagent's completion notice that begins a turn wakes the parent into it. That turn carries no options
+ * of its own, so it continues the limits of the turn that ended before it, counted from that turn's own prompt: the
+ * wake-up cannot spend what the original turn had left and then some.
+ */
+const wakeUpOptions = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  boundary: number | undefined,
+  visible: SQL | undefined,
+) {
+  if (boundary === undefined) return undefined
+  // Only the input that began the turn wakes it: a user prompt first means the turn began with one that carried none.
+  const began = yield* db
+    .select({
+      seq: SessionMessageTable.seq,
+      type: SessionMessageTable.type,
+      source: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.metadata.source')`,
+    })
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        inArray(SessionMessageTable.type, ["user", "synthetic"]),
+        visible,
+        gte(SessionMessageTable.seq, boundary),
+      ),
+    )
+    .orderBy(asc(SessionMessageTable.seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie)
+  if (began?.type !== "synthetic" || began.source !== "subagent") return undefined
+  // The turn that ended before the boundary: the idle marker (or the queued input) itself is not part of it.
+  return (yield* current(db, sessionID, { seq: boundary })).options
 })
 
 const decodeUsage = Schema.decodeUnknownOption(SessionEvent.UsageRecorded.data)
@@ -306,6 +367,9 @@ export function exceeded(options: Options, spent: Usage, priced: boolean) {
  * checks its own limits only before its next request. The ancestor's step limit is left out because only the
  * ancestor's own responses count toward it, so a parent on its last step would stop the child it just started. The
  * ancestor's usage includes every sibling running beside the child, so parallel subagents share the one budget.
+ *
+ * Each ancestor's turn is read as it stood when the Session below it was created: a background subagent outlives that
+ * turn, and the idle marker that closes it must not lift the limit the work was started under.
  */
 export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
   db: DatabaseService,
@@ -314,19 +378,21 @@ export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
 ) {
   const parentOf = (id: SessionSchema.ID) =>
     db
-      .select({ parent: SessionTable.parent_id })
+      .select({ parent: SessionTable.parent_id, created: SessionTable.time_created })
       .from(SessionTable)
       .where(eq(SessionTable.id, id))
       .get()
-      .pipe(
-        Effect.orDie,
-        Effect.map((row) => row?.parent ?? undefined),
-      )
+      .pipe(Effect.orDie)
   // A session tree is acyclic, but a bad row must not loop here.
   const seen = new Set<string>([sessionID])
-  for (let id = yield* parentOf(sessionID); id !== undefined && !seen.has(id); id = yield* parentOf(id)) {
+  for (
+    let row = yield* parentOf(sessionID);
+    row?.parent && !seen.has(row.parent);
+    row = yield* parentOf(row.parent)
+  ) {
+    const id = row.parent
     seen.add(id)
-    const turn = (yield* current(db, id)).options
+    const turn = (yield* current(db, id, { time: row.created })).options
     if (turn?.maxCost === undefined && turn?.maxTokens === undefined) continue
     const limit = exceeded(turn, { ...(yield* usage(db, id, turn)), steps: 0 }, priced)
     if (limit) return limit

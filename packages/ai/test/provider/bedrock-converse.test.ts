@@ -1130,6 +1130,41 @@ describe("Bedrock Converse route", () => {
     )
   })
 
+  // A no-argument call that a later block follows was complete, so it keeps its place in front of that block.
+  ;(["tool_use", "end_turn", "max_tokens"] as const).forEach((stopReason) => {
+    it.effect(`keeps provider order for a no-argument call followed by another call on ${stopReason}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(
+          LLMRequest.update(baseRequest, {
+            tools: [ToolDefinition.make({ name: "write", description: "Write", inputSchema: { type: "object" } })],
+          }),
+        ).pipe(
+          Effect.provide(
+            fixedBytes(
+              eventStreamBody(
+                ["messageStart", { role: "assistant" }],
+                [
+                  "contentBlockStart",
+                  { contentBlockIndex: 0, start: { toolUse: { toolUseId: "tool_1", name: "write" } } },
+                ],
+                ["contentBlockStop", { contentBlockIndex: 0 }],
+                [
+                  "contentBlockStart",
+                  { contentBlockIndex: 1, start: { toolUse: { toolUseId: "tool_2", name: "write" } } },
+                ],
+                ["contentBlockDelta", { contentBlockIndex: 1, delta: { toolUse: { input: '{"path":"a.ts"}' } } }],
+                ["contentBlockStop", { contentBlockIndex: 1 }],
+                ["messageStop", { stopReason }],
+              ),
+            ),
+          ),
+        )
+
+        expect(response.toolCalls.map((call) => call.id)).toEqual(["tool_1", "tool_2"])
+      }),
+    )
+  })
+
   it.effect("rejects a provider-emitted dotted name before normalizing its replay", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(baseRequest).pipe(

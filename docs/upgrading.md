@@ -1280,14 +1280,21 @@ response is resumed up to three times in a row (see "A response cut off by the o
 fails with the response's own error. A call whose arguments arrived complete is not affected, and still runs when a
 later call in the same response was cut off. A call with no argument text at all is held the same way, because a call
 cut off before its first argument token cannot be told from a call to a tool that takes no arguments: it runs with empty
-arguments once the response finishes with `tool-calls` or `stop`, and is dropped after any other finish. The cost is that
-a call with no arguments starts when the response finishes, not mid-stream. Provider-executed calls are not held.
+arguments once the response finishes with `tool-calls` or `stop`, and is dropped after any other finish. Every route does
+this, including the routes that run through the AI SDK, which used to run such a call with empty arguments. The one exception is a call that another block (a tool call, text or reasoning) follows: only the last block of a
+response can be cut off, so that call was complete and is released as soon as the next block starts. The cost is that a
+call with no arguments, when it is the last block, starts when the response finishes, not mid-stream.
+
+Held calls keep the order the provider sent them in. A call that arrives behind a held one waits and is released with
+it, so `task_list` followed by `task_update` still runs in that order, and a failing shell call sent after a
+no-argument call no longer cancels it. When the response is cut off, only the held calls are dropped and the calls
+behind them still run in order. Provider-executed calls are not held.
 
 A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
 `tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
 incomplete, with no reason or a reason Orbit does not know, and a Chat-style stream that ended without a finish reason
 from a model whose `compatibility.requireFinishReason` is `false`. Both now report an unknown finish, so the call is
-dropped, and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
+dropped (a call with no argument text in the second kind is a call to a tool without arguments and still runs), and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
 retries or continues. The first kind reports an unknown finish even when every call in it is complete, where it used to
 report `tool-calls`; those calls still run.
 
@@ -1330,10 +1337,12 @@ compaction start without the check, and their spend counts at the next one. A su
 token limits of every turn above it before each of its own steps, counting what that turn has spent so far, siblings
 included, so a subagent stops with `limit.cost` or `limit.tokens` instead of overshooting by a whole run; the parent's
 step limit counts only the parent's own responses and never stops a subagent. A response is still priced after it
-arrives, so the overshoot is at most one response. A background subagent that is still running when a limit ends the turn
-keeps running, because the turn is over and no longer limits it. Its completion notice then wakes
-the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
-a cost or token limit by one response.
+arrives, so the overshoot is at most one response. A subagent is limited by the turn that was open when it was
+started, even after that turn ends: a background subagent that is still running when the turn ends, whether it
+succeeded, failed or hit the limit, stops at the same cost or token limit, counting what the turn had spent. Its
+completion notice wakes the Session into a new turn that continues the limits of the turn before it, counted from the
+prompt that set them, unless a prompt of its own began a turn in between. A response is priced after it arrives, so a
+turn can also overshoot a cost or token limit by one response.
 
 The window starts at the prompt that set the options. A queued prompt without options, or a prompt sent after the busy
 period ended, runs without limits, and a steered prompt with its own options starts a new window. A prompt sent while a

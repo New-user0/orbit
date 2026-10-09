@@ -4581,6 +4581,23 @@ describe("SessionRunnerLLM", () => {
     expect(yield* tools.maxActive).toBe(1)
   })
 
+  // A call with no argument text waits for the finish, and the calls behind it wait with it: the runner sees them in the
+  // order the provider sent them, so a later call never starts first.
+  scenario("runs a held no-argument call before the calls the provider sent behind it", function* (s) {
+    yield* s.admit("No arguments, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-first", name: "mutate", input: { text: "first" }, partialInput: true }),
+        callOf("call-second", "mutate", "second"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["first", "second"])
+  })
+
   scenario("keeps the start order of a safe, a not safe and a safe call", function* (s) {
     yield* s.admit("Echo, mutate, echo")
     yield* s.llm.push(
@@ -5702,6 +5719,84 @@ describe("SessionRunnerLLM", () => {
         expect(s.requests.length - 2).toBe(row.childRequests)
         if (row.expected === undefined) return expect(Exit.isSuccess(exit)).toBe(true)
         expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.expected)
+      })
+
+    // A background subagent outlives the turn that started it: the parent's terminal writes the idle marker that closes
+    // the turn, and the limit it set must still bind the child (`orb run --max-cost` exits at that terminal).
+    for (const row of [
+      { name: "open", terminal: undefined },
+      { name: "succeeded", terminal: (s: Scenario) => s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID }) },
+      {
+        name: "failed",
+        terminal: (s: Scenario) =>
+          failTerminal(s, {
+            type: "limit.cost",
+            message: "The turn reached its cost limit.",
+          } as SessionError.Error),
+      },
+    ] as const)
+      scenario(`stops a subagent at the parent's cost limit after the parent is ${row.name}`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          // The harness stamps messages with the test clock (0) and sessions with the wall clock, so place the child inside
+          // the turn explicitly: after the parent's prompt and before the idle marker that the terminal writes.
+          .set({ parent_id: sessionID, time_created: 1 })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* TestClock.adjust("1 second")
+        if (row.terminal) yield* row.terminal(s)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(1)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain("limit.cost")
+      })
+
+    // The wake-up turn that a background subagent's completion notice begins continues the limits of the turn before it,
+    // unless a user prompt began a turn in between.
+    for (const row of [
+      { name: "keeps", prompt: false, limited: true },
+      { name: "drops", prompt: true, limited: false },
+    ] as const)
+      scenario(`${row.name} the turn's cost limit on the turn a subagent's completion notice wakes`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+        if (row.prompt) yield* s.session.prompt({ sessionID, text: "Unlimited", resume: false })
+        yield* s.session.synthetic({
+          sessionID,
+          text: "<subagent>done</subagent>",
+          metadata: { source: "subagent" },
+          resume: false,
+        })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("wake-done")),
+        )
+
+        const exit = yield* s.session.resume(sessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(row.limited ? 1 : 6)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.limited ? "limit.cost" : "")
       })
 
     scenario("stops at the token limit", function* (s) {
