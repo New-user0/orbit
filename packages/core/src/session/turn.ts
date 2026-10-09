@@ -199,9 +199,10 @@ export const current: (
 })
 
 /**
- * A background subagent's completion notice that begins a turn wakes the parent into it. That turn carries no options
- * of its own, so it continues the limits of the turn that ended before it, counted from that turn's own prompt: the
- * wake-up cannot spend what the original turn had left and then some.
+ * Input that no user prompt began wakes the Session into a turn: a background subagent's or shell job's completion
+ * notice, a plan reminder, any synthetic message. That turn carries no options of its own, so it continues the limits of
+ * the turn that ended before it, counted from that turn's own prompt: the wake-up cannot spend what the original turn
+ * had left and then some. A user prompt first starts a turn of its own.
  */
 const wakeUpOptions = Effect.fnUntraced(function* (
   db: DatabaseService,
@@ -215,7 +216,6 @@ const wakeUpOptions = Effect.fnUntraced(function* (
     .select({
       seq: SessionMessageTable.seq,
       type: SessionMessageTable.type,
-      source: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.metadata.source')`,
     })
     .from(SessionMessageTable)
     .where(
@@ -230,7 +230,7 @@ const wakeUpOptions = Effect.fnUntraced(function* (
     .limit(1)
     .get()
     .pipe(Effect.orDie)
-  if (began?.type !== "synthetic" || began.source !== "subagent") return undefined
+  if (began?.type !== "synthetic") return undefined
   // The turn that ended before the boundary: the idle marker (or the queued input) itself is not part of it.
   return (yield* current(db, sessionID, { seq: boundary })).options
 })
@@ -368,8 +368,10 @@ export function exceeded(options: Options, spent: Usage, priced: boolean) {
  * ancestor's own responses count toward it, so a parent on its last step would stop the child it just started. The
  * ancestor's usage includes every sibling running beside the child, so parallel subagents share the one budget.
  *
- * Each ancestor's turn is read as it stood when the Session below it was created: a background subagent outlives that
- * turn, and the idle marker that closes it must not lift the limit the work was started under.
+ * Each ancestor's turn is read as it stood when the Session below it was last prompted, which is the prompt that the
+ * ancestor's subagent tool admitted: a continued child belongs to the turn that continues it, not the one that created
+ * it. A background subagent outlives that turn, and the idle marker that closes it must not lift the limit the work was
+ * started under, because its latest prompt was admitted inside it.
  */
 export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
   db: DatabaseService,
@@ -383,8 +385,21 @@ export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
       .where(eq(SessionTable.id, id))
       .get()
       .pipe(Effect.orDie)
+  // The latest user prompt of the Session, delivered or still waiting in its inbox: the limit is checked before a
+  // continuation prompt is delivered.
+  const prompted = (id: SessionSchema.ID) =>
+    db
+      .get<{ time: number | null }>(
+        sql`SELECT max(time) AS time FROM (
+          SELECT time_created AS time FROM session_message WHERE session_id = ${id} AND type = 'user'
+          UNION ALL
+          SELECT time_created AS time FROM session_inbox WHERE session_id = ${id} AND type = 'user'
+        )`,
+      )
+      .pipe(Effect.orDie)
   // A session tree is acyclic, but a bad row must not loop here.
   const seen = new Set<string>([sessionID])
+  let below = sessionID
   for (
     let row = yield* parentOf(sessionID);
     row?.parent && !seen.has(row.parent);
@@ -392,7 +407,9 @@ export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
   ) {
     const id = row.parent
     seen.add(id)
-    const turn = (yield* current(db, id, { time: row.created })).options
+    const admitted = (yield* prompted(below))?.time ?? row.created
+    below = id
+    const turn = (yield* current(db, id, { time: admitted })).options
     if (turn?.maxCost === undefined && turn?.maxTokens === undefined) continue
     const limit = exceeded(turn, { ...(yield* usage(db, id, turn)), steps: 0 }, priced)
     if (limit) return limit

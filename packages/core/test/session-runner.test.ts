@@ -53,6 +53,7 @@ import { SessionRunner } from "@orbit/core/session/runner/index"
 import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
+import { ShellResult } from "@orbit/core/shell/result"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
@@ -84,7 +85,7 @@ import { Location } from "@orbit/core/location"
 import { Provider } from "@orbit/core/provider"
 import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
-import { asc, desc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
@@ -5723,8 +5724,19 @@ describe("SessionRunnerLLM", () => {
           .run()
           .pipe(Effect.orDie)
         yield* TestClock.adjust("1 second")
-        if (row.terminal) yield* row.terminal(s)
+        // The subagent tool admitted this prompt inside the turn; the parent's terminal comes after it.
         yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
+        if (row.terminal) {
+          yield* row.terminal(s)
+          // The child runs while the parent waits, so its prompt is delivered before the parent's idle marker. The test
+          // delivers it afterwards, so place the marker after that delivery.
+          yield* s.db
+            .update(SessionMessageTable)
+            .set({ time_created: 100_000 })
+            .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "idle")))
+            .run()
+            .pipe(Effect.orDie)
+        }
         yield* s.llm.push(
           ...Array.from({ length: 5 }, () => toolStep(spend)),
           TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
@@ -5736,13 +5748,26 @@ describe("SessionRunnerLLM", () => {
         expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain("limit.cost")
       })
 
-    // The wake-up turn that a background subagent's completion notice begins continues the limits of the turn before it,
-    // unless a user prompt began a turn in between.
+    // The wake-up turn that input no user prompt began (a completion notice, whatever its source) continues the limits of
+    // the turn before it, unless a user prompt began a turn in between.
+    const notices = {
+      subagent: { text: "<subagent>done</subagent>", metadata: { source: "subagent" } },
+      shell: ShellResult.notification({
+        jobID: "job_1",
+        shellID: "sh_1",
+        command: "npm run build",
+        state: "completed",
+        text: "built",
+      }),
+    }
     for (const row of [
-      { name: "keeps", prompt: false, limited: true },
-      { name: "drops", prompt: true, limited: false },
+      { name: "keeps", notice: "subagent", reminder: false, prompt: false, limited: true },
+      { name: "keeps", notice: "shell", reminder: false, prompt: false, limited: true },
+      { name: "keeps behind a plan reminder", notice: "shell", reminder: true, prompt: false, limited: true },
+      { name: "drops", notice: "subagent", reminder: false, prompt: true, limited: false },
+      { name: "drops", notice: "shell", reminder: false, prompt: true, limited: false },
     ] as const)
-      scenario(`${row.name} the turn's cost limit on the turn a subagent's completion notice wakes`, function* (s) {
+      scenario(`${row.name} the turn's cost limit on the turn a ${row.notice}'s completion notice wakes`, function* (s) {
         s.modelCost = [price]
         yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
         yield* s.llm.push(
@@ -5752,12 +5777,9 @@ describe("SessionRunnerLLM", () => {
         yield* s.resume
         yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
         if (row.prompt) yield* s.session.prompt({ sessionID, text: "Unlimited", resume: false })
-        yield* s.session.synthetic({
-          sessionID,
-          text: "<subagent>done</subagent>",
-          metadata: { source: "subagent" },
-          resume: false,
-        })
+        if (row.reminder)
+          yield* s.session.synthetic({ sessionID, text: "Plan reminder", metadata: { notice: "plan" }, resume: false })
+        yield* s.session.synthetic({ sessionID, ...notices[row.notice], resume: false })
         yield* s.llm.push(
           ...Array.from({ length: 5 }, () => toolStep(spend)),
           TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("wake-done")),
@@ -5766,6 +5788,46 @@ describe("SessionRunnerLLM", () => {
         const exit = yield* s.session.resume(sessionID).pipe(Effect.exit)
 
         expect(s.requests.length - 2).toBe(row.limited ? 1 : 6)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.limited ? "limit.cost" : "")
+      })
+
+    // A child that the subagent tool continues belongs to the turn that continues it, not to the one that created it.
+    for (const row of [
+      { name: "unlimited then limited", first: undefined, second: { maxCost: Money.USD.make(3) }, limited: true },
+      { name: "limited then unlimited", first: { maxCost: Money.USD.make(2) }, second: undefined, limited: false },
+      { name: "limited then limited", first: { maxCost: Money.USD.make(2) }, second: { maxCost: Money.USD.make(3) }, limited: true },
+    ] as const)
+      scenario(`binds a continued subagent to the continuing turn: ${row.name}`, function* (s) {
+        s.modelCost = [price]
+        const parentTurn = function* (turn: typeof row.first | typeof row.second, text: string) {
+          yield* s.session.prompt({ sessionID, text, turn, resume: false })
+          yield* s.llm.push(
+            toolStep(spend),
+            TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+          )
+          yield* s.resume
+        }
+        yield* parentTurn(row.first, "First")
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          .set({ parent_id: sessionID, time_created: 1 })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* TestClock.adjust("1 second")
+        yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+        yield* TestClock.adjust("1 second")
+        yield* parentTurn(row.second, "Second")
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Continue the child", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 4).toBe(row.limited ? 1 : 6)
         expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.limited ? "limit.cost" : "")
       })
 

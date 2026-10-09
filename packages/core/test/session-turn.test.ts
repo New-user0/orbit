@@ -296,9 +296,10 @@ describe("SessionTurn.current", () => {
       const queued = yield* s.admitSynthetic("Later work finished", "queue")
       yield* s.promote("input")
 
-      expect(yield* s.current).toEqual({
+      // The notice began the turn, not a prompt, so the turn continues the limits of the one before it.
+      expect(yield* s.current).toMatchObject({
         boundary: yield* s.seq(queued.id),
-        options: undefined,
+        options: { maxSteps: 3 },
         fallback: undefined,
         notices: {},
       })
