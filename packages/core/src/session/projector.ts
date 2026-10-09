@@ -79,13 +79,22 @@ function applyUsage(db: DatabaseService, sessionID: SessionSchema.ID, value: Usa
 }
 
 // The limit inputs live in this table, not in the event log, which only a persisting Bus keeps.
-function recordUsage(
+// A record published after its Session was deleted (a title or side query that finishes late) is dropped quietly, as the
+// session totals' UPDATE does: the row has a foreign key to the Session.
+const recordUsage = Effect.fnUntraced(function* (
   db: DatabaseService,
   event: { readonly durable: { readonly seq: number }; readonly created: number },
   kind: "usage" | "side_query",
   value: Usage & { readonly sessionID: SessionSchema.ID; readonly source: string },
 ) {
-  return db
+  const session = yield* db
+    .select({ id: SessionTable.id })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, value.sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session) return
+  yield* db
     .insert(SessionUsageTable)
     .values({
       session_id: value.sessionID,
@@ -103,7 +112,7 @@ function recordUsage(
     .onConflictDoNothing()
     .run()
     .pipe(Effect.orDie)
-}
+})
 
 const publishSessionUsage = Effect.fn("SessionProjector.publishUsage")(function* (
   db: DatabaseService,
