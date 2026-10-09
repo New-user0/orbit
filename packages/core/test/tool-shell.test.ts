@@ -1334,6 +1334,13 @@ describe("ShellTool", () => {
               const rows = [
                 { input: { command: cwdCommand, workdir: "cfg" }, workdir: trusted ? linked : config },
                 { input: { command: `cd cfg; ${cwdCommand}` }, workdir: active.path },
+                // Windows starts a process in `cfg.` as in `cfg`, while Bun's own `stat` finds no `cfg.`.
+                ...(isWindows
+                  ? [
+                      { input: { command: cwdCommand, workdir: "cfg." }, workdir: trusted ? linked : config },
+                      { input: { command: cwdCommand, workdir: "cfg " }, workdir: trusted ? linked : config },
+                    ]
+                  : []),
               ]
               yield* withSession(active.path, (registry) =>
                 Effect.forEach(rows, (row) =>

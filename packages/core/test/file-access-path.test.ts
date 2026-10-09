@@ -8,6 +8,8 @@ import { FileAccess } from "@orbit/core/file-access"
 import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Global } from "@orbit/util/global"
+import { ToolFailure } from "@orbit/ai"
+import { shortName } from "./fixture/short-name"
 import { tmpdirScoped, withTempDir } from "./fixture/tmpdir"
 import { location } from "./fixture/location"
 import { it } from "./lib/effect"
@@ -283,5 +285,117 @@ describe("FileAccess.resolve", () => {
       })
       expect(target.externalDirectory).toBeUndefined()
     }).pipe(provide(Global.Path.home)),
+  )
+})
+
+// On Windows one file has spellings that a rule written for its name would not see: an NTFS data stream opens the file
+// or a stream of it, an 8.3 short name opens the file it stands for, trailing periods and spaces are dropped when a
+// shell or ripgrep opens it, and a `\\?\` or `\\.\` prefix names the plain path. A stream is refused; every other
+// spelling resolves to the name the rules are written for, so a deny or ask rule for `*.env` or `*.sh` applies to it
+// (class 4, class 8). Elsewhere the rows do not run, as these spellings name other files there.
+describe.skipIf(process.platform !== "win32")("FileAccess.resolve of Windows spellings", () => {
+  const rules = (action: string, pattern: string, effect: Permission.Ruleset[number]["effect"]): Permission.Ruleset => [
+    { action: "*", resource: "*", effect: "allow" },
+    { action, resource: pattern, effect },
+  ]
+  const layout = (directory: string) =>
+    Effect.promise(async () => {
+      await fs.writeFile(path.join(directory, ".env"), "API_KEY=SECRET")
+      await fs.writeFile(path.join(directory, "README.md"), "readme")
+      await fs.mkdir(path.join(directory, "config folder long"))
+      await fs.writeFile(path.join(directory, "config folder long", "deploy.sh"), "echo")
+    })
+
+  it.live("resolves every spelling of a file to the name its rules are written for", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        yield* layout(directory)
+        const env = shortName(directory, ".env")
+        const folder = shortName(directory, "config folder long")
+        // The volume of the test folder makes 8.3 names, as the system volume does by default.
+        expect([env, folder]).toEqual([expect.stringContaining("~"), expect.stringContaining("~")])
+        const access = yield* FileAccess.Service
+        const rows: ReadonlyArray<readonly [string, string]> = [
+          // Controls: the plain name, and a case and separators that the rules already match.
+          [".env", ".env"],
+          [".ENV", ".ENV"],
+          ["src\\..\\.env", ".env"],
+          ["src/../.env", ".env"],
+          [env!, ".env"],
+          [env!.toLowerCase(), ".env"],
+          [".env.", ".env"],
+          [".env ", ".env"],
+          [".env. .", ".env"],
+          ["new.sh.", "new.sh"],
+          ["new.sh  ", "new.sh"],
+          [`${folder}\\deploy.sh`, "config folder long/deploy.sh"],
+          [`${folder}\\deploy.sh.`, "config folder long/deploy.sh"],
+          ["config folder long.\\deploy.sh", "config folder long/deploy.sh"],
+          [`\\\\?\\${path.join(directory, ".env")}`, ".env"],
+          [`\\\\.\\${path.join(directory, ".env")}`, ".env"],
+          [`//?/${path.join(directory, ".env").replaceAll("\\", "/")}`, ".env"],
+          [`\\\\?\\${path.join(directory, env!)}`, ".env"],
+        ]
+        for (const [spelling, resource] of rows) {
+          const target = yield* access.resolve({ path: spelling })
+          expect([spelling, target.resource, target.externalDirectory]).toEqual([spelling, resource, undefined])
+          expect(target.place).toBe(target.absolute)
+          // A rule for the file decides it, deny and ask alike: reading `*.env` and writing `*.sh`.
+          const [action, pattern] = resource.endsWith(".sh") ? ["Edit", "*.sh"] : ["Read", "*.env"]
+          for (const effect of ["deny", "ask"] as const)
+            expect([
+              spelling,
+              Permission.evaluate(action, target.resource, rules(action, pattern, effect)).effect,
+            ]).toEqual([spelling, effect])
+        }
+        // And not another file.
+        const readme = yield* access.resolve({ path: "README.md" })
+        expect(Permission.evaluate("Read", readme.resource, rules("Read", "*.env", "deny")).effect).toBe("allow")
+      }).pipe(provide(directory)),
+    ),
+  )
+
+  it.live("names a file outside the project by its long name", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        const outside = yield* tmpdirScoped()
+        yield* layout(outside.path)
+        const env = shortName(outside.path, ".env")
+        expect(env).toEqual(expect.stringContaining("~"))
+        const access = yield* FileAccess.Service
+        const target = yield* access.resolve({ path: path.join(outside.path, env!) })
+        expect(target.resource).toBe(path.join(outside.path, ".env").replaceAll("\\", "/"))
+        expect(target.externalDirectory?.resource).toBe(path.join(outside.path, "*").replaceAll("\\", "/"))
+      }).pipe(provide(directory)),
+    ),
+  )
+
+  it.live("refuses a data stream, or a drive that is not a disk, before any approval", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        yield* layout(directory)
+        const env = shortName(directory, ".env")
+        const access = yield* FileAccess.Service
+        for (const spelling of [
+          ".env::$DATA",
+          ".env:secret",
+          ".env:secret:$DATA",
+          `${env}::$DATA`,
+          "new.sh::$DATA",
+          "new.sh:payload",
+          `${path.join(directory, ".env")}::$DATA`,
+          "config folder long::$INDEX_ALLOCATION\\deploy.sh",
+          "HKLM:\\Software",
+          "FileSystem::C:\\Windows",
+        ]) {
+          const failure = yield* access.resolve({ path: spelling }).pipe(Effect.flip)
+          expect([spelling, failure instanceof ToolFailure, failure]).toMatchObject([
+            spelling,
+            true,
+            { code: "file.spelling" },
+          ])
+        }
+      }).pipe(provide(directory)),
+    ),
   )
 })

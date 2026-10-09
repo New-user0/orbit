@@ -1,9 +1,11 @@
 export * as FileAccess from "./file-access.js"
 
+import { ToolFailure } from "@orbit/ai"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Array, Context, Effect, Layer, Schema } from "effect"
+import { lstat, readdir } from "fs/promises"
 import path from "path"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
@@ -11,7 +13,7 @@ import { Project } from "./project.js"
 import { ProjectTrust } from "./project-trust.js"
 import { AbsolutePath } from "./schema.js"
 import type { SessionErrors } from "./session/error.js"
-import type { Tool } from "./tool.js"
+import { Tool } from "./tool.js"
 
 export const Kind = Schema.Literals(["file", "directory"])
 export type Kind = typeof Kind.Type
@@ -59,8 +61,11 @@ export interface ReadOptions {
 }
 
 export interface Interface {
-  /** Resolve a lexical path and its permission resources, without requesting approval. */
-  readonly resolve: (input: ResolveInput) => Effect.Effect<Target, FSUtil.Error>
+  /**
+   * Resolve a path and its permission resources, without requesting approval. On Windows it refuses a data stream and an
+   * 8.3 short name it cannot find the long name of (`file.spelling`), and names a file as the disk does.
+   */
+  readonly resolve: (input: ResolveInput) => Effect.Effect<Target, FSUtil.Error | ToolFailure>
   /** Approve external directories in one batch, preserving first-seen resource order. */
   readonly authorizeExternal: (
     targets: readonly Target[],
@@ -72,7 +77,7 @@ export interface Interface {
     file: string,
     context: Invocation,
     options?: ReadOptions,
-  ) => Effect.Effect<Target, FSUtil.Error | Error | SessionErrors.NotFoundError>
+  ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | Error | SessionErrors.NotFoundError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -95,6 +100,34 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const permission = yield* Permission.Service
     const trust = yield* ProjectTrust.Service
+
+    // Windows opens a file by its 8.3 short name too: `ENV~1` is `.env`, and `PROJEC~1` the project's folder. Each part
+    // below `from` that is such a name is replaced by the name it stands for, so rules and the project's folders see the
+    // file's own name. Only a part with `~` can be one, so other paths touch no disk, and this walk reads no share that
+    // is not a folder of the project.
+    const longNames = Effect.fnUntraced(function* (file: string, from?: string) {
+      if (process.platform !== "win32") return file
+      const root = path.parse(file).root
+      if (from === undefined && root.startsWith("\\\\")) return file
+      const base = from ?? root
+      return yield* Effect.reduce(
+        path.relative(base, file).split(path.sep),
+        () => base,
+        (folder, part) => {
+          if (!part.includes("~")) return Effect.succeed(path.join(folder, part))
+          return Effect.promise(() => longName(folder, part)).pipe(
+            Effect.flatMap((name) =>
+              name === undefined
+                ? new ToolFailure({
+                    message: `${file} names a file by a Windows short name whose long name could not be found. Use the long name.`,
+                    code: Tool.ErrorCode.FileSpelling,
+                  })
+                : Effect.succeed(path.join(folder, name)),
+            ),
+          )
+        },
+      )
+    })
 
     // A target outside the project, or one that a link in an untrusted project leads out to, which is `escapes`.
     const external = Effect.fnUntraced(function* (absolute: AbsolutePath, kind: Kind | undefined, escapes?: string) {
@@ -122,11 +155,26 @@ const layer = Layer.effect(
     })
 
     const resolve = Effect.fn("FileAccess.resolve")(function* (input: ResolveInput) {
-      const absolute = AbsolutePath.make(resolvePath(location.directory, input.path))
+      const lexical = resolvePath(location.directory, input.path)
+      // On Windows `name::$DATA` opens the file `name` and `name:x` a stream of it, so a rule for the file would not see
+      // the call, and a shell reads `HKLM:` or `FileSystem::C:\x` as a drive. No tool needs either, so a `:` after the
+      // drive or share is refused.
+      if (process.platform === "win32" && lexical.slice(path.parse(lexical).root.length).includes(":"))
+        return yield* new ToolFailure({
+          message: `${input.path} has a ":" after its drive, which on Windows names a data stream of a file or a drive that is not a disk. Use the plain path of the file or folder.`,
+          code: Tool.ErrorCode.FileSpelling,
+        })
       const worktree = path.resolve(location.project.directory)
-      const internal =
-        FSUtil.contains(location.directory, absolute) ||
-        (worktree !== path.parse(worktree).root && FSUtil.contains(worktree, absolute))
+      const folders = [location.directory, ...(worktree === path.parse(worktree).root ? [] : [worktree])]
+      // A part below a folder of the project is named in that folder as the disk names it, and a path outside from its
+      // root, so that an 8.3 short name does not hide the name that rules are written for.
+      const absolute = AbsolutePath.make(
+        yield* longNames(
+          lexical,
+          folders.find((folder) => FSUtil.contains(folder, lexical)),
+        ),
+      )
+      const internal = folders.some((folder) => FSUtil.contains(folder, absolute))
       if (!internal) return yield* external(absolute, input.kind)
       // Until the project is trusted, a link in it that leads out of it does not make the target the project's own: the
       // repository ships its links, and one to the user's other files would be read or written without a question.
@@ -191,3 +239,23 @@ export const node = makeLocationNode({
   layer,
   deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node],
 })
+
+// The name in `folder` that `part` stands for: `part` itself when the folder has an entry of that name or nothing is
+// there, and otherwise the one entry that is the same file, which is the long name of an 8.3 short name. Undefined when
+// something is there under `part` but no single entry is it.
+async function longName(folder: string, part: string) {
+  const entries = await readdir(folder).catch(() => undefined)
+  if (entries === undefined || entries.some((entry) => entry.toLowerCase() === part.toLowerCase())) return part
+  const file = await lstat(path.join(folder, part), { bigint: true }).catch(() => undefined)
+  if (file === undefined) return part
+  const same = await Promise.all(
+    entries.map((entry) =>
+      lstat(path.join(folder, entry), { bigint: true }).then(
+        (stat) => (stat.ino === file.ino ? [entry] : []),
+        () => [],
+      ),
+    ),
+  )
+  const names = same.flat()
+  return names.length === 1 ? names[0] : undefined
+}
