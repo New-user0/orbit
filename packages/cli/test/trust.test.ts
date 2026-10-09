@@ -84,7 +84,10 @@ const ollama = Bun.serve({
                       index: 0,
                       id: "call_write",
                       type: "function",
-                      function: { name: "write", arguments: JSON.stringify({ path: "blocked.txt", content: "no\n" }) },
+                      function: {
+                        name: "Write",
+                        arguments: JSON.stringify({ file_path: "blocked.txt", content: "no\n" }),
+                      },
                     },
                   ],
                 }
@@ -140,6 +143,7 @@ afterAll(async () => {
 })
 
 // The settings of a project that guards its files: a hook blocks every write.
+// The matcher keeps the tool's old name on purpose: a guard written before the rename must still block `Write`.
 const guard = { hooks: { PreToolUse: [{ matcher: "write", hooks: [{ type: "command", command: "exit 2" }] }] } }
 
 // The config of a user who is asked before every edit, and who has agents of their own. An agent's rules are added after

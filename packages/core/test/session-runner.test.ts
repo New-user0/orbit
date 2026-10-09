@@ -111,7 +111,7 @@ const testLLM = TestLLM.layer({
         ...part,
         text: part.text.replace(emptyCodeMode, ""),
       })),
-      tools: request.tools.filter((tool) => tool.name !== "execute"),
+      tools: request.tools.filter((tool) => tool.name !== "Execute"),
     }),
 })
 type ModelLimit = { readonly context: number; readonly input?: number; readonly output: number }
@@ -1297,6 +1297,36 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.tools.map((tool) => tool.name)).toContain("renamed_echo")
     expect(s.requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
     expect(s.executions).toEqual(["renamed"])
+  })
+
+  scenario("hides a tool from a session context hook that names it the way it was named before the rename", function* (s) {
+    const registry = yield* Tool.Service
+    const hooks = yield* PluginHooks.Service
+    yield* transformTools(
+      registry,
+      {
+        Write: {
+          name: "Write",
+          description: "A tool that a read-only plugin hides",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () => Effect.succeed({ output: {} }),
+        },
+      },
+      { codemode: false },
+    )
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        delete event.tools.write
+      }),
+    )
+    yield* s.admit("Read only")
+    yield* s.llm.push([])
+
+    yield* s.resume
+
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).toContain("echo")
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).not.toContain("Write")
   })
 
   scenario("projects a declared display name, escaped, onto the assistant tool and keeps it on replay", function* (s) {
@@ -3935,12 +3965,12 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.reasoningStart({ id: "reasoning-1" }),
         LLMEvent.reasoningDelta({ id: "reasoning-1", text: "Think" }),
         LLMEvent.reasoningEnd({ id: "reasoning-1" }),
-        LLMEvent.toolInputStart({ id: "call-error", name: "write" }),
-        LLMEvent.toolInputDelta({ id: "call-error", name: "write", text: '{"path":"README.md"}' }),
-        LLMEvent.toolInputEnd({ id: "call-error", name: "write" }),
-        LLMEvent.toolCall({ id: "call-error", name: "write", input: { path: "README.md" }, providerExecuted: true }),
-        LLMEvent.toolError({ id: "call-error", name: "write", message: "Denied" }),
-        LLMEvent.toolResult({ id: "call-error", name: "write", result: { type: "error", value: "Denied" } }),
+        LLMEvent.toolInputStart({ id: "call-error", name: "Write" }),
+        LLMEvent.toolInputDelta({ id: "call-error", name: "Write", text: '{"path":"README.md"}' }),
+        LLMEvent.toolInputEnd({ id: "call-error", name: "Write" }),
+        LLMEvent.toolCall({ id: "call-error", name: "Write", input: { path: "README.md" }, providerExecuted: true }),
+        LLMEvent.toolError({ id: "call-error", name: "Write", message: "Denied" }),
+        LLMEvent.toolResult({ id: "call-error", name: "Write", result: { type: "error", value: "Denied" } }),
         LLMEvent.toolCall({
           id: "call-provider",
           name: "web_search",
@@ -3987,7 +4017,7 @@ describe("SessionRunnerLLM", () => {
         content: [
           Expected.reasoning("Think"),
           Expected.failedTool(
-            { id: "call-error", name: "write" },
+            { id: "call-error", name: "Write" },
             { input: { path: "README.md" }, error: { type: "tool.execution", message: "Denied" } },
           ),
           Expected.completedTool(
@@ -4734,7 +4764,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(
       TestLLM.toolCalls(
         callOf("call-a1", "echo", "a1"),
-        LLMEvent.toolCall({ id: "call-program", name: "execute", input: { code: "return await tools.probe({})" } }),
+        LLMEvent.toolCall({ id: "call-program", name: "Execute", input: { code: "return await tools.probe({})" } }),
         callOf("call-a2", "echo", "a2"),
       ),
       TestLLM.text("Done", "text-final"),
@@ -6154,7 +6184,7 @@ describe("SessionRunnerLLM", () => {
       sessionID,
       assistantMessageID,
       id: "call-interrupted-subagent",
-      name: "subagent",
+      name: "Agent",
     })
     yield* s.bus.publish(SessionEvent.Tool.Input.Ended, {
       sessionID,
@@ -6193,7 +6223,7 @@ describe("SessionRunnerLLM", () => {
           {
             error: {
               type: "aborted",
-              message: "Tool execution interrupted: subagent (sessionID: ses_existing_child)",
+              message: "Tool execution interrupted: Agent (sessionID: ses_existing_child)",
             },
             metadata: { sessionID: "ses_existing_child", status: "running", internal: "private" },
           },
@@ -6606,7 +6636,7 @@ describe("SessionRunnerLLM", () => {
       })
       yield* s.admit("Call declined from Code Mode")
 
-      yield* s.llm.push(TestLLM.tool("call-execute", "execute", { code }))
+      yield* s.llm.push(TestLLM.tool("call-execute", "Execute", { code }))
 
       const exit = yield* s.resume.pipe(Effect.exit)
 
@@ -6795,8 +6825,8 @@ describe("SessionRunnerLLM", () => {
     yield* transformTools(
       registry,
       {
-        question: {
-          name: "question",
+        AskUserQuestion: {
+          name: "AskUserQuestion",
           description: "Ask the user",
           input: Schema.Struct({}),
           output: Schema.Struct({}),
@@ -6807,7 +6837,7 @@ describe("SessionRunnerLLM", () => {
     )
     yield* s.admit("Ask then stop")
 
-    yield* s.llm.push(TestLLM.tool("call-question", "question", {}), [])
+    yield* s.llm.push(TestLLM.tool("call-question", "AskUserQuestion", {}), [])
 
     const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
     const exit = yield* Fiber.join(run)
@@ -8812,7 +8842,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("rejects malformed streamed tool input ordering", function* (s) {
-    yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "read", text: "{}" })])
+    yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "Read", text: "{}" })])
 
     const defect = yield* s.resume.pipe(Effect.catchDefect(Effect.succeed))
     expect(defect).toBeInstanceOf(Error)

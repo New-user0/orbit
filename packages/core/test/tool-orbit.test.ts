@@ -80,7 +80,7 @@ it.effect("groups available models by provider with paging", () =>
         call: {
           type: "tool-call",
           id: `call-${JSON.stringify(input)}`,
-          name: "execute",
+          name: "Execute",
           input: { code: `return await tools.orbit.models(${JSON.stringify(input)})` },
         },
       }).pipe(Effect.map((result) => JSON.parse(result.content?.[0]?.type === "text" ? result.content[0].text : "")))

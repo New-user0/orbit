@@ -50,7 +50,7 @@ describe("Lsp", () => {
   it.live("the lsp tool only reads, so it is read-only, safe beside other calls and ended by a new message", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      expect(yield* toolTraits(registry, "lsp", { action: "hover", path: "a.ts" })).toMatchObject({
+      expect(yield* toolTraits(registry, "LSP", { action: "hover", path: "a.ts" })).toMatchObject({
         readOnly: true,
         concurrencySafe: true,
         destructive: false,

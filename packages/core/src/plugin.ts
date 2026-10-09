@@ -9,6 +9,7 @@ import { Cause, Context, Effect, Exit, Latch, Layer, Logger, Queue, References, 
 import { Bus } from "./bus.js"
 import { KV } from "./kv.js"
 import { PluginHost } from "./plugin/host.js"
+import { PluginLegacyNames } from "./plugin/legacy-names.js"
 import { type Failure, type Generation, Service } from "./plugin/service.js"
 import { State } from "./state.js"
 
@@ -62,7 +63,7 @@ const layer = Layer.effect(
         })
       })
       const exit = yield* Effect.suspend(() =>
-        plugin.effect({ ...host, storage: PluginHost.storage(kv, plugin.id) }),
+        plugin.effect(withToolNames(plugin, { ...host, storage: PluginHost.storage(kv, plugin.id) })),
       ).pipe(
         grouped,
         inherit,
@@ -280,6 +281,11 @@ type PendingFailure = {
   readonly refresh: Effect.Effect<void>
   readonly ref: string
   readonly release: Effect.Effect<void>
+}
+
+// Code plugins written before the tool rename keep being told the old names. Built-ins and plugins that opt in are not.
+function withToolNames(plugin: Generation, host: Parameters<Generation["effect"]>[0]) {
+  return plugin.source?.type === "builtin" || plugin.toolNames === "reference" ? host : PluginLegacyNames.host(host)
 }
 
 function slotInfo(slot: Slot): Plugin.Info {

@@ -12,7 +12,7 @@ import { Permission } from "../../permission.js"
 import { Ripgrep } from "../../ripgrep.js"
 import { NonNegativeInt, RelativePath } from "../../schema.js"
 
-export const name = "grep"
+export const name = "Grep"
 
 const ContextLines = NonNegativeInt.check(Schema.isLessThanOrEqualTo(20))
 

@@ -215,12 +215,12 @@ describe("SubagentTool", () => {
           yield* withSubagent(parent.location)
           const locations = yield* LocationServiceMap.Service
           const registry = yield* Tool.Service.pipe(Effect.provide(locations.get(parent.location)))
-          expect(yield* toolTraits(registry, "subagent")).toMatchObject({
+          expect(yield* toolTraits(registry, "Agent")).toMatchObject({
             readOnly: false,
             concurrencySafe: true,
             interruptBehavior: "block",
           })
-          expect(yield* toolTraits(registry, "workflow")).toMatchObject({
+          expect(yield* toolTraits(registry, "Workflow")).toMatchObject({
             readOnly: false,
             concurrencySafe: false,
             interruptBehavior: "block",
@@ -952,7 +952,7 @@ describe("SubagentTool in Plan mode", () => {
         const parent = yield* sessions.create({ location, model: parentModel, agent: plan })
         const registry = yield* activate(parent.location)
         const run = (agent?: string) =>
-          call(registry, parent.id, plan, "workflow", {
+          call(registry, parent.id, plan, "Workflow", {
             description: "plan workflow",
             script: `return await tools.agent({ description: "scan", prompt: "scan it"${agent ? `, agent: "${agent}"` : ""} })`,
           })

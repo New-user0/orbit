@@ -216,6 +216,7 @@ function compileEndpoint(endpoint: HttpApiEndpoint.Top) {
 export function fromPromise(plugin: Plugin) {
   return define({
     id: plugin.id,
+    ...(plugin.toolNames === undefined ? {} : { toolNames: plugin.toolNames }),
     effect: (host) =>
       Effect.gen(function* () {
         const [{ ClientApi }, { OrbitEvent }] = yield* Effect.promise(() =>

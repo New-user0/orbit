@@ -30,7 +30,7 @@ describe("SessionModelRequest.unsupportedParts", () => {
         Message.tool(
           ToolResultPart.make({
             id: "call_1",
-            name: "read",
+            name: "Read",
             result: {
               type: "content",
               value: [
@@ -91,7 +91,7 @@ describe("SessionModelRequest.boundImages", () => {
       Message.tool(
         ToolResultPart.make({
           id: "call_1",
-          name: "read",
+          name: "Read",
           result: {
             type: "content",
             value: [

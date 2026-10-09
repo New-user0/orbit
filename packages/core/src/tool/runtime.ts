@@ -3,6 +3,7 @@ import { Tool } from "@orbit/schema/tool"
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec"
 import { Cache, Effect, JsonSchema, Schema, SchemaIssue, SchemaRepresentation } from "effect"
 import { $ZodType, toJSONSchema } from "zod/v4/core"
+import { ToolNames } from "./names.js"
 import { ToolTraits } from "./traits.js"
 import { Permission } from "../permission.js"
 
@@ -312,7 +313,9 @@ const stringify = (value: unknown) => {
 
 export const normalizedName = (tool: Tool.Info) => tool.name.replace(/[^a-zA-Z0-9_-]/g, "_")
 
+// A tool registered under an old built-in name (`shell`, `write`) replaces that built-in, as it did before the rename,
+// instead of sitting beside it under a name the model is not told about.
 export const effectiveName = (tool: Tool.Info) =>
   tool.options?.namespace === undefined
-    ? normalizedName(tool)
+    ? ToolNames.canonical(normalizedName(tool))
     : `${tool.options.namespace.replaceAll(".", "_")}_${normalizedName(tool)}`

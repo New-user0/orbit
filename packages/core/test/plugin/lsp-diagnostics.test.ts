@@ -51,7 +51,7 @@ describe("LspPlugin", () => {
         agent: Agent.ID.make("build"),
         messageID: SessionMessage.ID.make("msg_lsp_plugin"),
         id: Tool.CallID.make("call_lsp_plugin"),
-        tool: "edit",
+        tool: "Edit",
         input: { path: "src/a.ts" },
         status: "completed" as const,
         result: {
@@ -71,7 +71,7 @@ describe("LspPlugin", () => {
       ])
       expect(Object.keys(event.result.metadata?.diagnostics as object)).toEqual([absolute, "src/a.ts"])
 
-      const read = { ...event, tool: "read", result: { content: "x" } as Tool.Result }
+      const read = { ...event, tool: "Read", result: { content: "x" } as Tool.Result }
       yield* hooks.trigger("tool", "execute.after", read)
       expect(read.result.content).toBe("x")
     }),

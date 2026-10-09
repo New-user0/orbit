@@ -1,4 +1,5 @@
 import type { SessionMessageAssistant, SessionMessageInfo } from "@orbit/client"
+import { canonicalToolName } from "../../../util/tool-display"
 import { groupEntries, mergeGroups, splitGroups, type GroupNode } from "./tree"
 
 export type PartRef = {
@@ -83,10 +84,10 @@ const explorationTools = new Set(["read", "glob", "grep", "webfetch", "websearch
  * Questions always stand alone.
  */
 export function partPath(part: AppendPart, verbosity: Verbosity): readonly GroupKind[] {
-  if (part.type === "tool" && part.name.toLowerCase() === "question") return []
+  if (part.type === "tool" && canonicalToolName(part.name) === "question") return []
   const activity: GroupKind[] = verbosity === "low" && part.type !== "text" ? ["activity"] : []
   if (part.type === "reasoning") return [...activity, "reasoning"]
-  if (part.type === "tool" && explorationTools.has(part.name.toLowerCase())) return [...activity, "exploration"]
+  if (part.type === "tool" && explorationTools.has(canonicalToolName(part.name))) return [...activity, "exploration"]
   return activity
 }
 

@@ -31,6 +31,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { App } from "../app.js"
 import { Permission } from "../permission.js"
 import { PluginHooks } from "../plugin/hooks.js"
+import { ToolNames } from "../tool/names.js"
 import { QuestionTool } from "../tool/plugin/question.js"
 import { ToolTraits } from "../tool/traits.js"
 import { Tool } from "../tool.js"
@@ -280,7 +281,8 @@ export const layer = Layer.effect(
           messages: input.messages,
           options: kind === "primary" || kind === "compaction" ? { maxTokens: defaultLimit } : {},
         },
-        Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
+        // A hook written before the rename that hides `tools.write` still hides `Write`.
+        ToolNames.aliased(Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d]))),
       )
       // Match by identity first, then by key. Entries matching neither were invented by a
       // hook and are dropped. `t.name` stays the real name so execution can map renames back.

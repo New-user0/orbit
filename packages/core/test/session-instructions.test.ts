@@ -115,7 +115,7 @@ const readCall = (
 ): Parameters<Tool.Snapshot["execute"]>[0] => ({
   sessionID,
   ...identity,
-  call: { type: "tool-call", id, name: "read", input: { path: readPath, ...page } },
+  call: { type: "tool-call", id, name: "Read", input: { file_path: readPath, ...page } },
 })
 
 const writeAgents = (file: string, content: string) => Effect.promise(() => fs.writeFile(file, content))
@@ -444,9 +444,9 @@ describe("SessionInstructions in a project that is not trusted", () => {
       yield* executeTool(registry, readCall(sessionID, "call-again", "linked/file.txt"))
       expect(asserted.map((input) => input.action)).toEqual([
         "external_directory",
-        "read",
+        "Read",
         "external_directory",
-        "read",
+        "Read",
       ])
       expect(asserted[0]).toMatchObject({ resources: [path.join(outside, "*").replaceAll("\\", "/")] })
       expect(yield* synthetics(sessionID)).toHaveLength(0)
@@ -463,7 +463,7 @@ describe("SessionInstructions in a project that is not trusted", () => {
       yield* trust.grant({ persist: false, via: "test" })
       asserted.length = 0
       yield* executeTool(registry, readCall(sessionID, "call-trusted", "linked/file.txt"))
-      expect(asserted.map((input) => input.action)).toEqual(["read"])
+      expect(asserted.map((input) => input.action)).toEqual(["Read"])
       const injected = yield* synthetics(sessionID)
       expect(injected).toHaveLength(1)
       expect(injected[0]!.text).toBe(`Instructions from: ${outsideFile}\noutside-instructions`)

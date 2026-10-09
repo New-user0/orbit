@@ -186,6 +186,27 @@ describe("ConfigPolicyPlugin.Plugin", () => {
     }),
   )
 
+  it.effect("reads an old tool name in a policy as the renamed tool, and no other", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([
+        document(
+          permission("deny", "shell:git push *"),
+          permission("deny", "edit:*.env"),
+          permission("deny", "WebFetch:https://blocked.example/*"),
+        ),
+      ])
+
+      const denied = { effect: "deny", message: "Blocked by configuration policy" } as const
+      expect(yield* evaluate("Bash", ["git push origin main"])).toEqual(denied)
+      expect(yield* evaluate("Edit", ["config/.env"])).toEqual(denied)
+      expect(yield* evaluate("webfetch", ["https://blocked.example/a"])).toEqual(denied)
+      expect(yield* evaluate("WebFetch", ["https://blocked.example/a"])).toEqual(denied)
+      // The spelling of one tool never reaches another.
+      expect(yield* evaluate("Read", ["git push origin main"])).toEqual({ effect: "allow", message: undefined })
+      expect(yield* evaluate("Bash", ["config/.env"])).toEqual({ effect: "allow", message: undefined })
+    }),
+  )
+
   it.effect("turns an ask into a deny but never grants", () =>
     Effect.gen(function* () {
       yield* addPlugin([document(permission("deny", "webfetch:*"), permission("allow", "shell:*"))])

@@ -58,12 +58,12 @@ const ollama = Bun.serve({
     if (!role) {
       mainRequests.push({ tools, result: last?.role === "tool" ? String(last.content) : undefined })
       if (last?.role === "tool") return reply("All done.")
-      return call("workflow", { description: "Build and review feature", script })
+      return call("Workflow", { description: "Build and review feature", script })
     }
     childTools.push(tools)
     if (role === "writer" && last?.role !== "tool") {
       roles.push(role)
-      return call("write", { path: "feature.txt", content: "feature v1\n" })
+      return call("Write", { file_path: "feature.txt", content: "feature v1\n" })
     }
     if (role !== "writer") roles.push(role)
     inflight++
@@ -165,8 +165,8 @@ test("the workflow tool delegates to subagents and returns only the program's re
   expect(roles[3]).toBe("fixer")
   expect(concurrent).toBe(2)
   // The main agent sees the workflow tool; subagents do not, so they cannot nest workflows.
-  expect(mainRequests[0]?.tools).toContain("workflow")
-  expect(childTools.every((tools) => !tools.includes("workflow") && !tools.includes("subagent"))).toBe(true)
+  expect(mainRequests[0]?.tools).toContain("Workflow")
+  expect(childTools.every((tools) => !tools.includes("Workflow") && !tools.includes("Agent"))).toBe(true)
   const result = mainRequests.at(-1)?.result ?? ""
   expect(result).toContain("REVIEW-1: add a trailing summary line")
   expect(result).toContain("Fixed: both findings")

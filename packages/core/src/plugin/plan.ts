@@ -9,6 +9,7 @@ import { Effect, Stream } from "effect"
 import path from "path"
 import { Permission } from "../permission.js"
 import { PlanMode } from "../plan-mode.js"
+import { ToolNames } from "../tool/names.js"
 
 const plan = PlanMode.agent
 
@@ -18,7 +19,7 @@ ${directory}
 
 Do not modify any other files or ask a subagent to do so.
 
-You remain in Plan mode until the user switches agents or approves your plan. When the plan is ready, call exit_plan_mode with it so the user can approve it. If the user asks you to implement changes before approving a plan, do not do so; present the plan instead.
+You remain in Plan mode until the user switches agents or approves your plan. When the plan is ready, call ExitPlanMode with it so the user can approve it. If the user asks you to implement changes before approving a plan, do not do so; present the plan instead.
 </system-reminder>`
 
 const leave = `<system-reminder>
@@ -36,11 +37,11 @@ export const Plugin = define({
         item.name = Agent.Name.make("Plan")
         item.description = "Read-only agent for exploring the codebase and planning work before implementation."
         item.mode = "primary"
-        item.permissions.push({ action: "question", resource: "*", effect: "allow" })
-        item.permissions.push({ action: "edit", resource: "*", effect: "deny" })
+        item.permissions.push({ action: "AskUserQuestion", resource: "*", effect: "allow" })
+        item.permissions.push({ action: "Edit", resource: "*", effect: "deny" })
         // Shell commands can change files too, so in Plan mode each one needs the user's approval.
-        item.permissions.push({ action: "shell", resource: "*", effect: "ask" })
-        item.permissions.push({ action: "edit", resource: path.join(directory, "*"), effect: "allow" })
+        item.permissions.push({ action: "Bash", resource: "*", effect: "ask" })
+        item.permissions.push({ action: "Edit", resource: path.join(directory, "*"), effect: "allow" })
         item.permissions.push({ action: "external_directory", resource: path.join(directory, "*"), effect: "allow" })
       })
     })
@@ -48,7 +49,7 @@ export const Plugin = define({
     yield* ctx.tool.hook("execute.after", (event) => {
       if (event.agent !== plan) return Effect.void
       if (event.status !== "error") return Effect.void
-      if (event.tool !== "edit" && event.tool !== "write" && event.tool !== "patch") return Effect.void
+      if (!["Edit", "Write", "Patch"].includes(ToolNames.canonical(event.tool))) return Effect.void
       if (!(event.error.error instanceof Permission.BlockedError)) return Effect.void
       event.error = new ToolFailure({
         message: `Cannot use ${event.tool} to modify files outside the Plan directory: ${directory}`,

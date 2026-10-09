@@ -34,7 +34,10 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Shell } from "@orbit/core/shell"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
+import { SdkPlugins } from "@orbit/core/plugin/sdk"
+import { define } from "@orbit/plugin/effect/plugin"
 import { ShellSelect } from "@orbit/core/shell/select"
+import { ToolNames } from "@orbit/core/tool/names"
 import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { ToolOutput } from "@orbit/core/tool-output"
@@ -51,6 +54,8 @@ const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = Model.Ref.make({ id: Model.ID.make("test"), providerID: Provider.ID.make("test") })
 const assertions: Permission.AssertInput[] = []
 let denyAction: string | undefined
+let hideShell = false
+let activeGuard = ""
 let afterPermission = (_input: Permission.AssertInput): Effect.Effect<void> => Effect.void
 
 const permission = permissionLayer({
@@ -74,6 +79,7 @@ const permission = permissionLayer({
 const reset = () => {
   assertions.length = 0
   denyAction = undefined
+  hideShell = false
   afterPermission = () => Effect.void
 }
 
@@ -153,6 +159,7 @@ const nodes = LayerNode.group([
   filesystem,
   FSUtil.node,
   Global.node,
+  SdkPlugins.node,
 ])
 const replacements = [
   SessionExecution.node.replace(executionNode),
@@ -176,7 +183,7 @@ const permissionIt = testEffect(
 const call = (input: typeof ShellTool.Input.Type, id = "call-shell") => ({
   sessionID,
   ...toolIdentity,
-  call: { type: "tool-call" as const, id, name: "shell", input },
+  call: { type: "tool-call" as const, id, name: "Bash", input },
 })
 
 const isWindows = process.platform === "win32"
@@ -302,7 +309,7 @@ describe("ShellTool scanner permissions", () => {
         Effect.gen(function* () {
           const saved = yield* PermissionSaved.Service
           const location = yield* Location.Service
-          yield* saved.add({ projectID: location.project.id, action: "shell", resources: ["printf *"] })
+          yield* saved.add({ projectID: location.project.id, action: "Bash", resources: ["printf *"] })
           const marker = path.join(fixture.active, "marker")
           const approved = yield* runPermissionCommand(
             registry,
@@ -346,7 +353,7 @@ describe("ShellTool scanner permissions", () => {
           expect(prompts).toHaveLength(3)
           for (const request of prompts) {
             expect(request).toMatchObject({
-              action: "shell",
+              action: "Bash",
               resources: ["printf hello", 'printf %s "$SCAN_TEST" > marker'],
               save: ["printf *", "printf *"],
             })
@@ -356,14 +363,14 @@ describe("ShellTool scanner permissions", () => {
           const agents = yield* Agent.Service
           yield* agents.transform((editor) =>
             editor.update(toolIdentity.agent, (agent) => {
-              agent.permissions = [{ action: "shell", resource: "printf hello", effect: "deny" }]
+              agent.permissions = [{ action: "Bash", resource: "printf hello", effect: "deny" }]
             }),
           )
           yield* Effect.promise(() => fs.rm(marker))
           const denied = yield* runPermissionCommand(registry, command, marker, [])
           expect(denied.exit).toMatchObject({
             _tag: "Success",
-            value: { status: "error", error: { message: expect.stringContaining("Permission denied: shell") } },
+            value: { status: "error", error: { message: expect.stringContaining("Permission denied: Bash") } },
           })
           expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
         }),
@@ -374,7 +381,7 @@ describe("ShellTool scanner permissions", () => {
         Effect.gen(function* () {
           const saved = yield* PermissionSaved.Service
           const location = yield* Location.Service
-          yield* saved.add({ projectID: location.project.id, action: "shell", resources: ["printf hello", "cat"] })
+          yield* saved.add({ projectID: location.project.id, action: "Bash", resources: ["printf hello", "cat"] })
           const marker = path.join(fixture.active, "marker")
           const command = "printf hello | cat > marker"
           const exact = yield* runPermissionCommand(registry, command, marker, [])
@@ -382,7 +389,7 @@ describe("ShellTool scanner permissions", () => {
           expect(exact.exit).toMatchObject({ _tag: "Success", value: { status: "completed", metadata: { exit: 0 } } })
           expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("hello")
 
-          yield* saved.add({ projectID: location.project.id, action: "shell", resources: ["printf *", "cat *"] })
+          yield* saved.add({ projectID: location.project.id, action: "Bash", resources: ["printf *", "cat *"] })
           yield* Effect.promise(() => fs.rm(marker))
           const broad = yield* runPermissionCommand(registry, command, marker, [])
           expect(broad.requests).toEqual([])
@@ -392,7 +399,7 @@ describe("ShellTool scanner permissions", () => {
           const agents = yield* Agent.Service
           yield* agents.transform((editor) =>
             editor.update(toolIdentity.agent, (agent) => {
-              agent.permissions = [{ action: "shell", resource: "cat", effect: "deny" }]
+              agent.permissions = [{ action: "Bash", resource: "cat", effect: "deny" }]
             }),
           )
           yield* Effect.promise(() => fs.rm(marker))
@@ -400,7 +407,7 @@ describe("ShellTool scanner permissions", () => {
           expect(denied.requests).toEqual([])
           expect(denied.exit).toMatchObject({
             _tag: "Success",
-            value: { status: "error", error: { message: expect.stringContaining("Permission denied: shell") } },
+            value: { status: "error", error: { message: expect.stringContaining("Permission denied: Bash") } },
           })
           expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
         }),
@@ -412,7 +419,7 @@ describe("ShellTool scanner permissions", () => {
           const agents = yield* Agent.Service
           yield* agents.transform((editor) =>
             editor.update(toolIdentity.agent, (agent) => {
-              agent.permissions = [{ action: "shell", resource: "*", effect: "allow" }]
+              agent.permissions = [{ action: "Bash", resource: "*", effect: "allow" }]
             }),
           )
           const marker = path.join(fixture.active, "marker")
@@ -454,7 +461,7 @@ describe("ShellTool scanner permissions", () => {
           yield* agents.transform((editor) =>
             editor.update(toolIdentity.agent, (agent) => {
               agent.permissions = [
-                { action: "shell", resource: "*", effect: "allow" },
+                { action: "Bash", resource: "*", effect: "allow" },
                 { action: "external_directory", resource: "*", effect: "deny" },
               ]
             }),
@@ -486,7 +493,7 @@ describe("ShellTool scanner permissions", () => {
           yield* agents.transform((editor) =>
             editor.update(toolIdentity.agent, (agent) => {
               agent.permissions = [
-                { action: "shell", resource: "*", effect: "allow" },
+                { action: "Bash", resource: "*", effect: "allow" },
                 { action: "external_directory", resource: path.join(fixture.outside, "*"), effect: "deny" },
               ]
             }),
@@ -541,8 +548,8 @@ describe("ShellTool conditional process substitution", () => {
             yield* agents.transform((editor) =>
               editor.update(toolIdentity.agent, (agent) => {
                 agent.permissions = [
-                  { action: "shell", resource: "*", effect: "allow" },
-                  { action: "shell", resource: "printf *", effect: "deny" },
+                  { action: "Bash", resource: "*", effect: "allow" },
+                  { action: "Bash", resource: "printf *", effect: "deny" },
                 ]
               }),
             )
@@ -555,7 +562,7 @@ describe("ShellTool conditional process substitution", () => {
             )
             expect(result.exit).toMatchObject({
               _tag: "Success",
-              value: { status: "error", error: { message: expect.stringContaining("Permission denied: shell") } },
+              value: { status: "error", error: { message: expect.stringContaining("Permission denied: Bash") } },
             })
             expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
           }),
@@ -570,12 +577,12 @@ describe("ShellTool conditional process substitution", () => {
             Effect.gen(function* () {
               const saved = yield* PermissionSaved.Service
               const location = yield* Location.Service
-              yield* saved.add({ projectID: location.project.id, action: "shell", resources: ["wait *"] })
+              yield* saved.add({ projectID: location.project.id, action: "Bash", resources: ["wait *"] })
               const marker = path.join(directory.active, "marker")
               const command = '[[ -n <(printf reached > marker) ]]; wait "$!"'
               const result = yield* runPermissionCommand(registry, command, marker, [reply])
               expect(result.requests).toMatchObject([
-                { action: "shell", resources: ["printf reached > marker", 'wait "$!"'], save: ["printf *", "wait *"] },
+                { action: "Bash", resources: ["printf reached > marker", 'wait "$!"'], save: ["printf *", "wait *"] },
               ])
               if (reply === "reject") {
                 expect(Exit.isFailure(result.exit)).toBe(true)
@@ -650,7 +657,7 @@ describe("ShellTool compound syntax approval compatibility", () => {
             Effect.gen(function* () {
               const saved = yield* PermissionSaved.Service
               const location = yield* Location.Service
-              yield* saved.add({ projectID: location.project.id, action: "shell", resources: fixture.saved })
+              yield* saved.add({ projectID: location.project.id, action: "Bash", resources: fixture.saved })
               const result = yield* runPermissionCommand(
                 registry,
                 portable ? fixture.command : fixture.equivalent,
@@ -718,7 +725,7 @@ describe("ShellTool ordinary shell syntax", () => {
               Effect.gen(function* () {
                 const saved = yield* PermissionSaved.Service
                 const location = yield* Location.Service
-                yield* saved.add({ projectID: location.project.id, action: "shell", resources: fixture.saved })
+                yield* saved.add({ projectID: location.project.id, action: "Bash", resources: fixture.saved })
                 const result = yield* runPermissionCommand(
                   registry,
                   fixture.command,
@@ -748,8 +755,8 @@ describe("ShellTool ordinary shell syntax", () => {
               yield* agents.transform((editor) =>
                 editor.update(toolIdentity.agent, (agent) => {
                   agent.permissions = [
-                    { action: "shell", resource: "*", effect: "allow" },
-                    { action: "shell", resource: "printf *", effect: "deny" },
+                    { action: "Bash", resource: "*", effect: "allow" },
+                    { action: "Bash", resource: "printf *", effect: "deny" },
                   ]
                 }),
               )
@@ -762,7 +769,7 @@ describe("ShellTool ordinary shell syntax", () => {
               )
               expect(result.exit).toMatchObject({
                 _tag: "Success",
-                value: { status: "error", error: { message: expect.stringContaining("Permission denied: shell") } },
+                value: { status: "error", error: { message: expect.stringContaining("Permission denied: Bash") } },
               })
               expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
             }),
@@ -795,7 +802,7 @@ describe("ShellTool ordinary shell syntax", () => {
                 const location = yield* Location.Service
                 yield* saved.add({
                   projectID: location.project.id,
-                  action: "shell",
+                  action: "Bash",
                   resources: ["Write-Output *", "Show-Value *"],
                 })
                 const result = yield* runPermissionCommand(registry, command, path.join(directory.active, "marker"), [])
@@ -829,7 +836,7 @@ describe("ShellTool ordinary shell syntax", () => {
             Effect.gen(function* () {
               const marker = path.join(directory.active, "marker")
               const first = yield* runPermissionCommand(registry, command, marker, ["always"])
-              expect(first.requests).toMatchObject([{ action: "shell", resources: [command], save: [pattern] }])
+              expect(first.requests).toMatchObject([{ action: "Bash", resources: [command], save: [pattern] }])
               expect(first.exit).toMatchObject({
                 _tag: "Success",
                 value: { status: "completed", metadata: { exit: 0 } },
@@ -844,13 +851,13 @@ describe("ShellTool ordinary shell syntax", () => {
               const agents = yield* Agent.Service
               yield* agents.transform((editor) =>
                 editor.update(toolIdentity.agent, (agent) => {
-                  agent.permissions = [{ action: "shell", resource: command, effect: "deny" }]
+                  agent.permissions = [{ action: "Bash", resource: command, effect: "deny" }]
                 }),
               )
               const denied = yield* runPermissionCommand(registry, command, marker, [])
               expect(denied.exit).toMatchObject({
                 _tag: "Success",
-                value: { status: "error", error: { message: expect.stringContaining("Permission denied: shell") } },
+                value: { status: "error", error: { message: expect.stringContaining("Permission denied: Bash") } },
               })
             }),
           pwsh ?? "pwsh",
@@ -868,7 +875,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            expect(yield* toolTraits(registry, "shell", { command: "echo", description: "echo" })).toMatchObject({
+            expect(yield* toolTraits(registry, "Bash", { command: "echo", description: "echo" })).toMatchObject({
               readOnly: false,
               concurrencySafe: false,
               cancelSiblingsOnFailure: true,
@@ -888,7 +895,7 @@ describe("ShellTool", () => {
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
             yield* registry.transform((editor) =>
-              editor.update("shell", (tool) => {
+              editor.update("Bash", (tool) => {
                 tool.options = { ...tool.options, codemode: true }
               }),
             )
@@ -900,8 +907,8 @@ describe("ShellTool", () => {
               call: {
                 type: "tool-call",
                 id: "call-parallel-shells",
-                name: "execute",
-                input: { code: `return await Promise.all([tools.shell(${inputs[0]}), tools.shell(${inputs[1]})])` },
+                name: "Execute",
+                input: { code: `return await Promise.all([tools.Bash(${inputs[0]}), tools.Bash(${inputs[1]})])` },
               },
             }).pipe(Effect.timeout("3 seconds"))
             expect(result.status).toBe("completed")
@@ -926,16 +933,16 @@ describe("ShellTool", () => {
           return withSession(tmp.path, (registry) =>
             Effect.gen(function* () {
               const definitions = yield* toolDefinitions(registry)
-              const definition = definitions.find((tool) => tool.name === "shell")
+              const definition = definitions.find((tool) => tool.name === "Bash")
               expect(definition?.description).toStartWith("Execute a shell command and return its output.")
               expect(definition?.inputSchema).not.toHaveProperty("properties.timeout.maximum")
               // Code Mode receives the declared output schema, including the command output text.
               expect(definition?.outputSchema).toHaveProperty("properties.output")
               expect(
-                (yield* toolDefinitions(registry, [{ action: "shell", resource: "*", effect: "deny" }])).map(
+                (yield* toolDefinitions(registry, [{ action: "Bash", resource: "*", effect: "deny" }])).map(
                   (tool) => tool.name,
                 ),
-              ).not.toContain("shell")
+              ).not.toContain("Bash")
 
               const settled = yield* executeTool(registry, call({ command: helloCommand }))
               expect(settled.status).toBe("completed")
@@ -944,7 +951,7 @@ describe("ShellTool", () => {
               expect(assertions).toMatchObject([
                 {
                   sessionID,
-                  action: "shell",
+                  action: "Bash",
                   resources: [isWindows ? "Start-Sleep -Milliseconds 100" : helloCommand],
                   agent: toolIdentity.agent,
                   source: { type: "tool", messageID: toolIdentity.messageID, id: "call-shell" },
@@ -1148,7 +1155,7 @@ describe("ShellTool", () => {
         reset()
         const workdir = path.join(tmp.path, "src")
         afterPermission = (input) =>
-          input.action === "shell"
+          input.action === "Bash"
             ? Effect.promise(async () => {
                 await fs.rm(workdir, { recursive: true })
                 await fs.writeFile(workdir, "not a directory")
@@ -1164,7 +1171,7 @@ describe("ShellTool", () => {
                 status: "error",
                 error: { message: `Working directory is not a directory: ${workdir}` },
               })
-              expect(assertions.map((input) => input.action)).toEqual(["shell"])
+              expect(assertions.map((input) => input.action)).toEqual(["Bash"])
             }),
           ),
         )
@@ -1185,7 +1192,7 @@ describe("ShellTool", () => {
           ).pipe(
             Effect.andThen(
               Effect.sync(() => {
-                expect(assertions.map((item) => item.action)).toEqual(["external_directory", "shell"])
+                expect(assertions.map((item) => item.action)).toEqual(["external_directory", "Bash"])
                 expect(assertions[0]).toMatchObject({
                   resources: [path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")],
                 })
@@ -1216,7 +1223,7 @@ describe("ShellTool", () => {
                 reset()
                 const settled = yield* executeTool(registry, call(input, "call-external-cd"))
                 expect(settled).toMatchObject({ status: "completed" })
-                expect(assertions.map((item) => item.action)).toEqual(["external_directory", "shell"])
+                expect(assertions.map((item) => item.action)).toEqual(["external_directory", "Bash"])
                 expect(assertions[0]).toMatchObject({
                   resources: [path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")],
                   sessionID,
@@ -1244,7 +1251,7 @@ describe("ShellTool", () => {
         return withSession(tmp.path, (registry) => executeTool(registry, call({ command }, "call-external-home"))).pipe(
           Effect.andThen(
             Effect.sync(() => {
-              expect(assertions.map((item) => item.action)).toEqual(["external_directory", "shell"])
+              expect(assertions.map((item) => item.action)).toEqual(["external_directory", "Bash"])
               expect(assertions[0]?.resources[0]).toStartWith(os.homedir().replaceAll("\\", "/"))
             }),
           ),
@@ -1269,9 +1276,9 @@ describe("ShellTool", () => {
             expect(assertions.map((item) => item.action)).toEqual(["external_directory"])
 
             reset()
-            denyAction = "shell"
+            denyAction = "Bash"
             yield* withSession(active.path, (registry) => executeTool(registry, call({ command: cwdCommand })))
-            expect(assertions.map((item) => item.action)).toEqual(["shell"])
+            expect(assertions.map((item) => item.action)).toEqual(["Bash"])
           }),
         ([active, outside]) =>
           Effect.promise(() =>
@@ -1279,6 +1286,254 @@ describe("ShellTool", () => {
           ),
       ),
     { timeout: 15_000 },
+  )
+
+  // Read from the registry the model's tool list is built from, so a name built from a variable or registered by a
+  // plugin elsewhere is seen too.
+  productionIt.live("advertises no built-in tool under a name the alias table lists as an old one", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const names = (yield* toolDefinitions(registry)).map((tool) => tool.name)
+            // The control: the registry is the full set, and the old names are in the table.
+            expect(names).toEqual(expect.arrayContaining(["Bash", "Read", "Edit", "Write", "Glob", "Grep", "Agent"]))
+            expect(Object.keys(ToolNames.tools)).toContain("shell")
+            expect(names.filter((name) => Object.hasOwn(ToolNames.tools, name))).toEqual([])
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  // A plugin guard written before the rename reads `input.background`; the call carries `run_in_background`.
+  productionIt.live(
+    "a plugin hook reads the old field names of the call it is shown, and the tool still gets the real input",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const hooks = yield* PluginHooks.Service
+              const seen: unknown[] = []
+              yield* hooks.register("tool", "execute.before", (event) =>
+                Effect.sync(() => {
+                  const input = event.input as Record<string, unknown>
+                  seen.push({
+                    old: input.background,
+                    current: input.run_in_background,
+                    keys: Object.keys(input).sort(),
+                  })
+                  input.background = false
+                }),
+              )
+              const settled = yield* executeTool(
+                registry,
+                call({ command: helloCommand, run_in_background: true }, "call-view"),
+              )
+              expect(seen).toEqual([{ old: true, current: true, keys: ["command", "run_in_background"] }])
+              // The guard's write under the old name reached the real field: the command ran in the foreground.
+              expect(settled.status).toBe("completed")
+              expect(settled.content).toEqual([{ type: "text", text: "hello" }])
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // A hook that confines a call by returning a copy of the input with the old field, or that clones the input, is not ignored.
+  for (const replace of [
+    (input: Record<string, unknown>) => ({ ...input, background: false }),
+    (input: Record<string, unknown>) => ({ ...structuredClone(input), background: false }),
+  ]) {
+    productionIt.live(
+      "a hook that replaces the input with a copy that uses an old field name changes the call",
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => {
+            reset()
+            return withSession(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const hooks = yield* PluginHooks.Service
+                yield* hooks.register("tool", "execute.before", (event) =>
+                  Effect.sync(() => {
+                    event.input = replace(event.input as Record<string, unknown>)
+                  }),
+                )
+                const settled = yield* executeTool(
+                  registry,
+                  call({ command: helloCommand, run_in_background: true }, "call-replaced"),
+                )
+                // The background flag the hook turned off reached the tool: the command ran in the foreground.
+                expect(settled.status).toBe("completed")
+                expect(settled.content).toEqual([{ type: "text", text: "hello" }])
+              }),
+            )
+          },
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 15_000 },
+    )
+  }
+
+  productionIt.live("offers the tool as PowerShell only when the session shell is PowerShell", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          const offered = (shell: string) =>
+            withSession(tmp.path, () =>
+              Effect.gen(function* () {
+                const selection = yield* ShellSelect.Service
+                yield* selection.transform((editor) => editor.configure(shell))
+                const hooks = yield* PluginHooks.Service
+                const event = yield* hooks.trigger("session", "context", {
+                  sessionID,
+                  model: sessionModel,
+                  system: [],
+                  messages: [],
+                  options: {},
+                  agent: toolIdentity.agent,
+                  tools: { Bash: { description: "", input: {} } },
+                } as never)
+                return Object.keys(event.tools)
+              }),
+            )
+          // Not every machine has both shells; a missing one falls back to the default, which is still one of the two.
+          const sh = yield* offered("sh")
+          expect(sh).toHaveLength(1)
+          expect(["Bash", "PowerShell"]).toContain(sh[0])
+          if (isWindows) expect(yield* offered("powershell")).toEqual(["PowerShell"])
+          else expect(sh).toEqual(["Bash"])
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  // The shell has three names: `shell` (before the rename), `Bash` and `PowerShell`. A hook written for any of the first two
+  // must reach the tool whichever shell the session has, because the model is offered it as `PowerShell` only at the end.
+  for (const shell of ["sh", "powershell"]) {
+    for (const plugin of [
+      { kind: "a plugin written for the old names", toolNames: undefined, guard: "shell" },
+      { kind: "a plugin that opted in to the reference names", toolNames: "reference" as const, guard: "Bash" },
+    ]) {
+      for (const spelling of ["shell", "Bash"]) {
+        productionIt.live(
+          `session shell ${shell}: ${plugin.kind} hides the tool with ${spelling} and blocks it as ${plugin.guard}`,
+          () =>
+            Effect.acquireUseRelease(
+              Effect.promise(() => tmpdir()),
+              (tmp) =>
+                Effect.gen(function* () {
+                  reset()
+                  const sdk = yield* SdkPlugins.Service
+                  const pluginID = `test.shell-guard.${shell}.${plugin.guard}.${spelling}`
+                  activeGuard = pluginID
+                  yield* sdk.register(
+                    define({
+                      id: pluginID,
+                      ...(plugin.toolNames ? { toolNames: plugin.toolNames } : {}),
+                      effect: (ctx) =>
+                        Effect.gen(function* () {
+                          yield* ctx.session.hook("context", (event) =>
+                            Effect.sync(() => {
+                              if (hideShell && activeGuard === pluginID) delete event.tools[spelling]
+                            }),
+                          )
+                          yield* ctx.tool.hook("execute.before", (event) =>
+                            activeGuard === pluginID && event.tool === plugin.guard
+                              ? Effect.fail(new Tool.Error({ message: `blocked by ${pluginID}` }))
+                              : Effect.void,
+                          )
+                        }),
+                    }),
+                  )
+                  yield* withSession(tmp.path, (registry) =>
+                    Effect.gen(function* () {
+                      const selection = yield* ShellSelect.Service
+                      yield* selection.transform((editor) => editor.configure(shell))
+                      const hooks = yield* PluginHooks.Service
+                      const request = () =>
+                        hooks.trigger("session", "context", {
+                          sessionID,
+                          model: sessionModel,
+                          system: [{ type: "text", text: "Fall back to Bash when a tool cannot do it." }],
+                          messages: [],
+                          options: {},
+                          agent: toolIdentity.agent,
+                          // As `SessionModelRequest` hands them over: a name written before the rename reaches the entry.
+                          tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
+                        } as never)
+                      // Control: without the hide, the tool is offered under exactly one of its two names.
+                      hideShell = false
+                      const control = yield* request()
+                      const offered = Object.keys(control.tools)
+                      expect(offered).toHaveLength(1)
+                      expect(["Bash", "PowerShell"]).toContain(offered[0])
+                      // The prompt names the tool the model is offered.
+                      expect(control.system[0]?.text).toBe(`Fall back to ${offered[0]} when a tool cannot do it.`)
+
+                      hideShell = true
+                      expect(Object.keys((yield* request()).tools)).toEqual([])
+
+                      // The call comes in under the name it was offered with, and the guard still sees the tool.
+                      const snapshot = yield* registry.snapshot()
+                      const bash = snapshot.definitions.find((tool) => tool.name === "Bash")
+                      if (!bash) return yield* Effect.die(new Error("Bash is not registered"))
+                      const failure = yield* snapshot
+                        .execute({
+                          ...call({ command: helloCommand }, "call-guarded"),
+                          call: { ...call({ command: helloCommand }, "call-guarded").call, name: offered[0]! },
+                          definitions: new Map([[offered[0]!, bash]]),
+                        })
+                        .pipe(Effect.flip)
+                      expect(failure.message).toBe(`blocked by ${pluginID}`)
+                    }),
+                  )
+                }),
+              (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+            ),
+          { timeout: 30_000 },
+        )
+      }
+    }
+  }
+
+  // An output style is the person's own text and is appended to the base prompt before the tool is offered as PowerShell.
+  productionIt.live("rewrites the shell name in the base prompt and leaves an output style as written", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("powershell"))
+            const hooks = yield* PluginHooks.Service
+            const event = yield* hooks.trigger("session", "context", {
+              sessionID,
+              model: sessionModel,
+              system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
+              messages: [],
+              options: {},
+              agent: toolIdentity.agent,
+              tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
+            } as never)
+            // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
+            expect(event.system[0]?.text).toBe(
+              `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
+            )
+          }),
+        ),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+    { timeout: 30_000 },
   )
 
   it.live("exposes malformed native syntax without fallback or partial execution", () =>
@@ -1317,7 +1572,7 @@ describe("ShellTool", () => {
               }
               expect(settled.status).toBe("completed")
               expect(settled.metadata?.exit).not.toBe(0)
-              expect(assertions.map((item) => item.action)).toEqual(["shell"])
+              expect(assertions.map((item) => item.action)).toEqual(["Bash"])
               expect(yield* Effect.promise(() => Bun.file(path.join(tmp.path, "marker")).text())).toBe("hello")
             }),
           (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
@@ -1361,12 +1616,7 @@ describe("ShellTool", () => {
                       }
                     }),
                   )
-                  expect(assertions.map((item) => item.action)).toEqual([
-                    "shell",
-                    "external_directory",
-                    "shell",
-                    "shell",
-                  ])
+                  expect(assertions.map((item) => item.action)).toEqual(["Bash", "external_directory", "Bash", "Bash"])
                   expect(assertions[1]?.resources).toEqual([path.join(realpathSync(os.homedir()), "*")])
                   expect(assertions[0]).toMatchObject({ resources: ["echo $((1 + 1))"], save: ["echo *"] })
                   expect(assertions[2]).toMatchObject({ resources: ["pwd"], save: ["pwd *"] })
@@ -1528,7 +1778,10 @@ describe("ShellTool", () => {
               Stream.runHead,
               Effect.forkScoped({ startImmediately: true }),
             )
-            const settled = yield* executeTool(registry, call({ command: idleCommand, timeout: 50, background: true }))
+            const settled = yield* executeTool(
+              registry,
+              call({ command: idleCommand, timeout: 50, run_in_background: true }),
+            )
             const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : undefined
             expect(settled.metadata).toMatchObject({ truncated: false })
             expect(shellID).toStartWith("sh_")
@@ -1582,7 +1835,7 @@ describe("ShellTool", () => {
             )
             const settled = yield* executeTool(
               registry,
-              call({ command: bodyExitCommand, background: true }, "call-background-nonzero"),
+              call({ command: bodyExitCommand, run_in_background: true }, "call-background-nonzero"),
             )
             const shellID = settled.metadata?.shellID
             expect(typeof shellID).toBe("string")
@@ -1625,7 +1878,7 @@ describe("ShellTool", () => {
                 : Effect.void,
             )
             const settled = yield* executeTool(registry, {
-              ...call({ command: "exit 7", background: true }, "call-background-silent-nonzero"),
+              ...call({ command: "exit 7", run_in_background: true }, "call-background-silent-nonzero"),
               // The command can finish while its initial progress update is being published.
               progress: (update) =>
                 typeof update.shellID === "string"
@@ -1659,7 +1912,7 @@ describe("ShellTool", () => {
               const shell = yield* Shell.Service
               const timed = yield* executeTool(
                 registry,
-                call({ command: idleCommand, background: true }, "call-updated-timeout"),
+                call({ command: idleCommand, run_in_background: true }, "call-updated-timeout"),
               )
               const timedID = timed.metadata?.shellID
               expect(typeof timedID).toBe("string")
@@ -1670,7 +1923,7 @@ describe("ShellTool", () => {
 
               const cleared = yield* executeTool(
                 registry,
-                call({ command: idleCommand, timeout: 50, background: true }, "call-cleared-timeout"),
+                call({ command: idleCommand, timeout: 50, run_in_background: true }, "call-cleared-timeout"),
               )
               const clearedID = cleared.metadata?.shellID
               expect(typeof clearedID).toBe("string")
@@ -1748,7 +2001,7 @@ describe("ShellTool", () => {
               const shell = yield* Shell.Service
               const settled = yield* executeTool(
                 registry,
-                call({ command: idleCommand, background: true }, "call-external-signal"),
+                call({ command: idleCommand, run_in_background: true }, "call-external-signal"),
               )
               const shellID = settled.metadata?.shellID
               expect(typeof shellID).toBe("string")
@@ -1922,7 +2175,7 @@ describe("ShellTool", () => {
       Effect.promise(() => tmpdir()),
       (tmp) => {
         reset()
-        denyAction = "shell"
+        denyAction = "Bash"
         return withSession(tmp.path, (registry) => failureFlag(registry, call({ command: cwdCommand }))).pipe(
           Effect.andThen((result) => Effect.sync(() => expect(result).toEqual({ settled: "failed", flag: undefined }))),
         )
@@ -1931,33 +2184,35 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live("cancels the job of a foreground command that is interrupted", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        reset()
-        return withSession(tmp.path, (registry) =>
-          Effect.gen(function* () {
-            const shell = yield* Shell.Service
-            const running = yield* executeTool(registry, call({ command: idleCommand }, "call-interrupted")).pipe(
-              Effect.forkChild({ startImmediately: true }),
-            )
-            const until = (done: (count: number) => boolean, remaining = 1000): Effect.Effect<void, Error> =>
-              Effect.gen(function* () {
-                if (done((yield* shell.list()).length)) return
-                if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
-                yield* Effect.promise(() => Bun.sleep(5))
-                return yield* until(done, remaining - 1)
-              })
-            yield* until((count) => count > 0)
-            yield* Fiber.interrupt(running)
-            // The job is cancelled on interrupt, so its shell goes away without the test removing it.
-            yield* until((count) => count === 0)
-          }),
-        )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
+  it.live(
+    "cancels the job of a foreground command that is interrupted",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const shell = yield* Shell.Service
+              const running = yield* executeTool(registry, call({ command: idleCommand }, "call-interrupted")).pipe(
+                Effect.forkChild({ startImmediately: true }),
+              )
+              const until = (done: (count: number) => boolean, remaining = 1000): Effect.Effect<void, Error> =>
+                Effect.gen(function* () {
+                  if (done((yield* shell.list()).length)) return
+                  if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
+                  yield* Effect.promise(() => Bun.sleep(5))
+                  return yield* until(done, remaining - 1)
+                })
+              yield* until((count) => count > 0)
+              yield* Fiber.interrupt(running)
+              // The job is cancelled on interrupt, so its shell goes away without the test removing it.
+              yield* until((count) => count === 0)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
     { timeout: 15_000 },
   )
 })

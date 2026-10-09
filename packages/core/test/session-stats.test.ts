@@ -91,7 +91,7 @@ describe("SessionStats", () => {
               SessionMessage.AssistantTool.make({
                 type: "tool",
                 id: "call_read",
-                name: "read",
+                name: "Read",
                 state: SessionMessage.ToolStateCompleted.make({
                   status: "completed",
                   input: {},
@@ -106,7 +106,7 @@ describe("SessionStats", () => {
               SessionMessage.AssistantTool.make({
                 type: "tool",
                 id: "call_edit",
-                name: "edit",
+                name: "Edit",
                 state: SessionMessage.ToolStateError.make({
                   status: "error",
                   input: {},
@@ -208,8 +208,8 @@ describe("SessionStats", () => {
       expect(stats.tools.mode).toBe("detail")
       if (stats.tools.mode !== "detail") throw new Error("Expected detailed tool statistics")
       expect(stats.tools.usage).toMatchObject([
-        { name: "read", calls: 1, succeeded: 1, failed: 0, durationP50: 250 },
-        { name: "edit", calls: 1, succeeded: 0, failed: 1, durationP50: 2_000 },
+        { name: "Read", calls: 1, succeeded: 1, failed: 0, durationP50: 250 },
+        { name: "Edit", calls: 1, succeeded: 0, failed: 1, durationP50: 2_000 },
         { name: "pending", calls: 1, succeeded: 0, failed: 0, unfinished: 1 },
       ])
 

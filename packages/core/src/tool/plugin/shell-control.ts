@@ -7,7 +7,7 @@ import { NonNegativeInt } from "../../schema.js"
 import { Shell } from "../../shell.js"
 
 /**
- * Tools for the background commands a session started with the shell tool: read their new output, wait for a line
+ * Tools for the background commands a session started with the Bash tool: read their new output, wait for a line
  * to appear, and stop them. Each tool only reaches commands its own session created.
  */
 
@@ -61,7 +61,7 @@ export const Plugin = {
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
-        name: "shell_output",
+        name: "TaskOutput",
         options: { codemode: false },
         traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
         description:
@@ -86,7 +86,7 @@ export const Plugin = {
           }).pipe(Effect.mapError(failure("read output from", input.shellID))),
       })
       editor.add({
-        name: "shell_watch",
+        name: "TaskWatch",
         options: { codemode: false },
         traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel" },
         description:
@@ -128,7 +128,7 @@ export const Plugin = {
           }).pipe(Effect.mapError(failure("watch", input.shellID))),
       })
       editor.add({
-        name: "shell_stop",
+        name: "TaskStop",
         options: { codemode: false },
         traits: { interruptBehavior: "block" },
         description: "Stop a background shell command this session started. Its output stays readable.",

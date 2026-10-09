@@ -1,6 +1,6 @@
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
-import { canonicalToolName, finiteNumber, webSearchProviderLabel } from "./tool-display"
+import { canonicalToolName, finiteNumber, legacyToolInput, webSearchProviderLabel } from "./tool-display"
 
 type Dict = Record<string, unknown>
 
@@ -185,7 +185,7 @@ export function permissionOptionLabel(option: "once" | "always" | "reject" | "co
 }
 
 function normalizeInput(action: string, value: unknown): Dict {
-  const input = dict(value)
+  const input = dict(legacyToolInput(action, value))
   const path = text(input.path) || text(input.filePath) || text(input.filepath)
   const agent = text(input.agent) || text(input.subagent_type)
   return {

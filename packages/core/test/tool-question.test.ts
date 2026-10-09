@@ -77,7 +77,7 @@ describe("QuestionTool", () => {
     Effect.gen(function* () {
       captured = undefined
       const registry = yield* Tool.Service
-      expect(yield* toolTraits(registry, "question")).toMatchObject({
+      expect(yield* toolTraits(registry, "AskUserQuestion")).toMatchObject({
         readOnly: false,
         concurrencySafe: false,
         requiresUserInteraction: true,
@@ -100,7 +100,7 @@ describe("QuestionTool", () => {
         error: {
           type: "tool.input-invalid",
           message:
-            'Invalid arguments for tool "question":\n- questions: Expected a value with a length of at least 1\n\nArguments provided:\n{\n  "questions": []\n}\n\nUpdate the arguments and call the tool again.',
+            'Invalid arguments for tool "AskUserQuestion":\n- questions: Expected a value with a length of at least 1\n\nArguments provided:\n{\n  "questions": []\n}\n\nUpdate the arguments and call the tool again.',
         },
       })
       expect(capturedInput()).toBeUndefined()
@@ -115,21 +115,21 @@ describe("QuestionTool", () => {
       const registry = yield* Tool.Service
 
       expect(
-        (yield* toolDefinitions(registry, [{ action: "question", resource: "*", effect: "deny" }])).map(
+        (yield* toolDefinitions(registry, [{ action: "AskUserQuestion", resource: "*", effect: "deny" }])).map(
           (tool) => tool.name,
         ),
-      ).toEqual(["execute"])
+      ).toEqual(["Execute"])
       expect(
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-question-denied", name: "question", input: questionInput },
+          call: { type: "tool-call", id: "call-question-denied", name: "AskUserQuestion", input: questionInput },
         }),
       ).toEqual({
         status: "error",
         error: {
           type: "permission.rejected",
-          message: "Permission denied: question",
+          message: "Permission denied: AskUserQuestion",
         },
       })
       expect(capturedInput()).toBeUndefined()
@@ -162,12 +162,12 @@ describe("QuestionTool", () => {
         },
       ]
 
-      expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toEqual(["question", "execute"])
+      expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toEqual(["AskUserQuestion", "Execute"])
       expect(
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-question", name: "question", input: { questions } },
+          call: { type: "tool-call", id: "call-question", name: "AskUserQuestion", input: { questions } },
         }),
       ).toEqual({
         status: "completed",
@@ -180,7 +180,7 @@ describe("QuestionTool", () => {
         ],
         metadata: { answers: [["Build"], ["Dev"], []] },
       })
-      expect(assertions).toMatchObject([{ sessionID, action: "question", resources: ["*"] }])
+      expect(assertions).toMatchObject([{ sessionID, action: "AskUserQuestion", resources: ["*"] }])
       expect(capturedInput()).toEqual({
         sessionID,
         title: "Questions",
@@ -225,7 +225,7 @@ describe("QuestionTool", () => {
       yield* executeTool(registryService, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-question", name: "question", input: questionInput },
+        call: { type: "tool-call", id: "call-question", name: "AskUserQuestion", input: questionInput },
       })
       expect(capturedInput()).toEqual({
         sessionID,
@@ -254,7 +254,7 @@ describe("QuestionTool", () => {
       const fiber = yield* executeTool(registryService, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-question", name: "question", input: questionInput },
+        call: { type: "tool-call", id: "call-question", name: "AskUserQuestion", input: questionInput },
       }).pipe(Effect.forkScoped)
 
       const exit = yield* Fiber.await(fiber)

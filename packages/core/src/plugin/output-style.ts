@@ -103,12 +103,15 @@ export const Plugin = define({
         const style = yield* load(name)
         if (!style) return
         const base = style.keepCodingInstructions ? system.text : withoutSections(system.text, CODING_SECTIONS)
-        event.system[0] = { ...system, text: `${base}\n\n# Output style: ${style.name}\n${style.body}` }
+        event.system[0] = { ...system, text: `${base}${STYLE_HEADING}${style.name}\n${style.body}` }
       }).pipe(Effect.catch(() => Effect.void))
 
     yield* ctx.session.hook("context", hook)
   }),
 } satisfies PluginInternal.InternalPlugin)
+
+/** What introduces an output style's text in the system prompt; the text after it is the person's own. */
+export const STYLE_HEADING = "\n\n# Output style: "
 
 /** Removes top-level `# Heading` sections by name, up to the next top-level heading. */
 export function withoutSections(text: string, names: readonly string[]) {

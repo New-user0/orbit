@@ -10,7 +10,7 @@ import { Location } from "../../location.js"
 import { Lsp } from "../../lsp/index.js"
 import { PositiveInt } from "../../schema.js"
 
-export const name = "lsp"
+export const name = "LSP"
 
 export const Input = Schema.Struct({
   action: Schema.Literals(["definition", "references", "hover", "symbols", "diagnostics"]).annotate({

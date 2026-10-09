@@ -16,7 +16,7 @@ import { AbsolutePath } from "../../schema.js"
  * source so every new session starts with it. Everything stays on this machine.
  */
 
-export const name = "memory"
+export const name = "Memory"
 const INDEX = "MEMORY.md"
 const Name = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,63}$/)).annotate({
   description: 'Short kebab-case name for the memory, such as "test-commands"',
@@ -65,7 +65,7 @@ export const Plugin = {
           ? undefined
           : [
               "# Project memory",
-              "Notes saved in earlier sessions with the memory tool. Read one with memory read before relying on details.",
+              "Notes saved in earlier sessions with the Memory tool. Read one with Memory read before relying on details.",
               "",
               ...lines,
             ].join("\n")

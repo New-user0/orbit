@@ -41,13 +41,13 @@ const withTools = <A, E, R>(
 ) =>
   Effect.gen(function* () {
     const registry = yield* Tool.Service
-    expect(yield* toolTraits(registry, "glob")).toMatchObject({
+    expect(yield* toolTraits(registry, "Glob")).toMatchObject({
       readOnly: true,
       concurrencySafe: true,
       destructive: false,
       interruptBehavior: "cancel",
     })
-    expect(yield* toolTraits(registry, "grep")).toMatchObject({
+    expect(yield* toolTraits(registry, "Grep")).toMatchObject({
       readOnly: true,
       concurrencySafe: true,
       destructive: false,
@@ -72,7 +72,7 @@ const withTools = <A, E, R>(
     ),
   )
 
-const call = (name: "glob" | "grep", input: unknown) => ({
+const call = (name: "Glob" | "Grep", input: unknown) => ({
   sessionID,
   ...toolIdentity,
   call: { type: "tool-call" as const, id: `call-${name}`, name, input },
@@ -95,7 +95,7 @@ describe("search tools", () => {
             Effect.gen(function* () {
               const result = yield* executeTool(
                 registry,
-                call("glob", { pattern: "**/*.ts", limit, ...(hidden === undefined ? {} : { hidden }) }),
+                call("Glob", { pattern: "**/*.ts", limit, ...(hidden === undefined ? {} : { hidden }) }),
               )
               const expected = hidden
                 ? [".hidden.ts", ".hidden/nested.ts", "src/.hidden.ts", "src/visible.ts"]
@@ -132,8 +132,8 @@ describe("search tools", () => {
           )
           yield* withTools(tmp.path, (registry) =>
             Effect.gen(function* () {
-              const glob = yield* executeTool(registry, call("glob", { pattern: "*" }))
-              const grep = yield* executeTool(registry, call("grep", { pattern: "needle" }))
+              const glob = yield* executeTool(registry, call("Glob", { pattern: "*" }))
+              const grep = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
 
               expect(glob.metadata).toEqual({ count: FileSystem.DEFAULT_SEARCH_LIMIT, truncated: true })
               expect(grep.metadata).toEqual({ matches: FileSystem.DEFAULT_SEARCH_LIMIT, truncated: true })
@@ -162,12 +162,12 @@ describe("search tools", () => {
       (tmp) =>
         withTools(tmp.path, (registry) =>
           Effect.gen(function* () {
-            expect(yield* executeTool(registry, call("grep", { pattern: "" }))).toEqual({
+            expect(yield* executeTool(registry, call("Grep", { pattern: "" }))).toEqual({
               status: "error",
               error: {
                 type: "tool.input-invalid",
                 message:
-                  'Invalid arguments for tool "grep":\n- pattern: Pattern must not be empty\n\nArguments provided:\n{\n  "pattern": ""\n}\n\nUpdate the arguments and call the tool again.',
+                  'Invalid arguments for tool "Grep":\n- pattern: Pattern must not be empty\n\nArguments provided:\n{\n  "pattern": ""\n}\n\nUpdate the arguments and call the tool again.',
               },
             })
           }),
@@ -189,14 +189,14 @@ describe("search tools", () => {
           Effect.andThen(
             withTools(tmp.path, (registry) =>
               Effect.gen(function* () {
-                const file = yield* executeTool(registry, call("grep", { path: "target.txt", pattern: "needle" }))
+                const file = yield* executeTool(registry, call("Grep", { path: "target.txt", pattern: "needle" }))
                 expect(file).toMatchObject({
                   status: "completed",
                   output: [{ entry: { path: "target.txt" }, line: 1, text: "needle\n" }],
                   metadata: { matches: 1, truncated: false },
                 })
 
-                const directory = yield* executeTool(registry, call("grep", { path: ".", pattern: "needle" }))
+                const directory = yield* executeTool(registry, call("Grep", { path: ".", pattern: "needle" }))
                 expect(directory).toMatchObject({
                   status: "completed",
                   metadata: { matches: 2, truncated: false },
@@ -221,7 +221,7 @@ describe("search tools", () => {
       Effect.promise(() => tmpdir()),
       (tmp) =>
         Effect.promise(() => fs.writeFile(path.join(tmp.path, "file.txt"), "haystack\n")).pipe(
-          Effect.andThen(withTools(tmp.path, (registry) => executeTool(registry, call("grep", { pattern: "needle" })))),
+          Effect.andThen(withTools(tmp.path, (registry) => executeTool(registry, call("Grep", { pattern: "needle" })))),
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result).toMatchObject({
@@ -242,7 +242,7 @@ describe("search tools", () => {
       (tmp) =>
         withTools(tmp.path, (registry) =>
           Effect.gen(function* () {
-            const result = yield* executeTool(registry, call("grep", { pattern: "[" }))
+            const result = yield* executeTool(registry, call("Grep", { pattern: "[" }))
             expect(result).toMatchObject({
               status: "error",
               error: { type: "tool.execution" },
@@ -269,11 +269,11 @@ describe("search tools", () => {
                 Effect.gen(function* () {
                   const directory = yield* executeTool(
                     registry,
-                    call("grep", { path: outside.path, pattern: "needle" }),
+                    call("Grep", { path: outside.path, pattern: "needle" }),
                   )
                   const file = yield* executeTool(
                     registry,
-                    call("grep", { path: path.join(outside.path, "outside.txt"), pattern: "needle" }),
+                    call("Grep", { path: path.join(outside.path, "outside.txt"), pattern: "needle" }),
                   )
                   expect(directory.status).toBe("completed")
                   expect(file.status).toBe("completed")
@@ -285,9 +285,9 @@ describe("search tools", () => {
             Effect.sync(() => {
               expect(assertions.map((input) => input.action)).toEqual([
                 "external_directory",
-                "grep",
+                "Grep",
                 "external_directory",
-                "grep",
+                "Grep",
               ])
               expect(assertions[0]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
               expect(assertions[2]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
@@ -302,7 +302,7 @@ describe("search tools", () => {
     ),
   )
 
-  for (const name of ["glob", "grep"] as const) {
+  for (const name of ["Glob", "Grep"] as const) {
     it.live(`${name} reports a missing search path`, () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
@@ -311,7 +311,7 @@ describe("search tools", () => {
             Effect.gen(function* () {
               const result = yield* executeTool(
                 registry,
-                call(name, { path: "missing", pattern: name === "glob" ? "*" : "needle" }),
+                call(name, { path: "missing", pattern: name === "Glob" ? "*" : "needle" }),
               )
               expect(result).toEqual({
                 status: "error",
@@ -330,7 +330,7 @@ describe("search tools", () => {
       (tmp) =>
         Effect.promise(() => fs.writeFile(path.join(tmp.path, "file.txt"), "content\n")).pipe(
           Effect.andThen(
-            withTools(tmp.path, (registry) => executeTool(registry, call("glob", { path: "file.txt", pattern: "*" }))),
+            withTools(tmp.path, (registry) => executeTool(registry, call("Glob", { path: "file.txt", pattern: "*" }))),
           ),
           Effect.tap((result) =>
             Effect.sync(() => {
@@ -354,14 +354,14 @@ describe("search tools", () => {
           Effect.andThen(
             withTools(
               active.path,
-              (registry) => executeTool(registry, call("glob", { path: outside.path, pattern: "*.txt" })),
+              (registry) => executeTool(registry, call("Glob", { path: outside.path, pattern: "*.txt" })),
               assertions,
             ),
           ),
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "glob"])
+              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "Glob"])
               expect(assertions[0]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
             }),
           ),
@@ -387,14 +387,14 @@ describe("search tools", () => {
           Effect.andThen(
             withTools(
               active.path,
-              (registry) => executeTool(registry, call("glob", { path: "linked", pattern: "*.txt" })),
+              (registry) => executeTool(registry, call("Glob", { path: "linked", pattern: "*.txt" })),
               assertions,
             ),
           ),
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(assertions.map((input) => input.action)).toEqual(["glob"])
+              expect(assertions.map((input) => input.action)).toEqual(["Glob"])
               expect(result).toMatchObject({
                 output: [{ path: path.join("linked", "outside.txt"), type: "file" }],
                 content: [{ type: "text", text: path.join(active.path, "linked", "outside.txt") }],
@@ -428,12 +428,12 @@ describe("search tools", () => {
 
           const files = yield* executeTool(
             registry,
-            call("grep", { pattern: "needle", outputMode: "files_with_matches" }),
+            call("Grep", { pattern: "needle", outputMode: "files_with_matches" }),
           )
           expect(files.output).toEqual({ files: ["b.py", "a.ts"] })
           expect(files.metadata).toEqual({ matches: 2, truncated: false })
 
-          const counts = yield* executeTool(registry, call("grep", { pattern: "needle", outputMode: "count" }))
+          const counts = yield* executeTool(registry, call("Grep", { pattern: "needle", outputMode: "count" }))
           expect(counts.output).toEqual({
             counts: expect.arrayContaining([
               { path: "a.ts", count: 2 },
@@ -442,18 +442,18 @@ describe("search tools", () => {
           })
           expect(counts.metadata).toEqual({ matches: 3, truncated: false })
 
-          const typed = yield* executeTool(registry, call("grep", { pattern: "needle", type: "py" }))
+          const typed = yield* executeTool(registry, call("Grep", { pattern: "needle", type: "py" }))
           expect(typed.metadata).toEqual({ matches: 1, truncated: false })
 
           const paged = yield* executeTool(
             registry,
-            call("grep", { pattern: "needle", path: "a.ts", offset: 1, limit: 1 }),
+            call("Grep", { pattern: "needle", path: "a.ts", offset: 1, limit: 1 }),
           )
           expect(paged.metadata).toEqual({ matches: 1, truncated: false })
           expect(text(paged)).toContain("Line 6: needle a2")
           expect(text(paged)).not.toContain("a1")
 
-          const context = yield* executeTool(registry, call("grep", { pattern: "needle", path: "a.ts", context: 1 }))
+          const context = yield* executeTool(registry, call("Grep", { pattern: "needle", path: "a.ts", context: 1 }))
           expect(context.metadata).toEqual({ matches: 2, truncated: false })
           expect(text(context)).toContain(
             [
@@ -469,7 +469,7 @@ describe("search tools", () => {
 
           const multiline = yield* executeTool(
             registry,
-            call("grep", { pattern: "two.three", path: "a.ts", multiline: true }),
+            call("Grep", { pattern: "two.three", path: "a.ts", multiline: true }),
           )
           expect(multiline.metadata).toEqual({ matches: 1, truncated: false })
         }),
@@ -492,7 +492,7 @@ describe("search tools", () => {
       })
       yield* withTools(tmp.path, (registry) =>
         Effect.gen(function* () {
-          const result = yield* executeTool(registry, call("glob", { pattern: "*.ts" }))
+          const result = yield* executeTool(registry, call("Glob", { pattern: "*.ts" }))
           expect(result.output).toEqual([
             { path: "new.ts", type: "file" },
             { path: "middle.ts", type: "file" },

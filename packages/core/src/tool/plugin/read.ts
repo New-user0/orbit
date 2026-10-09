@@ -17,9 +17,9 @@ import { AbsolutePath, PositiveInt } from "../../schema.js"
 import { ReadToolFileSystem } from "../read-filesystem.js"
 import { Environment } from "../../environment/index.js"
 
-export const name = "read"
+export const name = "Read"
 const LocationInput = Schema.Struct({
-  path: Schema.String.annotate({ description: "File or directory to read" }),
+  file_path: Schema.String.annotate({ description: "File or directory to read" }),
   offset: ReadToolFileSystem.PageInput.fields.offset.annotate({
     description: "The line or directory entry to start reading from (1-based)",
   }),
@@ -49,7 +49,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel", maxResultChars: Infinity },
           description:
-            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use grep to find specific content in large files.",
+            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use Grep to find specific content in large files.",
           input: Input,
           output: Output,
           execute: (input, context) => {
@@ -60,9 +60,9 @@ export const Plugin = {
                   limit: input.limit,
                 })
 
-              const requested = yield* access.authorizeRead(input.path, context)
+              const requested = yield* access.authorizeRead(input.file_path, context)
               const result = yield* read(requested).pipe(
-                Effect.map((content) => ({ content, target: requested, path: input.path })),
+                Effect.map((content) => ({ content, target: requested, path: input.file_path })),
                 Effect.catchIf(
                   (error) => error instanceof Environment.NotFound,
                   () =>
@@ -70,19 +70,19 @@ export const Plugin = {
                       const alternate = yield* alternatePath(requested.absolute).pipe(
                         Effect.orElseSucceed(() => undefined),
                       )
-                      if (!alternate) return yield* missing(input.path, requested.absolute)
+                      if (!alternate) return yield* missing(input.file_path, requested.absolute)
                       const target = yield* access.authorizeRead(alternate, context, { siblingOf: requested })
                       const content = yield* read(target).pipe(
                         Effect.catchIf(
                           (error) => error instanceof Environment.NotFound,
-                          () => missing(input.path, requested.absolute),
+                          () => missing(input.file_path, requested.absolute),
                         ),
                       )
-                      if (content.type === "list-page") return yield* missing(input.path, requested.absolute)
+                      if (content.type === "list-page") return yield* missing(input.file_path, requested.absolute)
                       return {
                         content,
                         target,
-                        path: join(dirname(input.path), basename(alternate)),
+                        path: join(dirname(input.file_path), basename(alternate)),
                       }
                     }),
                 ),
@@ -139,7 +139,7 @@ export const Plugin = {
                   error instanceof ReadToolFileSystem.OffsetOutOfRangeError ||
                   error instanceof ReadToolFileSystem.PathKindError
                     ? error.message
-                    : `Unable to read ${input.path}`
+                    : `Unable to read ${input.file_path}`
                 return new ToolFailure({ message, error })
               }),
             )

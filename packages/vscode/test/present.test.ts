@@ -172,3 +172,14 @@ test("a chat's agents come from its workflows and subagent calls, grouped by pha
   expect(duration(agents.slice(0, 3), 75_000)).toBe("1m 15s")
   expect(duration([agents[0]!, agents[2]!], 75_000)).toBe("4s")
 })
+
+test("a call under the reference tool names reads like one under the old names", () => {
+  const read = (name: string, input: Record<string, unknown>) =>
+    describe({ type: "tool", id: "1", name, status: "completed", input, output: "a\nb" }, "harness")
+  expect(read("Read", { file_path: "src/a.ts" })).toEqual(read("read", { path: "src/a.ts" }))
+  expect(read("Read", { file_path: "src/a.ts" })).toMatchObject({ verb: "Read", target: "src/a.ts" })
+  expect(read("Edit", { file_path: "src/a.ts" })).toMatchObject({ verb: "Edit", target: "src/a.ts" })
+  expect(read("NotebookEdit", { notebook_path: "n.ipynb" })).toMatchObject({ verb: "Edit", target: "n.ipynb" })
+  expect(read("Bash", { command: "bun test" })).toMatchObject({ verb: "Run", target: "bun test" })
+  expect(read("Agent", { description: "Look around" })).toMatchObject({ verb: "Agent", target: "Look around" })
+})

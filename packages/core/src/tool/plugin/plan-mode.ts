@@ -40,27 +40,27 @@ export const Plugin = {
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
-        name: "enter_plan_mode",
+        name: "EnterPlanMode",
         options: { codemode: false },
         traits: { requiresUserInteraction: true },
         description:
-          "Switch to Plan mode to research and design an approach before changing any files. Use it for large tasks, tasks with several reasonable approaches, or when the user asks for a plan. In Plan mode you can read and search but not edit; finish by calling exit_plan_mode with the plan.",
+          "Switch to Plan mode to research and design an approach before changing any files. Use it for large tasks, tasks with several reasonable approaches, or when the user asks for a plan. In Plan mode you can read and search but not edit; finish by calling ExitPlanMode with the plan.",
         input: EnterInput,
         output: Schema.Struct({ agent: Schema.String }),
         execute: (input, context) =>
           Effect.gen(function* () {
             if (context.agent === plan)
-              return { output: { agent: plan }, content: "Already in Plan mode. Call exit_plan_mode with the plan." }
+              return { output: { agent: plan }, content: "Already in Plan mode. Call ExitPlanMode with the plan." }
             yield* sessions.switchAgent({ sessionID: context.sessionID, agent: plan })
             return {
               output: { agent: plan },
               content:
-                "Switched to Plan mode. Research the task without changing files, then call exit_plan_mode with the plan for the user to approve.",
+                "Switched to Plan mode. Research the task without changing files, then call ExitPlanMode with the plan for the user to approve.",
             }
           }).pipe(Effect.mapError(failure("enter Plan mode"))),
       })
       editor.add({
-        name: "exit_plan_mode",
+        name: "ExitPlanMode",
         options: { codemode: false },
         traits: { requiresUserInteraction: true },
         description:

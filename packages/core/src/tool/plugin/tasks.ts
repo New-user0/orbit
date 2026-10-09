@@ -66,7 +66,7 @@ export const Plugin = {
 
     yield* ctx.tool.transform((editor) => {
       editor.add({
-        name: "task_create",
+        name: "TaskCreate",
         options: { codemode: false },
         traits: { readOnly: false, concurrencySafe: false },
         description:
@@ -93,7 +93,7 @@ export const Plugin = {
           }),
       })
       editor.add({
-        name: "task_update",
+        name: "TaskUpdate",
         options: { codemode: false },
         traits: { readOnly: false, concurrencySafe: false },
         description:
@@ -134,7 +134,7 @@ export const Plugin = {
           }),
       })
       editor.add({
-        name: "task_list",
+        name: "TaskList",
         options: { codemode: false },
         traits: { readOnly: true, concurrencySafe: true },
         description:

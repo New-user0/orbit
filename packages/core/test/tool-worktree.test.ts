@@ -53,18 +53,18 @@ describe("worktree tools", () => {
   it.effect("move a session into a new worktree and back, removing it when asked", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      yield* expectRegistryAsks(registry, ["enter_worktree", "exit_worktree"])
-      for (const name of ["enter_worktree", "exit_worktree"])
+      yield* expectRegistryAsks(registry, ["EnterWorktree", "ExitWorktree"])
+      for (const name of ["EnterWorktree", "ExitWorktree"])
         expect(yield* toolTraits(registry, name)).toMatchObject({
           readOnly: false,
           concurrencySafe: false,
           interruptBehavior: "block",
         })
-      expect((yield* executeTool(registry, call("exit_worktree", {}))).status).toBe("error")
-      const entered = yield* executeTool(registry, call("enter_worktree", { name: "spike" }))
+      expect((yield* executeTool(registry, call("ExitWorktree", {}))).status).toBe("error")
+      const entered = yield* executeTool(registry, call("EnterWorktree", { name: "spike" }))
       expect(entered.status).toBe("completed")
-      expect((yield* executeTool(registry, call("enter_worktree", {}))).status).toBe("error")
-      yield* executeTool(registry, call("exit_worktree", { remove: true }))
+      expect((yield* executeTool(registry, call("EnterWorktree", {}))).status).toBe("error")
+      yield* executeTool(registry, call("ExitWorktree", { remove: true }))
       expect(moves).toEqual(["/worktrees/spike", "/repo"])
       expect(removed).toEqual(["/worktrees/spike"])
     }),

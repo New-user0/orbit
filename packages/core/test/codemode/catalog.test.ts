@@ -121,7 +121,7 @@ describe("CodeModeInstructions.render", () => {
     expect(instructions).toContain("- orders (1 tool)")
     expect(instructions).toContain(`  - ${lookup.signature} // Look up an order by ID`)
     expect(instructions).not.toContain("search")
-    expect(instructions).toContain("They cannot be called directly. They only work inside code you pass to `execute`.")
+    expect(instructions).toContain("They cannot be called directly. They only work inside code you pass to `Execute`.")
     expect(instructions).toContain("The catalog is complete. Do not guess tool names.")
   })
 
@@ -131,7 +131,7 @@ describe("CodeModeInstructions.render", () => {
     expect(partial).toContain("- orders (1 tool, none shown)")
     expect(partial).toContain("They cannot be called directly, and neither can `search`.")
     expect(partial).toContain(
-      "The catalog is partial. Inside `execute`, use `search(...)` to find a tool, then call it by the `path` in the result. `search` is synchronous. Call it without `await`; it does not return a Promise.",
+      "The catalog is partial. Inside `Execute`, use `search(...)` to find a tool, then call it by the `path` in the result. `search` is synchronous. Call it without `await`; it does not return a Promise.",
     )
     expect(partial).toContain("- search({")
     expect(partial).toContain("  /** @integer @exclusiveMinimum 0 */\n  limit?: number,")
@@ -175,7 +175,7 @@ describe("CodeModeInstructions.render", () => {
 
   test("renders only the no-tools notice for an empty catalog", () => {
     expect(render([])).toBe(
-      "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `execute` unless there is at least one available Code Mode tool.",
+      "No Code Mode tools are currently available. Later Code Mode catalog updates may add or remove tools. Do not call `Execute` unless there is at least one available Code Mode tool.",
     )
   })
 })

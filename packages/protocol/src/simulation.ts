@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { ToolNames } from "@orbit/schema/tool-names"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 
 const JsonRpcID = Schema.Union([Schema.String, Schema.Number, Schema.Null])
@@ -539,10 +540,12 @@ export namespace Backend {
         if (
           tools.some(
             (tool) =>
-              tool.name === "execute" && tool.options?.namespace === undefined && tool.options?.codemode === false,
+              ToolNames.canonical(tool.name) === "Execute" &&
+              tool.options?.namespace === undefined &&
+              tool.options?.codemode === false,
           )
         )
-          return 'direct simulated tool name "execute" is reserved'
+          return 'direct simulated tool name "Execute" is reserved'
         return undefined
       }),
     ),
