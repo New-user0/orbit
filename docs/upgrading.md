@@ -1194,9 +1194,11 @@ Now the file tools (Read, Write, Edit, NotebookEdit, Patch, LSP, and the paths o
 which part of the path is really inside the project, and decide the rest under the project's own folder: the rules see
 the project-relative name, a repository link below it is followed and asked about as for the plain spelling, and an
 approval names the place the tool acts on. A share or device path (`\\server\share\…`, `\\localhost\C$\…`,
-`\\?\Volume{…}\…`, `\\.\…`) is refused with the error type `file.spelling` before any disk is read, unless the project
-itself is on that share. A repository link whose target is a share is named as the link says and never opened to
-decide the question. The lock that serializes edits of one file now takes the long name without the periods and spaces
+`\\?\Volume{…}\…`, `\\.\…`) is refused with the error type `file.spelling` before any disk is read, unless the path
+is in the project's folder. A repository link whose target is a share is named as the link says and never opened to
+decide the question; a part with `~` (an 8.3 short name) below such a link is refused too, as its long name could only
+be found by opening the share. The words a shell command names are followed through a repository link in these
+spellings as well, and a drive made from the project's folder (`subst`) is the project. The lock that serializes edits of one file now takes the long name without the periods and spaces
 Windows drops, so `new.txt.` and `new.txt` wait for each other.
 
 Your own rule with exactly the value of one of Orbit's folder allows (such as `external_directory` for the global config

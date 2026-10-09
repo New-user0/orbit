@@ -273,6 +273,31 @@ const linkModes = [
   ...(canLinkDirectory ? [{ trusted: false, reply: "once", link: "symlink" } as const] : []),
   { trusted: true, reply: "once", link: "junction" },
 ] as const
+const linkCheck =
+  (row: (typeof linkRows)[number], mode: { readonly trusted: boolean; readonly reply: "once" | "reject" }) =>
+  async (run: Run) => {
+    const config = path.join(run.root, "config")
+    const folder = run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))
+    if (mode.trusted) {
+      // The project's own link: no folder question, and the tool's approval names the link.
+      expect(folder).toHaveLength(0)
+      expect(run.permissions).toHaveLength(1)
+      expect(shownAt(run.permissions[0]?.toolCall.locations)).toEqual([row.place(run.root, true)])
+      expect(await row.acted(run.root, run.bodies)).toBe(true)
+      return
+    }
+    // The first question names the real folder, which Orbit's own allow for the config folder no longer answers.
+    expect(String(run.permissions[0]?.toolCall.title)).toContain("external directory")
+    expect(shownAt(run.permissions[0]?.toolCall.locations)).toContain(config)
+    if (mode.reply === "reject") {
+      expect(run.permissions).toHaveLength(1)
+      expect(await row.acted(run.root, run.bodies)).toBe(false)
+      return
+    }
+    expect(run.permissions).toHaveLength(2)
+    expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([row.place(run.root, false)])
+    expect(await row.acted(run.root, run.bodies)).toBe(true)
+  }
 for (const row of linkRows)
   for (const mode of linkModes)
     test(
@@ -288,29 +313,7 @@ for (const row of linkRows)
             args: () => row.args,
             setup: linkSetup(mode.link),
           },
-          async (run) => {
-            const config = path.join(run.root, "config")
-            const folder = run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))
-            if (mode.trusted) {
-              // The project's own link: no folder question, and the tool's approval names the link.
-              expect(folder).toHaveLength(0)
-              expect(run.permissions).toHaveLength(1)
-              expect(shownAt(run.permissions[0]?.toolCall.locations)).toEqual([row.place(run.root, true)])
-              expect(await row.acted(run.root, run.bodies)).toBe(true)
-              return
-            }
-            // The first question names the real folder, which Orbit's own allow for the config folder no longer answers.
-            expect(String(run.permissions[0]?.toolCall.title)).toContain("external directory")
-            expect(shownAt(run.permissions[0]?.toolCall.locations)).toContain(config)
-            if (mode.reply === "reject") {
-              expect(run.permissions).toHaveLength(1)
-              expect(await row.acted(run.root, run.bodies)).toBe(false)
-              return
-            }
-            expect(run.permissions).toHaveLength(2)
-            expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([row.place(run.root, false)])
-            expect(await row.acted(run.root, run.bodies)).toBe(true)
-          },
+          linkCheck(row, mode),
         ),
       90_000,
     )
@@ -690,6 +693,101 @@ for (const spelling of refusedSpellings)
       90_000,
     )
 
+// The same rows through each real spelling of the workspace folder: the paths a tool is given (Bash workdir, Grep, Write,
+// Read) and the words of a command (Bash cat, path words, redirect, PowerShell) meet the folder question that the plain
+// spelling meets, nothing is read or written before it, a trusted folder is the control, and a person's deny of the
+// config folder means no question and nothing sent (class 3, class 4, class 8, class 12; permissions-23).
+const spellArgs = (args: Record<string, unknown>, spelled: string) => {
+  const base = spelled.replaceAll("\\", "/")
+  return Object.fromEntries(
+    Object.entries(args).map(([key, value]) => {
+      if (typeof value !== "string") return [key, value]
+      if (key === "command") return [key, value.replace(/\bcfg(\/[^\s;]*)?/g, (word) => `"${base}/${word}"`)]
+      if (["workdir", "path", "file_path", "cwd"].includes(key)) return [key, `${base}/${value}`]
+      return [key, value]
+    }),
+  )
+}
+const spellingModes = [
+  { trusted: false, reply: "once" },
+  { trusted: false, reply: "reject" },
+  { trusted: true, reply: "once" },
+] as const
+for (const row of linkRows)
+  for (const spelling of realSpellings) {
+    for (const mode of spellingModes)
+      test(
+        `${mode.trusted ? "a trusted" : "an untrusted"} ${row.name} through ${spelling.name} and the repository's link into the config folder, answered ${mode.reply}`,
+        () =>
+          approval(
+            {
+              tool: row.tool,
+              rule: row.rule,
+              shell: "shell" in row ? row.shell : undefined,
+              trusted: mode.trusted,
+              reply: mode.reply,
+              args: (root) => spellArgs(row.args, spelling.spelled(root)),
+              setup: spellingLinks,
+            },
+            linkCheck(row, mode),
+          ),
+        90_000,
+      )
+    test(
+      `an untrusted ${row.name} through ${spelling.name} and the repository's link under the person's deny of the config folder is denied with no question`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            rule: row.rule,
+            shell: "shell" in row ? row.shell : undefined,
+            permissions: (root) => [
+              { action: row.rule, resource: "*", effect: "ask" },
+              {
+                action: "external_directory",
+                resource: `${path.join(root, "config").replaceAll("\\", "/")}/*`,
+                effect: "deny",
+              },
+            ],
+            reply: "once",
+            args: (root) => spellArgs(row.args, spelling.spelled(root)),
+            setup: spellingLinks,
+          },
+          async (run) => {
+            expect(run.permissions).toHaveLength(0)
+            expect(await row.acted(run.root, run.bodies)).toBe(false)
+          },
+        ),
+      90_000,
+    )
+  }
+// A share or device spelling is refused before any question whatever the tool, trusted or not.
+const refusedRows = linkRows.filter((row) => ["Bash workdir", "Grep path", "Write file_path"].includes(row.name))
+for (const row of refusedRows)
+  for (const spelling of refusedSpellings)
+    for (const trusted of [false, true])
+      test(
+        `${trusted ? "a trusted" : "an untrusted"} ${row.name} through ${spelling.name} is refused before any question`,
+        () =>
+          approval(
+            {
+              tool: row.tool,
+              rule: row.rule,
+              shell: "shell" in row ? row.shell : undefined,
+              trusted,
+              reply: "once",
+              args: (root) => spellArgs(row.args, spelling.spelled(root)),
+              setup: spellingLinks,
+            },
+            async (run) => {
+              expect(run.permissions).toHaveLength(0)
+              expect(await row.acted(run.root, run.bodies)).toBe(false)
+              expect(toolResult(run)).toContain("file.spelling")
+            },
+          ),
+        90_000,
+      )
+
 type Run = {
   readonly root: string
   readonly workspace: string
@@ -704,7 +802,9 @@ async function approval(
     args: (root: string) => Record<string, unknown>
     rule?: string
     // The person's own rules, in place of one `ask` rule for `rule`.
-    permissions?: ReadonlyArray<{ action: string; resource: string; effect: "allow" | "ask" | "deny" }>
+    permissions?:
+      | ReadonlyArray<{ action: string; resource: string; effect: "allow" | "ask" | "deny" }>
+      | ((root: string) => ReadonlyArray<{ action: string; resource: string; effect: "allow" | "ask" | "deny" }>)
     shell?: string
     trusted?: boolean
     reply?: "once" | "reject"
@@ -759,7 +859,9 @@ async function approval(
       update: "disable",
       model: "test/test-model",
       ...(input.shell ? { shell: input.shell } : {}),
-      permissions: input.permissions ?? [{ action: input.rule ?? input.tool, resource: "*", effect: "ask" }],
+      permissions: (typeof input.permissions === "function"
+        ? input.permissions(await fs.realpath(root))
+        : input.permissions) ?? [{ action: input.rule ?? input.tool, resource: "*", effect: "ask" }],
       providers: {
         test: {
           name: "Test",

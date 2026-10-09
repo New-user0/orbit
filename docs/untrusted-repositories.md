@@ -1631,11 +1631,13 @@ fixes it or asks.
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
   rule covers the folder. Task `permissions-3` (M6) carries a Read check for each file a search returns.
 - **A share named before anyone is asked (closed for the file tools by `permissions-23`).** `FileAccess.resolve` now
-  refuses a UNC, `\\?\Volume{…}` or `\\.\` path with `file.spelling` before any disk is read, unless the project is on
-  that share, and `ProjectTrust.escapes` reads a link's target one part at a time and names a share as the link says
-  without opening it; `FileAccess` then neither reads that place's kind nor looks above it for a `.git`.
-  `file-access-spelling.test.ts` pins both (the link row needs Developer Mode, and fails in 5 seconds on the old
-  code). What remains: a share named in a shell command's text or in a path that a loader other than the file tools
+  refuses a UNC, `\\?\Volume{…}` or `\\.\` path with `file.spelling` before any disk is read, unless the path is in
+  the project's folder, and `ProjectTrust.escapes` reads a link's target one part at a time and names a share as the
+  link says without opening it; `FileAccess` then neither reads that place's kind nor looks above it for a `.git`. A
+  part with `~` below a repository link to a share is refused with `file.spelling` as well, because looking up its long
+  name would read the folder the link leads to (the review of the first version found this one: it took 6 seconds to
+  connect to the host). `file-access-spelling.test.ts` pins these with a host name of its own to each run and a time
+  limit on every row (the link rows need Developer Mode, and fail instead of passing without it). What remains: a share named in a shell command's text or in a path that a loader other than the file tools
   reads, such as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
 - **Other spellings of the project folder (closed for the file tools by `permissions-23`).** A path that named the
   project through another spelling of its own folder (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`,
@@ -1647,9 +1649,14 @@ fixes it or asks.
   spelling, and the rules see the project-relative name. `\\localhost\C$\…`, `\\?\Volume{…}\…` and `\\.\Volume{…}\…`
   are refused (see the entry above). Pinned by the table in `file-access-spelling.test.ts` (deny, ask and trusted rows
   for each spelling) and by the `orb acp` table in `permission-files.subprocess.test.ts`, which fail on the code before
-  the change. What remains: the paths a shell command names in its text (`FileAccess.escaped`) are matched to the
-  project by name, so a shell word in one of these spellings is not followed through a repository link; the question
-  for a command still names its folder.
+  the change. The paths a shell command names in its text (`FileAccess.escaped`) are anchored the same way before
+  `ProjectTrust.escapes` follows them (`cat "<spelling>/cfg/orbit.json"` meets the folder question of the plain
+  spelling), and the `orb acp` table crosses every row of `linkRows` (Bash workdir, `cd`, path words, `cat` and
+  redirect, PowerShell, Grep, Glob, Read, Write) with every real spelling, untrusted with `once` and `reject`, trusted,
+  and under a person's deny of the config folder, and the refused spellings with Bash workdir, Grep and Write. A drive
+  that is made from the project's folder (`subst Q: <project>`) is anchored too, because the root is the first part
+  asked about. What remains: a path that goes through a link that is not in the project and that leads into it by a
+  route this walk cannot read (a mapped network drive); a word of a command that a shell builds as it runs.
 - **A rule of the person's with the value of one of Orbit's own allows (closed by `permissions-23`).** A place a link
   leads to is decided without Orbit's own allows (`Agent.folders`). They are now marked where they are made (the rule
   objects are kept in a `WeakSet`, so the mark is not a field that a config file, stored rule or decoded value can
@@ -1658,8 +1665,10 @@ fixes it or asks.
   person's rule with the value of one of Orbit's own allows decide a folder a link leads to"; `agent.test.ts` pins the
   mark on a new agent). What remains: the mark follows the object, so a copy of a rule (a spread, a structured clone, a
   JSON round trip or a schema decode) counts as the person's, which is the looser reading. The production plugin host
-  hands the agent editor over without copying, so Explore's rules keep the mark by reference; the copying `agentHost`
-  of the test fixtures does not, and no test pins Explore's.
+  hands the agent editor over without copying, so Explore's rules keep the mark by reference; `agent.test.ts` ("keeps
+  the mark of Orbit's own folder allows in every built-in agent, Explore among them") builds the agents through the
+  real `orbit.agent` plugin with an editor that does not copy and fails when Explore copies its rules. The copying
+  `agentHost` of the test fixtures does not keep the mark.
 - **Approvals not yet built only from the request.** Since M2 the server puts the resolved file or folder on file,
   shell, Grep and Glob requests, and the terminal UI, Mini and ACP prefer it. Parts of an approval still come from the
   call's recorded input, or are missing: the terminal UI, Mini and VS Code name no folder on a shell, Grep or Glob

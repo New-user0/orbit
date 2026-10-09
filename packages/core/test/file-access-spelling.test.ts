@@ -149,14 +149,10 @@ describe("FileAccess for another spelling of the project's folder", () => {
     () =>
       Effect.gen(function* () {
         const { project } = yield* layout
-        const share = "\\\\orbit-no-such-host.invalid\\share\\dir"
-        const linked = yield* Effect.promise(() =>
-          fs.symlink(share, path.join(project, "shared"), "dir").then(
-            () => true,
-            () => false,
-          ),
-        )
-        if (!linked) return
+        // A host name of its own to each run, so that the system's cache of an unreachable host cannot hide a connection.
+        const share = `\\\\orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid\\share\\dir`
+        // Fails visibly when this machine cannot make the link (Developer Mode), rather than passing without a check.
+        yield* Effect.promise(() => fs.symlink(share, path.join(project, "shared"), "dir"))
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
           const trust = yield* ProjectTrust.Service
@@ -171,6 +167,13 @@ describe("FileAccess for another spelling of the project's folder", () => {
           expect(yield* trust.escapes(path.join(project, "shared", "a.txt"))).toBe(path.join(share, "a.txt"))
           expect(yield* trust.reachable(path.join(project, "shared", "a.txt"))).toBe(false)
           expect(Date.now() - started).toBeLessThan(1_000)
+          // A part with `~` below the link would have its folder read for the long name, which connects to the share.
+          for (const below of ["shared/AB~1/a.txt", "shared/sub/AB~1/a.txt", "shared/PROJEC~1"]) {
+            const begun = Date.now()
+            const failure = yield* access.resolve({ path: below }).pipe(Effect.flip)
+            expect([below, failure]).toMatchObject([below, { code: "file.spelling" }])
+            expect(Date.now() - begun).toBeLessThan(1_000)
+          }
         }).pipe(provideProject(project, false))
       }),
   )
@@ -201,5 +204,79 @@ describe("FileAccess for another spelling of the project's folder", () => {
             }
           }).pipe(provideProject(project, trusted))
       }),
+  )
+
+  it.live(
+    "finds a shell word through every spelling that a repository link leads out of, as for the plain spelling",
+    () =>
+      Effect.gen(function* () {
+        const { project, outside, spellings } = yield* layout
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          const plain = yield* access.escaped([path.join(project, "docs", "notes.md")])
+          expect(plain.map((item) => item.place)).toEqual([AbsolutePath.make(path.join(outside, "notes.md"))])
+          for (const spelling of spellings) {
+            const found = yield* access.escaped([
+              path.join(spelling.spelled, "docs", "notes.md"),
+              path.join(spelling.spelled, "docs", "new.md"),
+            ])
+            expect([
+              spelling.name,
+              found.map((item) => item.place),
+              found.map((item) => item.externalDirectory?.escaped),
+            ]).toEqual([
+              spelling.name,
+              [AbsolutePath.make(path.join(outside, "notes.md")), AbsolutePath.make(path.join(outside, "new.md"))],
+              [true, true],
+            ])
+            // A word that stays in the project, or is not in it at all, is not asked about.
+            expect(yield* access.escaped([path.join(spelling.spelled, "secret", "key.txt"), outside])).toEqual([])
+          }
+        }).pipe(provideProject(project, false))
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          for (const spelling of spellings)
+            expect(yield* access.escaped([path.join(spelling.spelled, "docs", "notes.md")])).toEqual([])
+        }).pipe(provideProject(project, true))
+      }),
+  )
+
+  // A drive made from the project's folder is the project: the root is the first part that is asked about.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "decides a drive made from the project's folder as the project",
+    () =>
+      Effect.gen(function* () {
+        const { project, outside } = yield* layout
+        const free = yield* Effect.promise(async () => {
+          for (const letter of "QRSTUVWXYZ") {
+            if (
+              await fs.stat(`${letter}:\\`).then(
+                () => false,
+                () => true,
+              )
+            )
+              return letter
+          }
+          return undefined
+        })
+        if (free === undefined) return yield* Effect.die("no free drive letter for subst")
+        const drive = `${free}:`
+        expect(Bun.spawnSync(["subst", drive, project]).exitCode).toBe(0)
+        yield* Effect.addFinalizer(() => Effect.sync(() => void Bun.spawnSync(["subst", drive, "/D"])))
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          const key = yield* access.resolve({ path: `${drive}\\secret\\key.txt` })
+          expect([key.absolute, key.resource, key.externalDirectory]).toEqual([
+            AbsolutePath.make(path.join(project, "secret", "key.txt")),
+            "secret/key.txt",
+            undefined,
+          ])
+          const through = yield* access.resolve({ path: `${drive}\\docs\\notes.md` })
+          expect([through.place, through.externalDirectory?.escaped]).toEqual([
+            AbsolutePath.make(path.join(outside, "notes.md")),
+            true,
+          ])
+        }).pipe(provideProject(project, false))
+      }).pipe(Effect.scoped),
   )
 })

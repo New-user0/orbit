@@ -64,8 +64,9 @@ export interface ReadOptions {
 
 export interface Interface {
   /**
-   * Resolve a path and its permission resources, without requesting approval. On Windows it refuses a data stream and an
-   * 8.3 short name it cannot find the long name of (`file.spelling`), and names a file as the disk does.
+   * Resolve a path and its permission resources, without requesting approval. On Windows it refuses a data stream, a share
+   * or device path (unless it is in the project's own folder), and an 8.3 short name it cannot find the long name of or
+   * that is below a link to a share (`file.spelling`), and names a file as the disk does.
    */
   readonly resolve: (input: ResolveInput) => Effect.Effect<Target, FSUtil.Error | ToolFailure>
   /** Approve external directories in one batch, preserving first-seen resource order. */
@@ -81,8 +82,8 @@ export interface Interface {
     options?: ReadOptions,
   ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | Error | SessionErrors.NotFoundError>
   /**
-   * The targets among absolute `files` that are in the project by name and that a link in it leads out of while it is
-   * not trusted, each with its real place and an `escaped` external directory. Nothing else about the files is refused
+   * The targets among absolute `files` that are in the project, by name or by another spelling of its folder, and that a
+   * link in it leads out of while it is not trusted, each with its real place and an `escaped` external directory. Nothing else about the files is refused
    * or asked: they are paths that a shell command names in its text, not paths a tool was given.
    */
   readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error>
@@ -115,7 +116,7 @@ const layer = Layer.effect(
     // The project's folders by name: a target in one is the project's own, unless a link leads it out.
     const folders = [location.directory, ...(worktree === path.parse(worktree).root ? [] : [worktree])]
     // Those folders as the disk has them, for finding a path that names the project through another spelling of it.
-    const real = yield* Effect.forEach(folders, fs.resolve)
+    const real = yield* Effect.forEach(folders, (folder) => fs.resolve(folder).pipe(Effect.map(FSUtil.normalizePath)))
 
     // Windows opens a file by its 8.3 short name too: `ENV~1` is `.env`, and `PROJEC~1` the project's folder. Each part
     // below `from` that is such a name is replaced by the name it stands for, so rules and the project's folders see the
@@ -131,7 +132,8 @@ const layer = Layer.effect(
         () => base,
         (folder, part) => {
           if (!part.includes("~")) return Effect.succeed(path.join(folder, part))
-          return Effect.promise(() => longName(folder, part)).pipe(
+          return refuseShare(folder, file).pipe(
+            Effect.andThen(Effect.promise(() => longName(folder, part))),
             Effect.flatMap((name) =>
               name === undefined
                 ? new ToolFailure({
@@ -144,6 +146,21 @@ const layer = Layer.effect(
         },
       )
     })
+
+    // Reading a folder for the long name of a part would connect to the share that a link of the repository leads that
+    // folder to, before anyone is asked. Links are read one part at a time, which touches no share, so such a folder is
+    // refused here, whatever the part below it is.
+    const refuseShare = (folder: string, file: string) =>
+      trust.escapes(folder).pipe(
+        Effect.flatMap((leads) =>
+          leads?.startsWith("\\\\")
+            ? new ToolFailure({
+                message: `${file} is below a link that leads to a network share, whose short names tools do not look up. Use the long name.`,
+                code: Tool.ErrorCode.FileSpelling,
+              })
+            : Effect.void,
+        ),
+      )
 
     // A target outside the project, or one that a link in an untrusted project leads out to, which is `escapes`.
     const external = Effect.fnUntraced(function* (absolute: AbsolutePath, kind: Kind | undefined, escapes?: string) {
@@ -182,10 +199,12 @@ const layer = Layer.effect(
     const anchor = Effect.fnUntraced(function* (file: AbsolutePath) {
       const root = path.parse(file).root
       const parts = path.relative(root, file).split(path.sep)
-      for (const index of parts.keys()) {
+      // The root comes first: a drive that is made from the project's folder (`subst Q: <project>`) is the project.
+      for (const index of [-1, ...parts.keys()]) {
         const prefix = path.join(root, ...parts.slice(0, index + 1))
         if ((yield* fs.stat(prefix).pipe(Effect.orElseSucceed(() => undefined))) === undefined) return undefined
-        const where = yield* fs.resolve(prefix)
+        // The native path: the JavaScript one leaves a drive made from a folder (`subst`) as the drive.
+        const where = FSUtil.normalizePath(yield* fs.resolve(prefix))
         const folder = real.findIndex((item) => FSUtil.contains(item, where))
         if (folder !== -1)
           return AbsolutePath.make(
@@ -208,7 +227,7 @@ const layer = Layer.effect(
       const named = folders.find((folder) => FSUtil.contains(folder, lexical))
       // A share path (`\\localhost\C$\...`) or a device path (`\\?\Volume{...}`, `\\.\...`) names a folder of the
       // project in a spelling that no rule is written for, and opening one connects to a share. No tool needs one, so it
-      // is refused before any disk is read, unless the project itself is on that share.
+      // is refused before any disk is read, unless the path is in the project's folder.
       if (named === undefined && isShare(lexical))
         return yield* new ToolFailure({
           message: `${input.path} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
@@ -282,10 +301,18 @@ const layer = Layer.effect(
     const escaped = Effect.fn("FileAccess.escaped")(function* (files: readonly string[]) {
       if (yield* trust.trusted()) return []
       const targets = yield* Effect.forEach(
-        files.filter((file) => folders.some((folder) => FSUtil.contains(folder, file))),
+        // A share is not opened to find out where it is: no tool is given one, and a command that names one is asked about
+        // as the shell asks.
+        files.filter((file) => !isShare(file)),
         Effect.fnUntraced(function* (file) {
-          const escapes = yield* trust.escapes(file)
-          return escapes === undefined ? [] : [yield* external(AbsolutePath.make(file), undefined, escapes)]
+          // A word that names the project through another spelling of its folder is decided where it really is, as `resolve`
+          // does for a tool's path.
+          const absolute = folders.some((folder) => FSUtil.contains(folder, file))
+            ? AbsolutePath.make(file)
+            : yield* anchor(AbsolutePath.make(file))
+          if (absolute === undefined) return []
+          const escapes = yield* trust.escapes(absolute)
+          return escapes === undefined ? [] : [yield* external(absolute, undefined, escapes)]
         }),
       )
       return targets.flat()

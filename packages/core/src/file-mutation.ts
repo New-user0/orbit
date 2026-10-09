@@ -70,7 +70,7 @@ const layer = Layer.effect(
     const environment = yield* Environment.Service
     const locks = KeyedMutex.makeUnsafe<string>()
     const withLock: Interface["withLock"] = (targets) => (effect) =>
-      // The key is the file's long name with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock.
+      // The key is the file's long name (when it exists; a new file keeps the name it is given, which tools resolve long) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock.
       [
         ...new Set(
           targets.map((target) => FSUtil.resolve(FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target))))),
