@@ -18,8 +18,10 @@ import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
 import { PatchTool } from "@orbit/core/tool/plugin/patch"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
+import { FSUtil } from "@orbit/util/fs-util"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { testEffect } from "./lib/effect"
@@ -106,6 +108,7 @@ const withTool = <A, E, R>(
   projectDirectory = directory,
   // The permissive ledger allows every change. The real one asks that the session has read the file.
   ledger: "permissive" | "real" = "permissive",
+  trusted = true,
 ) => {
   const activeLocation = Layer.succeed(
     Location.Service,
@@ -146,6 +149,7 @@ const withTool = <A, E, R>(
           Location.node.replace(activeLocation),
           Formatter.node.replace(formatter),
           Permission.node.replace(permission),
+          ...(trusted ? [] : untrustedProjectNodes),
         ],
       ),
     ),
@@ -942,6 +946,52 @@ describe("PatchTool", () => {
                 expect(readsBeforeEditApproval).toBe(1)
                 expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after\n")
               }),
+            ),
+          ),
+        )
+      },
+      ([active, outside]) =>
+        Effect.promise(() =>
+          Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+        ),
+    ),
+  )
+
+  // A repository that is not trusted ships its links: a patch through one asks about the real folder, marked as one a
+  // link leads to, and the request names the real file and folder, which the clients show (class 4, class 8).
+  it.live("names the real file a link in an untrusted project leads a patch to", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      ([active, outside]) => {
+        reset()
+        return Effect.promise(async () => {
+          await fs.writeFile(path.join(outside.path, "external.txt"), "before\n")
+          await fs.symlink(outside.path, path.join(active.path, "linked"), "junction")
+        }).pipe(
+          Effect.andThen(
+            withTool(
+              active.path,
+              (registry) =>
+                Effect.gen(function* () {
+                  expect(
+                    yield* executeTool(
+                      registry,
+                      call(`*** Begin Patch\n*** Update File: linked/external.txt\n@@\n-before\n+after\n*** End Patch`),
+                    ),
+                  ).toMatchObject({ status: "completed" })
+                  const real = FSUtil.resolve(outside.path)
+                  const folder = path.join(real, "*").replaceAll("\\", "/")
+                  expect(assertions.map((input) => input.action)).toEqual(["external_directory", "Edit"])
+                  expect(assertions[0]).toMatchObject({
+                    resources: [folder],
+                    escaped: [folder],
+                    metadata: { filepath: path.join(real, "external.txt"), parentDir: real },
+                  })
+                  expect(assertions[1]?.resources).toEqual([path.join(real, "external.txt").replaceAll("\\", "/")])
+                }),
+              active.path,
+              "permissive",
+              false,
             ),
           ),
         )

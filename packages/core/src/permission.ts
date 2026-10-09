@@ -1,6 +1,7 @@
 export * as Permission from "./permission.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { Global } from "@orbit/util/global"
 import { Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
 import { Permission } from "@orbit/schema/permission"
 import { Bus } from "./bus.js"
@@ -49,6 +50,10 @@ export const AssertInput = Schema.Struct({
   // resource and no other, so a resource without aliases is never lifted by a rule that only an alias of another
   // resource matches.
   aliases: Schema.Record(Schema.String, Schema.Array(Schema.String)).pipe(Schema.optional),
+  // Resources that are where a link in a project that is not trusted leads out to. The allows that Orbit gives every
+  // agent for its own folders (`Agent.folders`) do not decide them, only the person's own rules and approvals do. They
+  // stay off the public Request.
+  escaped: Schema.Array(Schema.String).pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -139,6 +144,7 @@ interface Pending {
   readonly agent?: Agent.ID
   // Kept here rather than on the public Request so re-evaluating a pending request after an "always" reply sees them.
   readonly aliases?: AssertInput["aliases"]
+  readonly escaped?: AssertInput["escaped"]
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
   // The tool call that was executing when the request was made, for deciding and explaining it. Never on the public Request.
   readonly call?: ToolCurrentCall.Call
@@ -153,7 +159,28 @@ const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const hooks = yield* PluginHooks.Service
+    const global = yield* Global.Service
     const pending = new Map<ID, Pending>()
+    // Orbit's own allows, compared by value: a copy that an agent took of them, as Explore does, is still Orbit's.
+    const folders = Agent.folders(global)
+    const own = (rules: Permission.Ruleset) =>
+      rules.filter(
+        (rule) =>
+          !folders.some(
+            (item) => item.action === rule.action && item.resource === rule.resource && item.effect === rule.effect,
+          ),
+      )
+    const decide = (
+      input: Pick<AssertInput, "action" | "aliases" | "escaped">,
+      resource: string,
+      rules: Permission.Ruleset,
+    ) =>
+      evaluate(
+        input.action,
+        resource,
+        input.escaped?.includes(resource) ? own(rules) : rules,
+        input.aliases?.[resource],
+      )
     let closed = false
 
     const close = Effect.gen(function* () {
@@ -188,10 +215,11 @@ const layer = Layer.effect(
       return merge(agent?.permissions ?? missingAgentPermissions, session.permissions ?? [])
     })
 
-    function denied(input: Pick<AssertInput, "action" | "resources" | "aliases">, rules: Permission.Ruleset) {
-      return input.resources.some(
-        (resource) => evaluate(input.action, resource, rules, input.aliases?.[resource]).effect === "deny",
-      )
+    function denied(
+      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped">,
+      rules: Permission.Ruleset,
+    ) {
+      return input.resources.some((resource) => decide(input, resource, rules).effect === "deny")
     }
 
     function relevant(input: AssertInput, rules: Permission.Ruleset) {
@@ -202,9 +230,7 @@ const layer = Layer.effect(
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return { effect: "deny" as const, rules }
       const all = [...rules, ...(yield* savedRules())]
-      const effects = input.resources.map(
-        (resource) => evaluate(input.action, resource, all, input.aliases?.[resource]).effect,
-      )
+      const effects = input.resources.map((resource) => decide(input, resource, all).effect)
       const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
@@ -232,11 +258,18 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, agent?: Agent.ID, aliases?: AssertInput["aliases"]) =>
+    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped">) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
-          const item: Pending = { request, agent, aliases, deferred, call: yield* ToolCurrentCall.Current }
+          const item: Pending = {
+            request,
+            agent: input.agent,
+            aliases: input.aliases,
+            escaped: input.escaped,
+            deferred,
+            call: yield* ToolCurrentCall.Current,
+          }
           if (closed) {
             yield* Deferred.fail(deferred, new DeclinedError())
             return item
@@ -255,7 +288,7 @@ const layer = Layer.effect(
       if (closed) return { id: input.id ?? ID.create(), effect: "deny" as const }
       const result = yield* evaluateInput(input)
       const value = request(input, result.message)
-      if (result.effect === "ask") yield* create(value, input.agent, input.aliases)
+      if (result.effect === "ask") yield* create(value, input)
       return { id: value.id, effect: result.effect }
     })
 
@@ -274,7 +307,7 @@ const layer = Layer.effect(
               })
             }
             if (result.effect === "allow") return
-            const item = yield* create(request(input, result.message), input.agent, input.aliases)
+            const item = yield* create(request(input, result.message), input)
             return yield* restore(Deferred.await(item.deferred)).pipe(
               // Deliberate defect tunnel: leaves wrap execution in blanket `mapError`, which
               // must not convert a user's decline into model-facing tool output. The decline
@@ -350,9 +383,12 @@ const layer = Layer.effect(
           if (input.reply !== "always" || !existing.request.save?.length) return
 
           for (const [id, item] of pending) {
-            const result = yield* evaluateInput({ ...item.request, agent: item.agent, aliases: item.aliases }).pipe(
-              Effect.catchTag("Session.NotFoundError", () => Effect.undefined),
-            )
+            const result = yield* evaluateInput({
+              ...item.request,
+              agent: item.agent,
+              aliases: item.aliases,
+              escaped: item.escaped,
+            }).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.undefined))
             if (result?.effect !== "allow") continue
             yield* bus.publish(Permission.Event.Replied, {
               sessionID: item.request.sessionID,
@@ -389,5 +425,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, Location.node, Agent.node, SessionStore.node, PermissionSaved.node, PluginHooks.node],
+  deps: [Bus.node, Location.node, Agent.node, SessionStore.node, PermissionSaved.node, PluginHooks.node, Global.node],
 })

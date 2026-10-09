@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import path from "path"
 import { Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import { Global } from "@orbit/util/global"
 import { Agent } from "@orbit/core/agent"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -35,6 +37,7 @@ const it = testEffect(
       Agent.node,
       PluginHooks.node,
       Permission.node,
+      Global.node,
     ]),
     [Location.node.replace(current)],
   ),
@@ -318,7 +321,9 @@ describe("Permission", () => {
       let count = 0
       const ask = (input: Partial<Permission.AssertInput>) =>
         service.ask(assertion({ ...input, id: Permission.ID.create(`per_names_${count++}`) }))
-      const blocked = yield* service.assert(assertion({ action: "Bash", resources: ["rm -rf build"] })).pipe(Effect.flip)
+      const blocked = yield* service
+        .assert(assertion({ action: "Bash", resources: ["rm -rf build"] }))
+        .pipe(Effect.flip)
       expect(blocked).toBeInstanceOf(Permission.BlockedError)
       expect((yield* ask({ action: "Edit", resources: ["a.env"] })).effect).toBe("ask")
       expect((yield* ask({ action: "Read", resources: ["a.ts"] })).effect).toBe("allow")
@@ -785,6 +790,89 @@ describe("Permission resource aliases", () => {
       }),
     )
   })
+})
+
+// Orbit lets every agent reach its own folders outside the project without a question: shell and tool output, the
+// temporary folder and the global config folder. A repository that is not trusted can ship a link into one of them, so
+// a place reached through such a link is decided by the person's own rules and approvals only (class 4, class 8).
+describe("Permission for a place a link leads out to", () => {
+  const folders = Effect.gen(function* () {
+    const global = yield* Global.Service
+    const resource = (folder: string) => path.join(folder, "*").replaceAll("\\", "/")
+    return {
+      rules: [
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "external_directory", resource: "*", effect: "ask" },
+        ...Agent.folders(global),
+      ] satisfies Permission.Ruleset,
+      places: [
+        resource(global.config),
+        resource(global.tmp),
+        resource(path.join(global.data, "shell", "shl_1")),
+        resource(path.join(global.data, "tool-output")),
+      ],
+      config: resource(global.config),
+    }
+  })
+  const external = (resource: string, escaped: boolean) =>
+    assertion({
+      id: Permission.ID.create(),
+      action: "external_directory",
+      resources: [resource],
+      save: [resource],
+      ...(escaped ? { escaped: [resource] } : {}),
+    })
+
+  it.effect("lets Orbit's own allows decide a folder named directly, and not one a link leads to", () =>
+    Effect.gen(function* () {
+      const fixture = yield* folders
+      yield* setup(fixture.rules)
+      const service = yield* Permission.Service
+      for (const place of fixture.places) {
+        expect([place, (yield* service.ask(external(place, false))).effect]).toEqual([place, "allow"])
+        expect([place, (yield* service.ask(external(place, true))).effect]).toEqual([place, "ask"])
+      }
+    }),
+  )
+
+  it.effect("lets the person's own rules decide a folder a link leads to", () =>
+    Effect.gen(function* () {
+      const fixture = yield* folders
+      yield* setup([...fixture.rules, { action: "external_directory", resource: fixture.config, effect: "allow" }])
+      const service = yield* Permission.Service
+      expect(yield* service.ask(external(fixture.config, true))).toMatchObject({ effect: "allow" })
+      yield* setRules([...fixture.rules, { action: "external_directory", resource: fixture.config, effect: "deny" }])
+      expect(yield* service.ask(external(fixture.config, true))).toMatchObject({ effect: "deny" })
+      expect(yield* service.ask(external(fixture.config, false))).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  it.effect("holds only the resources a link leads to, and lets an always reply save the person's approval", () =>
+    Effect.gen(function* () {
+      const fixture = yield* folders
+      yield* setup(fixture.rules)
+      const tmp = fixture.places[1]!
+      const selected = yield* waitForRequest({
+        action: "external_directory",
+        resources: [tmp, fixture.config],
+        save: [tmp, fixture.config],
+        escaped: [fixture.config],
+      })
+      expect(selected.request).not.toHaveProperty("escaped")
+      yield* selected.service.reply({ requestID: selected.request.id, reply: "always" })
+      yield* Fiber.join(selected.fiber)
+      expect(
+        yield* selected.service.ask(
+          assertion({
+            id: Permission.ID.create("per_next"),
+            action: "external_directory",
+            resources: [fixture.config],
+            escaped: [fixture.config],
+          }),
+        ),
+      ).toMatchObject({ effect: "allow" })
+    }),
+  )
 })
 
 describe("shell scanner permission impact", () => {

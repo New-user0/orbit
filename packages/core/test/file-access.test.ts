@@ -220,11 +220,14 @@ describe("FileAccess in a project that is not trusted", () => {
           const trust = yield* ProjectTrust.Service
           const outsideAt = (target: FileAccess.Target, file: string, directory: string, resource: string) => {
             expect(target.absolute).toBe(AbsolutePath.make(path.join(project, ...file.split("/"))))
+            // The place the tool acts on, which a request names: where the link leads, not the link.
+            expect(target.place).toBe(AbsolutePath.make(path.join(outside, resource)))
             expect(target.resource).toBe(slash(path.join(outside, resource)))
             expect(target.externalDirectory).toMatchObject({
               action: "external_directory",
               directory: path.join(outside, directory),
               resource: slash(path.join(outside, directory, "*")),
+              escaped: true,
             })
           }
           const paths = () =>
@@ -241,6 +244,7 @@ describe("FileAccess in a project that is not trusted", () => {
           const untrusted = yield* paths()
           expect(untrusted[0]).toEqual({
             absolute: AbsolutePath.make(path.join(project, "own.md")),
+            place: AbsolutePath.make(path.join(project, "own.md")),
             resource: "own.md",
           })
           outsideAt(untrusted[1], "docs/notes.md", ".", "notes.md")
@@ -253,6 +257,7 @@ describe("FileAccess in a project that is not trusted", () => {
           yield* trust.grant({ persist: false, via: "test" })
           const trusted = yield* paths()
           for (const target of trusted) expect(target.externalDirectory).toBeUndefined()
+          for (const target of trusted) expect(target.place).toBe(target.absolute)
           expect(trusted[1].resource).toBe("docs/notes.md")
           yield* trust.revoke()
           expect((yield* paths())[1].externalDirectory).toBeDefined()
@@ -268,8 +273,13 @@ describe("FileAccess in a project that is not trusted", () => {
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         yield* access.authorizeRead("docs/notes.md", invocation)
+        // The folder is marked as one a link leads to, so Orbit's own allows do not decide it (Permission).
         expect(requests).toMatchObject([
-          { action: "external_directory", resources: [slash(path.join(outside, "*"))] },
+          {
+            action: "external_directory",
+            resources: [slash(path.join(outside, "*"))],
+            escaped: [slash(path.join(outside, "*"))],
+          },
           { action: "Read", resources: [slash(path.join(outside, "notes.md"))] },
         ])
 
@@ -277,7 +287,29 @@ describe("FileAccess in a project that is not trusted", () => {
         expect(requests.at(-1)).toMatchObject({
           action: "external_directory",
           resources: [slash(path.join(outside, "*"))],
+          escaped: [slash(path.join(outside, "*"))],
         })
+
+        // The same folder named directly and through the link in one call is still the link's.
+        requests.length = 0
+        yield* access.authorizeExternal(
+          [
+            yield* access.resolve({ path: path.join(outside, "notes.md"), kind: "file" }),
+            yield* access.resolve({ path: "docs/notes.md", kind: "file" }),
+          ],
+          invocation,
+        )
+        expect(requests).toMatchObject([
+          { resources: [slash(path.join(outside, "*"))], escaped: [slash(path.join(outside, "*"))] },
+        ])
+        // A folder named directly carries no mark.
+        requests.length = 0
+        yield* access.authorizeExternal(
+          [yield* access.resolve({ path: path.join(outside, "notes.md"), kind: "file" })],
+          invocation,
+        )
+        expect(requests).toHaveLength(1)
+        expect(requests[0]).not.toHaveProperty("escaped")
       }).pipe(provideProject(project, requests, false))
 
       requests.length = 0

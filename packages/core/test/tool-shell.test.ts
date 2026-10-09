@@ -42,6 +42,7 @@ import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { ToolOutput } from "@orbit/core/tool-output"
 import { Tool } from "@orbit/core/tool"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
 import { offlineModels } from "./fixture/models"
@@ -170,6 +171,14 @@ const replacements = [
 const productionIt = testEffect(AppNodeBuilder.build(nodes, replacements))
 const it = testEffect(
   AppNodeBuilder.build(nodes, [...replacements, PluginSupervisor.node.replace(shellPluginSupervisor)]),
+)
+// A project that nothing trusts, where the core tests would otherwise trust every folder.
+const untrustedIt = testEffect(
+  AppNodeBuilder.build(nodes, [
+    ...replacements,
+    PluginSupervisor.node.replace(shellPluginSupervisor),
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+  ]),
 )
 const permissionIt = testEffect(
   AppNodeBuilder.build(LayerNode.group([nodes, PermissionSaved.node]), [
@@ -1304,6 +1313,48 @@ describe("ShellTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
+
+  // A repository that is not trusted can ship a link into a folder that Orbit lets every agent reach by itself, here the
+  // global config folder. A command that runs there, or changes into it, asks about the real folder, marked as one a
+  // link leads to so that only the person's own rules decide it, and the approval names that folder. A trusted project's
+  // link is its own (class 4, class 8).
+  for (const trusted of [false, true])
+    (trusted ? it : untrustedIt).live(
+      `${trusted ? "a trusted" : "an untrusted"} project's link into the global config folder ${trusted ? "is the project's own" : "is asked about and shown as that folder"}`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (active) =>
+            Effect.gen(function* () {
+              const global = yield* Global.Service
+              yield* Effect.promise(() => fs.symlink(global.config, path.join(active.path, "cfg"), "junction"))
+              const config = FSUtil.resolve(global.config)
+              const linked = path.join(active.path, "cfg")
+              const folder = path.join(config, "*").replaceAll("\\", "/")
+              const rows = [
+                { input: { command: cwdCommand, workdir: "cfg" }, workdir: trusted ? linked : config },
+                { input: { command: `cd cfg; ${cwdCommand}` }, workdir: active.path },
+              ]
+              yield* withSession(active.path, (registry) =>
+                Effect.forEach(rows, (row) =>
+                  Effect.gen(function* () {
+                    reset()
+                    expect(yield* executeTool(registry, call(row.input, "call-link"))).toMatchObject({
+                      status: "completed",
+                    })
+                    expect(assertions.map((item) => item.action)).toEqual(
+                      trusted ? ["Bash"] : ["external_directory", "Bash"],
+                    )
+                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
+                    expect(assertions.at(-1)?.metadata).toEqual({ workdir: row.workdir })
+                  }),
+                ),
+              )
+            }),
+          (active) => Effect.promise(() => active[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 30_000 },
+    )
 
   it.live(
     "does not execute after external-directory or shell denial",

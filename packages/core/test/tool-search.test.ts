@@ -17,7 +17,9 @@ import { GlobTool } from "@orbit/core/tool/plugin/glob"
 import { GrepTool } from "@orbit/core/tool/plugin/grep"
 import { Tool } from "@orbit/core/tool"
 import { Global } from "@orbit/util/global"
+import { FSUtil } from "@orbit/util/fs-util"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -39,6 +41,7 @@ const withTools = <A, E, R>(
   directory: string,
   body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
   assertions?: Permission.AssertInput[],
+  trusted = true,
 ) =>
   Effect.gen(function* () {
     const registry = yield* Tool.Service
@@ -69,6 +72,7 @@ const withTools = <A, E, R>(
               }),
           }),
         ),
+        ...(trusted ? [] : untrustedProjectNodes),
       ]),
     ),
   )
@@ -424,6 +428,57 @@ describe("search tools", () => {
           ),
       ),
     )
+
+  // A repository that is not trusted ships its links: a search through one asks about the real folder, marked as one a
+  // link leads to so that only the person's own rules decide it, and its own approval names that folder. A trusted
+  // project's link is its own (class 4, class 8).
+  for (const name of ["Glob", "Grep"] as const)
+    for (const trusted of [false, true])
+      it.live(
+        `${name} through a link in ${trusted ? "a trusted project searches the project's own folder" : "an untrusted project names the real folder"}`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+            ([active, outside]) => {
+              const assertions: Permission.AssertInput[] = []
+              return Effect.promise(async () => {
+                await fs.writeFile(path.join(outside.path, "outside.txt"), "needle\n")
+                await fs.symlink(outside.path, path.join(active.path, "linked"), "junction")
+              }).pipe(
+                Effect.andThen(
+                  withTools(
+                    active.path,
+                    (registry) =>
+                      executeTool(
+                        registry,
+                        call(name, { path: "linked", pattern: name === "Glob" ? "*.txt" : "needle" }),
+                      ),
+                    assertions,
+                    trusted,
+                  ),
+                ),
+                Effect.tap((result) =>
+                  Effect.sync(() => {
+                    const real = FSUtil.resolve(outside.path)
+                    const folder = path.join(real, "*").replaceAll("\\", "/")
+                    expect(result.status).toBe("completed")
+                    expect(assertions.map((item) => item.action)).toEqual(
+                      trusted ? [name] : ["external_directory", name],
+                    )
+                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
+                    expect(assertions.find((item) => item.action === name)?.metadata?.path).toBe(
+                      trusted ? path.join(active.path, "linked") : real,
+                    )
+                  }),
+                ),
+              )
+            },
+            ([active, outside]) =>
+              Effect.promise(() =>
+                Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+              ),
+          ),
+      )
 
   it.live("globs through an in-location external symlink without external approval", () =>
     Effect.acquireUseRelease(

@@ -32,10 +32,20 @@ export interface ExternalDirectoryAuthorization {
   readonly directory: AbsolutePath
   readonly resource: string
   readonly save: string
+  /**
+   * The directory is where a link in a project that is not trusted leads out to, so the allows Orbit gives every agent
+   * for its own folders do not decide it: only the person's own rules and approvals do.
+   */
+  readonly escaped?: true
 }
 
 export interface Target {
   readonly absolute: AbsolutePath
+  /**
+   * Where the tool acts: the real place that a link in a project that is not trusted leads `absolute` out to, and
+   * `absolute` otherwise. A request names this place, so an approval does not show a link as a folder of the project.
+   */
+  readonly place: AbsolutePath
   /** Location-relative for internal paths, absolute for external paths. */
   readonly resource: string
   readonly externalDirectory?: ExternalDirectoryAuthorization
@@ -86,8 +96,9 @@ const layer = Layer.effect(
     const permission = yield* Permission.Service
     const trust = yield* ProjectTrust.Service
 
-    // A target outside the project, or one that a link in an untrusted project leads out to, which is `place`.
-    const external = Effect.fnUntraced(function* (absolute: AbsolutePath, place: string, kind: Kind | undefined) {
+    // A target outside the project, or one that a link in an untrusted project leads out to, which is `escapes`.
+    const external = Effect.fnUntraced(function* (absolute: AbsolutePath, kind: Kind | undefined, escapes?: string) {
+      const place = escapes ?? absolute
       const type =
         kind === "directory"
           ? "Directory"
@@ -98,12 +109,14 @@ const layer = Layer.effect(
       const directory = AbsolutePath.make(type === "Directory" ? place : path.dirname(place))
       return {
         absolute,
+        place: AbsolutePath.make(place),
         resource: slash(place),
         externalDirectory: {
           action: "external_directory",
           directory,
           resource: slash(path.join(directory, "*")),
           save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
+          ...(escapes === undefined ? {} : { escaped: true as const }),
         },
       } satisfies Target
     })
@@ -114,13 +127,14 @@ const layer = Layer.effect(
       const internal =
         FSUtil.contains(location.directory, absolute) ||
         (worktree !== path.parse(worktree).root && FSUtil.contains(worktree, absolute))
-      if (!internal) return yield* external(absolute, absolute, input.kind)
+      if (!internal) return yield* external(absolute, input.kind)
       // Until the project is trusted, a link in it that leads out of it does not make the target the project's own: the
       // repository ships its links, and one to the user's other files would be read or written without a question.
       const escapes = yield* trust.escapes(absolute)
-      if (escapes !== undefined) return yield* external(absolute, escapes, input.kind)
+      if (escapes !== undefined) return yield* external(absolute, input.kind, escapes)
       return {
         absolute,
+        place: absolute,
         resource: slash(path.relative(location.directory, absolute) || "."),
       } satisfies Target
     })
@@ -135,10 +149,15 @@ const layer = Layer.effect(
         (left, right) => left.resource === right.resource,
       )
       if (external.length === 0) return
+      // A folder counts as escaped when any target reaches it through a link, even if another names it directly.
+      const escaped = Array.dedupe(
+        targets.flatMap((target) => (target.externalDirectory?.escaped ? [target.externalDirectory.resource] : [])),
+      )
       yield* permission.assert({
         action: "external_directory",
         resources: external.map((item) => item.resource),
         save: external.map((item) => item.save),
+        ...(escaped.length === 0 ? {} : { escaped }),
         ...(metadata === undefined ? {} : { metadata }),
         ...invocation(context),
       })
