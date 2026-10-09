@@ -39,5 +39,5 @@ export function legacyToolName(name: string): string {
   return Object.hasOwn(current, name) ? current[name as keyof typeof current] : name
 }
 
-/** The fields a view reads for a value: the old name of the field, then the names it has now. */
-export const fieldNames = { path: ["path", "file_path", "notebook_path"] } as const
+/** The fields a view reads for a value. A file tool reads its current field first, as the runner does. */
+export const fieldNames = { path: ["path"], file: ["file_path", "notebook_path", "path"] } as const

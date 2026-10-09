@@ -183,3 +183,26 @@ test("a call under the reference tool names reads like one under the old names",
   expect(read("Bash", { command: "bun test" })).toMatchObject({ verb: "Run", target: "bun test" })
   expect(read("Agent", { description: "Look around" })).toMatchObject({ verb: "Agent", target: "Look around" })
 })
+
+test("a file tool that carries both field spellings is drawn from the current one", () => {
+  const rows = [
+    ["read", "file_path"],
+    ["write", "file_path"],
+    ["edit", "file_path"],
+    ["Read", "file_path"],
+    ["NotebookEdit", "notebook_path"],
+  ] as const
+  rows.forEach(([name, current]) =>
+    [false, true].forEach((reversed) => {
+      const pair: [string, string][] = [
+        [current, "/w/real.ts"],
+        ["path", "/w/decoy.ts"],
+      ]
+      const shown = describe(
+        { type: "tool", id: "1", name, status: "completed", input: Object.fromEntries(reversed ? pair.reverse() : pair) },
+        "w",
+      )
+      expect(shown.target).toBe("real.ts")
+    }),
+  )
+})

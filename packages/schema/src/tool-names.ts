@@ -114,8 +114,13 @@ export function raiseInput(tool: string, input: unknown): unknown
 export function raiseInput(tool: string, input: unknown): unknown {
   const table = fieldTable(tool)
   if (!table || typeof input !== "object" || input === null || Array.isArray(input)) return input
+  // The runner drops an old spelling that arrives beside the current one (its schemas are closed), so a reader that
+  // shows the call must not let the dropped key override the field that runs.
+  const olds = new Set(Object.entries(table).flatMap(([next, old]) => (Object.hasOwn(input, next) ? [old] : [])))
   return Object.fromEntries(
-    Object.entries(input).map(([key, value]) => [Object.hasOwn(table, key) ? table[key] : key, value]),
+    Object.entries(input)
+      .filter(([key]) => !olds.has(key))
+      .map(([key, value]) => [Object.hasOwn(table, key) ? table[key] : key, value]),
   )
 }
 

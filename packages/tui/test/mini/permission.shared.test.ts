@@ -193,3 +193,27 @@ describe("run permission shared", () => {
     ])
   })
 })
+
+describe("mini permission with a decoy old field name", () => {
+  ;[false, true].forEach((reversed) =>
+    test(`names the file that runs${reversed ? " (decoy first)" : ""}`, () => {
+      const pair = [
+        ["file_path", ".env"],
+        ["path", "README.md"],
+      ]
+      const info = permissionInfo(
+        req({
+          action: "Read",
+          resources: [".env"],
+          tool: canonicalToolPart("Read", {
+            status: "running",
+            input: Object.fromEntries(reversed ? pair.reverse() : pair),
+            metadata: {},
+          }),
+        }),
+      )
+      expect(info.title).toContain(".env")
+      expect(JSON.stringify(info)).not.toContain("README.md")
+    }),
+  )
+})

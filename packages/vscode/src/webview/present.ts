@@ -31,7 +31,7 @@ export function describe(item: Extract<Item, { type: "tool" }>, folder: string):
     case "read":
       return {
         verb: "Read",
-        target: relative(text("path"), folder),
+        target: relative(text("file"), folder),
         meta: lines ? `${lines} lines` : undefined,
         ...failed,
       }
@@ -57,7 +57,7 @@ export function describe(item: Extract<Item, { type: "tool" }>, folder: string):
         .filter((line, index, all) => line || index < all.length - 1).length
       return {
         verb: created ? "Create" : "Write",
-        target: relative(text("path"), folder),
+        target: relative(text("file"), folder),
         add: changes.add ?? (created && written ? `+${written}` : undefined),
         del: changes.del,
         ...failed,
@@ -65,7 +65,7 @@ export function describe(item: Extract<Item, { type: "tool" }>, folder: string):
     }
     case "edit":
     case "notebook_edit":
-      return { verb: "Edit", target: relative(text("path"), folder), ...changes, ...failed }
+      return { verb: "Edit", target: relative(text("file"), folder), ...changes, ...failed }
     case "patch":
       return {
         verb: "Edit",
