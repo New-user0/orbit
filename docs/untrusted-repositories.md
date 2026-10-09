@@ -1602,6 +1602,11 @@ fixes it or asks.
   its provider key sent to the model). The same spellings turn a person's absolute-path deny rule into an ask. The fix
   decides containment on the real path for every spelling. The owner chose it on 2026-10-09 as the first M3 fix (task
   `permissions-23`).
+- **A rule of the person's with the value of one of Orbit's own allows.** A place a link leads to is decided without
+  Orbit's own allows (`Agent.folders`), which `Permission` recognises by value, because an agent may copy them. A rule
+  the person wrote with exactly the same action, folder and effect is taken for Orbit's and does not decide that place,
+  so the person is asked; it fails closed. Saved approvals are not affected. Task `permissions-23` (M3) marks Orbit's
+  allows by where they come from.
 
 ## Review checklist
 

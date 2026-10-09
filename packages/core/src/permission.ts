@@ -170,15 +170,18 @@ const layer = Layer.effect(
             (item) => item.action === rule.action && item.resource === rule.resource && item.effect === rule.effect,
           ),
       )
+    // Saved approvals are the person's own answers, so they join after Orbit's allows are taken out: one that has the
+    // same value as an allow of Orbit's (an "always" for the global config folder) still decides a place a link leads to.
     const decide = (
       input: Pick<AssertInput, "action" | "aliases" | "escaped">,
       resource: string,
       rules: Permission.Ruleset,
+      approvals: Permission.Ruleset = [],
     ) =>
       evaluate(
         input.action,
         resource,
-        input.escaped?.includes(resource) ? own(rules) : rules,
+        [...(input.escaped?.includes(resource) ? own(rules) : rules), ...approvals],
         input.aliases?.[resource],
       )
     let closed = false
@@ -229,8 +232,9 @@ const layer = Layer.effect(
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
       const rules = yield* configured(input.sessionID, input.agent)
       if (denied(input, rules)) return { effect: "deny" as const, rules }
-      const all = [...rules, ...(yield* savedRules())]
-      const effects = input.resources.map((resource) => decide(input, resource, all).effect)
+      const approvals = yield* savedRules()
+      const all = [...rules, ...approvals]
+      const effects = input.resources.map((resource) => decide(input, resource, rules, approvals).effect)
       const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
