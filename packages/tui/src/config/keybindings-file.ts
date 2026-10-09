@@ -7,7 +7,7 @@ import { createBindingLookup } from "@opentui/keymap/extras"
 import { plain } from "@orbit/flow/plain"
 import { Option, Schema } from "effect"
 import { parse, printParseErrorCode, stripComments, type ParseError } from "jsonc-parser"
-import { mkdir, writeFile } from "node:fs/promises"
+import { lstat, mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { TuiKeybind } from "./keybind"
 
@@ -115,7 +115,15 @@ export function overrides(file: Result): TuiKeybind.BindingLookupView["override"
 /** Writes the commented template unless something is at the path already, and returns whether it wrote it. */
 export async function create(file: string) {
   await mkdir(path.dirname(file), { recursive: true })
-  // "wx" fails when anything is there, a link included, so this never writes through one and never replaces a file.
+  // "wx" never replaces a file, but on Windows it follows a link that points at nothing and creates the file the link
+  // names. So anything at the path, a link included, stops it first; a path that cannot be checked counts as taken.
+  if (
+    await lstat(file).then(
+      () => true,
+      (error: NodeJS.ErrnoException) => error.code !== "ENOENT",
+    )
+  )
+    return false
   return writeFile(file, template(), { flag: "wx", mode: 0o600 }).then(
     () => true,
     (error: NodeJS.ErrnoException) => {

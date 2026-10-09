@@ -53,8 +53,9 @@ describe("a patch that changes several files", () => {
     { file: "README.md", patch: "--- README.md\n+typo fix" },
     { file: ".orbit/config.json", patch: "--- .orbit/config.json\n+SECOND_FILE_CHANGE" },
   ]
+  // Each file keeps its own diff: the diff view draws one file's patch and spins on a joined one.
   ;[true, false].forEach((joined) =>
-    test(`names every file and shows every diff${joined ? "" : " (no joined diff)"}`, () => {
+    test(`names every file and shows every file's own diff${joined ? "" : " (no joined diff)"}`, () => {
       const shown = permissionPresentation({
         action: "Edit",
         tool: "Patch",
@@ -63,10 +64,23 @@ describe("a patch that changes several files", () => {
       })
       expect(shown.title).toContain("README.md")
       expect(shown.title).toContain(".orbit/config.json")
-      expect(shown.diff).toContain("+typo fix")
-      expect(shown.diff).toContain("SECOND_FILE_CHANGE")
+      expect(shown.diffs).toEqual(files.map((item) => ({ file: item.file, diff: item.patch })))
+      expect(shown.diff).toBeUndefined()
     }),
   )
+
+  test("without a diff per file the joined diff is shown as plain text", () => {
+    const shown = permissionPresentation({
+      action: "Edit",
+      resources: files.map((item) => item.file),
+      metadata: { diff: files.map((item) => item.patch).join("\n") },
+    })
+    expect(shown.title).toBe("Edit 2 files: README.md, .orbit/config.json")
+    expect(shown.diff).toBeUndefined()
+    expect(shown.diffs).toBeUndefined()
+    expect(shown.patch).toContain("+typo fix")
+    expect(shown.patch).toContain("SECOND_FILE_CHANGE")
+  })
 
   test("a single-file patch keeps the single-file prompt", () => {
     const shown = permissionPresentation({

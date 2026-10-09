@@ -10,6 +10,8 @@ export type PermissionPresentation = {
   title: string
   lines: string[]
   diff?: string
+  // One entry per file when a single request edits several.
+  diffs?: { file: string; diff: string }[]
   patch?: string
   file?: string
 }
@@ -37,6 +39,7 @@ export function permissionPresentation(
     title: bodyText(presented.title),
     lines: presented.lines.map(bodyText),
     diff: presented.diff === undefined ? undefined : bodyText(presented.diff),
+    diffs: presented.diffs?.map((item) => ({ file: bodyText(item.file), diff: bodyText(item.diff) })),
     patch: presented.patch === undefined ? undefined : bodyText(presented.patch),
   }
 }
@@ -58,21 +61,32 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     // only the first would hide part of what is approved.
     const named = files.map((item) => text(item.file)).filter(Boolean)
     const targets = named.length > 1 ? named : resources.length > 1 ? resources : []
-    const diff =
-      (targets.length > 1
-        ? text(metadata.diff) ||
-          files
-            .map((item) => text(item.patch) || text(item.diff))
-            .filter(Boolean)
-            .join("\n")
-        : text(first.patch) || text(first.diff) || text(metadata.diff)) || undefined
+    if (targets.length > 1) {
+      const diffs = files.map((item) => ({ file: text(item.file), diff: text(item.patch) || text(item.diff) }))
+      const each = named.length > 1 && diffs.every((item) => item.file && item.diff)
+      return {
+        icon: "→",
+        title: `Edit ${targets.length} files: ${targets.map(formatPath).join(", ")}`,
+        lines: targets.map((target) => `Path: ${formatPath(target)}`),
+        // The diff view draws one file's patch, so each file keeps its own; without them the joined text is shown as
+        // plain text, never through the diff view.
+        diffs: each ? diffs.map((item) => ({ file: formatPath(item.file), diff: item.diff })) : undefined,
+        patch: each
+          ? undefined
+          : text(metadata.diff) ||
+            diffs
+              .map((item) => item.diff)
+              .filter(Boolean)
+              .join("\n") ||
+            undefined,
+        file,
+      }
+    }
+    const diff = text(first.patch) || text(first.diff) || text(metadata.diff) || undefined
     return {
       icon: "→",
-      title:
-        targets.length > 1
-          ? `Edit ${targets.length} files: ${targets.map(formatPath).join(", ")}`
-          : `Edit ${formatPath(file)}`,
-      lines: targets.length > 1 ? targets.map((target) => `Path: ${formatPath(target)}`) : [],
+      title: `Edit ${formatPath(file)}`,
+      lines: [],
       diff,
       patch: diff ? undefined : text(input.patchText) || undefined,
       file,

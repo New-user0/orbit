@@ -20,15 +20,16 @@ import { useToast } from "../../ui/toast"
 
 type PermissionStage = "permission" | "reject"
 
-function EditBody(props: { file?: string; diff?: string; patch?: string }) {
+function EditBody(props: { file?: string; diff?: string; diffs?: { file: string; diff: string }[]; patch?: string }) {
   const theme = useTheme()
   const themes = useThemes()
   const syntax = themes.currentSyntax
   const config = useConfig().data
   const dimensions = useTerminalDimensions()
 
-  const filepath = createMemo(() => props.file ?? "")
-  const diff = createMemo(() => props.diff ?? "")
+  // A patch that edits several files gets one diff per file, each under its own path.
+  const diffs = createMemo(() => props.diffs ?? (props.diff ? [{ file: props.file ?? "", diff: props.diff }] : []))
+  const several = () => diffs().length > 1
 
   const view = createMemo(() => {
     const diffView = config.diffs?.view
@@ -37,12 +38,11 @@ function EditBody(props: { file?: string; diff?: string; patch?: string }) {
     return dimensions().width > 120 ? "split" : "unified"
   })
 
-  const ft = createMemo(() => filetype(filepath()))
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
 
   return (
     <box flexDirection="column" gap={1}>
-      <Show when={diff()}>
+      <Show when={diffs().length > 0}>
         <scrollbox
           height="100%"
           scrollAcceleration={scrollAcceleration()}
@@ -53,29 +53,42 @@ function EditBody(props: { file?: string; diff?: string; patch?: string }) {
             },
           }}
         >
-          <PatchDiff
-            diff={diff()}
-            hunkFg={theme.diff.text.hunkHeader}
-            view={view()}
-            filetype={ft()}
-            syntaxStyle={syntax()}
-            showLineNumbers={true}
-            width="100%"
-            wrapMode="word"
-            fg={theme.text.base}
-            addedBg={theme.diff.background.added}
-            removedBg={theme.diff.background.removed}
-            contextBg={theme.diff.background.context}
-            addedSignColor={theme.diff.highlight.added}
-            removedSignColor={theme.diff.highlight.removed}
-            lineNumberFg={theme.diff.lineNumber.text}
-            lineNumberBg={theme.diff.background.context}
-            addedLineNumberBg={theme.diff.lineNumber.background.added}
-            removedLineNumberBg={theme.diff.lineNumber.background.removed}
-          />
+          <box flexDirection="column" gap={1}>
+            <For each={diffs()}>
+              {(item) => (
+                <box flexDirection="column">
+                  <Show when={several()}>
+                    <box paddingLeft={1}>
+                      <text fg={theme.text.muted}>{`Path: ${item.file}`}</text>
+                    </box>
+                  </Show>
+                  <PatchDiff
+                    diff={item.diff}
+                    hunkFg={theme.diff.text.hunkHeader}
+                    view={view()}
+                    filetype={filetype(item.file)}
+                    syntaxStyle={syntax()}
+                    showLineNumbers={true}
+                    width="100%"
+                    wrapMode="word"
+                    fg={theme.text.base}
+                    addedBg={theme.diff.background.added}
+                    removedBg={theme.diff.background.removed}
+                    contextBg={theme.diff.background.context}
+                    addedSignColor={theme.diff.highlight.added}
+                    removedSignColor={theme.diff.highlight.removed}
+                    lineNumberFg={theme.diff.lineNumber.text}
+                    lineNumberBg={theme.diff.background.context}
+                    addedLineNumberBg={theme.diff.lineNumber.background.added}
+                    removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                  />
+                </box>
+              )}
+            </For>
+          </box>
         </scrollbox>
       </Show>
-      <Show when={!diff()}>
+      <Show when={diffs().length === 0}>
         <Show
           when={props.patch}
           fallback={
@@ -171,7 +184,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           const view = () => canonicalToolName(props.request.action)
           const presentationBody = () =>
             view() === "edit" ? (
-              <EditBody file={current.file} diff={current.diff} patch={current.patch} />
+              <EditBody file={current.file} diff={current.diff} diffs={current.diffs} patch={current.patch} />
             ) : view() === "external_directory" ? (
               <Show when={current.lines.length > 0}>
                 <box paddingLeft={1} gap={1}>

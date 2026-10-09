@@ -768,6 +768,7 @@ text that the output limit cut is one line.
 
 **What to do:** nothing for most setups. A program that reads `json` or `stream-json` joins the parts of steps whose
 `step_finish` has reason `length`, and drops the parts of the message that a `notice` line replaces.
+
 ### A failed tool call has an error type that names what went wrong
 
 A tool call that failed used to be reported with the error type `tool.execution` whatever the reason, so a client could
@@ -795,6 +796,7 @@ message is not affected.
 
 **What to do:** Nothing for code that does not read the type. If you match on `tool.execution`, also match the types
 above, or match the type of the failure you care about.
+
 ### Messages say how they were delivered, and a prompt can carry turn options
 
 A `user` message and a `synthetic` message now carry a `delivery` field, `steer` or `queue`: the delivery that the input
@@ -988,6 +990,20 @@ output limit replaced, which appears once Orbit makes such retries in a later ch
 screen and a cut-off reply had no marker.
 
 **Affects:** people who use the terminal UI.
+
+**What to do:** Nothing.
+
+### An approval prompt shows what the request asks for, and every file a patch changes
+
+The terminal UI and Mini used to fill an approval prompt from the input of the tool call that was running. A Code Mode
+`execute` call that fetches a URL, a `workflow` call that starts an agent and a patch all ask under that running call,
+whose own input can name a different URL, agent or file from the one asked about. The prompt now uses the call's input
+only when that call is the tool that asks, and otherwise shows the request's own URL, agent or file. A patch that
+changes several files used to be shown as an edit of its first file, with only that file's diff. Its prompt now names
+every file in the title and shows each file's diff under its path.
+
+**Affects:** people who approve edits made with the Patch tool, which some models get in place of Edit and Write, and
+approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini.
 
 **What to do:** Nothing.
 
@@ -1439,6 +1455,7 @@ a network device that drops keepalives.
 
 **What to do:** nothing in most setups. To allow longer silence, set `chunkTimeout` in the provider settings, or
 `false` to turn the limit off.
+
 ### Failed model requests retry sooner, more often and for longer
 
 A session step or compaction that fails with a transient error, an overload included, now waits 0.5, 1, 2, 4, 8 and

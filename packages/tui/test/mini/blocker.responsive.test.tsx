@@ -197,6 +197,45 @@ test("advancing fields reveals the new choice without a second Enter", async () 
   }
 })
 
+// The Patch tool asks once for every file it changes; each file's patch starts with `Index:`, and `diff` joins them.
+test.each([false, true])(
+  "a patch permission that changes two files draws both files' diffs (mono=%s)",
+  async (mono) => {
+    const file = (name: string, before: string, after: string) =>
+      `Index: ${name}\n${"=".repeat(67)}\n--- ${name}\n+++ ${name}\n@@ -1,1 +1,1 @@\n-${before}\n+${after}\n`
+    const files = [
+      { file: "a.txt", patch: file("a.txt", "one", "FIRST_FILE_CHANGE") },
+      { file: "b.txt", patch: file("b.txt", "two", "SECOND_FILE_CHANGE") },
+    ]
+    const app = await testRender(
+      () => (
+        <RunPermissionBody
+          request={{
+            id: "per_patch",
+            sessionID: "ses_responsive",
+            action: "Edit",
+            resources: files.map((item) => item.file),
+            metadata: { files, diff: files.map((item) => item.patch + "\n").join("") },
+          }}
+          theme={mono ? RUN_THEME_MONO.footer : RUN_THEME_FALLBACK.footer}
+          block={mono ? RUN_THEME_MONO.block : RUN_THEME_FALLBACK.block}
+          mono={mono}
+          onReply={() => {}}
+        />
+      ),
+      { width: 112, height: 40 },
+    )
+    try {
+      await settle(app)
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("FIRST_FILE_CHANGE")
+      expect(frame).toContain("SECOND_FILE_CHANGE")
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)
+
 test("roomy permission prompts retain their header and padded action bar", async () => {
   const app = await testRender(
     () => (

@@ -254,6 +254,18 @@ describe("mini permission for a patch that changes several files", () => {
     )
     expect(info.title).toContain("README.md")
     expect(info.title).toContain(".orbit/config.json")
-    expect(JSON.stringify(info)).toContain("SECOND_FILE_CHANGE")
+    expect(info.diffs?.map((item) => item.diff)).toEqual(files.map((item) => item.patch))
+    expect(info.diff).toBeUndefined()
+    const mono = permissionInfo(
+      req({
+        action: "Edit",
+        resources: files.map((item) => item.file),
+        metadata: { files, diff: files.map((item) => item.patch).join("\n") },
+      }),
+      undefined,
+      true,
+    )
+    expect(mono.lines.join("\n")).toContain("+typo fix")
+    expect(mono.lines.join("\n")).toContain("SECOND_FILE_CHANGE")
   })
 })

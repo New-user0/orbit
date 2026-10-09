@@ -154,7 +154,8 @@ export function RunPermissionBody(props: {
   const [state, setState] = createSignal(createPermissionBodyState(props.request))
   const stage = createMemo(() => state().stage)
   const info = createMemo(() => permissionInfo(props.request, props.directory?.(), props.mono))
-  const ft = createMemo(() => toolFiletype(info().file))
+  // A patch that edits several files gets one diff per file, each under its own path.
+  const diffs = createMemo(() => info().diffs ?? (info().diff ? [{ file: info().file ?? "", diff: info().diff! }] : []))
   let scroll: ScrollBoxRenderable | undefined
   const scrollbar = createMemo(() => ({
     visible: !props.mono,
@@ -409,7 +410,7 @@ export function RunPermissionBody(props: {
                     </text>
                   </box>
                   <Show
-                    when={info().diff}
+                    when={diffs().length > 0}
                     fallback={
                       <Show
                         when={info().patch}
@@ -452,38 +453,49 @@ export function RunPermissionBody(props: {
                       </Show>
                     }
                   >
-                    <Show
-                      when={width() >= 40}
-                      fallback={
-                        <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                          {info().diff}
-                        </text>
-                      }
-                    >
-                      <PatchDiff
-                        diff={info().diff!}
-                        hunkFg={props.block.diffLineNumber}
-                        view="unified"
-                        filetype={ft()}
-                        syntaxStyle={props.block.syntax}
-                        showLineNumbers={true}
-                        width="100%"
-                        flexShrink={0}
-                        wrapMode="word"
-                        fg={props.theme.text}
-                        addedBg={props.block.diffAddedBg}
-                        removedBg={props.block.diffRemovedBg}
-                        contextBg={props.block.diffContextBg}
-                        addedSignColor={props.block.diffHighlightAdded}
-                        removedSignColor={props.block.diffHighlightRemoved}
-                        lineNumberFg={props.block.diffLineNumber}
-                        lineNumberBg={props.block.diffContextBg}
-                        addedLineNumberBg={props.block.diffAddedLineNumberBg}
-                        removedLineNumberBg={props.block.diffRemovedLineNumberBg}
-                      />
-                    </Show>
+                    <For each={diffs()}>
+                      {(item) => (
+                        <box width="100%" flexDirection="column" flexShrink={0}>
+                          <Show when={diffs().length > 1}>
+                            <text width="100%" fg={props.theme.muted} wrapMode="word" flexShrink={0}>
+                              {`Path: ${item.file}`}
+                            </text>
+                          </Show>
+                          <Show
+                            when={width() >= 40}
+                            fallback={
+                              <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
+                                {item.diff}
+                              </text>
+                            }
+                          >
+                            <PatchDiff
+                              diff={item.diff}
+                              hunkFg={props.block.diffLineNumber}
+                              view="unified"
+                              filetype={toolFiletype(item.file)}
+                              syntaxStyle={props.block.syntax}
+                              showLineNumbers={true}
+                              width="100%"
+                              flexShrink={0}
+                              wrapMode="word"
+                              fg={props.theme.text}
+                              addedBg={props.block.diffAddedBg}
+                              removedBg={props.block.diffRemovedBg}
+                              contextBg={props.block.diffContextBg}
+                              addedSignColor={props.block.diffHighlightAdded}
+                              removedSignColor={props.block.diffHighlightRemoved}
+                              lineNumberFg={props.block.diffLineNumber}
+                              lineNumberBg={props.block.diffContextBg}
+                              addedLineNumberBg={props.block.diffAddedLineNumberBg}
+                              removedLineNumberBg={props.block.diffRemovedLineNumberBg}
+                            />
+                          </Show>
+                        </box>
+                      )}
+                    </For>
                   </Show>
-                  <Show when={!info().diff && !info().patch && info().lines.length === 0}>
+                  <Show when={diffs().length === 0 && !info().patch && info().lines.length === 0}>
                     <text width="100%" fg={props.theme.muted} flexShrink={0}>
                       No diff provided
                     </text>
