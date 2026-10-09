@@ -485,7 +485,7 @@ const sinks: Array<{
 }> = [
   {
     sink: "inline title",
-    name: "grep",
+    name: "Grep",
     input: (value) => ({ pattern: value }),
     hostile: evil,
     escaped: "e\\x1b]0;pwned\\x07",
