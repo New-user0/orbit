@@ -1688,8 +1688,11 @@ shown as a read of the project file, and a Code Mode fetch, an MCP call and a Wo
 the terminal interface uses, `ToolNames.owns`) and builds the prompt from the request otherwise: the folder outside the
 project for `external_directory`, the method and URL for a fetch (`POST https://...`), the action and resources for an
 MCP tool or an agent. A file edit shows the diff the server will write, taken from the request's `metadata.files`, so an
-edit of a file with CRLF line endings is no longer shown as no change. The terminal interface and `orb run` in Mini
-mode also name the method of a Code Mode fetch other than GET and HEAD, as `WebFetch POST <url>` with a `Method:` line.
+edit of a file with CRLF line endings is no longer shown as no change. The approval prompts of the terminal interface
+and of Mini (`orb mini`) also name the method of a Code Mode fetch other than GET and HEAD, as `WebFetch POST <url>` with
+a `Method:` line. A caller's own input contributes only the fields its tool declares (a path, a pattern, a URL, a
+command), never extra keys the model added to it, and a diff or a `<n> files` title appears only for an edit, write,
+notebook edit or patch.
 
 **Affects:** ACP clients that read the title, locations or `rawInput` of a permission request, and anyone who approves
 Code Mode fetches.

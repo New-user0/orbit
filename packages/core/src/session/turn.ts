@@ -240,7 +240,7 @@ export interface Usage {
   /**
    * Responses and usage records, the Session's own or a subagent's, whose price is unknown: a finished response with
    * no recorded cost or no tokens at all, any response or record with tokens and a cost of zero, a response that failed
-   * with no recorded cost, and usage records that do not decode. They add nothing (or nothing real) to `cost`, so a
+   * with no recorded cost. They add nothing (or nothing real) to `cost`, so a
    * cost limit must not read them as free.
    */
   readonly unknown: number
