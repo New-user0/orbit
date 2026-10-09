@@ -65,7 +65,9 @@ function splitRows(hunk: string) {
       index++
       continue
     }
-    if (prefix === "\\") {
+    // A line no hunk row starts with (`\ No newline`, or another file's header in a joined patch) adds no row; the
+    // +/- loop below would not consume it and would never advance.
+    if (prefix !== "+" && prefix !== "-") {
       index++
       continue
     }

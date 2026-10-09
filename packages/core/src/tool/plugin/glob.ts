@@ -65,15 +65,18 @@ export const Plugin = {
             Effect.gen(function* () {
               const searchPath = input.path === "undefined" || input.path === "null" ? undefined : input.path
               const source = { type: "tool" as const, messageID: context.messageID, id: context.id }
-              const target = yield* access.resolve({ path: searchPath ?? ".", kind: "directory" })
-              yield* access.authorizeExternal([target], context)
+              // A listing of a folder is a Read of it, so the person's Read rules for that folder decide it as they decide
+              // a Read of the folder. The pattern is asked about below.
+              const target = yield* access.authorizeRead(searchPath ?? ".", context, { kind: "directory" })
               yield* permission.assert({
                 action: name,
                 resources: [input.pattern],
                 save: ["*"],
                 metadata: {
                   root: searchPath ?? ".",
-                  path: searchPath,
+                  // The searched folder as resolved here, so a client shows it rather than the input's spelling, and the
+                  // real folder when a link in an untrusted project leads there.
+                  path: target.place,
                   hidden: input.hidden,
                   limit: input.limit,
                 },

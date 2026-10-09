@@ -279,6 +279,39 @@ test.each(["Edit", "edit"])("a %s permission request shows the diff it asks to a
   }
 })
 
+// The Patch tool asks once for every file it changes; each file's patch starts with `Index:`, and `diff` joins them.
+test("a permission request for a patch that changes two files draws both files' diffs", async () => {
+  await using tmp = await tmpdir()
+  const file = (name: string, before: string, after: string) =>
+    `Index: ${name}\n${"=".repeat(67)}\n--- ${name}\n+++ ${name}\n@@ -1,1 +1,1 @@\n-${before}\n+${after}\n`
+  const files = [
+    { file: "a.txt", patch: file("a.txt", "one", "FIRST_FILE_CHANGE"), additions: 1, deletions: 1 },
+    { file: "b.txt", patch: file("b.txt", "two", "SECOND_FILE_CHANGE"), additions: 1, deletions: 1 },
+  ]
+  const panes = await mountPanes(tmp.path, () => (
+    <PermissionPrompt
+      request={{
+        id: "per_patch",
+        sessionID: "ses_scoped",
+        action: "Edit",
+        resources: files.map((item) => item.file),
+        metadata: { files, diff: files.map((item) => item.patch + "\n").join("") },
+      }}
+    />
+  ))
+  try {
+    await panes.app.renderOnce()
+    const frame = panes.app.captureCharFrame()
+    expect(frame).toContain("Edit 2 files: a.txt, b.txt")
+    expect(frame).toContain("Path: a.txt")
+    expect(frame).toContain("FIRST_FILE_CHANGE")
+    expect(frame).toContain("Path: b.txt")
+    expect(frame).toContain("SECOND_FILE_CHANGE")
+  } finally {
+    panes.app.renderer.destroy()
+  }
+})
+
 test.each([
   ["permission", true],
   ["dialog", false],

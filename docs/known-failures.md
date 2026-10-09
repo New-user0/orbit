@@ -6,6 +6,12 @@ Last verified at commit `b79898f` (this branch with `origin/main` at `a0a4222` m
 
 How to start a run: PowerShell or Git Bash works for every package except `packages/cli`, which needs Git Bash because its `mini-config` tests call `mktemp -d`. Core clears `SHELL` in `packages/core/test/preload.ts` on win32, so a Git Bash terminal (which exports `SHELL=/bin/bash.exe`) gives the same result as PowerShell.
 
+On Linux, as CI's ubuntu job or a local container runs the packages, the tests need these on PATH as a person who is not root, because root ignores file permissions:
+- `git`, `ripgrep`, `pgrep` (procps), `bubblewrap` and `socat`;
+- Node.js 22.15 or later: the ESM reload tests in `packages/tui/test/plugin-source.test.ts` use `module.registerHooks`, and fail with Node 20.
+
+The bubblewrap test in `packages/core/test/shell-sandbox.test.ts` also needs user namespaces, which Docker's default seccomp and AppArmor profiles block. M2's verification ran Linux in Docker with those profiles off for the test container (`--security-opt seccomp=unconfined --security-opt apparmor=unconfined`).
+
 Columns: "On main" is `yes` when the test failed in that verification run on `origin/main`, and `intermittent` when it is a known failure that did not appear in that run because it depends on load or timing. A cause that says "not root-caused" records only the failing assertion; it is not shown to be specific to Windows.
 
 ## Gates
@@ -77,6 +83,7 @@ Each passes when re-run alone, unless its row says otherwise.
 | cli | `unresponsive managed port occupancy reports a bounded conflict`, `port contender recognizes an incumbent registered during the bind race` and `a failed service stays registered and owns the selected port until stopped` (`packages/cli/test/service.test.ts`) | Time out at 20 to 27 s in the full run; the file passes alone (28 pass with the lifecycle file's other test). | intermittent |
 | cli | `acp prompt content subprocess > accepts embedded text resource image and file resource link prompt content` (`packages/cli/test/acp/prompt-content.subprocess.test.ts`) | Fails with `Timed out waiting for initialize response`, a harness wait for the spawned process, under load. | intermittent |
 | tui | (`packages/tui/test/session-home.test.tsx`) `Home loads a stable, bounded beginning (mixed)` | Timing flake. | intermittent |
+| tui | `files a sent prompt under its directory and time, and keeps only history_limit entries` (`packages/tui/test/prompt/history-provider.test.tsx`) | Seen on Linux (Docker, see Gates): an entry the limit trim removed comes back (`two, three, two`). Prompt-history writes are not serialized, so an append still in flight when the trim rewrites the file restores it. It failed in 3 of 6 runs of the file at `e405408` and 2 of 5 at `4a2c9b5`. Not a timeout. | intermittent |
 | util | (`packages/util/test/observability-otlp.test.ts`) `exports a span through the configured OTLP trace endpoint` | Hit its 5.16 s timeout under load. | intermittent |
 
 A timeout-only failure under load is a load flake: it passes when its file is re-run alone, and it needs no new row. The timeout may be the test's own (5 seconds in core, 30 seconds in cli and tui), the runner's, or a harness wait such as a spawned process that does not answer. The PR names the test and the file it re-ran alone. A gate (see Gates) must still pass when re-run alone. Any other failure is fixed, or added here with its reason.

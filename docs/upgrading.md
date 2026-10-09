@@ -768,6 +768,7 @@ text that the output limit cut is one line.
 
 **What to do:** nothing for most setups. A program that reads `json` or `stream-json` joins the parts of steps whose
 `step_finish` has reason `length`, and drops the parts of the message that a `notice` line replaces.
+
 ### A failed tool call has an error type that names what went wrong
 
 A tool call that failed used to be reported with the error type `tool.execution` whatever the reason, so a client could
@@ -795,6 +796,7 @@ message is not affected.
 
 **What to do:** Nothing for code that does not read the type. If you match on `tool.execution`, also match the types
 above, or match the type of the failure you care about.
+
 ### Messages say how they were delivered, and a prompt can carry turn options
 
 A `user` message and a `synthetic` message now carry a `delivery` field, `steer` or `queue`: the delivery that the input
@@ -991,6 +993,20 @@ screen and a cut-off reply had no marker.
 
 **What to do:** Nothing.
 
+### An approval prompt shows what the request asks for, and every file a patch changes
+
+The terminal UI and Mini used to fill an approval prompt from the input of the tool call that was running. A Code Mode
+`execute` call that fetches a URL, a `workflow` call that starts an agent and a patch all ask under that running call,
+whose own input can name a different URL, agent or file from the one asked about. The prompt now uses the call's input
+only when that call is the tool that asks, and otherwise shows the request's own URL, agent or file. A patch that
+changes several files used to be shown as an edit of its first file, with only that file's diff. Its prompt now names
+every file in the title, the old name of a moved file included, and shows each file's diff under its path.
+
+**Affects:** people who approve edits made with the Patch tool, which some models get in place of Edit and Write, and
+approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -1120,6 +1136,65 @@ One table, `ToolNames` (`packages/schema/src/tool-names.ts`, re-exported from `p
 **Affects:** plugin authors whose hooks or tools match on a built-in tool's name or input field, SDK callers that read tool names from events of new sessions, and tests or scripts that call the tools by name. Permission rules, hook matchers and old sessions keep working.
 
 **What to do:** nothing for rules, hook matchers and existing code plugins that match on a name or field they are given. A plugin that lists tools and picks one by its old name (`editor.list().filter((t) => t.id === "shell")`, or iterating `event.tools`) now finds `Bash`: `list()` and iteration report the current names, while `get`, `update`, `remove` and keyed reads accept either spelling. Every legacy hook is given the old field names as the input stands when it runs, including after the input repair or an earlier plugin replaced `event.input`, and a current field written after a `delete input.path` is a write, not a withdrawal. When you update a plugin to the new names, declare `toolNames: "reference"` and compare with `Bash`, `Edit` and `Write` in the same change, and prefer the new names in rules you write.
+
+### A link that an untrusted folder ships into Orbit's own folders is asked about
+
+Orbit lets every agent reach a few folders of its own outside the project without a question: your global config
+folder, Orbit's temporary folder, and its shell and tool output. In a folder that you have not trusted, a link that the
+repository ships (a symlink or a junction) into one of those folders was covered by that allow too. A read, a write, a
+search or a command through the link asked no folder question, and the shell, Grep and Glob approvals named the link as
+a folder of the project, so a command approved as `mv AGENTS.md AGENTS.md.bak` in `<project>\cfg` moved your own
+instructions aside, and a Read or Grep of `cfg/orbit.json` sent your provider key to the model.
+
+Now a place that such a link leads to asks "Access external directory" about the real folder, and only your own rules
+and the approvals you saved can allow it; Orbit's own allows no longer answer it. This covers a Read and a Write through
+the link, a Patch, a Grep or Glob `path`, a shell `workdir`, a folder that `cd` changes to, and a plain word of a shell
+command or a file it redirects to, such as `cat cfg/orbit.json` or `echo text > cfg/AGENTS.md`. The shell approval's `metadata.workdir`, the `metadata.path` of a Grep or Glob approval
+and the `metadata.filepath` of a patch's folder question name the real place. On Windows a link is seen through
+`cfg.` and `cfg ` too, which a program started there treats as `cfg`. A path that a command builds as it runs, from a
+variable or a substitution, is not checked yet. A trusted folder's links are its own, as before, and a folder of Orbit's
+own that a tool names directly, such as `~/.config/orbit`, is still allowed without a question.
+
+**Affects:** people who open folders they have not trusted that ship links into those folders, who now see the
+question. Code built on `@orbit/core` that builds a `FileAccess.Target` must give it `place`, and an implementation of
+`FileAccess.Service` must provide `escaped`.
+
+**What to do:** answer the question. To let such links through without one, trust the folder, or add your own
+`external_directory` allow rule for that folder, such as `~/.config/orbit/*`.
+
+### On Windows, every spelling of a file meets the rules written for it
+
+On Windows one file has spellings that a rule written for its name did not see. `.env::$DATA` opens `.env`, `new.sh:x`
+writes a stream of `new.sh`, the 8.3 short name `ENV~1` opens `.env`, and a shell or ripgrep opens `.env.` or `.env ` as
+`.env`. A Read deny or ask of `*.env`, such as the default ask, or an Edit deny of `*.sh` let these through.
+
+Now a path with a `:` after its drive or share is refused with the error type `file.spelling` before anything is asked:
+a data stream, and also a drive that is not a disk, such as `HKLM:\Software` or `FileSystem::C:\x`, which a shell would
+read as a drive. Read, Write, Edit, NotebookEdit, Patch and LSP refuse it, and so do a Grep or Glob path, a shell
+`workdir` and the folder of a `cd`. A part of a path that is an 8.3 short name is named by its long name, trailing
+periods and spaces are dropped as Windows drops them, and a `\\?\` or `\\.\` prefix is read as the plain path, so your
+rules see `.env` and `new.sh`, and an approval names the file by its own name. An 8.3 name whose long name cannot be
+told is refused with `file.spelling` as well.
+
+**Affects:** Windows users with rules for file names, and shell commands that change their location to a PowerShell
+drive such as `HKLM:`, which now fail. Code that matches on a failed tool call's `error.type` can see `file.spelling`.
+
+**What to do:** use the plain path of a file or folder. A shell command can still name a registry key as an argument;
+only a change of location to it is refused.
+
+### Grep and Glob ask your Read rules about the path they search
+
+Grep and Glob asked their own rules about the pattern only, so a Read deny of `*.env` did not cover a Grep of `.env`,
+which sent the file's lines to the model. Both now ask your Read rules about the path they search, as a Read of that
+path would, before they ask about the pattern: a Read deny of `*.env` refuses a Grep of `.env`, a Read deny of a folder
+refuses a Glob of it, and a Read ask asks about the path. A search of a folder does not yet hold each file it finds to
+your Read rules, so a Grep of `.` still reads a `.env` in it unless a rule covers the folder.
+
+**Affects:** people with Read rules that ask or deny. With a Read ask that covers the searched path, a search now asks
+about the path as well as about the pattern, and an agent whose rules allow Grep or Glob but deny Read can no longer
+search.
+
+**What to do:** answer the question, or allow the path for Read in your own rules or the agent's.
 
 ## Plugins and SDK
 
@@ -1355,6 +1430,11 @@ period ended, runs without limits, and a steered prompt with its own options sta
 limited turn is finishing joins that turn, and fails at once if the limit is already spent. Only responses that ended
 count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
 responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
+These limits, the subagent binding above and the side-query and compaction totals of `orb stats` read two tables that the
+session projector always fills (`session_usage`, `session_admission`), not the event log, which a server keeps only when
+it is built to persist events. `orb serve`, the background service and `--standalone` do not, so before this change a
+title or compaction cost was missing from the limits and from `orb stats` there, and a background subagent was not bound
+to its parent's turn. A database that kept its events has them copied into `session_usage` when it migrates.
 
 A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It is refused with
 `limit.cost-unknown`, a refusal and not a limit that was reached, when the model has no tier-less price above zero (a
@@ -1434,6 +1514,7 @@ a network device that drops keepalives.
 
 **What to do:** nothing in most setups. To allow longer silence, set `chunkTimeout` in the provider settings, or
 `false` to turn the limit off.
+
 ### Failed model requests retry sooner, more often and for longer
 
 A session step or compaction that fails with a transient error, an overload included, now waits 0.5, 1, 2, 4, 8 and
@@ -1657,3 +1738,48 @@ notice is sent as a `session_info_update` with `orbit/notice` in `_meta`.
 **Affects:** scripts that call `orb run` and read its result object or exit code, and ACP clients.
 
 **What to do:** nothing; the new fields are additive. A script that passes a limit should check `subtype`.
+
+### Over ACP, an approval describes what is asked, and a Code Mode write says its method
+
+`orb acp` used to build an approval from the call that raised it, so a Read that followed a link out of the project was
+shown as a read of the project file, and a Code Mode fetch, an MCP call and a Workflow agent were all shown as
+`Execute` or `Workflow`. It now shows the caller's name and input only when the caller owns the request (the same table
+the terminal interface uses, `ToolNames.owns`) and builds the prompt from the request otherwise: the folder outside the
+project for `external_directory`, the method and URL for a fetch (`POST https://...`), the action and resources for an
+MCP tool or an agent. A file edit shows the diff the server will write, taken from the request's `metadata.files`, so an
+edit of a file with CRLF line endings is no longer shown as no change. The approval prompts of the terminal interface
+and of Mini (`orb mini`) also name the method of a Code Mode fetch other than GET and HEAD, as `WebFetch POST <url>` with
+a `Method:` line. A built-in tool's own input contributes only the fields that tool declares, never extra keys the model
+added to it: a `cwd` on a shell call does not change the folder shown, and a `method` on a fetch does not change its
+title. An MCP tool or a skill shows the arguments it sends in `rawInput`. A diff or a `<n> files` title appears only for
+an edit, write, notebook edit or patch.
+
+**Affects:** ACP clients that read the title, locations or `rawInput` of a permission request, and anyone who approves
+Code Mode fetches.
+
+**What to do:** nothing. `rawInput` of a request the caller does not own carries the request's metadata and `resources`.
+
+### Approvals show a path where the tool acts, `~` included
+
+The tools read a leading `~`, `~/` or (on Windows) `~\` in a path as your home folder, and a Git Bash, Cygwin or WSL
+drive spelling such as `/c/Users/...` as that Windows drive. `orb acp` resolved the same path against the session's
+folder instead, so a shell `workdir`, a Grep or Glob `path` or a Read, Edit, Write or Patch file of `~/config` was shown
+in the approval and in the tool updates as `<project>/~/config` while the tool acted in your home folder. `orb acp` now
+resolves a path from a tool's input as the tools do, `..` included, and shows an absolute path normalized, so on Windows
+a path that starts with `/` is shown with a drive letter.
+
+The server also names the place on the request. A shell approval carries `metadata.workdir`, the absolute folder the
+command runs in, and the `metadata.path` of a Grep or Glob approval is now the absolute place searched rather than the
+path as the model wrote it. An ACP approval for a Read, Edit, Write or Patch takes its locations from the request's
+resources, which are the files the server resolved and checked your rules against, rather than from the calling tool's
+input, and a Read, Edit or Write approval takes its title from them too. The approval prompts of the terminal interface
+and of Mini (`orb mini`) name that file for a Read or an Edit as well: Mini showed
+`~/../<you>/.config/orbit/orbit.json` as a file of the project. Their tool rows, such as a shell row's `cd <folder>`,
+now draw a path from a tool's input the way the tools read it too, where they used to show `~/../<you>/.config/orbit` as
+`<you>/.config/orbit` in the project. A path from a server on another kind of system is drawn as before.
+
+**Affects:** ACP clients that read the locations or title of a tool call or an approval, people who approve reads and
+edits in the terminal interface or Mini, and plugins or SDK callers that read `metadata.path` of a Grep or Glob
+permission request.
+
+**What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.

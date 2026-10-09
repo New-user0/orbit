@@ -46,3 +46,107 @@ describe("a call that names a file under both spellings", () => {
     ),
   )
 })
+
+// The request's resources name the file the server resolved and the tool acts on; the caller's input can spell another
+// one (filename recovery reads a sibling, `~/..` leaves the home folder), so the prompt names the resource.
+describe("a file the request resolved differently from the caller's spelling", () => {
+  const rows = [
+    { action: "Read", tool: "Read", input: { file_path: "READEM.md" }, resource: "README.md" },
+    { action: "Read", tool: "LSP", input: { path: "~/../other/a.ts" }, resource: "/home/other/a.ts" },
+    {
+      action: "Edit",
+      tool: "Edit",
+      input: { file_path: "~/config/orbit.json" },
+      resource: "/home/me/config/orbit.json",
+    },
+    { action: "Edit", tool: "Write", input: { file_path: "draft.md", content: "x" }, resource: "src/notes.md" },
+  ] as const
+  for (const row of rows)
+    test(`${row.tool} names ${row.resource}`, () => {
+      const shown = permissionPresentation({
+        action: row.action,
+        tool: row.tool,
+        resources: [row.resource],
+        input: row.input,
+      })
+      expect(shown.title).toBe(`${row.action} ${row.resource}`)
+      expect(JSON.stringify(shown)).not.toContain(Object.values(row.input)[0])
+    })
+})
+
+// A patch asks once, as Edit, for every file it changes. The prompt must name each file and show each file's diff.
+describe("a patch that changes several files", () => {
+  const files = [
+    { file: "README.md", patch: "--- README.md\n+typo fix" },
+    { file: ".orbit/config.json", patch: "--- .orbit/config.json\n+SECOND_FILE_CHANGE" },
+  ]
+  // Each file keeps its own diff: the diff view draws one file's patch and spins on a joined one.
+  ;[true, false].forEach((joined) =>
+    test(`names every file and shows every file's own diff${joined ? "" : " (no joined diff)"}`, () => {
+      const shown = permissionPresentation({
+        action: "Edit",
+        tool: "Patch",
+        resources: files.map((item) => item.file),
+        metadata: { files, ...(joined ? { diff: files.map((item) => item.patch).join("\n") } : {}) },
+      })
+      expect(shown.title).toContain("README.md")
+      expect(shown.title).toContain(".orbit/config.json")
+      expect(shown.diffs).toEqual(files.map((item) => ({ file: item.file, diff: item.patch })))
+      expect(shown.diff).toBeUndefined()
+    }),
+  )
+
+  // The Patch tool lists a moved file's old and new names in the resources, and names its per-file entry by the new one.
+  test("a patch that moves one file and edits another names the moved file's old name too", () => {
+    const moved = { file: "dst.txt", patch: "--- src.txt\n+++ dst.txt\n+MOVED_CHANGE" }
+    const shown = permissionPresentation({
+      action: "Edit",
+      tool: "Patch",
+      resources: ["src.txt", "dst.txt", files[0].file],
+      metadata: { files: [moved, files[0]] },
+    })
+    expect(shown.title).toBe("Edit 3 files: src.txt, dst.txt, README.md")
+    expect(shown.lines).toEqual(["Path: src.txt", "Path: dst.txt", "Path: README.md"])
+    expect(shown.diffs).toEqual([
+      { file: "dst.txt", diff: moved.patch },
+      { file: "README.md", diff: files[0].patch },
+    ])
+  })
+
+  test("a patch that only moves a file keeps the diff view", () => {
+    const moved = { file: "dst.txt", patch: "--- src.txt\n+++ dst.txt\n+MOVED_CHANGE" }
+    const shown = permissionPresentation({
+      action: "Edit",
+      tool: "Patch",
+      resources: ["src.txt", "dst.txt"],
+      metadata: { files: [moved], diff: `${moved.patch}\n` },
+    })
+    expect(shown.title).toBe("Edit 2 files: src.txt, dst.txt")
+    expect(shown.diffs).toEqual([{ file: "dst.txt", diff: moved.patch }])
+    expect(shown.patch).toBeUndefined()
+  })
+
+  test("without a diff per file the joined diff is shown as plain text", () => {
+    const shown = permissionPresentation({
+      action: "Edit",
+      resources: files.map((item) => item.file),
+      metadata: { diff: files.map((item) => item.patch).join("\n") },
+    })
+    expect(shown.title).toBe("Edit 2 files: README.md, .orbit/config.json")
+    expect(shown.diff).toBeUndefined()
+    expect(shown.diffs).toBeUndefined()
+    expect(shown.patch).toContain("+typo fix")
+    expect(shown.patch).toContain("SECOND_FILE_CHANGE")
+  })
+
+  test("a single-file patch keeps the single-file prompt", () => {
+    const shown = permissionPresentation({
+      action: "Edit",
+      tool: "Patch",
+      resources: ["README.md"],
+      metadata: { files: [files[0]] },
+    })
+    expect(shown.title).toBe("Edit README.md")
+    expect(shown.lines).toEqual([])
+  })
+})

@@ -264,6 +264,47 @@ export const scanPortable = Effect.fnUntraced(function* (command: string, shell:
   return output
 })
 
+/**
+ * The literal words that the commands in `command` take as arguments, and the files they redirect to, with quotes
+ * removed, and the value of an `--option=value`: what a command may open as a path. A word with an expansion (`$`, a
+ * backtick, a substitution) is left out, since its value is not known before the command runs, and so are flags; the
+ * command inside a substitution has words of its own. This is not an analysis of what a command opens: it names the
+ * plain words, for a check that only adds questions.
+ */
+export const operands = Effect.fnUntraced(function* (command: string, shell: string) {
+  const parsers = yield* Effect.promise(load)
+  const powershell = ShellSelect.ps(shell)
+  const tree = (powershell ? parsers.ps : parsers.bash).parse(command)
+  if (!tree) return []
+  return yield* Effect.acquireUseRelease(
+    Effect.succeed(tree),
+    (tree) =>
+      Effect.sync(() =>
+        [
+          ...tree.rootNode.descendantsOfType("command").flatMap((node) =>
+            node
+              ? parts(node)
+                  .slice(1)
+                  .map((part) => part.text)
+              : [],
+          ),
+          ...tree.rootNode
+            .descendantsOfType(powershell ? "redirected_file_name" : "file_redirect")
+            .flatMap((node) => (node ? [(powershell ? node : (node.lastNamedChild ?? node)).text] : [])),
+        ].flatMap(literal),
+      ),
+    (tree) => Effect.sync(() => tree.delete()),
+  )
+})
+
+function literal(text: string) {
+  const word = text.trim()
+  if (/[$`]/.test(word) || word.startsWith("(") || word.startsWith("@(")) return []
+  const value = word.startsWith("-") && word.includes("=") ? word.slice(word.indexOf("=") + 1) : word
+  if (value === "" || value.startsWith("-")) return []
+  return [value.replace(/["']/g, "")]
+}
+
 function parts(node: Node) {
   return Array.from({ length: node.childCount }).flatMap((_, index): Part[] => {
     const child = node.child(index)

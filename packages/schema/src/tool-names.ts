@@ -75,6 +75,37 @@ export function legacy(name: string): string {
   return Object.entries(tools).find(([, value]) => value === family(name))?.[0] ?? name
 }
 
+// The tools whose own input describes a permission request of an action; LSP asks as Read and Write, NotebookEdit as Edit.
+const owners: Record<string, readonly string[]> = {
+  edit: ["edit", "write", "notebook_edit", "multiedit"],
+  read: ["read", "lsp"],
+  list: ["list", "glob"],
+  glob: ["glob"],
+  grep: ["grep"],
+  shell: ["shell"],
+  subagent: ["subagent", "task"],
+  webfetch: ["webfetch"],
+  websearch: ["websearch"],
+  lsp: ["lsp"],
+}
+const aliases: Record<string, string> = { bash: "shell", task: "subagent", apply_patch: "patch" }
+const lowered = (name: string) => {
+  const old = legacy(name).toLowerCase()
+  return aliases[old] ?? old
+}
+
+/**
+ * Whether the tool named `tool` is the one a permission request of `action` is about, so that its own input may be
+ * shown for the request. A Code Mode fetch, an MCP call, a Workflow agent and a Patch edit all ask under their caller's
+ * call ID, and a link out of the project asks `external_directory` under a Read: for those the caller's input says
+ * nothing true about the request. A request with no known caller is the request's own.
+ */
+export function owns(action: string, tool?: string): boolean {
+  if (tool === undefined) return true
+  const name = lowered(action)
+  return (owners[name] ?? [name]).includes(lowered(tool))
+}
+
 /**
  * Every spelling of a tool or permission action: the name given, its current name and each old name that maps to it.
  * A rule or matcher written with any one of them stands for the same tool, and for no other.

@@ -135,7 +135,7 @@ export const Plugin = {
                 const target = yield* access.resolve({ path: value, kind: "file" })
                 if (!target.externalDirectory) return target
                 yield* access.authorizeExternal([target], context, {
-                  filepath: target.absolute,
+                  filepath: target.place,
                   parentDir: target.externalDirectory.directory,
                 })
                 return target

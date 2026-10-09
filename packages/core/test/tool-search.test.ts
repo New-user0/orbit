@@ -16,7 +16,10 @@ import { Session } from "@orbit/core/session"
 import { GlobTool } from "@orbit/core/tool/plugin/glob"
 import { GrepTool } from "@orbit/core/tool/plugin/grep"
 import { Tool } from "@orbit/core/tool"
+import { Global } from "@orbit/util/global"
+import { FSUtil } from "@orbit/util/fs-util"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -38,6 +41,9 @@ const withTools = <A, E, R>(
   directory: string,
   body: (registry: Tool.Interface) => Effect.Effect<A, E, R>,
   assertions?: Permission.AssertInput[],
+  trusted = true,
+  // The person's rules, decided as Permission decides them: a deny refuses the call, and anything else lets it through.
+  rules: Permission.Ruleset = [],
 ) =>
   Effect.gen(function* () {
     const registry = yield* Tool.Service
@@ -65,9 +71,20 @@ const withTools = <A, E, R>(
             assert: (input) =>
               Effect.sync(() => {
                 assertions?.push(input)
-              }),
+              }).pipe(
+                Effect.andThen(
+                  input.resources.some(
+                    (resource) => Permission.evaluate(input.action, resource, rules).effect === "deny",
+                  )
+                    ? Effect.fail(
+                        new Permission.BlockedError({ rules, permission: input.action, resources: input.resources }),
+                      )
+                    : Effect.void,
+                ),
+              ),
           }),
         ),
+        ...(trusted ? [] : untrustedProjectNodes),
       ]),
     ),
   )
@@ -285,12 +302,16 @@ describe("search tools", () => {
             Effect.sync(() => {
               expect(assertions.map((input) => input.action)).toEqual([
                 "external_directory",
+                "Read",
                 "Grep",
                 "external_directory",
+                "Read",
                 "Grep",
               ])
               expect(assertions[0]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
-              expect(assertions[2]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
+              expect(assertions[1]?.resources).toEqual([outside.path.replaceAll("\\", "/")])
+              expect(assertions[3]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
+              expect(assertions[4]?.resources).toEqual([path.join(outside.path, "outside.txt").replaceAll("\\", "/")])
             }),
           ),
         )
@@ -361,7 +382,7 @@ describe("search tools", () => {
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "Glob"])
+              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "Read", "Glob"])
               expect(assertions[0]?.resources).toEqual([path.join(outside.path, "*").replaceAll("\\", "/")])
             }),
           ),
@@ -373,6 +394,170 @@ describe("search tools", () => {
         ),
     ),
   )
+
+  // A client shows the searched folder from the request, so the request names it as resolved here, whatever spelling
+  // the call used: `~` is the home folder (class 8, approval display).
+  for (const name of ["Glob", "Grep"] as const)
+    it.live(`${name} names the resolved folder on its approval for each path spelling`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        ([active, outside]) => {
+          const rows = [
+            { path: `~/${path.relative(Global.Path.home, outside.path)}`, searches: outside.path },
+            { path: `../${path.basename(outside.path)}`, searches: outside.path },
+            { path: outside.path, searches: outside.path },
+            { path: "src", searches: path.join(active.path, "src") },
+            ...(process.platform === "win32"
+              ? [
+                  {
+                    path: `/${outside.path[0]!.toLowerCase()}${outside.path.slice(2).replaceAll("\\", "/")}`,
+                    searches: outside.path,
+                  },
+                ]
+              : []),
+          ]
+          return Effect.promise(() => fs.mkdir(path.join(active.path, "src"))).pipe(
+            Effect.andThen(
+              Effect.forEach(rows, (row) => {
+                const assertions: Permission.AssertInput[] = []
+                return withTools(
+                  active.path,
+                  (registry) => executeTool(registry, call(name, { path: row.path, pattern: "needle" })),
+                  assertions,
+                ).pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() =>
+                      expect([row.path, assertions.find((item) => item.action === name)?.metadata?.path]).toEqual([
+                        row.path,
+                        row.searches,
+                      ]),
+                    ),
+                  ),
+                )
+              }),
+            ),
+          )
+        },
+        ([active, outside]) =>
+          Effect.promise(() =>
+            Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+          ),
+      ),
+    )
+
+  // A repository that is not trusted ships its links: a search through one asks about the real folder, marked as one a
+  // link leads to so that only the person's own rules decide it, and its own approval names that folder. A trusted
+  // project's link is its own (class 4, class 8).
+  for (const name of ["Glob", "Grep"] as const)
+    for (const trusted of [false, true])
+      it.live(
+        `${name} through a link in ${trusted ? "a trusted project searches the project's own folder" : "an untrusted project names the real folder"}`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+            ([active, outside]) => {
+              const assertions: Permission.AssertInput[] = []
+              return Effect.promise(async () => {
+                await fs.writeFile(path.join(outside.path, "outside.txt"), "needle\n")
+                await fs.symlink(outside.path, path.join(active.path, "linked"), "junction")
+              }).pipe(
+                Effect.andThen(
+                  withTools(
+                    active.path,
+                    (registry) =>
+                      executeTool(
+                        registry,
+                        call(name, { path: "linked", pattern: name === "Glob" ? "*.txt" : "needle" }),
+                      ),
+                    assertions,
+                    trusted,
+                  ),
+                ),
+                Effect.tap((result) =>
+                  Effect.sync(() => {
+                    const real = FSUtil.resolve(outside.path)
+                    const folder = path.join(real, "*").replaceAll("\\", "/")
+                    expect(result.status).toBe("completed")
+                    expect(assertions.map((item) => item.action)).toEqual(
+                      trusted ? ["Read", name] : ["external_directory", "Read", name],
+                    )
+                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
+                    expect(assertions.find((item) => item.action === name)?.metadata?.path).toBe(
+                      trusted ? path.join(active.path, "linked") : real,
+                    )
+                  }),
+                ),
+              )
+            },
+            ([active, outside]) =>
+              Effect.promise(() =>
+                Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+              ),
+          ),
+      )
+
+  // A search reads what it searches, so the person's Read rules for its path decide it as they decide a Read of that
+  // path: a Read deny of `*.env` covers Grep of `.env`, whose own rules key on the pattern, and a Read deny of a folder
+  // covers a Glob of it. A Read ask asks about the path; other paths are the controls (class 8).
+  const readRule = (resource: string, effect: "deny" | "ask"): Permission.Ruleset => [
+    { action: "*", resource: "*", effect: "allow" },
+    { action: "Read", resource, effect },
+  ]
+  const readRows = [
+    { name: "Grep", input: { path: ".env", pattern: "API_KEY" }, rules: readRule("*.env", "deny"), expect: "denied" },
+    { name: "Grep", input: { path: ".env", pattern: "API_KEY" }, rules: readRule("*.env", "ask"), expect: "asked" },
+    { name: "Grep", input: { path: "README.md", pattern: "readme" }, rules: readRule("*.env", "deny"), expect: "done" },
+    { name: "Glob", input: { path: "secrets", pattern: "*" }, rules: readRule("secrets", "deny"), expect: "denied" },
+    { name: "Glob", input: { path: "secrets", pattern: "*" }, rules: readRule("secrets", "ask"), expect: "asked" },
+    { name: "Glob", input: { path: "src", pattern: "*" }, rules: readRule("secrets", "deny"), expect: "done" },
+  ] as const
+  for (const row of readRows)
+    it.live(
+      `${row.name} of ${row.input.path} under a Read ${row.rules[1]!.effect} of ${row.rules[1]!.resource} is ${row.expect}`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => {
+            const assertions: Permission.AssertInput[] = []
+            return Effect.promise(async () => {
+              await fs.writeFile(path.join(tmp.path, ".env"), "API_KEY=SECRET-MARKER\n")
+              await fs.writeFile(path.join(tmp.path, "README.md"), "readme\n")
+              await fs.mkdir(path.join(tmp.path, "secrets"))
+              await fs.writeFile(path.join(tmp.path, "secrets", "key.pem"), "key\n")
+              await fs.mkdir(path.join(tmp.path, "src"))
+              await fs.writeFile(path.join(tmp.path, "src", "a.ts"), "a\n")
+            }).pipe(
+              Effect.andThen(
+                withTools(
+                  tmp.path,
+                  (registry) => executeTool(registry, call(row.name, row.input)),
+                  assertions,
+                  true,
+                  row.rules,
+                ),
+              ),
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  const read = assertions.filter((item) => item.action === "Read")
+                  expect(read.map((item) => item.resources)).toEqual([[row.input.path]])
+                  if (row.expect === "denied") {
+                    expect(result.status).toBe("error")
+                    expect(assertions.map((item) => item.action)).toEqual(["Read"])
+                    expect(JSON.stringify(result)).not.toContain("SECRET-MARKER")
+                    expect(JSON.stringify(result)).not.toContain("key.pem")
+                  }
+                  if (row.expect === "asked") {
+                    expect(Permission.evaluate("Read", row.input.path, row.rules).effect).toBe("ask")
+                    expect(result.status).toBe("completed")
+                  }
+                  if (row.expect === "done") expect(result.status).toBe("completed")
+                }),
+              ),
+            )
+          },
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        ),
+    )
 
   it.live("globs through an in-location external symlink without external approval", () =>
     Effect.acquireUseRelease(
@@ -394,7 +579,7 @@ describe("search tools", () => {
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(assertions.map((input) => input.action)).toEqual(["Glob"])
+              expect(assertions.map((input) => input.action)).toEqual(["Read", "Glob"])
               expect(result).toMatchObject({
                 output: [{ path: path.join("linked", "outside.txt"), type: "file" }],
                 content: [{ type: "text", text: path.join(active.path, "linked", "outside.txt") }],

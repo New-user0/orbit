@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
+import { Global } from "@orbit/util/global"
 import { normalizeTool, toolInlineInfo, toolOutputText, toolPath, toolScroll } from "../../src/mini/tool"
 import { canonicalToolPart } from "./fixture/tool-part"
 
@@ -130,5 +132,21 @@ describe("Mini tool presentation", () => {
   test("keeps segment-safe contained tool paths relative", () => {
     expect(toolPath("..cache/result.txt", { directory: "/work/project" })).toBe("..cache/result.txt")
     expect(toolPath("../shared/result.txt", { directory: "/work/project" })).toBe("/work/shared/result.txt")
+  })
+
+  // A Bash row shows `cd <workdir>`, and every row shows its file, from the tool's input: the tools read `~` as the home
+  // folder, so `~/../<home folder name>/x` is the home folder's `x` and never `<home folder name>/x` in the project.
+  test("shows a ~ path in the home folder, where the tool acts", () => {
+    const directory = path.resolve("/work/project")
+    const spelled = `~/../${path.basename(Global.Path.home)}/.config/orbit`
+    const place = path.join(Global.Path.home, ".config", "orbit").replaceAll("\\", "/")
+    expect(toolPath(spelled, { directory })).toBe(place)
+    expect(toolPath(spelled, { directory, home: true })).toBe("~/.config/orbit")
+    expect(
+      toolInlineInfo(
+        canonicalToolPart("Read", { status: "running", input: { file_path: `${spelled}/orbit.json` }, metadata: {} }),
+        directory,
+      ).title,
+    ).toContain(`${place}/orbit.json`)
   })
 })

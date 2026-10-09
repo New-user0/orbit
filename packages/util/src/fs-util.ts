@@ -265,11 +265,58 @@ export namespace FSUtil {
 
   export function windowsPath(p: string): string {
     if (process.platform !== "win32") return p
-    return p
-      .replace(/^\/([a-zA-Z]):(?:[\\/]|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
-      .replace(/^\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
-      .replace(/^\/cygdrive\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
-      .replace(/^\/mnt\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
+    return (
+      p
+        // A `\\?\` or `\\.\` prefix names the same file as the plain drive or share path, so it is written as that path.
+        .replace(/^[\\/]{2}\?[\\/]UNC[\\/]/i, "\\\\")
+        .replace(/^[\\/]{2}[?.][\\/]([a-zA-Z]):/, (_, drive) => `${drive.toUpperCase()}:`)
+        .replace(/^\/([a-zA-Z]):(?:[\\/]|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
+        .replace(/^\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
+        .replace(/^\/cygdrive\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
+        .replace(/^\/mnt\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
+    )
+  }
+
+  /**
+   * An absolute path as Windows opens it: a part that ends in one period loses it, and the last part loses every trailing
+   * period and space. Bun's own file calls keep them, but a shell, ripgrep and `Bun.write` do not, so `cfg.` is `cfg` and
+   * `.env.` is `.env`. A part of only periods and spaces is left alone. Elsewhere the path is returned as it is.
+   */
+  export function windowsTrim(p: string): string {
+    if (process.platform !== "win32") return p
+    const root = path.parse(p).root
+    const parts = p.slice(root.length).split(/[\\/]/)
+    return (
+      root +
+      parts
+        .map((part, index) => {
+          if (/^[. ]*$/.test(part)) return part
+          if (index === parts.length - 1) return part.replace(/[. ]+$/, "")
+          return part.endsWith(".") && !part.endsWith("..") ? part.slice(0, -1) : part
+        })
+        .join(path.sep)
+    )
+  }
+
+  /**
+   * The place a path in a tool call names: a leading `~`, `~/` or, on Windows, `~\` is `home`, a Git Bash, Cygwin or WSL
+   * drive spelling is that Windows drive, a `\\?\` or `\\.\` prefix is dropped, trailing periods and spaces go as Windows
+   * drops them (`windowsTrim`), and anything else is resolved from `directory`. The tools resolve their paths with it
+   * (FileAccess.resolvePath), and the ACP client, the terminal interface and Mini draw a call's paths with it, so a call
+   * is not shown in one place while it acts in another.
+   */
+  export function resolveFrom(directory: string, input: string, home: string) {
+    const normalized = windowsPath(input)
+    return windowsTrim(
+      path.resolve(
+        directory,
+        normalized === "~"
+          ? home
+          : normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))
+            ? path.join(home, normalized.slice(2))
+            : normalized,
+      ),
+    )
   }
 
   export function overlaps(a: string, b: string) {

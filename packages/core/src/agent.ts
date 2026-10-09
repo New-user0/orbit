@@ -24,6 +24,19 @@ export type Info = Agent.Info
 
 export { Event } from "@orbit/schema/agent"
 
+/**
+ * The folders of Orbit's own that every agent may reach outside the project without a question: shell and tool output,
+ * the temporary folder and the global config folder. They never decide a place that a link in a project that is not
+ * trusted leads out to (`Permission.AssertInput.escaped`): only the person's own rules and approvals do, so that a link
+ * the repository ships into the global config folder is asked about.
+ */
+export const folders = (global: Pick<Global.Interface, "data" | "tmp" | "config">): Info["permissions"] => [
+  { action: "external_directory", resource: SHELL_OUTPUT_GLOB(global.data), effect: "allow" },
+  { action: "external_directory", resource: TOOL_OUTPUT_GLOB(global.data), effect: "allow" },
+  { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" },
+  { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" },
+]
+
 export interface Selection {
   readonly id: ID
   readonly info: Info | undefined
@@ -56,12 +69,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const global = yield* Global.Service
-    const permissions: Info["permissions"] = [
-      { action: "external_directory", resource: SHELL_OUTPUT_GLOB(global.data), effect: "allow" },
-      { action: "external_directory", resource: TOOL_OUTPUT_GLOB(global.data), effect: "allow" },
-      { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" },
-      { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" },
-    ]
+    const permissions = folders(global)
     const state = State.create<Data, Editor>({
       name: "agent",
       initial: () => ({ agents: new Map() }),
