@@ -1340,13 +1340,14 @@ compaction start without the check, and their spend counts at the next one. A su
 token limits of every turn above it before each of its own steps, counting what that turn has spent so far, siblings
 included, so a subagent stops with `limit.cost` or `limit.tokens` instead of overshooting by a whole run; the parent's
 step limit counts only the parent's own responses and never stops a subagent. A response is still priced after it
-arrives, so the overshoot is at most one response. A subagent is limited by the turn that was open when it was
-last prompted, even after that turn ends: a continued subagent belongs to the turn that continues it, not the one that
+arrives, so the overshoot is at most one response. A subagent is limited by the turn that was open when its latest
+prompt was admitted, not when it was delivered, even after that turn ends: a continued subagent belongs to the turn that continues it, not the one that
 created it, and a background subagent that is still running when the turn ends, whether it succeeded, failed or hit the
 limit, stops at the same cost or token limit, counting what the turn had spent. The completion notice of a background
 subagent or a background shell job, like any other synthetic message that no prompt of the user began, wakes the Session
-into a new turn that continues the limits of the turn before it, counted from the prompt that set them, unless a
-prompt of its own began a turn in between. A response is priced after it arrives, so a
+into a new turn that continues the limits of the turn before it, counted from the prompt that set them. A turn that holds a
+prompt of the person's is never such a wake-up, whatever synthetic input (a plan reminder, editor context) was parked in front of it: the
+prompt's own options, or none, apply. A response is priced after it arrives, so a
 turn can also overshoot a cost or token limit by one response.
 
 The window starts at the prompt that set the options. A queued prompt without options, or a prompt sent after the busy

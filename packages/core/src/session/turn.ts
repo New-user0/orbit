@@ -1,6 +1,6 @@
 export * as SessionTurn from "./turn.js"
 
-import { and, asc, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm"
+import { and, desc, eq, gt, gte, inArray, lt, lte, sql } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { DateTime, Effect, Option, Schema } from "effect"
 import { Model } from "@orbit/schema/model"
@@ -211,12 +211,11 @@ const wakeUpOptions = Effect.fnUntraced(function* (
   visible: SQL | undefined,
 ) {
   if (boundary === undefined) return undefined
-  // Only the input that began the turn wakes it: a user prompt first means the turn began with one that carried none.
-  const began = yield* db
-    .select({
-      seq: SessionMessageTable.seq,
-      type: SessionMessageTable.type,
-    })
+  // A user prompt anywhere in the turn is the person's own input, so its options (or none) apply, whatever parked
+  // synthetic input (a plan reminder, editor context) precedes it. Only a turn that holds nothing but synthetic input
+  // is a wake-up.
+  const kinds = yield* db
+    .select({ type: SessionMessageTable.type })
     .from(SessionMessageTable)
     .where(
       and(
@@ -226,11 +225,10 @@ const wakeUpOptions = Effect.fnUntraced(function* (
         gte(SessionMessageTable.seq, boundary),
       ),
     )
-    .orderBy(asc(SessionMessageTable.seq))
-    .limit(1)
-    .get()
+    .groupBy(SessionMessageTable.type)
+    .all()
     .pipe(Effect.orDie)
-  if (began?.type !== "synthetic") return undefined
+  if (kinds.some((row) => row.type === "user") || !kinds.some((row) => row.type === "synthetic")) return undefined
   // The turn that ended before the boundary: the idle marker (or the queued input) itself is not part of it.
   return (yield* current(db, sessionID, { seq: boundary })).options
 })
@@ -368,7 +366,8 @@ export function exceeded(options: Options, spent: Usage, priced: boolean) {
  * ancestor's own responses count toward it, so a parent on its last step would stop the child it just started. The
  * ancestor's usage includes every sibling running beside the child, so parallel subagents share the one budget.
  *
- * Each ancestor's turn is read as it stood when the Session below it was last prompted, which is the prompt that the
+ * Each ancestor's turn is read as it stood when the Session below it was last prompted, by the time that prompt was admitted rather than delivered (a prompt delivered
+after the ancestor's turn ended still belongs to it), which is the prompt that the
  * ancestor's subagent tool admitted: a continued child belongs to the turn that continues it, not the one that created
  * it. A background subagent outlives that turn, and the idle marker that closes it must not lift the limit the work was
  * started under, because its latest prompt was admitted inside it.
@@ -385,16 +384,29 @@ export const ancestorLimit = Effect.fn("SessionTurn.ancestorLimit")(function* (
       .where(eq(SessionTable.id, id))
       .get()
       .pipe(Effect.orDie)
-  // The latest user prompt of the Session, delivered or still waiting in its inbox: the limit is checked before a
-  // continuation prompt is delivered.
+  // When the latest user prompt of the Session was admitted, delivered or still waiting in its inbox: the limit is
+  // checked before a continuation prompt is delivered. The enqueue event survives delivery, so a prompt that reaches
+  // the Session after its parent's turn ended is still bound to the turn that admitted it. A Session without enqueue
+  // events (an import or a fork) falls back to the time its messages were written.
+  const enqueued = sql`SELECT created AS time FROM event
+    WHERE type = ${Event.versionedType(SessionEvent.InboxEnqueued.type, SessionEvent.InboxEnqueued.durable.version)}
+      AND json_extract(data, '$.item.type') = 'user'
+      AND NOT EXISTS (
+        SELECT 1 FROM event AS cancelled
+        WHERE cancelled.type = ${Event.versionedType(SessionEvent.InboxCancelled.type, SessionEvent.InboxCancelled.durable.version)}
+          AND cancelled.aggregate_id = event.aggregate_id
+          AND json_extract(cancelled.data, '$.inboxID') = json_extract(event.data, '$.inboxID'))`
   const prompted = (id: SessionSchema.ID) =>
     db
       .get<{ time: number | null }>(
-        sql`SELECT max(time) AS time FROM (
-          SELECT time_created AS time FROM session_message WHERE session_id = ${id} AND type = 'user'
-          UNION ALL
-          SELECT time_created AS time FROM session_inbox WHERE session_id = ${id} AND type = 'user'
-        )`,
+        sql`SELECT coalesce(
+          (SELECT max(time) FROM (${enqueued} AND aggregate_id = ${id})),
+          (SELECT max(time) FROM (
+            SELECT time_created AS time FROM session_message WHERE session_id = ${id} AND type = 'user'
+            UNION ALL
+            SELECT time_created AS time FROM session_inbox WHERE session_id = ${id} AND type = 'user'
+          ))
+        ) AS time`,
       )
       .pipe(Effect.orDie)
   // A session tree is acyclic, but a bad row must not loop here.

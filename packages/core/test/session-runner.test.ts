@@ -5756,17 +5756,11 @@ describe("SessionRunnerLLM", () => {
         yield* TestClock.adjust("1 second")
         // The subagent tool admitted this prompt inside the turn; the parent's terminal comes after it.
         yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
-        if (row.terminal) {
-          yield* row.terminal(s)
-          // The child runs while the parent waits, so its prompt is delivered before the parent's idle marker. The test
-          // delivers it afterwards, so place the marker after that delivery.
-          yield* s.db
-            .update(SessionMessageTable)
-            .set({ time_created: 100_000 })
-            .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "idle")))
-            .run()
-            .pipe(Effect.orDie)
-        }
+        // Natural order: the parent's terminal comes after the admission, and the child's prompt is delivered after the
+        // terminal, as when a response crosses the limit and starts a background subagent in the same step.
+        yield* TestClock.adjust("1 second")
+        if (row.terminal) yield* row.terminal(s)
+        yield* TestClock.adjust("1 second")
         yield* s.llm.push(
           ...Array.from({ length: 5 }, () => toolStep(spend)),
           TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
@@ -5819,6 +5813,37 @@ describe("SessionRunnerLLM", () => {
 
         expect(s.requests.length - 2).toBe(row.limited ? 1 : 6)
         expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.limited ? "limit.cost" : "")
+      })
+
+    // Synthetic input the person's client parks before their prompt (resume: false) does not make the person's own
+    // unlimited turn a wake-up of the limited turn before it.
+    for (const parked of [
+      { name: "a plan reminder", metadata: { notice: "plan" } },
+      { name: "editor context", metadata: { source: "editor" } },
+      { name: "embedded context", metadata: { source: "acp" } },
+      { name: "a user shell", metadata: { source: "shell" } },
+      { name: "no metadata", metadata: undefined },
+    ] as const)
+      scenario(`runs the person's unlimited prompt behind ${parked.name} parked after a limited turn`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+        yield* s.session.synthetic({ sessionID, text: "Parked", metadata: parked.metadata, resume: false })
+        yield* s.session.prompt({ sessionID, text: "Unlimited", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("next-done")),
+        )
+
+        const exit = yield* s.session.resume(sessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(6)
+        expect(Exit.isSuccess(exit)).toBe(true)
       })
 
     // A child that the subagent tool continues belongs to the turn that continues it, not to the one that created it.
