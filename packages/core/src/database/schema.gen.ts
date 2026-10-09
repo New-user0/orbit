@@ -144,6 +144,14 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_admission\` (
+          \`id\` text PRIMARY KEY,
+          \`session_id\` text NOT NULL,
+          \`time_created\` integer NOT NULL,
+          CONSTRAINT \`fk_session_admission_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`session_inbox\` (
           \`id\` text PRIMARY KEY,
           \`session_id\` text NOT NULL,
@@ -221,6 +229,23 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
         );
       `)
       yield* tx.run(`
+        CREATE TABLE \`session_usage\` (
+          \`session_id\` text NOT NULL,
+          \`seq\` integer NOT NULL,
+          \`time_created\` integer NOT NULL,
+          \`kind\` text NOT NULL,
+          \`source\` text NOT NULL,
+          \`cost\` real NOT NULL,
+          \`tokens_input\` integer NOT NULL,
+          \`tokens_output\` integer NOT NULL,
+          \`tokens_reasoning\` integer NOT NULL,
+          \`tokens_cache_read\` integer NOT NULL,
+          \`tokens_cache_write\` integer NOT NULL,
+          CONSTRAINT \`session_usage_pk\` PRIMARY KEY(\`session_id\`, \`seq\`),
+          CONSTRAINT \`fk_session_usage_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
+        );
+      `)
+      yield* tx.run(`
         CREATE TABLE \`workspace\` (
           \`id\` text PRIMARY KEY,
           \`provider\` text NOT NULL,
@@ -243,6 +268,9 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
         `CREATE UNIQUE INDEX \`permission_project_action_resource_idx\` ON \`permission\` (\`project_id\`,\`action\`,\`resource\`);`,
+      )
+      yield* tx.run(
+        `CREATE INDEX \`session_admission_session_idx\` ON \`session_admission\` (\`session_id\`,\`time_created\`);`,
       )
       yield* tx.run(
         `CREATE INDEX \`session_inbox_session_delivery_seq_idx\` ON \`session_inbox\` (\`session_id\`,\`delivery\`,\`enqueued_seq\`);`,
@@ -275,6 +303,7 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
       yield* tx.run(
         `CREATE INDEX \`session_v2_time_suspended_idx\` ON \`session_v2\` (\`time_suspended\`) WHERE "session_v2"."time_suspended" is not null;`,
       )
+      yield* tx.run(`CREATE INDEX \`session_usage_time_idx\` ON \`session_usage\` (\`time_created\`);`)
     })
   },
 }

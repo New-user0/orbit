@@ -5,7 +5,8 @@ import path from "node:path"
 import { decide, decisionText, decodeNodes, decodeRuns, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
 
 // `orb` from source behind a wrapper script. orb reads the working directory from PWD, which the wrapper's own `cd`
-// would change, so it hands on the directory it was called from.
+// would change, so it hands on the directory it was called from. `orb flow run` runs a workflow's code only in a trusted
+// folder, so the wrapper trusts the test repository the way the CLI tests' environment does.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-runs-"))
 const cli = path.join(import.meta.dir, "..", "..", "cli")
 const executable = path.join(root, "orb")
@@ -15,6 +16,7 @@ await Bun.write(
     "#!/bin/sh",
     `export HOME="${root}" XDG_STATE_HOME="${root}/state" XDG_DATA_HOME="${root}/data"`,
     `export XDG_CONFIG_HOME="${root}/config" XDG_CACHE_HOME="${root}/cache" ORBIT_DISABLE_FILEWATCHER=true`,
+    "export ORBIT_TRUST_PROJECT=1",
     `cd "${cli}" && PWD="$OLDPWD" exec "${process.execPath}" run src/index.ts "$@"`,
   ].join("\n"),
 )

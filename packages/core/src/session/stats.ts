@@ -1,18 +1,15 @@
 export * as SessionStats from "./stats.js"
 
-import { DateTime, Effect, Option, Schema } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { and, eq, gte, inArray, lt, or, sql } from "drizzle-orm"
 import { Model } from "@orbit/schema/model"
 import { Money } from "@orbit/schema/money"
 import { Project } from "@orbit/schema/project"
 import { Provider } from "@orbit/schema/provider"
-import { Event } from "@orbit/schema/event"
-import { SessionEvent } from "@orbit/schema/session-event"
 import { ToolMode } from "@orbit/schema/session-stats"
 import { TokenUsage } from "@orbit/schema/token-usage"
 import { Database } from "../database/database.js"
-import { EventTable } from "../event/sql.js"
-import { SessionMessageTable, SessionTable } from "./sql.js"
+import { SessionMessageTable, SessionTable, SessionUsageTable } from "./sql.js"
 
 type Input = {
   readonly from?: number
@@ -74,8 +71,6 @@ type ToolAggregate = {
   durations: number[]
 }
 
-// Both usage events carry these two fields; the rest of each payload is not needed here.
-const decodeUsage = Schema.decodeUnknownOption(Schema.Struct({ cost: Money.USD, tokens: TokenUsage.Info }))
 const Window = 31 * 24 * 60 * 60 * 1_000
 
 export class InvalidRangeError extends Schema.TaggedError<InvalidRangeError>()("SessionStats.InvalidRangeError", {
@@ -286,44 +281,33 @@ export const get = Effect.fn("SessionStats.get")(function* (input: Input = {}) {
     .where(input.projectID === undefined ? undefined : eq(SessionTable.project_id, input.projectID))
     .all()
     .pipe(Effect.orDie)
-  const events = (yield* Effect.forEach(
+  // Read from the projected table: the event log is empty unless the Bus persists, which CLI servers do not.
+  const recorded = (yield* Effect.forEach(
     batches(ids.map((row) => row.id)),
     (batch) =>
       db
-        .select({ data: EventTable.data })
-        .from(EventTable)
+        .select()
+        .from(SessionUsageTable)
         .where(
           and(
-            inArray(EventTable.aggregate_id, batch),
-            or(
-              and(
-                eq(
-                  EventTable.type,
-                  Event.versionedType(SessionEvent.UsageRecorded.type, SessionEvent.UsageRecorded.durable.version),
-                ),
-                sql`json_extract(${EventTable.data}, '$.source') = 'compaction'`,
-              ),
-              eq(
-                EventTable.type,
-                Event.versionedType(
-                  SessionEvent.SideQueryRecorded.type,
-                  SessionEvent.SideQueryRecorded.durable.version,
-                ),
-              ),
-            ),
-            gte(EventTable.created, from),
-            lt(EventTable.created, to),
+            inArray(SessionUsageTable.session_id, batch),
+            or(eq(SessionUsageTable.kind, "side_query"), eq(SessionUsageTable.source, "compaction")),
+            gte(SessionUsageTable.time_created, from),
+            lt(SessionUsageTable.time_created, to),
           ),
         )
         .all()
         .pipe(Effect.orDie),
     { concurrency: 4 },
   )).flat()
-  events.forEach((row) => {
-    const decoded = decodeUsage(row.data)
-    if (Option.isNone(decoded)) return
-    addTokens(totals.tokens, decoded.value.tokens)
-    totals.cost += decoded.value.cost
+  recorded.forEach((row) => {
+    addTokens(totals.tokens, {
+      input: row.tokens_input,
+      output: row.tokens_output,
+      reasoning: row.tokens_reasoning,
+      cache: { read: row.tokens_cache_read, write: row.tokens_cache_write },
+    })
+    totals.cost += row.cost
   })
 
   const days = [...activity.entries()].sort(([a], [b]) => a.localeCompare(b))
@@ -370,7 +354,7 @@ function windows(from: number, to: number) {
   }))
 }
 
-function batches(ids: string[]) {
+function batches<T>(ids: T[]) {
   return Array.from({ length: Math.ceil(ids.length / 500) }, (_, index) => ids.slice(index * 500, (index + 1) * 500))
 }
 

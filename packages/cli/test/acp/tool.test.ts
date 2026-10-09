@@ -1,5 +1,6 @@
 import { resolve } from "node:path"
 import { describe, expect, test } from "bun:test"
+import { Global } from "@orbit/util/global"
 import {
   completedToolUpdate,
   errorToolUpdate,
@@ -40,23 +41,47 @@ describe("acp tools", () => {
     })
   })
 
+  // The shell tools declare `workdir`; a `cwd` or `cmd` the model adds to its input neither moves the command nor names it.
+  test.each(["Bash", "PowerShell"])("a %s call shows the folder it runs in, not a cwd the model added", (name) => {
+    const input = { command: "sh setup.sh", cwd: "/decoy", cmd: "rm -rf /" }
+    expect(toLocations(name, input, "/workspace")).toEqual([{ path: "/workspace" }])
+    expect(pendingToolCall({ toolCallId: "call", toolName: name, state: { input }, cwd: "/workspace" })).toMatchObject({
+      title: "sh setup.sh",
+      locations: [{ path: "/workspace" }],
+      rawInput: { command: "sh setup.sh", cwd: "/workspace", cmd: "rm -rf /" },
+    })
+    expect(
+      pendingToolCall({
+        toolCallId: "call",
+        toolName: name,
+        state: { input: { ...input, workdir: "sub" } },
+        cwd: "/workspace",
+      }).rawInput,
+    ).toEqual({ command: "sh setup.sh", workdir: "sub", cmd: "rm -rf /" })
+  })
+
+  // An absolute path is shown as the tools resolve it, which on Windows gives a rooted path the session folder's drive.
   test("extracts file locations from tool input", () => {
-    expect(toLocations("read", { path: "/tmp/a.ts" }, "/workspace")).toEqual([{ path: "/tmp/a.ts" }])
+    expect(toLocations("read", { path: "/tmp/a.ts" }, "/workspace")).toEqual([{ path: resolve("/tmp/a.ts") }])
     expect(toLocations("edit", { path: "/tmp/b.ts", oldString: "a", newString: "b" }, "/workspace")).toEqual([
-      { path: "/tmp/b.ts" },
+      { path: resolve("/tmp/b.ts") },
     ])
-    expect(toLocations("write", { path: "/tmp/c.ts", content: "c" }, "/workspace")).toEqual([{ path: "/tmp/c.ts" }])
-    expect(toLocations("read", { filePath: "/tmp/v1.ts" }, "/workspace")).toEqual([{ path: "/tmp/v1.ts" }])
+    expect(toLocations("write", { path: "/tmp/c.ts", content: "c" }, "/workspace")).toEqual([
+      { path: resolve("/tmp/c.ts") },
+    ])
+    expect(toLocations("read", { filePath: "/tmp/v1.ts" }, "/workspace")).toEqual([{ path: resolve("/tmp/v1.ts") }])
     expect(toLocations("edit", { path: "src/b.ts" }, "/workspace")).toEqual([
       { path: resolve("/workspace", "src/b.ts") },
     ])
-    expect(toLocations("grep", { path: "/repo/src" }, "/workspace")).toEqual([{ path: "/repo/src" }])
-    expect(toLocations("glob", { path: "/repo/test" }, "/workspace")).toEqual([{ path: "/repo/test" }])
+    expect(toLocations("grep", { path: "/repo/src" }, "/workspace")).toEqual([{ path: resolve("/repo/src") }])
+    expect(toLocations("glob", { path: "/repo/test" }, "/workspace")).toEqual([{ path: resolve("/repo/test") }])
     expect(toLocations("grep", { pattern: "x", path: "src" }, "/workspace")).toEqual([
       { path: resolve("/workspace", "src") },
     ])
     expect(toLocations("glob", { pattern: "*.ts" }, "/workspace")).toEqual([])
-    expect(toLocations("context7_get_library_docs", { path: "/docs" }, "/workspace")).toEqual([{ path: "/docs" }])
+    expect(toLocations("context7_get_library_docs", { path: "/docs" }, "/workspace")).toEqual([
+      { path: resolve("/docs") },
+    ])
     expect(
       toLocations("external_directory", { filepath: "/tmp/outside/a.ts", parentDir: "/tmp/outside" }, "/workspace"),
     ).toEqual([{ path: "/tmp/outside/a.ts" }])
@@ -64,10 +89,77 @@ describe("acp tools", () => {
     expect(toLocations("bash", { command: "pwd", workdir: "subdir" }, "/workspace")).toEqual([
       { path: resolve("/workspace", "subdir") },
     ])
-    expect(toLocations("bash", { command: "pwd", workdir: "/abs/dir" }, "/workspace")).toEqual([{ path: "/abs/dir" }])
-    expect(toLocations("read", { path: "/tmp/missing-file-path.ts" }, "/workspace")).toEqual([
-      { path: "/tmp/missing-file-path.ts" },
+    expect(toLocations("bash", { command: "pwd", workdir: "/abs/dir" }, "/workspace")).toEqual([
+      { path: resolve("/abs/dir") },
     ])
+    expect(toLocations("read", { path: "/tmp/missing-file-path.ts" }, "/workspace")).toEqual([
+      { path: resolve("/tmp/missing-file-path.ts") },
+    ])
+  })
+
+  // Every spelling of a path that the tools accept, with the place they act on (FileAccess.resolvePath, pinned by
+  // packages/core/test/file-access-path.test.ts). A tool call is shown at that place: a leading `~` is the home folder,
+  // not a folder named `~` in the project, and a Git Bash drive spelling is the Windows drive.
+  describe("shows each spelling of a path at the place the tool acts on", () => {
+    const home = Global.Path.home
+    const cwd = resolve("/workspace")
+    const windows = process.platform === "win32"
+    const spellings: ReadonlyArray<readonly [string, string]> = [
+      ["~", home],
+      ["~/config", resolve(home, "config")],
+      ["~\\config", windows ? resolve(home, "config") : resolve(cwd, "~\\config")],
+      ["~/../outside", resolve(home, "..", "outside")],
+      ["~draft", resolve(cwd, "~draft")],
+      ["/c/Users/someone/config", windows ? "C:\\Users\\someone\\config" : "/c/Users/someone/config"],
+      ["/C:/Users/someone/config", windows ? "C:\\Users\\someone\\config" : "/C:/Users/someone/config"],
+      ["/cygdrive/c/config", windows ? "C:\\config" : "/cygdrive/c/config"],
+      ["/mnt/c/config", windows ? "C:\\config" : "/mnt/c/config"],
+      ["sub/config", resolve(cwd, "sub", "config")],
+      ["../config", resolve(cwd, "..", "config")],
+      ["/workspace/src/../../etc/config", resolve("/etc/config")],
+      [resolve("/elsewhere/config"), resolve("/elsewhere/config")],
+    ]
+    const calls: ReadonlyArray<readonly [string, (value: string) => Record<string, unknown>]> = [
+      ["Bash", (value) => ({ command: "mv orbit.json orbit.json.bak", workdir: value })],
+      ["PowerShell", (value) => ({ command: "Move-Item orbit.json orbit.json.bak", workdir: value })],
+      ["Grep", (value) => ({ pattern: "apiKey", path: value })],
+      ["Glob", (value) => ({ pattern: "*.json", path: value })],
+      ["Read", (value) => ({ file_path: value })],
+      ["Write", (value) => ({ file_path: value, content: "{}" })],
+      ["Edit", (value) => ({ file_path: value, old_string: "a", new_string: "b" })],
+      ["Patch", (value) => ({ patchText: `*** Begin Patch\n*** Add File: ${value}\n+x\n*** End Patch` })],
+    ]
+    for (const [tool, input] of calls)
+      test.each(spellings)(`${tool} %s`, (value, place) => {
+        const state = { input: input(value) }
+        expect(toLocations(tool, state.input, cwd)).toEqual([{ path: place }])
+        expect(pendingToolCall({ toolCallId: "call", toolName: tool, state, cwd }).locations).toEqual([{ path: place }])
+        expect(runningToolUpdate({ toolCallId: "call", toolName: tool, state, cwd }).locations).toEqual([
+          { path: place },
+        ])
+        const done = { toolCallId: "call", toolName: tool, input: state.input, content: [], cwd }
+        expect(completedToolUpdate(done).locations).toEqual([{ path: place }])
+        expect(errorToolUpdate({ ...done, error: "failed" }).locations).toEqual([{ path: place }])
+      })
+
+    // Glob searches the session's folder for these, and Bash runs there for an empty `workdir`; neither is a folder.
+    test("a Glob path spelled undefined or null and an empty workdir name no other folder", () => {
+      expect(toLocations("Glob", { pattern: "*", path: "undefined" }, cwd)).toEqual([])
+      expect(toLocations("Glob", { pattern: "*", path: "null" }, cwd)).toEqual([])
+      expect(toLocations("Bash", { command: "ls", workdir: "" }, cwd)).toEqual([{ path: cwd }])
+    })
+
+    test.each(spellings)("the diff of a completed Edit of %s", (value, place) => {
+      expect(
+        completedToolUpdate({
+          toolCallId: "call",
+          toolName: "Edit",
+          input: { file_path: value, old_string: "a", new_string: "b" },
+          content: [],
+          cwd,
+        }).content,
+      ).toEqual([{ type: "diff", path: place, oldText: "a", newText: "b" }])
+    })
   })
 
   test("extracts patch locations from every hunk in the patch body", () => {
@@ -94,7 +186,7 @@ describe("acp tools", () => {
 
     expect(toLocations("patch", { patchText }, "/workspace")).toEqual([
       { path: resolve("/workspace", "src/new.ts") },
-      { path: "/abs/old.ts" },
+      { path: resolve("/abs/old.ts") },
       { path: resolve("/workspace", "src/moved.ts") },
       { path: resolve("/workspace", "src/same.ts") },
       { path: resolve("/workspace", "src/gone.ts") },
@@ -169,7 +261,7 @@ describe("acp tools", () => {
       },
       {
         type: "diff",
-        path: "/tmp/file.ts",
+        path: resolve("/tmp/file.ts"),
         oldText: "before",
         newText: "after",
       },
@@ -260,7 +352,7 @@ describe("acp tools", () => {
       toolCallId: "tool-1",
       status: "pending",
       kind: "edit",
-      locations: [{ path: "/tmp/file.ts" }],
+      locations: [{ path: resolve("/tmp/file.ts") }],
       rawInput: {
         path: "/tmp/file.ts",
         oldString: "before",
@@ -284,7 +376,7 @@ describe("acp tools", () => {
     ).toEqual({
       toolCallId: "tool-1",
       status: "completed",
-      locations: [{ path: "/tmp/file.ts" }],
+      locations: [{ path: resolve("/tmp/file.ts") }],
       content: [
         {
           type: "content",
@@ -292,7 +384,7 @@ describe("acp tools", () => {
         },
         {
           type: "diff",
-          path: "/tmp/file.ts",
+          path: resolve("/tmp/file.ts"),
           oldText: "before",
           newText: "after",
         },
@@ -315,7 +407,7 @@ describe("acp tools", () => {
     ).toMatchObject({
       toolCallId: "call",
       status: "in_progress",
-      locations: [{ path: "/tmp/a" }],
+      locations: [{ path: resolve("/tmp/a") }],
       content: [{ type: "content", content: { type: "text", text: "done" } }],
     })
   })
@@ -392,7 +484,7 @@ describe("acp tools", () => {
       status: "failed",
       kind: "read",
       title: "read",
-      locations: [{ path: "/tmp/a" }],
+      locations: [{ path: resolve("/tmp/a") }],
       rawInput: { path: "/tmp/a" },
       content: [
         { type: "content", content: { type: "text", text: "partial output" } },

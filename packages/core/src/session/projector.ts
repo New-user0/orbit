@@ -14,7 +14,13 @@ import { SessionMessageUpdater } from "./message-updater.js"
 import { SessionInbox } from "./inbox.js"
 import { Workspace } from "@orbit/schema/workspace"
 import { InstructionState } from "./instruction-state.js"
-import { SessionInboxTable, SessionMessageTable, SessionTable } from "./sql.js"
+import {
+  SessionAdmissionTable,
+  SessionInboxTable,
+  SessionMessageTable,
+  SessionTable,
+  SessionUsageTable,
+} from "./sql.js"
 import { InstructionEntry } from "./instruction-entry.js"
 import { Slug } from "../util/slug.js"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -71,6 +77,42 @@ function applyUsage(db: DatabaseService, sessionID: SessionSchema.ID, value: Usa
     .run()
     .pipe(Effect.orDie)
 }
+
+// The limit inputs live in this table, not in the event log, which only a persisting Bus keeps.
+// A record published after its Session was deleted (a title or side query that finishes late) is dropped quietly, as the
+// session totals' UPDATE does: the row has a foreign key to the Session.
+const recordUsage = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  event: { readonly durable: { readonly seq: number }; readonly created: number },
+  kind: "usage" | "side_query",
+  value: Usage & { readonly sessionID: SessionSchema.ID; readonly source: string },
+) {
+  const session = yield* db
+    .select({ id: SessionTable.id })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, value.sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session) return
+  yield* db
+    .insert(SessionUsageTable)
+    .values({
+      session_id: value.sessionID,
+      seq: event.durable.seq,
+      time_created: event.created,
+      kind,
+      source: value.source,
+      cost: value.cost,
+      tokens_input: value.tokens.input,
+      tokens_output: value.tokens.output,
+      tokens_reasoning: value.tokens.reasoning,
+      tokens_cache_read: value.tokens.cache.read,
+      tokens_cache_write: value.tokens.cache.write,
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+})
 
 const publishSessionUsage = Effect.fn("SessionProjector.publishUsage")(function* (
   db: DatabaseService,
@@ -623,8 +665,18 @@ const layer = Layer.effectDiscard(
         .pipe(Effect.orDie)
     })
     yield* bus.project(SessionEvent.MessageContentUpdated, (event) => run(db, event))
-    yield* bus.project(SessionEvent.UsageRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
-    yield* bus.project(SessionEvent.SideQueryRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
+    yield* bus.project(SessionEvent.UsageRecorded, (event) =>
+      Effect.gen(function* () {
+        yield* applyUsage(db, event.data.sessionID, event.data)
+        yield* recordUsage(db, event, "usage", event.data)
+      }),
+    )
+    yield* bus.project(SessionEvent.SideQueryRecorded, (event) =>
+      Effect.gen(function* () {
+        yield* applyUsage(db, event.data.sessionID, event.data)
+        yield* recordUsage(db, event, "side_query", { ...event.data, source: event.data.purpose })
+      }),
+    )
     yield* bus.project(SessionEvent.Forked, (event) => projectFork(db, event))
     yield* bus.project(SessionEvent.InboxDelivered, (event) =>
       Effect.gen(function* () {
@@ -671,6 +723,13 @@ const layer = Layer.effectDiscard(
           item: event.data.item,
           timeCreated: event.created,
         })
+        if (event.data.item.type === "user")
+          yield* db
+            .insert(SessionAdmissionTable)
+            .values({ id: event.data.inboxID, session_id: event.data.sessionID, time_created: event.created })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
         yield* db
           .update(SessionTable)
           .set({ time_updated: event.created })
@@ -680,9 +739,16 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* bus.project(SessionEvent.InboxCancelled, (event) =>
-      SessionInbox.projectCancelled(db, {
-        id: event.data.inboxID,
-        sessionID: event.data.sessionID,
+      Effect.gen(function* () {
+        yield* SessionInbox.projectCancelled(db, {
+          id: event.data.inboxID,
+          sessionID: event.data.sessionID,
+        })
+        yield* db
+          .delete(SessionAdmissionTable)
+          .where(eq(SessionAdmissionTable.id, event.data.inboxID))
+          .run()
+          .pipe(Effect.orDie)
       }),
     )
     yield* bus.project(SessionEvent.InboxDeliveryChanged, (event) =>

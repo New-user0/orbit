@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import os from "node:os"
+import path from "node:path"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
@@ -114,7 +116,8 @@ describe("run permission shared", () => {
         }),
       ),
     ).toMatchObject({
-      title: "Access external directory /tmp/work",
+      // Shown where the tools would act on it: on Windows a path that starts with `/` is on the current drive.
+      title: `Access external directory ${path.resolve("/tmp/work").replaceAll("\\", "/")}`,
       lines: ["- /tmp/work/**/*.ts", "- /tmp/work/**/*.tsx"],
     })
 
@@ -237,4 +240,70 @@ describe("mini permission with a decoy old field name", () => {
       expect(JSON.stringify(info)).not.toContain("README.md")
     }),
   )
+})
+
+describe("mini permission for a patch that changes several files", () => {
+  test("names every file and shows every diff", () => {
+    const files = [
+      { file: "README.md", patch: "--- README.md\n+typo fix" },
+      { file: ".orbit/config.json", patch: "--- .orbit/config.json\n+SECOND_FILE_CHANGE" },
+    ]
+    const info = permissionInfo(
+      req({
+        action: "Edit",
+        resources: files.map((item) => item.file),
+        metadata: { files, diff: files.map((item) => item.patch).join("\n") },
+      }),
+    )
+    expect(info.title).toContain("README.md")
+    expect(info.title).toContain(".orbit/config.json")
+    expect(info.diffs?.map((item) => item.diff)).toEqual(files.map((item) => item.patch))
+    expect(info.diff).toBeUndefined()
+    const mono = permissionInfo(
+      req({
+        action: "Edit",
+        resources: files.map((item) => item.file),
+        metadata: { files, diff: files.map((item) => item.patch).join("\n") },
+      }),
+      undefined,
+      true,
+    )
+    expect(mono.lines.join("\n")).toContain("+typo fix")
+    expect(mono.lines.join("\n")).toContain("SECOND_FILE_CHANGE")
+  })
+})
+
+// The tools read `~/../<home folder name>/...` from the home folder, while Mini's path formatter would read the caller's
+// spelling from the project folder and show a file of the project. The request's resources name the file the server
+// resolved, which is the one the tool acts on.
+describe("mini permission names the file its request resolved", () => {
+  const home = os.homedir()
+  const file = path.join(home, ".config", "orbit", "orbit.json").replaceAll("\\", "/")
+  const spelled = `~/../${path.basename(home)}/.config/orbit/orbit.json`
+  const patch = '--- orbit.json\n+++ orbit.json\n@@ -1,1 +1,1 @@\n-{}\n+{ "permissions": [] }\n'
+  const rows: ReadonlyArray<{ tool: string; action: string; input: Record<string, string | number>; diff: boolean }> = [
+    { tool: "Read", action: "Read", input: { file_path: spelled }, diff: false },
+    { tool: "LSP", action: "Read", input: { action: "hover", path: spelled, line: 1, character: 1 }, diff: false },
+    {
+      tool: "Edit",
+      action: "Edit",
+      input: { file_path: spelled, old_string: "{}", new_string: '{ "permissions": [] }' },
+      diff: true,
+    },
+    { tool: "Write", action: "Edit", input: { file_path: spelled, content: "{}" }, diff: true },
+  ]
+  for (const row of rows)
+    test(row.tool, () => {
+      const info = permissionInfo(
+        req({
+          action: row.action,
+          resources: [file],
+          metadata: row.diff ? { files: [{ file, patch }] } : {},
+          tool: canonicalToolPart(row.tool, { status: "running", input: row.input, metadata: {} }),
+        }),
+        path.resolve("/project"),
+      )
+      expect(info.title).toBe(`${row.action} ~/.config/orbit/orbit.json`)
+      expect([info.title, ...info.lines].join("\n")).not.toContain(`${path.basename(home)}/.config`)
+    })
 })

@@ -138,13 +138,31 @@ describe("ShellParse", () => {
     expect(bash.directories).toEqual([path.join(os.homedir(), "src")])
 
     const backslash = await Effect.runPromise(ShellParse.scan("cd '~\\src'", "/bin/bash", "/workspace"))
-    expect(backslash.directories).toEqual(
-      process.platform === "win32" ? [path.join(os.homedir(), "src")] : ["~\\src"],
-    )
+    expect(backslash.directories).toEqual(process.platform === "win32" ? [path.join(os.homedir(), "src")] : ["~\\src"])
 
     const powershell = await Effect.runPromise(
       ShellParse.scan('Set-Location "$PWD/src"; Set-Location $PSHOME', "/usr/local/bin/pwsh", "/workspace"),
     )
     expect(powershell.directories).toEqual(["/workspace/src", "/usr/local/bin"])
+  })
+
+  // The plain words a command takes, which a check of links that lead out of an untrusted project resolves. A word with an
+  // expansion has no value before the command runs and is left out; that is the shell analysis of a later milestone.
+  test.each([
+    ["cat cfg/orbit.json", "/bin/bash", ["cfg/orbit.json"]],
+    ["mv cfg/AGENTS.md cfg/AGENTS.md.bak", "/bin/bash", ["cfg/AGENTS.md", "cfg/AGENTS.md.bak"]],
+    ['cat "cfg/orbit.json" \'cfg\'/x c"f"g/y', "/bin/bash", ["cfg/orbit.json", "cfg/x", "cfg/y"]],
+    ["echo hi > cfg/AGENTS.md", "/bin/bash", ["hi", "cfg/AGENTS.md"]],
+    ["git --git-dir=cfg/repo status -s", "/bin/bash", ["cfg/repo", "status"]],
+    ["FOO=1 tar -C cfg -cf out.tar .", "/bin/bash", ["cfg", "out.tar", "."]],
+    // A substitution's own command is a command with words of its own.
+    ["cat $HOME/x `echo cfg`/y $(echo cfg)/z", "/bin/bash", ["cfg", "cfg"]],
+    ["cd cfg && ls", "/bin/bash", ["cfg"]],
+    ["Get-Content cfg/orbit.json", "pwsh", ["cfg/orbit.json"]],
+    ["Move-Item -Path cfg/AGENTS.md -Destination 'cfg/x.bak'", "pwsh", ["cfg/AGENTS.md", "cfg/x.bak"]],
+    ["echo hi > cfg/AGENTS.md", "pwsh", ["hi", "cfg/AGENTS.md"]],
+    ["Get-Content $env:USERPROFILE/x", "pwsh", []],
+  ] as const)("names the plain words of %s in %s", async (command, shell, expected) => {
+    expect(await Effect.runPromise(ShellParse.operands(command, shell))).toEqual([...expected])
   })
 })

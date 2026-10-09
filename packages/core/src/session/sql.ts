@@ -144,6 +144,51 @@ export const SessionInboxTable = sqliteTable(
   ],
 )
 
+/**
+ * What a Session spent on compaction, titles and other side queries, kept by the projector so that turn limits and
+ * stats do not depend on the optional event log (`Bus` persists events only when asked to, which CLI servers do not).
+ */
+export const SessionUsageTable = sqliteTable(
+  "session_usage",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    seq: integer().notNull(),
+    time_created: integer().notNull(),
+    kind: text().$type<"usage" | "side_query">().notNull(),
+    source: text().notNull(),
+    cost: real().notNull(),
+    tokens_input: integer().notNull(),
+    tokens_output: integer().notNull(),
+    tokens_reasoning: integer().notNull(),
+    tokens_cache_read: integer().notNull(),
+    tokens_cache_write: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.seq] }),
+    index("session_usage_time_idx").on(table.time_created),
+  ],
+)
+
+/**
+ * When each user input was admitted, kept after the input leaves the inbox: a turn limit binds a subagent to the turn
+ * that admitted its prompt, and the delivered message only records the delivery time. Cancelled inputs are removed.
+ */
+export const SessionAdmissionTable = sqliteTable(
+  "session_admission",
+  {
+    id: text().$type<SessionMessage.ID>().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    time_created: integer().notNull(),
+  },
+  (table) => [index("session_admission_session_idx").on(table.session_id, table.time_created)],
+)
+
 export const InstructionEntryTable = sqliteTable(
   "instruction_entry",
   {

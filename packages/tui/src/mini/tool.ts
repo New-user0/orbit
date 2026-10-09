@@ -15,6 +15,7 @@ import os from "os"
 import path from "path"
 import stripAnsi from "strip-ansi"
 import type { SessionMessageAssistantTool } from "@orbit/client/promise"
+import { Global } from "@orbit/util/global"
 import { LANGUAGE_EXTENSIONS } from "../util/filetype"
 import { Locale } from "../util/locale"
 import {
@@ -324,6 +325,8 @@ export function toolPath(input?: string, opts: { home?: boolean; directory?: str
   return formatPath(input, {
     base: opts.directory ?? process.cwd(),
     home: opts.home ? os.homedir() : undefined,
+    // The home folder the tools read a leading `~` as, whether or not the row abbreviates it.
+    tilde: Global.Path.home,
     forwardSlashes: true,
   })
 }

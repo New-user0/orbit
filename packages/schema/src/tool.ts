@@ -207,6 +207,11 @@ export const ErrorCode = {
   FileUnread: "file.unread",
   /** The file changed since the session last read it. */
   FileStale: "file.stale",
+  /**
+   * On Windows, the path names an NTFS data stream (`name::$DATA`, `name:stream`), or an 8.3 short name whose long name
+   * cannot be found: spellings that a rule written for the file would not see.
+   */
+  FileSpelling: "file.spelling",
   /** An edit that replaces a text with itself. */
   EditNoChange: "edit.no-change",
   /** An edit that looks for nothing. */

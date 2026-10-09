@@ -139,12 +139,22 @@ export const Plugin = {
           kind: "directory",
         }),
       )
-      yield* access.authorizeExternal([target, ...directories], context)
+      // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
+      // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
+      const operands = yield* access.escaped(
+        (yield* ShellParse.operands(invocation.command, invocation.shell)).map((operand) =>
+          FileAccess.resolvePath(target.absolute, operand),
+        ),
+      )
+      yield* access.authorizeExternal([target, ...directories, ...operands], context)
       if (parsed.commands.length > 0)
         yield* permission.assert({
           action: name,
           resources: parsed.commands.map((command) => command.resource),
           save: parsed.commands.map((command) => command.save),
+          // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling, and
+          // the real folder when a link in an untrusted project leads there.
+          metadata: { workdir: target.place },
           sessionID: context.sessionID,
           agent: context.agent,
           source,

@@ -42,6 +42,7 @@ import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { ToolOutput } from "@orbit/core/tool-output"
 import { Tool } from "@orbit/core/tool"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
 import { offlineModels } from "./fixture/models"
@@ -170,6 +171,14 @@ const replacements = [
 const productionIt = testEffect(AppNodeBuilder.build(nodes, replacements))
 const it = testEffect(
   AppNodeBuilder.build(nodes, [...replacements, PluginSupervisor.node.replace(shellPluginSupervisor)]),
+)
+// A project that nothing trusts, where the core tests would otherwise trust every folder.
+const untrustedIt = testEffect(
+  AppNodeBuilder.build(nodes, [
+    ...replacements,
+    PluginSupervisor.node.replace(shellPluginSupervisor),
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+  ]),
 )
 const permissionIt = testEffect(
   AppNodeBuilder.build(LayerNode.group([nodes, PermissionSaved.node]), [
@@ -1208,6 +1217,50 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
+  // A client shows the folder a command runs in from the request, so the request names it as resolved here, whatever
+  // spelling the call used: `~` is the home folder (class 8, approval display).
+  const spellings = (active: string, outside: string) => [
+    { workdir: `~/${path.relative(Global.Path.home, outside)}`, runs: outside },
+    { workdir: `../${path.basename(outside)}`, runs: outside },
+    { workdir: outside, runs: outside },
+    { workdir: "src", runs: path.join(active, "src") },
+    ...(isWindows
+      ? [{ workdir: `/${outside[0]!.toLowerCase()}${outside.slice(2).replaceAll("\\", "/")}`, runs: outside }]
+      : []),
+  ]
+  it.live(
+    "names the resolved folder on the shell approval for each workdir spelling",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        ([active, outside]) =>
+          Effect.promise(() => fs.mkdir(path.join(active.path, "src"))).pipe(
+            Effect.andThen(
+              Effect.forEach(spellings(active.path, outside.path), (row) => {
+                reset()
+                return withSession(active.path, (registry) =>
+                  executeTool(registry, call({ command: cwdCommand, workdir: row.workdir })),
+                ).pipe(
+                  Effect.andThen(
+                    Effect.sync(() =>
+                      expect([row.workdir, assertions.find((item) => item.action === "Bash")?.metadata]).toEqual([
+                        row.workdir,
+                        { workdir: row.runs },
+                      ]),
+                    ),
+                  ),
+                )
+              }),
+            ),
+          ),
+        ([active, outside]) =>
+          Effect.promise(() =>
+            Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+          ),
+      ),
+    { timeout: 60_000 },
+  )
+
   it.live(
     "deduplicates external directory approvals across workdir and directory-change commands",
     () =>
@@ -1260,6 +1313,61 @@ describe("ShellTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
+
+  // A repository that is not trusted can ship a link into a folder that Orbit lets every agent reach by itself, here the
+  // global config folder. A command that runs there, or changes into it, asks about the real folder, marked as one a
+  // link leads to so that only the person's own rules decide it, and the approval names that folder. A trusted project's
+  // link is its own (class 4, class 8).
+  for (const trusted of [false, true])
+    (trusted ? it : untrustedIt).live(
+      `${trusted ? "a trusted" : "an untrusted"} project's link into the global config folder ${trusted ? "is the project's own" : "is asked about and shown as that folder"}`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (active) =>
+            Effect.gen(function* () {
+              const global = yield* Global.Service
+              yield* Effect.promise(async () => {
+                await fs.writeFile(path.join(global.config, "marker.txt"), "marker\n")
+                await fs.symlink(global.config, path.join(active.path, "cfg"), "junction")
+              })
+              const config = FSUtil.resolve(global.config)
+              const linked = path.join(active.path, "cfg")
+              const folder = path.join(config, "*").replaceAll("\\", "/")
+              const rows = [
+                { input: { command: cwdCommand, workdir: "cfg" }, workdir: trusted ? linked : config },
+                { input: { command: `cd cfg; ${cwdCommand}` }, workdir: active.path },
+                // A plain word of the command, and a file it writes to, through the link.
+                { input: { command: "cat cfg/marker.txt" }, workdir: active.path },
+                { input: { command: "echo planted > cfg/planted.txt" }, workdir: active.path },
+                // Windows starts a process in `cfg.` as in `cfg`, while Bun's own `stat` finds no `cfg.`.
+                ...(isWindows
+                  ? [
+                      { input: { command: cwdCommand, workdir: "cfg." }, workdir: trusted ? linked : config },
+                      { input: { command: cwdCommand, workdir: "cfg " }, workdir: trusted ? linked : config },
+                    ]
+                  : []),
+              ]
+              yield* withSession(active.path, (registry) =>
+                Effect.forEach(rows, (row) =>
+                  Effect.gen(function* () {
+                    reset()
+                    expect(yield* executeTool(registry, call(row.input, "call-link"))).toMatchObject({
+                      status: "completed",
+                    })
+                    expect(assertions.map((item) => item.action)).toEqual(
+                      trusted ? ["Bash"] : ["external_directory", "Bash"],
+                    )
+                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
+                    expect(assertions.at(-1)?.metadata).toEqual({ workdir: row.workdir })
+                  }),
+                ),
+              )
+            }),
+          (active) => Effect.promise(() => active[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 30_000 },
+    )
 
   it.live(
     "does not execute after external-directory or shell denial",
@@ -1507,32 +1615,34 @@ describe("ShellTool", () => {
   }
 
   // An output style is the person's own text and is appended to the base prompt before the tool is offered as PowerShell.
-  productionIt.live("rewrites the shell name in the base prompt and leaves an output style as written", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) =>
-        withSession(tmp.path, () =>
-          Effect.gen(function* () {
-            const selection = yield* ShellSelect.Service
-            yield* selection.transform((editor) => editor.configure("powershell"))
-            const hooks = yield* PluginHooks.Service
-            const event = yield* hooks.trigger("session", "context", {
-              sessionID,
-              model: sessionModel,
-              system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
-              messages: [],
-              options: {},
-              agent: toolIdentity.agent,
-              tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
-            } as never)
-            // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
-            expect(event.system[0]?.text).toBe(
-              `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
-            )
-          }),
-        ),
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-    ),
+  productionIt.live(
+    "rewrites the shell name in the base prompt and leaves an output style as written",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          withSession(tmp.path, () =>
+            Effect.gen(function* () {
+              const selection = yield* ShellSelect.Service
+              yield* selection.transform((editor) => editor.configure("powershell"))
+              const hooks = yield* PluginHooks.Service
+              const event = yield* hooks.trigger("session", "context", {
+                sessionID,
+                model: sessionModel,
+                system: [{ type: "text", text: "Use Bash for it.\n\n# Output style: Terse\nPrefer Git Bash." }],
+                messages: [],
+                options: {},
+                agent: toolIdentity.agent,
+                tools: ToolNames.aliased({ Bash: { description: "", input: {} } }),
+              } as never)
+              // Only a machine that has PowerShell offers it; elsewhere the session falls back to the default shell.
+              expect(event.system[0]?.text).toBe(
+                `Use ${isWindows ? "PowerShell" : "Bash"} for it.\n\n# Output style: Terse\nPrefer Git Bash.`,
+              )
+            }),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
     { timeout: 30_000 },
   )
 
@@ -1621,7 +1731,11 @@ describe("ShellTool", () => {
                   expect(assertions[0]).toMatchObject({ resources: ["echo $((1 + 1))"], save: ["echo *"] })
                   expect(assertions[2]).toMatchObject({ resources: ["pwd"], save: ["pwd *"] })
                   expect(assertions[3]).toMatchObject({ resources: ["pwd"], save: ["pwd *"] })
-                  return assertions.slice()
+                  // Each run works in its own temporary folder, which the shell's requests name as their workdir.
+                  const named = [realpathSync(tmp.path), tmp.path].map((item) => JSON.stringify(item).slice(1, -1))
+                  return JSON.parse(
+                    named.reduce((text, item) => text.replaceAll(item, "<tmp>"), JSON.stringify(assertions)),
+                  ) as unknown
                 }),
               (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
             ),

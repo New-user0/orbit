@@ -315,7 +315,8 @@ const transformTools = (registry: Tool.Interface, tools: Readonly<Record<string,
       editor.add({ ...tool, name, options: { authorizes: true, ...(options ?? tool.options) } }),
     ),
   )
-const layer = Layer.unwrap(
+const makeLayer = (persist: boolean) =>
+  Layer.unwrap(
   Effect.map(RunnerState, (state) => {
     const modelTransport = Layer.succeed(
       SessionModelTransport.Service,
@@ -620,7 +621,7 @@ const layer = Layer.unwrap(
       ]),
       [
         ...replacements,
-        Bus.node.replace(Bus.configured({ persist: true })),
+        Bus.node.replace(persist ? Bus.configured({ persist }) : Bus.configured()),
         LocationServiceMap.node.replace(promptLocationNode),
         Model.node.replace(promptModels),
         SessionExecution.node.replace(execution),
@@ -631,7 +632,12 @@ const layer = Layer.unwrap(
   Layer.provideMerge(Layer.sync(RunnerState, makeRunnerState)),
   Layer.provideMerge(testLLM),
 )
+// Most scenarios read the event log, so they run on a persisting Bus. A CLI server builds its Bus without one, so the
+// turn limits (whose inputs must not live in the log) also run on `productionLayer`.
+const layer = makeLayer(true)
+const productionLayer = makeLayer(false)
 const it = testEffect(layer)
+const productionIt = testEffect(productionLayer)
 const sessionID = Session.ID.make("ses_runner_test")
 const otherSessionID = Session.ID.make("ses_runner_other")
 
@@ -721,17 +727,24 @@ const setup = Effect.gen(function* () {
 })
 
 type Scenario = Effect.Success<typeof setup>
-const scenario = (
-  name: string,
-  body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
-) =>
-  it.effect(
-    name,
-    Effect.gen(function* () {
-      const s = yield* setup
-      return yield* body(s)
-    }),
-  )
+const scenarioOn =
+  (on: typeof it) =>
+  (
+    name: string,
+    body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
+  ) =>
+    on.effect(
+      name,
+      Effect.gen(function* () {
+        const s = yield* setup
+        return yield* body(s)
+      }),
+    )
+const scenario = scenarioOn(it)
+const limitScenarios = [
+  ["event log", scenario],
+  ["no event log", scenarioOn(productionIt)],
+] as const
 
 // Nominal retry gaps: exponential from 500ms capped at 32s, for 10 retries.
 const RETRY_GAPS = [500, 1_000, 2_000, 4_000, 8_000, 16_000, ...Array<number>(4).fill(32_000)]
@@ -5661,7 +5674,8 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(2)
     })
 
-    scenario("counts a compaction's usage record toward the cost limit", function* (s) {
+    for (const [mode, scenario] of limitScenarios)
+    scenario(`counts a compaction's usage record toward the cost limit (${mode})`, function* (s) {
       s.modelCost = [price]
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend))
@@ -5685,6 +5699,7 @@ describe("SessionRunnerLLM", () => {
       LLMEvent.textDelta({ id, text: "Done" }),
       LLMEvent.textEnd({ id }),
     ]
+    for (const [mode, scenario] of limitScenarios)
     for (const row of [
       { name: "cost", turn: { maxCost: Money.USD.make(3) }, expected: "limit.cost", childRequests: 1 },
       { name: "tokens", turn: { maxTokens: 5 }, expected: "limit.tokens", childRequests: 1 },
@@ -5692,7 +5707,7 @@ describe("SessionRunnerLLM", () => {
       { name: "steps", turn: { maxSteps: 2 }, expected: undefined, childRequests: 6 },
       { name: "no limit", turn: undefined, expected: undefined, childRequests: 6 },
     ] as const)
-      scenario(`stops a subagent at the parent turn's ${row.name} limit`, function* (s) {
+      scenario(`stops a subagent at the parent turn's ${row.name} limit (${mode})`, function* (s) {
         s.modelCost = [price]
         yield* s.session.prompt({ sessionID, text: "Work", turn: row.turn, resume: false })
         yield* s.llm.push(
@@ -5724,6 +5739,7 @@ describe("SessionRunnerLLM", () => {
 
     // A background subagent outlives the turn that started it: the parent's terminal writes the idle marker that closes
     // the turn, and the limit it set must still bind the child (`orb run --max-cost` exits at that terminal).
+    for (const [mode, scenario] of limitScenarios)
     for (const row of [
       { name: "open", terminal: undefined },
       { name: "succeeded", terminal: (s: Scenario) => s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID }) },
@@ -5736,7 +5752,7 @@ describe("SessionRunnerLLM", () => {
           } as SessionError.Error),
       },
     ] as const)
-      scenario(`stops a subagent at the parent's cost limit after the parent is ${row.name}`, function* (s) {
+      scenario(`stops a subagent at the parent's cost limit after the parent is ${row.name} (${mode})`, function* (s) {
         s.modelCost = [price]
         yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
         yield* s.llm.push(

@@ -13,6 +13,7 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location, tempLocationLayer } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
+import { shortName } from "./fixture/short-name"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -220,11 +221,14 @@ describe("FileAccess in a project that is not trusted", () => {
           const trust = yield* ProjectTrust.Service
           const outsideAt = (target: FileAccess.Target, file: string, directory: string, resource: string) => {
             expect(target.absolute).toBe(AbsolutePath.make(path.join(project, ...file.split("/"))))
+            // The place the tool acts on, which a request names: where the link leads, not the link.
+            expect(target.place).toBe(AbsolutePath.make(path.join(outside, resource)))
             expect(target.resource).toBe(slash(path.join(outside, resource)))
             expect(target.externalDirectory).toMatchObject({
               action: "external_directory",
               directory: path.join(outside, directory),
               resource: slash(path.join(outside, directory, "*")),
+              escaped: true,
             })
           }
           const paths = () =>
@@ -241,6 +245,7 @@ describe("FileAccess in a project that is not trusted", () => {
           const untrusted = yield* paths()
           expect(untrusted[0]).toEqual({
             absolute: AbsolutePath.make(path.join(project, "own.md")),
+            place: AbsolutePath.make(path.join(project, "own.md")),
             resource: "own.md",
           })
           outsideAt(untrusted[1], "docs/notes.md", ".", "notes.md")
@@ -253,6 +258,7 @@ describe("FileAccess in a project that is not trusted", () => {
           yield* trust.grant({ persist: false, via: "test" })
           const trusted = yield* paths()
           for (const target of trusted) expect(target.externalDirectory).toBeUndefined()
+          for (const target of trusted) expect(target.place).toBe(target.absolute)
           expect(trusted[1].resource).toBe("docs/notes.md")
           yield* trust.revoke()
           expect((yield* paths())[1].externalDirectory).toBeDefined()
@@ -261,6 +267,72 @@ describe("FileAccess in a project that is not trusted", () => {
     },
   )
 
+  // Windows opens `docs.`, `docs ` and the 8.3 name of a link as the link, and a shell or ripgrep given one follows it,
+  // while Bun's own `stat` does not find `docs.`. Each spelling is seen as the link, so it is asked about as one.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "sees a link through each Windows spelling of its name",
+    () => {
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const { project, outside } = yield* layout
+        yield* Effect.promise(() => fs.symlink(outside, path.join(project, "linked folder"), "junction"))
+        const short = shortName(project, "linked folder")
+        expect(short).toEqual(expect.stringContaining("~"))
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          for (const spelling of [
+            "linked folder.",
+            "linked folder ",
+            "linked folder. ",
+            "LINKED FOLDER",
+            short!,
+            `\\\\?\\${path.join(project, "linked folder")}`,
+            "docs.",
+          ]) {
+            const target = yield* access.resolve({ path: spelling, kind: "directory" })
+            expect([spelling, target.place, target.externalDirectory?.escaped]).toEqual([spelling, outside, true])
+          }
+          for (const spelling of ["linked folder.\\notes.md", `${short}\\notes.md`, "docs.\\notes.md"]) {
+            const target = yield* access.resolve({ path: spelling })
+            expect([spelling, target.place, target.externalDirectory?.escaped]).toEqual([
+              spelling,
+              path.join(outside, "notes.md"),
+              true,
+            ])
+          }
+        }).pipe(provideProject(project, requests, false))
+      })
+    },
+  )
+
+  // The paths a shell command names in its text: only one that a link leads out of the project counts, and nothing about
+  // the others is asked or refused, a path outside by name included.
+  it.live("names only the paths of a command that a link leads out of the project", () => {
+    const requests: Permission.AssertInput[] = []
+    return Effect.gen(function* () {
+      const { project, outside } = yield* layout
+      const files = [
+        path.join(project, "own.md"),
+        path.join(project, "docs", "notes.md"),
+        path.join(project, "docs", "new.txt"),
+        path.join(outside, "notes.md"),
+        path.join(project, "https:", "evil.example"),
+      ]
+      const escaped = Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        return yield* access.escaped(files)
+      })
+      const untrusted = yield* escaped.pipe(provideProject(project, requests, false))
+      expect(untrusted.map((target) => ({ place: target.place, escaped: target.externalDirectory?.escaped }))).toEqual([
+        { place: AbsolutePath.make(path.join(outside, "notes.md")), escaped: true },
+        { place: AbsolutePath.make(path.join(outside, "new.txt")), escaped: true },
+      ])
+      const trusted = yield* escaped.pipe(provideProject(project, requests, true))
+      expect(trusted).toEqual([])
+      expect(requests).toEqual([])
+    })
+  })
+
   it.live("asks about the outside folder before a read through a link, and not once the project is trusted", () => {
     const requests: Permission.AssertInput[] = []
     return Effect.gen(function* () {
@@ -268,8 +340,13 @@ describe("FileAccess in a project that is not trusted", () => {
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         yield* access.authorizeRead("docs/notes.md", invocation)
+        // The folder is marked as one a link leads to, so Orbit's own allows do not decide it (Permission).
         expect(requests).toMatchObject([
-          { action: "external_directory", resources: [slash(path.join(outside, "*"))] },
+          {
+            action: "external_directory",
+            resources: [slash(path.join(outside, "*"))],
+            escaped: [slash(path.join(outside, "*"))],
+          },
           { action: "Read", resources: [slash(path.join(outside, "notes.md"))] },
         ])
 
@@ -277,7 +354,29 @@ describe("FileAccess in a project that is not trusted", () => {
         expect(requests.at(-1)).toMatchObject({
           action: "external_directory",
           resources: [slash(path.join(outside, "*"))],
+          escaped: [slash(path.join(outside, "*"))],
         })
+
+        // The same folder named directly and through the link in one call is still the link's.
+        requests.length = 0
+        yield* access.authorizeExternal(
+          [
+            yield* access.resolve({ path: path.join(outside, "notes.md"), kind: "file" }),
+            yield* access.resolve({ path: "docs/notes.md", kind: "file" }),
+          ],
+          invocation,
+        )
+        expect(requests).toMatchObject([
+          { resources: [slash(path.join(outside, "*"))], escaped: [slash(path.join(outside, "*"))] },
+        ])
+        // A folder named directly carries no mark.
+        requests.length = 0
+        yield* access.authorizeExternal(
+          [yield* access.resolve({ path: path.join(outside, "notes.md"), kind: "file" })],
+          invocation,
+        )
+        expect(requests).toHaveLength(1)
+        expect(requests[0]).not.toHaveProperty("escaped")
       }).pipe(provideProject(project, requests, false))
 
       requests.length = 0
