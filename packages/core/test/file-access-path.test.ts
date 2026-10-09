@@ -370,6 +370,24 @@ describe.skipIf(process.platform !== "win32")("FileAccess.resolve of Windows spe
     ),
   )
 
+  // Two names of one file, a hard link, leave no single long name for its short name: it is refused, not guessed.
+  it.live("refuses a short name whose long name cannot be told", () =>
+    withTempDir(({ path: directory }) =>
+      Effect.gen(function* () {
+        yield* layout(directory)
+        yield* Effect.promise(() => fs.link(path.join(directory, ".env"), path.join(directory, "second-name.txt")))
+        const env = shortName(directory, ".env")
+        expect(env).toEqual(expect.stringContaining("~"))
+        const access = yield* FileAccess.Service
+        const failure = yield* access.resolve({ path: env! }).pipe(Effect.flip)
+        expect([failure instanceof ToolFailure, failure]).toMatchObject([true, { code: "file.spelling" }])
+        // Each name of the file is still its own.
+        expect((yield* access.resolve({ path: ".env" })).resource).toBe(".env")
+        expect((yield* access.resolve({ path: "second-name.txt" })).resource).toBe("second-name.txt")
+      }).pipe(provide(directory)),
+    ),
+  )
+
   it.live("refuses a data stream, or a drive that is not a disk, before any approval", () =>
     withTempDir(({ path: directory }) =>
       Effect.gen(function* () {

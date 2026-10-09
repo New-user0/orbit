@@ -171,6 +171,14 @@ const rows: ReadonlyArray<Row> = [
     expect: "refused",
     absent: "ran.txt",
   },
+  // A word of a command is not a path that the shell changes to, so a drive in it is no refusal.
+  {
+    name: "a drive named as a word",
+    tool: "Bash",
+    input: () => ({ command: "echo 'HKLM:\\Software' > ran.txt" }),
+    rules: readDeny,
+    expect: "done",
+  },
   { name: "a stream", tool: "Read", input: () => ({ file_path: ".env::$DATA" }), rules: readDeny, expect: "spelling" },
   { name: "a short name", tool: "Read", input: (n) => ({ file_path: n.env }), rules: readDeny, expect: "denied" },
   {
