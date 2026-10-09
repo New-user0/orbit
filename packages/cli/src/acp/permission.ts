@@ -53,9 +53,9 @@ const ask = Effect.fnUntraced(function* (input: Input) {
   const caller = input.tool && ToolNames.owns(request.action, input.tool.name) ? input.tool : undefined
   const toolName = caller?.name ?? request.action
   const toolInput: ToolInput = caller
-    ? { ...caller.input, ...request.metadata }
+    ? { ...declaredFields(request.action, caller.input), ...request.metadata }
     : { ...request.metadata, resources: request.resources }
-  const previews = yield* permissionPreviews(toolName, toolInput, input.cwd, caller !== undefined)
+  const previews = yield* permissionPreviews(toolName, toolInput, request.metadata, input.cwd, caller !== undefined)
   const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const result = yield* input.connection.requestPermission({
     sessionId: input.clientSessionID,
@@ -93,11 +93,56 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
   return `${prefix}: ${title}`
 }
 
-const permissionPreviews = Effect.fnUntraced(function* (toolName: string, input: ToolInput, cwd: string, owned: boolean) {
+// The fields each action's tool declares. A recorded call keeps the extra keys its schema drops at decode, so a model can
+// add any key to its own input; only a declared one describes what the person is asked to approve.
+const declared: Record<string, readonly string[]> = {
+  edit: [
+    "file_path",
+    "notebook_path",
+    "path",
+    "filePath",
+    "content",
+    "old_string",
+    "new_string",
+    "oldString",
+    "newString",
+    "replace_all",
+    "replaceAll",
+  ],
+  patch: ["patchText"],
+  read: ["file_path", "path", "filePath"],
+  lsp: ["file_path", "path", "filePath"],
+  list: ["path", "pattern"],
+  glob: ["path", "pattern"],
+  grep: ["path", "pattern"],
+  shell: ["command", "cmd", "workdir", "cwd", "description"],
+  webfetch: ["url", "method", "format"],
+  websearch: ["query"],
+  subagent: ["agent", "prompt", "description"],
+}
+
+function declaredFields(action: string, input: ToolInput): ToolInput {
+  const fields = declared[ToolNames.legacy(action).toLowerCase()] ?? declared[action.toLowerCase()] ?? []
+  return Object.fromEntries(fields.flatMap((key) => (key in input ? [[key, input[key]]] : [])))
+}
+
+// Only the edit family has files to show a diff of; the check is by canonical name and alias.
+const editFamily = new Set(["edit", "write", "notebook_edit", "multiedit", "patch", "apply_patch"])
+const isEditFamily = (name: string) =>
+  [name, ToolNames.canonical(name), ToolNames.legacy(name)].some((item) => editFamily.has(item.toLowerCase()))
+
+const permissionPreviews = Effect.fnUntraced(function* (
+  toolName: string,
+  input: ToolInput,
+  metadata: ToolInput,
+  cwd: string,
+  owned: boolean,
+) {
   const tool = toolName.toLocaleLowerCase()
   // The server's own diffs come first: they are what it will write (an Edit converts line endings to the file's, which
   // a replace on the client's copy of old_string does not), and a request whose caller is not the editor has no other.
-  const served = servedPreviews(input, cwd)
+  // They come only from the request's metadata, and only for the edit family.
+  const served = isEditFamily(toolName) ? servedPreviews(metadata, cwd) : []
   if (served.length > 0) return served
   if (!owned) return []
   if (tool === "patch" || tool === "apply_patch") return yield* patchPreviews(input, cwd)
@@ -184,7 +229,7 @@ function permissionTitle(
   resources: ReadonlyArray<string>,
   owned: boolean,
 ) {
-  if (previews.length > 1) return `${previews.length} files`
+  if (previews.length > 1 && isEditFamily(toolName)) return `${previews.length} files`
   switch (toolName.toLocaleLowerCase()) {
     case "external_directory": {
       const directory = resources.find(isPath)
@@ -228,7 +273,10 @@ function permissionLocations(
   // Outside the project the request's own folder is the whole point of the prompt, so it is always listed.
   if (toolName.toLocaleLowerCase() === "external_directory")
     return Array.from(
-      new Set([...locations.map((item) => item.path), ...resources.filter(isPath).map((item) => absolutePath(wildcardDirectory(item), cwd))]),
+      new Set([
+        ...locations.map((item) => item.path),
+        ...resources.filter(isPath).map((item) => absolutePath(wildcardDirectory(item), cwd)),
+      ]),
       (path) => ({ path }),
     )
   if (locations.length > 0) return locations
