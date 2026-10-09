@@ -55,7 +55,13 @@ const ask = Effect.fnUntraced(function* (input: Input) {
   const toolInput: ToolInput = caller
     ? { ...declaredFields(request.action, caller.input), ...request.metadata }
     : { ...request.metadata, resources: request.resources }
-  const previews = yield* permissionPreviews(toolName, toolInput, request.metadata, input.cwd, caller !== undefined)
+  const previews = yield* permissionPreviews(
+    toolName,
+    toolInput,
+    request.metadata ?? {},
+    input.cwd,
+    caller !== undefined,
+  )
   const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const result = yield* input.connection.requestPermission({
     sessionId: input.clientSessionID,
