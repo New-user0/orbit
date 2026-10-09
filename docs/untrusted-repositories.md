@@ -541,6 +541,23 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   All three follow links, count a file that is not there yet by where a link in its path would put it, and answer for a
   link that points nowhere by where it points. `FileAccess.resolve` asks `escapes` and treats such a path as external.
 
+- A place that a link leads out to is the person's to allow, never Orbit's. Orbit gives every agent allows for folders
+  of its own (`Agent.folders`: the global config folder, the temporary folder, shell and tool output), and a link that a
+  repository ships into one of them took that allow: a read, a write, a search or a command through it asked no folder
+  question, and the shell, Grep and Glob approvals named the link. `FileAccess` marks the external folder of such a target `escaped`, `authorizeExternal`
+  passes those resources to `Permission.assert` as `escaped`, and Permission decides them without Orbit's allows
+  (compared by value, so an agent's copy of them is still Orbit's). The target's `place` is the real place, which the
+  shell (`metadata.workdir`), Grep and Glob (`metadata.path`) and Patch (`metadata.filepath`) put on the request. A path
+  that a shell command names in its text is checked the same way when it is a plain word or a redirect target
+  (`ShellParse.operands`, `FileAccess.escaped`); a path the command builds as it runs is not (Known gaps).
+- Windows has several spellings of one file, and a check made with one spelling misses the others. `FileAccess.resolve`
+  refuses a `:` after the drive or share (`name::$DATA`, `name:stream`, and `HKLM:` or `FileSystem::C:\x`, which a shell
+  reads as a drive) with the error type `file.spelling`, and names each part with `~` by the long name its 8.3 short name
+  stands for, matched by file ID, refusing one it cannot tell. `FSUtil.resolveFrom`, which the tools and the displays
+  share, drops a `\\?\` or `\\.\` prefix and trims trailing periods and spaces as Windows does: one period off an inner
+  part, every period and space off the last. Bun's own file calls keep `cfg.`, while a shell, ripgrep and `Bun.write`
+  drop it, so a link checked with Bun's `stat` alone was not seen while a program started in `cfg.` ran through it.
+
 - Config references go through `ConfigVariable.substitute` with `within`, which expands no `{env:}`, refuses
   `{file://host/share}` before the disk is touched, and checks the real path of a file.
 - Never decide containment with `FSUtil.resolve` or `fs.resolve`. Both return the lexical path for a part that is not
@@ -566,6 +583,17 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   that no disk access happens: a share test that waits 5 seconds means the check came too late.
 - Untrusted: the file is not read and `config file skipped` is logged once. After a grant the file appears without a
   restart. The trusted control follows links as before.
+- For a tool, point the link at a folder that Orbit allows by itself, such as the global config folder, so that only the
+  `escaped` mark stands between it and a silent read: `permission.test.ts` ("Permission for a place a link leads out
+  to"), `tool-shell.test.ts`, `tool-search.test.ts`, `tool-patch.test.ts`, and the rows over a real `orb acp` in
+  `packages/cli/test/acp/permission-files.subprocess.test.ts` (a junction and a relative symlink, answered once and
+  rejected, with a trusted control).
+- On Windows, one table per level for the spellings, under a deny and an ask rule, with the plain name as the control:
+  `file-access-path.test.ts` (resolve), `tool-windows-spelling.test.ts` (each file tool, Grep, Glob and the shell over
+  the production plugins), `file-access.test.ts` (a link seen through a trailing period or space, its 8.3 name, `\\?\`
+  and case),
+  `packages/util/test/fs-util.test.ts` and the `orb acp` rows. A row that Bun would pass anyway, because Bun opens
+  `new.sh.` by its literal name, also checks that the rule decided.
 - Mutation: make `reachable`, `supplies` and `escapes` answer true and watch the tests fail. The real-symlink tests skip
   on accounts without the privilege, so run them on Linux before closing a milestone.
 
@@ -574,6 +602,9 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Which new reader of repository-supplied bytes does this add, and is it in the reader list?
 - Is containment checked on the real path, for a target that does not exist yet and for a dangling link?
 - Is any path compared as a string (`===`, `startsWith`, `!==`)? On Windows too?
+- Does a link into a folder that Orbit allows by itself (`Agent.folders`) still ask, and does the approval name the real
+  place?
+- On Windows, which spellings reach the check: a stream, an 8.3 name, trailing periods and spaces, a `\\?\` prefix?
 - Is containment decided by `FSUtil.resolve` or `fs.resolve` followed by `FSUtil.contains`? Both keep the lexical path
   for a part that is not there, so a new file under a link passes.
 - Does the text go to the model provider, a tool write or the terminal, and what is the worst file a link could point
@@ -806,6 +837,15 @@ runs" is a permission.
   folder and `/c/...` the Windows drive. `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP,
   `permission-files.subprocess.test.ts` the rows over a real `orb acp`, and `packages/tui/test/util/path-format.test.ts`
   the terminal interface's and Mini's.
+- Through a link in an untrusted project, the place is where the link leads: the server resolves it
+  (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
+  as a folder of the project (class 4).
+- An allow that Orbit adds by itself is not the person's: it never decides a place that a link leads out to, and only
+  the person's own rules and saved approvals do (`Permission.AssertInput.escaped`, class 4).
+- A rule keyed on one field does not cover the others. Grep and Glob ask their own rules about the pattern, so the path
+  they search goes through the Read rules first (`FileAccess.authorizeRead`), and a Read deny of `*.env` covers a Grep
+  of `.env`. A rule matches the name a file has on disk: on Windows `FileAccess.resolve` turns every spelling of a file
+  into that name before a rule sees it (class 4).
 
 **How to test:**
 
@@ -824,6 +864,8 @@ runs" is a permission.
 - Does it pick a model, a provider or a budget? Then it is withheld as `providers`, never inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
+- Does an allow that Orbit adds by itself decide something a repository can steer, such as a place a link leads to?
+- Which fields of the call do its rules key on, and is a path among the fields that no rule sees?
 - Does a default or fallback name an agent or a mode by constant instead of by configuration?
 
 ### 9. Terminal control characters in printed or stored text
@@ -1538,6 +1580,19 @@ fixes it or asks.
 - **Lint noise.** `bun run lint:effect-patterns` carries 27 standing diagnostics, so a new violation of the AGENTS.md
   style rules (nested service yields, `else`, import aliases) hides among them. Bring it to zero or make it fail on the
   files that a change touches.
+- **Paths in shell command text.** The shell asks about its workdir, the folders of `cd`, `pushd` and `Set-Location`,
+  and the plain words and redirect targets of a command that a link in an untrusted project leads out of it
+  (`ShellParse.operands`, `FileAccess.escaped`). It does not ask about a path the command builds as it runs (a variable,
+  a substitution, a glob before the link's name, quoting that the scan does not undo), one a script or program opens by
+  itself, or a path in the text that names a place outside the project directly, such as `cat ~/.ssh/id_rsa`, which the
+  Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis.
+- **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
+  each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
+  rule covers the folder. No task yet.
+- **A share named before anyone is asked.** For a target outside the project, `FileAccess.resolve` reads the place
+  (its kind, and the folders above it for a `.git`) before the folder question, so a UNC path that a call names
+  connects to the share first; and `ProjectTrust.escapes` follows a link in the project whose target is a share before
+  any question. A link to a share needs a clone that makes symlinks (Developer Mode on Windows). No task yet.
 
 ## Review checklist
 
