@@ -53,11 +53,16 @@ describe("usage after the session is deleted", () => {
           cost: Money.USD.make(1),
           tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
         }
-        const exit = yield* Effect.exit(
+        const exit =
           kind === "usage"
-            ? bus.publish(SessionEvent.UsageRecorded, { sessionID, source: "title", ...usage })
-            : bus.publish(SessionEvent.SideQueryRecorded, { sessionID, purpose: "webfetch.summarize", ...usage }),
-        )
+            ? yield* Effect.exit(
+                Effect.asVoid(bus.publish(SessionEvent.UsageRecorded, { sessionID, source: "title", ...usage })),
+              )
+            : yield* Effect.exit(
+                Effect.asVoid(
+                  bus.publish(SessionEvent.SideQueryRecorded, { sessionID, purpose: "webfetch.summarize", ...usage }),
+                ),
+              )
         expect(Exit.isSuccess(exit)).toBe(true)
         expect(
           yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all(),
