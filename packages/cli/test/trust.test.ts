@@ -2214,3 +2214,27 @@ test("the refusal shows the name of a file it names on one line, as a clone can 
   for (const line of held.split(EOL)) expect(line).not.toMatch(/\p{C}/u)
   expect(held).toContain(`${path.join(".orbit", "b")}\\x1b[2Kc.md`)
 })
+
+// `orb -p --trust false` once sent "false ..." as the message with the folder trusted, where `orb run --trust false`
+// refuses it. A word after a bare flag that widens what runs is a usage error before anything starts.
+test("orb -p with a word after a flag that widens what runs starts nothing", async () => {
+  const repository = await hooked("print-widening")
+  const marker = path.join(repository, "print.marker")
+  await Bun.write(
+    path.join(repository, ".orbit", "plugins", "mark.ts"),
+    `import { writeFileSync } from "node:fs"\nwriteFileSync(${JSON.stringify(marker)}, "loaded")\nexport default { id: "mark", async setup() {} }`,
+  )
+  const before = runs
+  const rows = ["--trust", "--auto", "--yolo", "--dangerously-skip-permissions"].flatMap((flag) =>
+    ["false", "off"].map((word) => [flag, word] as const),
+  )
+
+  for (const [flag, word] of rows) {
+    const result = await orb(repository, ["-p", "--standalone", flag, word, "--model", model, "say ok"])
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("ambiguous")
+  }
+  expect(await Bun.file(marker).exists()).toBe(false)
+  expect(runs).toBe(before)
+}, 300_000)

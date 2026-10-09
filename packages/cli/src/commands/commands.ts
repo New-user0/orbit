@@ -928,6 +928,9 @@ export const RootValueFlags = {
   short: ["s", "m", "f", "r"],
 } as const
 
+/** The boolean flags of `orb -p` that grant trust or approve every ask when they are on. */
+export const WideningFlags: ReadonlyArray<string> = ["trust", "auto", "yolo", "dangerously-skip-permissions"]
+
 /** The boolean flags of `orb -p`, each with the short letter it is also written with, if it has one. */
 export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
   print: "p",

@@ -1,9 +1,9 @@
-import { PrintBooleanFlags, RootValueFlags, Subcommands } from "../commands/commands"
+import { PrintBooleanFlags, RootValueFlags, Subcommands, WideningFlags } from "../commands/commands"
 
-export type Classified = {
-  readonly mode: "print" | "root"
-  readonly args: ReadonlyArray<string>
-}
+export type Classified =
+  | { readonly mode: "print" | "root"; readonly args: ReadonlyArray<string> }
+  // A print line that cannot be told apart from one that turns a permission on: nothing starts.
+  | { readonly mode: "usage"; readonly message: string }
 
 const valueLong = new Set<string>(RootValueFlags.long)
 const valueShort = new Set<string>(RootValueFlags.short)
@@ -34,6 +34,17 @@ export function classify(argv: ReadonlyArray<string>): Classified {
   const wordAt = tokens.findIndex((token) => token.kind === "word")
   const first = tokens[wordAt]
   const prints = printAt !== -1 && (first?.kind !== "word" || !subcommands.has(first.text) || printAt < wordAt)
+  if (prints) {
+    // `orb -p --trust false x` would send "false x" with the folder trusted, where `orb run --trust false x` refuses it.
+    const ambiguous = tokens.find(
+      (token, index) => token.kind === "flag" && token.widens && tokens[index + 1]?.kind === "value",
+    )
+    if (ambiguous?.kind === "flag" && ambiguous.widens)
+      return {
+        mode: "usage",
+        message: `write --${ambiguous.widens} or --${ambiguous.widens}=false: a word after --${ambiguous.widens} is ambiguous on a print line`,
+      }
+  }
   if (prints) return { mode: "print", args: [...tokens.flatMap((token) => token.rewritten), ...operands] }
   // A bare --resume is only a flag of the interface and of `orb run`; another command's -r is its own.
   // The interface also takes a directory as its first word, so only a real subcommand other than `run` keeps its own -r.
@@ -51,6 +62,8 @@ type Token =
   | {
       readonly kind: "flag"
       readonly print: boolean
+      /** The name of a flag that grants trust or approval when it is bare, set while it is written without a value. */
+      readonly widens?: string
       readonly rewritten: ReadonlyArray<string>
       readonly resumed: ReadonlyArray<string>
     }
@@ -96,6 +109,7 @@ function scan(flags: ReadonlyArray<string>): ReadonlyArray<Token> {
       result.push({
         kind: "flag",
         print: name === "print" && text !== "--print=false",
+        widens: boolean && WideningFlags.includes(name) ? name : undefined,
         rewritten: [negated ? `--${name.slice(3)}=false` : boolean ? `${text}=true` : text],
         resumed: [text],
       })

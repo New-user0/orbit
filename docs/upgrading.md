@@ -295,7 +295,10 @@ a literal `--`, except that when the first word is a subcommand `-p` must come b
 the `debug` subcommand and `orb run -p` is still a `run` command line (a usage error). A word right after a flag that takes a value is that
 flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the next word into the message, so `orb -p yes do it` sends
 "yes do it" and `orb -p --thinking false positives` sends "false positives" with thinking on; write `--no-thinking` or
-`--thinking=false` to turn a flag off. Only to find the subcommand does `orb` treat a yes/no/true/false word after a
+`--thinking=false` to turn a flag off. The flags that grant trust or approve every ask (`--trust`, `--auto`, `--yolo`,
+`--dangerously-skip-permissions`) are stricter: a yes/no/true/false word right after one of them on a print line is a usage error
+(exit 1, nothing starts), because `orb -p --trust false fix it` would otherwise send "false fix it" with the folder trusted
+where `orb run --trust false` refuses it; write `--trust=false` or `--no-trust`. Only to find the subcommand does `orb` treat a yes/no/true/false word after a
 boolean flag as its value, so `orb --standalone yes serve -p` is still a `serve` command line. `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
 object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
 takes the same flags from one shared definition. The flags that `orb` takes only with `-p` (`--output-format`,

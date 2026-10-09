@@ -7,7 +7,7 @@ import { PrintBooleanFlags, RootValueFlags, Subcommands } from "../src/commands/
 // form, so a word such as yes or run can never be taken for a value or a subcommand.
 const printed = (argv: string[]) => {
   const line = classify(argv)
-  expect(line.mode).toBe("print")
+  if (line.mode !== "print") throw new Error(`expected a print line, got ${line.mode}`)
   return line.args
 }
 
@@ -164,4 +164,25 @@ test.each([
   [["-p", "x", "--", "-r"], ["--print=true", "x", "--", "-r"]],
 ])("%j takes the word after -r as its value on a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
+})
+
+// A word after a bare flag that widens what runs would be sent as part of the message on a print line, while
+// `orb run` reads it as the flag's value: the line is refused instead of guessing.
+const widening = ["--trust", "--auto", "--yolo", "--dangerously-skip-permissions"]
+const literalWords = ["false", "no", "0", "off", "n", "true", "yes"]
+
+test.each(widening.flatMap((flag) => literalWords.map((word) => [flag, word] as const)))(
+  "orb -p %s %s is a usage error",
+  (flag, word) => {
+    expect(classify(["-p", flag, word, "fix", "it"]).mode).toBe("usage")
+    // The flag may come before -p.
+    expect(classify([flag, word, "-p", "fix"]).mode).toBe("usage")
+  },
+)
+
+test.each(widening)("orb -p %s keeps its inline and bare forms", (flag) => {
+  expect(printed(["-p", `${flag}=false`, "fix"])).toEqual(["--print=true", `${flag}=false`, "fix"])
+  expect(printed(["-p", flag, "--model", "x/y", "fix"])).toEqual(["--print=true", `${flag}=true`, "--model", "x/y", "fix"])
+  // On an ordinary line the word is the flag's value, which is what `orb run` does too.
+  expect(classify(["run", flag, "false", "fix"]).mode).toBe("root")
 })
