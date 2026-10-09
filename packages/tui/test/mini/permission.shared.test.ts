@@ -116,7 +116,8 @@ describe("run permission shared", () => {
         }),
       ),
     ).toMatchObject({
-      title: "Access external directory /tmp/work",
+      // Shown where the tools would act on it: on Windows a path that starts with `/` is on the current drive.
+      title: `Access external directory ${path.resolve("/tmp/work").replaceAll("\\", "/")}`,
       lines: ["- /tmp/work/**/*.ts", "- /tmp/work/**/*.tsx"],
     })
 
