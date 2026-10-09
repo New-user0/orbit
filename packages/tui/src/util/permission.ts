@@ -1,6 +1,6 @@
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
-import { canonicalToolName, finiteNumber, webSearchProviderLabel } from "./tool-display"
+import { canonicalToolName, finiteNumber, legacyToolInput, webSearchProviderLabel } from "./tool-display"
 
 type Dict = Record<string, unknown>
 
@@ -19,6 +19,9 @@ export type PermissionPresentationInput = {
   metadata?: unknown
   input?: unknown
   toolMetadata?: unknown
+  // The tool that asks, when known. Its own field names decide which key names the file: NotebookEdit asks as Edit,
+  // and a decoy `path` beside its `notebook_path` must not be what the prompt shows.
+  tool?: string
 }
 
 // Every string here can come from a model (a shell command, a path, a diff), so the one exit writes control
@@ -39,7 +42,7 @@ export function permissionPresentation(
 
 function present(source: PermissionPresentationInput, formatPath: (value: string) => string): PermissionPresentation {
   const action = canonicalToolName(source.action)
-  const input = normalizeInput(action, source.input)
+  const input = normalizeInput(action, source.input, source.tool)
   const metadata = { ...dict(source.toolMetadata), ...dict(source.metadata) }
   const resources = source.resources.filter((item): item is string => typeof item === "string")
 
@@ -184,8 +187,8 @@ export function permissionOptionLabel(option: "once" | "always" | "reject" | "co
   return "Cancel"
 }
 
-function normalizeInput(action: string, value: unknown): Dict {
-  const input = dict(value)
+function normalizeInput(action: string, value: unknown, tool?: string): Dict {
+  const input = dict(legacyToolInput(tool ?? action, value))
   const path = text(input.path) || text(input.filePath) || text(input.filepath)
   const agent = text(input.agent) || text(input.subagent_type)
   return {

@@ -7,7 +7,7 @@ import { Form } from "../../form.js"
 import { Permission } from "../../permission.js"
 import { Question } from "@orbit/schema/question"
 
-export const name = "question"
+export const name = "AskUserQuestion"
 
 export const description = `Use this tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
@@ -63,7 +63,7 @@ export const Plugin = {
           execute: (input, context) =>
             permission
               .assert({
-                action: "question",
+                action: name,
                 resources: ["*"],
                 sessionID: context.sessionID,
                 agent: context.agent,

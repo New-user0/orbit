@@ -307,6 +307,32 @@ describe("Permission", () => {
     }),
   )
 
+  it.effect("applies rules and saved approvals written with old tool names to the renamed tools", () =>
+    Effect.gen(function* () {
+      yield* setup([
+        { action: "shell", resource: "rm *", effect: "deny" },
+        { action: "edit", resource: "*.env", effect: "ask" },
+        { action: "read", resource: "*", effect: "allow" },
+      ])
+      const service = yield* Permission.Service
+      let count = 0
+      const ask = (input: Partial<Permission.AssertInput>) =>
+        service.ask(assertion({ ...input, id: Permission.ID.create(`per_names_${count++}`) }))
+      const blocked = yield* service.assert(assertion({ action: "Bash", resources: ["rm -rf build"] })).pipe(Effect.flip)
+      expect(blocked).toBeInstanceOf(Permission.BlockedError)
+      expect((yield* ask({ action: "Edit", resources: ["a.env"] })).effect).toBe("ask")
+      expect((yield* ask({ action: "Read", resources: ["a.ts"] })).effect).toBe("allow")
+      // An allow for one tool does not reach another.
+      expect((yield* ask({ action: "Bash", resources: ["ls"] })).effect).toBe("ask")
+
+      // A saved approval from before the rename allows the renamed tool, and a configured deny still wins.
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "shell", resources: ["ls"] })
+      expect((yield* ask({ action: "Bash", resources: ["ls"] })).effect).toBe("allow")
+      expect((yield* ask({ action: "Glob", resources: ["ls"] })).effect).toBe("ask")
+    }),
+  )
+
   it.effect("uses saved bash approvals while preserving configured deny precedence", () =>
     Effect.gen(function* () {
       yield* setup()

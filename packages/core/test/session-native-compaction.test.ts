@@ -201,7 +201,7 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
       agent: { id: Agent.defaultID, info: Agent.Info.default(Agent.defaultID) },
       tools: stubSnapshot({
         definitions: [
-          ToolDefinition.make({ name: "read", description: "Read a file", inputSchema: { type: "object" } }),
+          ToolDefinition.make({ name: "Read", description: "Read a file", inputSchema: { type: "object" } }),
         ],
         execute: () => Effect.die("Compaction must never dispatch tools"),
       }),
@@ -259,7 +259,7 @@ it.live(
       expect(JSON.stringify(first.messages)).not.toContain("Synthetic context")
       expect(fixture.bodies[0]).toMatchObject({
         input: expect.arrayContaining([{ type: "compaction_trigger" }]),
-        tools: [expect.objectContaining({ name: "read" })],
+        tools: [expect.objectContaining({ name: "Read" })],
       })
       expect(fixture.bodies[0]).not.toHaveProperty("context_management")
       expect(fixture.headers[0]?.get("x-test-hook")).toBe("compaction")
@@ -340,7 +340,7 @@ it.live("manual and automatic endpoint compaction keep the provider replacement 
     expect(JSON.stringify(replacement)).not.toContain("Original user")
     expect(fixture.state.calls).toBe(2)
     expect(fixture.headers[0]?.get("x-http-hook")).toBe("compaction")
-    expect(fixture.bodies[0]).toMatchObject({ tools: [expect.objectContaining({ name: "read" })] })
+    expect(fixture.bodies[0]).toMatchObject({ tools: [expect.objectContaining({ name: "Read" })] })
     expect(fixture.bodies[0]).not.toHaveProperty("context_management")
   }),
 )

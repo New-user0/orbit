@@ -4391,6 +4391,7 @@ describe("OpenAI Responses route", () => {
             id: "call_1",
             name: "lookup",
             input: {},
+            partialInput: true,
             providerExecuted: undefined,
             providerMetadata: { openai: { itemId: "fc_item_1" } },
           },

@@ -17,7 +17,7 @@ import { SubagentTool } from "./subagent.js"
 // program's return value comes back. Intermediate work (drafts, reviews, findings) stays in the children, so the
 // caller's context holds the plan and the outcome rather than every step in between.
 
-export const name = "workflow"
+export const name = "Workflow"
 
 /** Subagents running at once within one workflow. */
 const CONCURRENCY = 4

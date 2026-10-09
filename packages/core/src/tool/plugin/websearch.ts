@@ -9,7 +9,7 @@ import { Form } from "../../form.js"
 import { Permission } from "../../permission.js"
 import { WebSearch } from "../../websearch.js"
 
-export const name = "websearch"
+export const name = "WebSearch"
 export const NO_RESULTS = "No search results found. Please try a different query."
 const providerSelectionLock = Semaphore.makeUnsafe(1)
 const httpErrors = new Map([

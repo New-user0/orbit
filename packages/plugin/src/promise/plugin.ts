@@ -57,6 +57,8 @@ export type Cleanup = () => Promise<void> | void
 
 export interface Plugin {
   readonly id: string
+  /** `"reference"` opts the plugin's tool and permission hooks in to the current built-in tool names. */
+  readonly toolNames?: "reference"
   readonly setup: (context: Context) => Promise<Cleanup | void> | Cleanup | void
 }
 

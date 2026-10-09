@@ -55,7 +55,9 @@ const HeadlessParams = {
     Flag.withDefault(false),
   ),
   jsonSchema: Flag.string("json-schema").pipe(
-    Flag.withDescription("JSON Schema file the final answer must follow; prints one JSON result object"),
+    Flag.withDescription(
+      "JSON Schema file the final answer must follow; the result carries the parsed answer as structured_output, and text output prints only the parsed JSON",
+    ),
     Flag.optional,
   ),
   file: Flag.string("file").pipe(
@@ -65,15 +67,55 @@ const HeadlessParams = {
   ),
   title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
   thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
+  maxSteps: Flag.integer("max-steps").pipe(
+    Flag.withAlias("max-turns"),
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription("Stop after this many model calls; the result then has subtype error_max_steps"),
+    Flag.optional,
+  ),
+  maxCost: Flag.float("max-cost").pipe(
+    Flag.withSchema(Schema.Finite.check(Schema.isGreaterThan(0))),
+    Flag.withDescription("Stop once the run has cost this many US dollars; needs a model with a known price"),
+    Flag.optional,
+  ),
+  maxTokens: Flag.integer("max-tokens").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
+    Flag.withDescription("Stop once the run has used this many tokens"),
+    Flag.optional,
+  ),
+  fallbackModel: Flag.string("fallback-model").pipe(
+    Flag.withDescription(
+      "Model to switch to when the main model stays overloaded, in the format provider/model#variant",
+    ),
+    Flag.optional,
+  ),
 }
 
 // The flags that only `orb -p` takes, which the root command lists so that --help shows them.
 const PrintParams = {
   ...HeadlessParams,
-  outputFormat: Flag.choice("output-format", ["text", "json"]).pipe(
-    Flag.withDescription('Output format with -p: "text" prints the answer, "json" prints one JSON result object'),
+  outputFormat: Flag.choice("output-format", ["text", "json", "stream-json"]).pipe(
+    Flag.withDescription(
+      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run that fails before its prompt is sent prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents',
+    ),
     Flag.optional,
   ),
+  includePartialMessages: Flag.boolean("include-partial-messages").pipe(
+    Flag.withDescription(
+      "With --output-format stream-json: also print text_delta, reasoning_delta (with --thinking) and tool_input_delta lines as the model streams",
+    ),
+    Flag.withDefault(false),
+  ),
+  verbose: Flag.boolean("verbose").pipe(
+    Flag.withDescription(
+      "With the text format: show thinking and tool output, and print one usage line per step on stderr",
+    ),
+    Flag.withDefault(false),
+  ),
+}
+
+// What the interface takes as well as `orb -p`, so a plain `orb` run does not refuse them.
+const ModelParams = {
   model: Flag.string("model").pipe(
     Flag.withAlias("m"),
     Flag.withDescription("Model to use in the format provider/model#variant"),
@@ -81,6 +123,14 @@ const PrintParams = {
   ),
   agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
 }
+
+/** The flags that only `orb -p` takes, as the camelCase names of the parsed input, which the root command refuses. */
+export const PrintParamKeys = Object.keys(PrintParams) as ReadonlyArray<keyof typeof PrintParams>
+
+/** The same flags as they are typed, for the message that refuses them and the tests that pin it. */
+export const PrintParamFlags = PrintParamKeys.map(
+  (key) => `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+)
 
 // A bare -r or --resume is rewritten to `--resume=` by framework/argv.ts, because the parser has no optional values.
 const ResumeParams = {
@@ -139,6 +189,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
     print: PrintFlag,
     ...SessionParams,
     ...PrintParams,
+    ...ModelParams,
     prompt: Flag.string("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
@@ -660,6 +711,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         ),
         agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
         format: Flag.choice("format", ["default", "json", "stream-json", "result"]).pipe(
+          Flag.withHidden,
           Flag.withDescription(
             'Output format: "json" or "stream-json" print one JSON event per line, "result" prints one JSON object at the end',
           ),
@@ -843,6 +895,7 @@ export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NA
     ...SessionParams,
     ...HeadlessResumeParams,
     ...PrintParams,
+    ...ModelParams,
     print: PrintFlag,
     message: Argument.string("message").pipe(
       Argument.withDescription("Message to send"),
@@ -862,6 +915,11 @@ export const RootValueFlags = {
     "agent",
     "output-format",
     "json-schema",
+    "max-steps",
+    "max-turns",
+    "max-cost",
+    "max-tokens",
+    "fallback-model",
     "file",
     "title",
     "completions",
@@ -869,6 +927,9 @@ export const RootValueFlags = {
   ],
   short: ["s", "m", "f", "r"],
 } as const
+
+/** The boolean flags of `orb -p` that grant trust or approve every ask when they are on. */
+export const WideningFlags: ReadonlyArray<string> = ["trust", "auto", "yolo", "dangerously-skip-permissions"]
 
 /** The boolean flags of `orb -p`, each with the short letter it is also written with, if it has one. */
 export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
@@ -882,6 +943,8 @@ export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
   fork: undefined,
   bare: undefined,
   thinking: undefined,
+  "include-partial-messages": undefined,
+  verbose: undefined,
   "print-logs": undefined,
 }
 

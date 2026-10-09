@@ -12,6 +12,7 @@ import type {
   Workspace,
 } from "../protocol.js"
 import { agentsOf, describe, duration, excerpt, phases, segments, tokens } from "./present.js"
+import { legacyToolName } from "../tool-name.js"
 
 // Runs inside the webview. Every string from the model or the server is set as text, never parsed as HTML.
 declare function acquireVsCodeApi(): { postMessage(message: FromView): void }
@@ -176,7 +177,7 @@ setInterval(() => {
   // Running workflows show elapsed seconds; redraw them about once a second.
   if (state.tick % 7 === 0)
     items.forEach((item) => {
-      if (item.type === "tool" && item.name === "workflow" && item.status === "running") replace(item)
+      if (item.type === "tool" && legacyToolName(item.name) === "workflow" && item.status === "running") replace(item)
     })
   if (state.tick % 7 === 0 && !map.hidden) paintMap()
   const spinner = busy.querySelector(".spin")
@@ -190,7 +191,7 @@ function render(item: Item) {
   state.started = true
   empty.remove()
   // The plan has its own card, kept where the first plan update appeared.
-  if (item.type === "tool" && item.name === "todo") {
+  if (item.type === "tool" && legacyToolName(item.name) === "todo") {
     if (!plan) {
       plan = element("div", "plan")
       column.append(plan)
@@ -251,7 +252,7 @@ function build(item: Item): HTMLElement {
       return node
     }
     case "tool":
-      return item.name === "workflow" ? workflow(item) : tool(item)
+      return legacyToolName(item.name) === "workflow" ? workflow(item) : tool(item)
     case "permission":
       return permission(item)
   }

@@ -3,7 +3,7 @@ export * as TodoTool from "./todo.js"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
 
-export const name = "todo"
+export const name = "TodoWrite"
 
 export const description = `Keep a short plan for the current task, shown to the user while you work.
 

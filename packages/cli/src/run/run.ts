@@ -1,17 +1,19 @@
 import { Service, type Endpoint } from "@orbit/client/effect/service"
 import { Orbit, type OrbitClient, type SessionMessageAssistantTool } from "@orbit/client/promise"
-import { jsonLine } from "@orbit/flow/plain"
+import { body, jsonLine, progress } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
 import { open } from "node:fs/promises"
+import { EOL } from "node:os"
 import path from "node:path"
 import { readStdin } from "../util/io"
 import { ServerConnection } from "../services/server-connection"
 import { parseSessionTargetModel, resolveSessionTarget } from "../session-target"
-import { toolInlineInfo } from "@orbit/tui/mini/tool"
+import { toolInlineInfo, toolOutputText } from "@orbit/tui/mini/tool"
 import { runNonInteractivePrompt, wroteResult } from "./noninteractive"
 import { UI } from "./ui"
 import { Env } from "../env"
 import { errorMessage } from "../util/error"
+import { ORBIT_VERSION } from "../version"
 
 export type RunCommandInput = {
   server: ServerConnection.Resolved
@@ -28,7 +30,17 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
+  maxSteps?: number
+  maxCost?: number
+  maxTokens?: number
+  fallbackModel?: string
   auto?: boolean
+  /** `orb -p`: init and result lines, the enriched result, and the schema text mode. `orb run --format` has none. */
+  envelope?: boolean
+  /** With the stream-json envelope: text, reasoning and tool input fragments as they stream. */
+  partial?: boolean
+  /** With the text format: tool output bodies and a usage line per step. */
+  verbose?: boolean
 }
 
 type FilePart = {
@@ -93,6 +105,16 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       fetch(request, { ...init, timeout: false } as BunFetchRequestInit)) as typeof fetch,
   })
   const explicit = parseRunModel(input.model)
+  const fallback = parseSessionTargetModel(input.fallbackModel)
+  const turn =
+    input.maxSteps === undefined && input.maxCost === undefined && input.maxTokens === undefined && !fallback
+      ? undefined
+      : {
+          ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
+          ...(input.maxCost === undefined ? {} : { maxCost: input.maxCost }),
+          ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
+          ...(fallback ? { fallbackModel: fallback } : {}),
+        }
   const target = await resolveSessionTarget({
     client,
     location: prepared.directory ? { directory: prepared.directory } : undefined,
@@ -139,6 +161,15 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     })
   }
 
+  // The model of the init line is the one the run asks for, or the default of the folder when it asks for none.
+  const initModel =
+    input.envelope && input.format === "stream-json"
+      ? (model ??
+        (await client.model
+          .default({ location: { directory: target.location.directory } })
+          .then((result) => (result.data ? { providerID: result.data.providerID, modelID: result.data.id } : undefined))
+          .catch(() => undefined)))
+      : undefined
   await runNonInteractivePrompt({
     client,
     sessionID: target.session.id,
@@ -150,11 +181,22 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     variant,
     thinking: input.thinking ?? false,
     format: input.format,
+    envelope: input.envelope
+      ? {
+          cwd: target.location.directory,
+          agent: target.agent,
+          model: initModel ? `${initModel.providerID}/${initModel.modelID}` : undefined,
+          version: ORBIT_VERSION,
+        }
+      : undefined,
+    partial: input.partial,
+    verbose: input.verbose,
     jsonSchema: input.jsonSchema,
+    turn,
     auto: input.auto ?? false,
     attached: options.attached ?? true,
     compatibility: options.compatibility,
-    renderTool: (part) => renderTool(part, target.location.directory),
+    renderTool: (part) => renderTool(part, target.location.directory, input.verbose),
     renderToolError: (part) => renderToolError(part, target.location.directory),
   }).catch((error) => reportRunError(input, errorMessage(error), target.session.id))
 }
@@ -231,34 +273,71 @@ function isBinaryContent(bytes: Uint8Array) {
   return bytes.reduce((count, byte) => count + Number(byte < 9 || (byte > 13 && byte < 32)), 0) / bytes.length > 0.3
 }
 
-async function renderTool(part: SessionMessageAssistantTool, directory: string) {
+async function renderTool(part: SessionMessageAssistantTool, directory: string, verbose?: boolean) {
   const info = toolInlineInfo(part, directory)
+  // --verbose also prints what the tool returned, which a block already shows as its body.
+  const output =
+    verbose && info.mode !== "block" && part.state.status === "completed"
+      ? toolOutputText(part.name, part.state.content).trim()
+      : ""
   if (info.mode === "block") {
     UI.empty()
-    UI.println(UI.Style.TEXT_NORMAL + info.icon, UI.Style.TEXT_NORMAL + info.title)
-    if (info.body?.trim()) UI.println(info.body)
+    UI.println(UI.Style.TEXT_NORMAL + info.icon, UI.Style.TEXT_NORMAL + progress(info.title))
+    if (info.body?.trim()) UI.println(body(info.body))
     UI.empty()
     return
   }
   UI.println(
     UI.Style.TEXT_NORMAL + info.icon,
-    UI.Style.TEXT_NORMAL + info.title,
-    info.description ? UI.Style.TEXT_DIM + info.description + UI.Style.TEXT_NORMAL : "",
+    UI.Style.TEXT_NORMAL + progress(info.title),
+    info.description ? UI.Style.TEXT_DIM + progress(info.description) + UI.Style.TEXT_NORMAL : "",
   )
+  // A lone carriage return would overwrite the line before it on a terminal, so it breaks the line instead.
+  if (output)
+    UI.println(
+      body(output.replace(/\r\n?/g, "\n"))
+        .split("\n")
+        .map((line) => `  ${line}`)
+        .join(EOL),
+    )
 }
 
 async function renderToolError(part: SessionMessageAssistantTool, directory: string) {
   const info = toolInlineInfo(part, directory)
-  UI.println(UI.Style.TEXT_NORMAL + "✗", UI.Style.TEXT_NORMAL + `${info.title} failed`)
+  UI.println(UI.Style.TEXT_NORMAL + "✗", UI.Style.TEXT_NORMAL + `${progress(info.title)} failed`)
 }
 
 /** @internal Used by the V1 command boundary before a Session exists. */
-export function reportRunError(input: Pick<RunCommandInput, "format">, message: string, sessionID?: string) {
+export function reportRunError(
+  input: Pick<RunCommandInput, "format" | "envelope">,
+  message: string,
+  sessionID?: string,
+) {
   process.exitCode = 1
-  if (input.format === "result") {
+  if (input.format === "result" || (input.envelope && input.format === "stream-json")) {
     if (wroteResult()) return
     process.stdout.write(
-      jsonLine({ type: "result", sessionID: sessionID ?? "", is_error: true, result: "", error: message }) + "\n",
+      jsonLine({
+        type: "result",
+        sessionID: sessionID ?? "",
+        is_error: true,
+        subtype: "error",
+        ...(input.envelope ? { outcome: "failed", reason: "error" } : {}),
+        result: "",
+        error: message,
+        ...(input.envelope
+          ? {
+              steps: 0,
+              duration_ms: 0,
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              rejected: [],
+            }
+          : {
+              usage: { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
+            }),
+        truncated: false,
+      }) + "\n",
     )
     return
   }
@@ -268,6 +347,7 @@ export function reportRunError(input: Pick<RunCommandInput, "format">, message: 
         type: "error",
         timestamp: Date.now(),
         sessionID: sessionID ?? "",
+        subtype: "error",
         error: { type: "unknown", message },
       }) + "\n",
     )

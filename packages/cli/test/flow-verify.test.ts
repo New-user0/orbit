@@ -53,12 +53,12 @@ const ollama = Bun.serve({
     const feedback = prompt.includes("did not pass verification") ? prompt : ""
     // Each attempt reads answer.txt before writing it, as the write tool requires for a file that already exists.
     if (messages.at(-1)?.role === "tool") {
-      if (!JSON.stringify(messages.at(-2)).includes('"name":"read"')) return reply("Wrote answer.txt")
+      if (!JSON.stringify(messages.at(-2)).includes('"name":"Read"')) return reply("Wrote answer.txt")
       const answer = body.model === "good:1b" || (body.model === "learner:1b" && feedback) ? "42" : "41"
-      return call("write", { path: "answer.txt", content: `${answer}\n` })
+      return call("Write", { file_path: "answer.txt", content: `${answer}\n` })
     }
     authored.push({ model: body.model, feedback })
-    return call("read", { path: "answer.txt" })
+    return call("Read", { file_path: "answer.txt" })
   },
 })
 

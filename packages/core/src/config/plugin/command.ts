@@ -262,7 +262,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
         const parsed = yield* ShellParse.scan(source, shell, cwd, { portable })
         const resources = parsed.commands.map((command) => command.resource)
         yield* services.permission.assert({
-          action: "shell",
+          action: "Bash",
           // Ask about the span as written as well when its commands alone would mislead: the scanner found none (a bare
           // redirect), or it changes directory, so the commands run somewhere the resources do not show. Saved rules
           // match single commands, so they never cover such a span.

@@ -242,6 +242,15 @@ and `steps` of every agent (so also `agents.title.model`, which `small_model` mi
 which pins the model of side queries), and the `model` of every command. Orbit uses your own settings instead.
 Trusting the folder restores them. The config has no other field that picks a model, a provider or a budget today.
 
+A workflow or suite file in an untrusted folder can no longer pick a model either. `orb flow run`, `flow resume` and
+`eval` stop, with the usual untrusted-folder message and exit 1, before any model is asked, when a YAML or JSON file sets
+a `model` on a node, a team member or a `judge`, lists `retry.fallbackModels`, sets `retry.maxAttempts`, `maxIterations`
+or `maxRounds`, or is a suite with `models`, even in a folder that holds nothing back. The message lists each field as
+written under "lets the file choose which of your models run its nodes". Before, such a file ran at once and its `model`
+replaced the `--model` you passed. `--trust` runs it once, `orb trust` trusts the folder for good, and a file that sets
+none of these keeps running without a grant. In a trusted folder nothing changes: the file's model still wins over
+`--model`. The file's own `budget` is not held, because it only lowers what a run may spend.
+
 A folder whose only config is one of these now counts as holding config back. The headless commands (`orb run` and
 the others) stop in it with the usual untrusted-folder message and exit 1, and the terminal UI and VS Code show the
 trust prompt, which lists the `providers` kind.
@@ -286,7 +295,10 @@ a literal `--`, except that when the first word is a subcommand `-p` must come b
 the `debug` subcommand and `orb run -p` is still a `run` command line (a usage error). A word right after a flag that takes a value is that
 flag's value, as in `orb -p --agent plan fix it`. Boolean flags never take the next word into the message, so `orb -p yes do it` sends
 "yes do it" and `orb -p --thinking false positives` sends "false positives" with thinking on; write `--no-thinking` or
-`--thinking=false` to turn a flag off. Only to find the subcommand does `orb` treat a yes/no/true/false word after a
+`--thinking=false` to turn a flag off. The flags that grant trust or approve every ask (`--trust`, `--auto`, `--yolo`,
+`--dangerously-skip-permissions`) are stricter: a yes/no/true/false word right after one of them on a print line is a usage error
+(exit 1, nothing starts), because `orb -p --trust false fix it` would otherwise send "false fix it" with the folder trusted
+where `orb run --trust false` refuses it; write `--trust=false` or `--no-trust`. Only to find the subcommand does `orb` treat a yes/no/true/false word after a
 boolean flag as its value, so `orb --standalone yes serve -p` is still a `serve` command line. `--output-format text` (the default) prints the answer, and `--output-format json` prints one JSON result
 object. `--bare`, `--json-schema`, `--file`, `--title` and `--thinking` work as they do for `orb run`, and `orb run` now
 takes the same flags from one shared definition. The flags that `orb` takes only with `-p` (`--output-format`,
@@ -294,14 +306,47 @@ takes the same flags from one shared definition. The flags that `orb` takes only
 `orb run` takes the others too, and keeps its own `--format` in place of `--output-format`. `orb -p --help` lists every flag a printed run accepts,
 including `--trust` and `--fork`.
 
-Like `orb run`, `orb -p` stops in an untrusted folder whose project config is held back, before anything is sent, and
-reports the refusal as a JSON result object under `--output-format json`; `--trust` runs it once.
+Unlike `orb run`, `orb -p` stops in any untrusted folder, before anything is sent, also one whose project config holds
+nothing back (a fresh clone with only an `AGENTS.md`), because the folder's instructions steer the model and the default
+rules let its tool calls run without asking. It reports the refusal as a JSON result object under `--output-format json`
+and exits 1, `--bare` included; `--trust` runs it once, and `orb trust` trusts the folder for good. Against a server
+older than workspace trust, which cannot say whether the folder is trusted, it stops as well. `orb run` and `orb loop`
+still go ahead in a folder that holds nothing back.
 
 `orb run a -- b` used to send the operands after `--` twice ("a b b"). It now sends them once.
 
 **Affects:** scripts that passed operands after `--` to `orb run` and relied on the repeat.
 
 **What to do:** nothing for `-p`; to send a message that starts with a dash, put it after `--`.
+
+### `orb -p` prints an init line, an enriched result and, on request, streamed fragments
+
+`orb -p --output-format stream-json` prints one JSON line per event, beginning with an init line
+`{"type":"init","protocol":1,"sessionID","cwd","agent","model","version"}` that is written before the message is sent
+(`agent` is `null` until the session has chosen one), and ending with exactly one result line. A run that fails
+before its prompt is sent (the trust refusal, a `--resume` that names no session, no message, a variant that does not exist, a title that cannot be set) prints only the
+result line, with an empty `sessionID`. `--output-format json` prints only that result object. It also carries `subtype`
+(`success`, `error`, `interrupted`, or `error_max_steps`, `error_max_tokens` or `error_max_cost` when a limit ended the
+run) and `truncated`. Besides `sessionID`, `is_error`, `result`, `structured_output` and `error`, it now has
+`outcome` (`succeeded`, `failed` or `interrupted`), `reason` when the run did not succeed (`error`, `invalid_output`,
+`form_cancelled` (a form such as an MCP elicitation was cancelled), `incomplete`, `interrupted` for Ctrl-C, or the reason the runner stopped it,
+such as `shutdown`, which is an `interrupted` outcome), `steps`, `duration_ms`,
+`cost`, `tokens` and `rejected` (the requests that were rejected because nobody could approve them). The steps, cost and
+tokens include failed steps and the steps of subagents the run started. `--include-partial-messages` (stream-json only)
+adds `text_delta`, `reasoning_delta` (with `--thinking`) and `tool_input_delta` lines. `--verbose` (text format only; a usage error otherwise) implies `--thinking`,
+prints what the tools returned and writes one usage line per step to stderr. With the text format, a run that
+auto-rejected requests ends with one summary line on stderr; its exit code does not change.
+
+`orb -p --json-schema` with the text format now prints only the parsed JSON answer (it used to print the result object,
+which `--output-format json` still does); an answer that is not JSON is an error on stderr and exits 1. `orb run
+--format` is hidden from `--help` and prints what it printed before, without the new fields or lines. The one visible
+change is that its text output now writes out control characters in tool titles, descriptions, block bodies and the
+failed line, so a line break in a title or description shows as `\n` and an escape as `\x1b`, while a block body keeps
+its line breaks and tabs.
+
+**Affects:** scripts that read the output of `orb -p --json-schema` as a result object.
+
+**What to do:** add `--output-format json` to keep reading the result object; ignore the new fields otherwise.
 
 ### The sidebar's getting-started text no longer lists model families
 
@@ -1066,6 +1111,16 @@ Ask and deny rules now govern a tool that does not take care of its own permissi
 
 **What to do:** approve the prompt, or add an allow rule for the tool's action. Authors of a tool that asks in `execute` set `options.authorizes: true` to avoid the second question.
 
+### Built-in tools take the reference names and input fields
+
+The built-in tools are renamed, and several of their input fields with them: `shell` is `Bash`, `read` is `Read`, `edit` is `Edit`, `write` is `Write`, `patch` is `Patch`, `glob` is `Glob`, `grep` is `Grep`, `webfetch` is `WebFetch`, `websearch` is `WebSearch`, `question` is `AskUserQuestion`, `todo` is `TodoWrite`, `task_create`, `task_update` and `task_list` are `TaskCreate`, `TaskUpdate` and `TaskList`, `subagent` is `Agent`, `skill` is `Skill`, `notebook_edit` is `NotebookEdit`, `lsp` is `LSP`, `enter_plan_mode` and `exit_plan_mode` are `EnterPlanMode` and `ExitPlanMode`, `enter_worktree` and `exit_worktree` are `EnterWorktree` and `ExitWorktree`, `shell_output`, `shell_watch` and `shell_stop` are `TaskOutput`, `TaskWatch` and `TaskStop`, `workflow` is `Workflow`, `memory` is `Memory` and Code Mode's `execute` is `Execute`. `Edit` takes `file_path`, `old_string`, `new_string` and `replace_all`, `Read` and `Write` take `file_path`, `NotebookEdit` takes `notebook_path`, and `Bash` takes `run_in_background` where it took `background`. The model is now told the new names, and the permission action of a tool is its new name (`Edit` for `Edit`, `Write`, `Patch` and `NotebookEdit`).
+
+One table, `ToolNames` (`packages/schema/src/tool-names.ts`, re-exported from `packages/core/src/tool/names.ts`), keeps every old spelling working. Permission rules, saved approvals, policies of the form `<action>:<resource>`, hook matchers and the clients that draw a call all accept either spelling, and an old spelling stands for the same tool as the new one and for no other: an `allow` for `read` never covers `Bash`. A config hook of your own (in an Orbit settings file) is told the old name in `tool_name` whenever its matcher accepts it, which includes a matcher that is absent, `*` or `.*`, and its `tool_input` always carries the old field names beside the current ones, so a guard that checks `tool_name == "read"`, `path` or `oldString` keeps blocking whatever its matcher says. A matcher that names only the new spelling, such as `Read`, is told `Read`. A hook from another product's settings file is told that product's name, as before. A session recorded before the change replays under the new names: history is lowered with the new tool name and fields, while the recorded events keep what they were written with and nothing is migrated. A code plugin (an SDK plugin, a plugin package or a local plugin) that does not say otherwise keeps being told the old names: the `tool` of a `tool.execute.before` or `tool.execute.after` hook and the `action` of a `permission.evaluate` hook are `shell`, `edit` and `write`, so a guard such as `event.tool === "shell"` keeps matching and blocking, and a name such as `shell` that the hook writes to `event.tool` is read as the tool it names. A plugin opts in to the new names by declaring `toolNames: "reference"` beside its `id` (in the `define` call, or in the object a promise plugin exports); its hooks are then told `Bash`, `Edit` and `Write`, and it must compare with those. The built-in plugins use the new names. The input a plugin hook is shown answers to the old field names too: `input.path` reads `file_path`, and a write to `input.path` changes `file_path`, and `delete input.path` withdraws `file_path`, while `Object.keys`, `structuredClone` and copies of the input carry the current names only; a hook that replaces `event.input` with a copy or an object of its own that uses an old field name (`background`, `oldString`) changes the call all the same. The `tools` record that `session.context` and compaction hooks receive is keyed by the new names, but reads, writes and `delete` with an old name act on the new entry, so `delete event.tools.write` still hides `Write`. The editor of `tool.transform` answers to the old names as well: `get`, `update` and `remove` with `shell` or `write` act on `Bash` or `Write`, unless a tool is registered under that exact id. When the session shell is PowerShell the model is offered the shell tool as `PowerShell` and its prompts say so, but only after every plugin's context, compaction and generate hook has run and every execute hook has been told the tool by its registry name: a hook written for `shell` or `Bash` sees, hides and blocks the tool whichever shell the session has. The PowerShell name is written into Orbit's own base prompt only; an output style you add keeps its text, so "Git Bash" in a style stays as written. Every execute hook, a config `PreToolUse` hook included, is now told the registry name of any tool that a `session.context` hook renamed, not only the shell; before, it was told the name the model called. `PowerShell`, `Bash` and `shell` are spellings of one action, so a rule, saved approval or hook matcher written for any of them covers the tool whichever name the model is given, and an ACP client shows the command of a `PowerShell` call as it does for `Bash`. A plugin that registers a tool under an old built-in name (`shell`, `write`) now replaces that built-in, as it did before the rename, and a `session.context` hook that reads or deletes `tools.write` while also adding its own tool called `write` reaches its own entry, not `Write`. A model that still sends an old tool name or field is not understood, because the old names are no longer in its tool list. `Read` does not take `pages` yet.
+
+**Affects:** plugin authors whose hooks or tools match on a built-in tool's name or input field, SDK callers that read tool names from events of new sessions, and tests or scripts that call the tools by name. Permission rules, hook matchers and old sessions keep working.
+
+**What to do:** nothing for rules, hook matchers and existing code plugins that match on a name or field they are given. A plugin that lists tools and picks one by its old name (`editor.list().filter((t) => t.id === "shell")`, or iterating `event.tools`) now finds `Bash`: `list()` and iteration report the current names, while `get`, `update`, `remove` and keyed reads accept either spelling. Every legacy hook is given the old field names as the input stands when it runs, including after the input repair or an earlier plugin replaced `event.input`, and a current field written after a `delete input.path` is a write, not a withdrawal. When you update a plugin to the new names, declare `toolNames: "reference"` and compare with `Bash`, `Edit` and `Write` in the same change, and prefer the new names in rules you write.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -1226,14 +1281,23 @@ any other way (an output limit, a content filter or an unknown reason), or the s
 and the tool does not run. After an output limit the input is recorded as failed with `tool.input-truncated` and the
 response is resumed up to three times in a row (see "A response cut off by the output limit is resumed"); otherwise it
 fails with the response's own error. A call whose arguments arrived complete is not affected, and still runs when a
-later call in the same response was cut off. A call that stopped before its first argument is not caught: it cannot be
-told from a call to a tool that takes no arguments, so it still runs with empty arguments.
+later call in the same response was cut off. A call with no argument text at all is held the same way, because a call
+cut off before its first argument token cannot be told from a call to a tool that takes no arguments: it runs with empty
+arguments once the response finishes with `tool-calls` or `stop`, and is dropped after any other finish. Every route does
+this, including the routes that run through the AI SDK, which used to run such a call with empty arguments. The one exception is a call that another block (a tool call, text or reasoning) follows: only the last block of a
+response can be cut off, so that call was complete and is released as soon as the next block starts. The cost is that a
+call with no arguments, when it is the last block, starts when the response finishes, not mid-stream.
+
+Held calls keep the order the provider sent them in. A call that arrives behind a held one waits and is released with
+it, so `task_list` followed by `task_update` still runs in that order, and a failing shell call sent after a
+no-argument call no longer cancels it. When the response is cut off, only the held calls are dropped and the calls
+behind them still run in order. Provider-executed calls are not held.
 
 A cut-off call no longer counts as the evidence that its response finished. Two kinds of stream used to report
 `tool-calls` because such a call was in them, which released the call: a Responses-style stream that the provider ended as
 incomplete, with no reason or a reason Orbit does not know, and a Chat-style stream that ended without a finish reason
 from a model whose `compatibility.requireFinishReason` is `false`. Both now report an unknown finish, so the call is
-dropped, and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
+dropped (a call with no argument text in the second kind is a call to a tool without arguments and still runs), and the session handles the response as it handles any unknown finish: as an incomplete stream, which it
 retries or continues. The first kind reports an unknown finish even when every call in it is complete, where it used to
 report `tool-calls`; those calls still run.
 
@@ -1268,14 +1332,23 @@ A prompt could already carry `turn: { maxSteps, maxCost, maxTokens }`, and the o
 runner now checks them at the start of every model step, before the automatic compaction and the request of that step,
 and again before each retry of a step. When the turn has reached a limit, the busy period ends as failed with the
 session error type `limit.steps`, `limit.cost` or `limit.tokens`, after the tools of the last response have settled and
-with no partial response left behind.
+with no partial response left behind. A cost limit that cannot be checked is refused with `limit.cost-unknown`
+instead, as described below.
 
 Not every request is checked. Title generation, a compaction that recovers from a context overflow, and a manual
-compaction start without the check, and their spend counts at the next one. A subagent is checked only at the parent's
-step boundaries: it runs all its own steps between two checks, so a turn can overshoot by a whole subagent run, and a
-background subagent that is still running when a limit ends the turn keeps running. Its completion notice then wakes
-the Session into a new turn, which carries no limit. A response is priced after it arrives, so a turn can also overshoot
-a cost or token limit by one response.
+compaction start without the check, and their spend counts at the next one. A subagent also checks the cost and
+token limits of every turn above it before each of its own steps, counting what that turn has spent so far, siblings
+included, so a subagent stops with `limit.cost` or `limit.tokens` instead of overshooting by a whole run; the parent's
+step limit counts only the parent's own responses and never stops a subagent. A response is still priced after it
+arrives, so the overshoot is at most one response. A subagent is limited by the turn that was open when its latest
+prompt was admitted, not when it was delivered, even after that turn ends: a continued subagent belongs to the turn that continues it, not the one that
+created it, and a background subagent that is still running when the turn ends, whether it succeeded, failed or hit the
+limit, stops at the same cost or token limit, counting what the turn had spent. The completion notice of a background
+subagent or a background shell job, like any other synthetic message that no prompt of the user began, wakes the Session
+into a new turn that continues the limits of the turn before it, counted from the prompt that set them. A turn that holds a
+prompt of the person's is never such a wake-up, whatever synthetic input (a plan reminder, editor context) was parked in front of it: the
+prompt's own options, or none, apply. A response is priced after it arrives, so a
+turn can also overshoot a cost or token limit by one response.
 
 The window starts at the prompt that set the options. A queued prompt without options, or a prompt sent after the busy
 period ended, runs without limits, and a steered prompt with its own options starts a new window. A prompt sent while a
@@ -1283,15 +1356,15 @@ limited turn is finishing joins that turn, and fails at once if the limit is alr
 count as steps: a retry before output, and a response that failed mid-stream, do not. Cost and tokens add the Session's
 responses and its compaction and title usage, and the responses and usage of every subagent it started in the window.
 
-A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It fails with `limit.cost`
-when the model has no tier-less price above zero (a catalog model without a price is listed as zero), and when anything
-in the window, the Session's own or a subagent's, carries tokens with a cost of zero, a finished response carries no
-cost or no tokens, or a response failed mid-stream with no cost. So a free model cannot run under a cost limit; use a
-step or token limit for it.
+A cost limit never reads spend of unknown price as free, and a price of zero is not a price. It is refused with
+`limit.cost-unknown`, a refusal and not a limit that was reached, when the model has no tier-less price above zero (a
+catalog model without a price is listed as zero), and when anything in the window, the Session's own or a subagent's,
+carries tokens with a cost of zero, a finished response carries no cost or no tokens, or a response failed mid-stream
+with no cost. So a free model cannot run under a cost limit; use a step or token limit for it.
 
 **Affects:** SDK and HTTP callers that send `turn` limits and clients that show session errors.
 
-**What to do:** Nothing unless you send limits. Handle the three `limit.*` error types, and give models that you run
+**What to do:** Nothing unless you send limits. Handle the four `limit.*` error types, and give models that you run
 with a cost limit a price.
 
 ### VS Code asks whether to trust a folder, and starts only the `orb` of your own settings and PATH
@@ -1458,8 +1531,8 @@ When a model response stops because it reached its output limit, Orbit now adds 
 resume where it stopped and sends the request again, up to three times in a row. Before, the turn ended with the cut-off
 text. A tool call that was still being written when the limit hit is never run: it is recorded as failed with the error
 `tool.input-truncated`, so the model learns it did not run and can issue it again in full. After three resumes in a row,
-the next cut-off stays as it is. The count comes from the session history and starts over after any response that
-finishes with `stop` or `tool-calls`, after a compaction and after a new message from you. The limit holds whether the
+the next cut-off stays as it is. The count comes from the session's stored messages and starts over after any response
+that finishes with `stop` or `tool-calls` and after a new message from you. A compaction does not reset it. The limit holds whether the
 cut-off response was text only, ran a tool or ended inside a tool call. If a turn limit (`maxSteps`, `maxCost`,
 `maxTokens`) is already spent at a cut-off, including the third resume's, the turn fails with that `limit.*` error and
 no note is written. A text-only cut-off is resumed within the same step, so it shares that step's retry allowance, as
@@ -1550,10 +1623,37 @@ never repeated, since a repeat would run and bill the call again. The cut-off at
 note with `metadata.notice` set to `output-escalation` (and `metadata.replaces` naming that attempt) stay in the
 session's messages but are left out of every later request, token estimate, compaction summary and regenerated title, including in a fork,
 whose copy of the note names the copied attempt. The larger limit lasts until a response ends normally. While it lasts,
-`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction empties the history
-the runner reads, so a long stretch can escalate again after one. A `session.context` hook that changes or removes the
+`session.context` hooks see the model's maximum as `maxTokens` and no `outputTokenCap`. A compaction does not end it, and
+a stretch escalates at most once however often it compacts. A `session.context` hook that changes or removes the
 output limit keeps the limit it chose, and a request already at the model's maximum is not repeated.
 
 **Affects:** people who set `output_token_cap`, and clients reading session messages, which now see the hidden notice.
 
 **What to do:** nothing. Unset `output_token_cap` to avoid the extra request.
+
+### `orb run` takes limits and a fallback model, and its result says why it stopped
+
+`orb run` and `orb -p` take `--max-steps` (alias `--max-turns`), `--max-cost` (US dollars), `--max-tokens` and
+`--fallback-model` (`provider/model#variant`). They are sent with the prompt as its turn options, so the server enforces
+them. A run that reaches a limit exits 1 and says which: the result object of `orb run --format result` and `orb run --json-schema`
+gains `subtype` (`success`, `error_max_steps`, `error_max_cost`, `error_max_tokens`, `error` or `interrupted`), `usage`
+(the steps, cost and tokens of this session's own responses to the prompt, read from the stored messages when the run
+ends, so a subagent's spend is not in it; a response that failed part way adds its spend but is not a step) and
+`truncated` (the last step stopped at the output limit, even when a limit then ended the run, which also prints a
+warning). `orb -p` has no `usage`: its result carries the flat `steps`, `cost` and `tokens` described in the note on its
+output envelope, which count failed steps and subagents' steps, so `steps` can exceed what `--max-steps` counted. With `--format json` and `stream-json` every `error` line of a printed run carries the same
+`subtype`. A `--max-cost` that the model's missing price cannot check fails the run with the session error type
+`limit.cost-unknown`, subtype `error`, instead of running without a bound; it is a refusal, so over ACP it fails the
+turn rather than stopping with `max_turn_requests`. Without `-p`, the interface refuses these flags like the other flags
+of a printed run. If the server does not echo the limits back, because it is an older version that drops fields it does
+not know, the run asks the server to interrupt its session and fails with a version error. That interruption does
+nothing for a session that is idle or not yet running, so on such a server the prompt can still run without its limits.
+
+Any message that the runner marks with `metadata.notice` and a description, such as the switch to the fallback model,
+now prints a warning line, or a `{"type":"notice","notice":...,"message":...}` line with `--format json` and
+`stream-json`. Over ACP, a turn that reached a limit stops with `max_turn_requests` instead of failing, and every
+notice is sent as a `session_info_update` with `orbit/notice` in `_meta`.
+
+**Affects:** scripts that call `orb run` and read its result object or exit code, and ACP clients.
+
+**What to do:** nothing; the new fields are additive. A script that passes a limit should check `subtype`.

@@ -647,7 +647,7 @@ for (const [name, validate] of invalidValidates) {
         ],
       ])
       const snapshot = yield* tools.snapshot()
-      expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["after", "before", "execute"])
+      expect(snapshot.definitions.map((definition) => definition.name)).toEqual(["after", "before", "Execute"])
     }).pipe(Effect.provide(Logger.layer([logger])))
   })
 

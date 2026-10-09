@@ -53,6 +53,7 @@ import { SessionRunner } from "@orbit/core/session/runner/index"
 import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
+import { ShellResult } from "@orbit/core/shell/result"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
@@ -84,7 +85,7 @@ import { Location } from "@orbit/core/location"
 import { Provider } from "@orbit/core/provider"
 import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
-import { asc, desc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
@@ -110,7 +111,7 @@ const testLLM = TestLLM.layer({
         ...part,
         text: part.text.replace(emptyCodeMode, ""),
       })),
-      tools: request.tools.filter((tool) => tool.name !== "execute"),
+      tools: request.tools.filter((tool) => tool.name !== "Execute"),
     }),
 })
 type ModelLimit = { readonly context: number; readonly input?: number; readonly output: number }
@@ -1296,6 +1297,36 @@ describe("SessionRunnerLLM", () => {
     expect(s.requests[0]?.tools.map((tool) => tool.name)).toContain("renamed_echo")
     expect(s.requests[0]?.tools.map((tool) => tool.name)).not.toContain("echo")
     expect(s.executions).toEqual(["renamed"])
+  })
+
+  scenario("hides a tool from a session context hook that names it the way it was named before the rename", function* (s) {
+    const registry = yield* Tool.Service
+    const hooks = yield* PluginHooks.Service
+    yield* transformTools(
+      registry,
+      {
+        Write: {
+          name: "Write",
+          description: "A tool that a read-only plugin hides",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () => Effect.succeed({ output: {} }),
+        },
+      },
+      { codemode: false },
+    )
+    yield* hooks.register("session", "context", (event) =>
+      Effect.sync(() => {
+        delete event.tools.write
+      }),
+    )
+    yield* s.admit("Read only")
+    yield* s.llm.push([])
+
+    yield* s.resume
+
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).toContain("echo")
+    expect(s.requests[0]?.tools.map((tool) => tool.name)).not.toContain("Write")
   })
 
   scenario("projects a declared display name, escaped, onto the assistant tool and keeps it on replay", function* (s) {
@@ -3934,12 +3965,12 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.reasoningStart({ id: "reasoning-1" }),
         LLMEvent.reasoningDelta({ id: "reasoning-1", text: "Think" }),
         LLMEvent.reasoningEnd({ id: "reasoning-1" }),
-        LLMEvent.toolInputStart({ id: "call-error", name: "write" }),
-        LLMEvent.toolInputDelta({ id: "call-error", name: "write", text: '{"path":"README.md"}' }),
-        LLMEvent.toolInputEnd({ id: "call-error", name: "write" }),
-        LLMEvent.toolCall({ id: "call-error", name: "write", input: { path: "README.md" }, providerExecuted: true }),
-        LLMEvent.toolError({ id: "call-error", name: "write", message: "Denied" }),
-        LLMEvent.toolResult({ id: "call-error", name: "write", result: { type: "error", value: "Denied" } }),
+        LLMEvent.toolInputStart({ id: "call-error", name: "Write" }),
+        LLMEvent.toolInputDelta({ id: "call-error", name: "Write", text: '{"path":"README.md"}' }),
+        LLMEvent.toolInputEnd({ id: "call-error", name: "Write" }),
+        LLMEvent.toolCall({ id: "call-error", name: "Write", input: { path: "README.md" }, providerExecuted: true }),
+        LLMEvent.toolError({ id: "call-error", name: "Write", message: "Denied" }),
+        LLMEvent.toolResult({ id: "call-error", name: "Write", result: { type: "error", value: "Denied" } }),
         LLMEvent.toolCall({
           id: "call-provider",
           name: "web_search",
@@ -3986,7 +4017,7 @@ describe("SessionRunnerLLM", () => {
         content: [
           Expected.reasoning("Think"),
           Expected.failedTool(
-            { id: "call-error", name: "write" },
+            { id: "call-error", name: "Write" },
             { input: { path: "README.md" }, error: { type: "tool.execution", message: "Denied" } },
           ),
           Expected.completedTool(
@@ -4551,6 +4582,23 @@ describe("SessionRunnerLLM", () => {
     expect(yield* tools.maxActive).toBe(1)
   })
 
+  // A call with no argument text waits for the finish, and the calls behind it wait with it: the runner sees them in the
+  // order the provider sent them, so a later call never starts first.
+  scenario("runs a held no-argument call before the calls the provider sent behind it", function* (s) {
+    yield* s.admit("No arguments, then mutate")
+    yield* s.llm.push(
+      TestLLM.toolCalls(
+        LLMEvent.toolCall({ id: "call-first", name: "mutate", input: { text: "first" }, partialInput: true }),
+        callOf("call-second", "mutate", "second"),
+      ),
+      TestLLM.text("Done", "text-final"),
+    )
+
+    yield* s.resume
+
+    expect(s.executions).toEqual(["first", "second"])
+  })
+
   scenario("keeps the start order of a safe, a not safe and a safe call", function* (s) {
     yield* s.admit("Echo, mutate, echo")
     yield* s.llm.push(
@@ -4716,7 +4764,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.llm.push(
       TestLLM.toolCalls(
         callOf("call-a1", "echo", "a1"),
-        LLMEvent.toolCall({ id: "call-program", name: "execute", input: { code: "return await tools.probe({})" } }),
+        LLMEvent.toolCall({ id: "call-program", name: "Execute", input: { code: "return await tools.probe({})" } }),
         callOf("call-a2", "echo", "a2"),
       ),
       TestLLM.text("Done", "text-final"),
@@ -5630,6 +5678,214 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(1)
     })
 
+    // A subagent is admitted with no turn options of its own. While it runs, the parent waits and checks nothing, so the
+    // child must stop at the limit the parent's turn set, counting what the parent already spent.
+    const lengthText = (id: string) => [
+      LLMEvent.textStart({ id }),
+      LLMEvent.textDelta({ id, text: "Done" }),
+      LLMEvent.textEnd({ id }),
+    ]
+    for (const row of [
+      { name: "cost", turn: { maxCost: Money.USD.make(3) }, expected: "limit.cost", childRequests: 1 },
+      { name: "tokens", turn: { maxTokens: 5 }, expected: "limit.tokens", childRequests: 1 },
+      // The parent's step limit counts only its own responses, so it never stops a child.
+      { name: "steps", turn: { maxSteps: 2 }, expected: undefined, childRequests: 6 },
+      { name: "no limit", turn: undefined, expected: undefined, childRequests: 6 },
+    ] as const)
+      scenario(`stops a subagent at the parent turn's ${row.name} limit`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: row.turn, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        expect(s.requests).toHaveLength(2)
+
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          .set({ parent_id: sessionID })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(row.childRequests)
+        if (row.expected === undefined) return expect(Exit.isSuccess(exit)).toBe(true)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.expected)
+      })
+
+    // A background subagent outlives the turn that started it: the parent's terminal writes the idle marker that closes
+    // the turn, and the limit it set must still bind the child (`orb run --max-cost` exits at that terminal).
+    for (const row of [
+      { name: "open", terminal: undefined },
+      { name: "succeeded", terminal: (s: Scenario) => s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID }) },
+      {
+        name: "failed",
+        terminal: (s: Scenario) =>
+          failTerminal(s, {
+            type: "limit.cost",
+            message: "The turn reached its cost limit.",
+          } as SessionError.Error),
+      },
+    ] as const)
+      scenario(`stops a subagent at the parent's cost limit after the parent is ${row.name}`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          // The harness stamps messages with the test clock (0) and sessions with the wall clock, so place the child inside
+          // the turn explicitly: after the parent's prompt and before the idle marker that the terminal writes.
+          .set({ parent_id: sessionID, time_created: 1 })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* TestClock.adjust("1 second")
+        // The subagent tool admitted this prompt inside the turn; the parent's terminal comes after it.
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Child work", resume: false })
+        // Natural order: the parent's terminal comes after the admission, and the child's prompt is delivered after the
+        // terminal, as when a response crosses the limit and starts a background subagent in the same step.
+        yield* TestClock.adjust("1 second")
+        if (row.terminal) yield* row.terminal(s)
+        yield* TestClock.adjust("1 second")
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(1)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain("limit.cost")
+      })
+
+    // The wake-up turn that input no user prompt began (a completion notice, whatever its source) continues the limits of
+    // the turn before it, unless a user prompt began a turn in between.
+    const notices = {
+      subagent: { text: "<subagent>done</subagent>", metadata: { source: "subagent" } },
+      shell: ShellResult.notification({
+        jobID: "job_1",
+        shellID: "sh_1",
+        command: "npm run build",
+        state: "completed",
+        text: "built",
+      }),
+    }
+    for (const row of [
+      { name: "keeps", notice: "subagent", reminder: false, prompt: false, limited: true },
+      { name: "keeps", notice: "shell", reminder: false, prompt: false, limited: true },
+      { name: "keeps behind a plan reminder", notice: "shell", reminder: true, prompt: false, limited: true },
+      { name: "drops", notice: "subagent", reminder: false, prompt: true, limited: false },
+      { name: "drops", notice: "shell", reminder: false, prompt: true, limited: false },
+    ] as const)
+      scenario(`${row.name} the turn's cost limit on the turn a ${row.notice}'s completion notice wakes`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+        if (row.prompt) yield* s.session.prompt({ sessionID, text: "Unlimited", resume: false })
+        if (row.reminder)
+          yield* s.session.synthetic({ sessionID, text: "Plan reminder", metadata: { notice: "plan" }, resume: false })
+        yield* s.session.synthetic({ sessionID, ...notices[row.notice], resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("wake-done")),
+        )
+
+        const exit = yield* s.session.resume(sessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(row.limited ? 1 : 6)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.limited ? "limit.cost" : "")
+      })
+
+    // Synthetic input the person's client parks before their prompt (resume: false) does not make the person's own
+    // unlimited turn a wake-up of the limited turn before it.
+    for (const parked of [
+      { name: "a plan reminder", metadata: { notice: "plan" } },
+      { name: "editor context", metadata: { source: "editor" } },
+      { name: "embedded context", metadata: { source: "acp" } },
+      { name: "a user shell", metadata: { source: "shell" } },
+      { name: "no metadata", metadata: undefined },
+    ] as const)
+      scenario(`runs the person's unlimited prompt behind ${parked.name} parked after a limited turn`, function* (s) {
+        s.modelCost = [price]
+        yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(3) }, resume: false })
+        yield* s.llm.push(
+          toolStep(spend),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+        )
+        yield* s.resume
+        yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+        yield* s.session.synthetic({ sessionID, text: "Parked", metadata: parked.metadata, resume: false })
+        yield* s.session.prompt({ sessionID, text: "Unlimited", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("next-done")),
+        )
+
+        const exit = yield* s.session.resume(sessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 2).toBe(6)
+        expect(Exit.isSuccess(exit)).toBe(true)
+      })
+
+    // A child that the subagent tool continues belongs to the turn that continues it, not to the one that created it.
+    for (const row of [
+      { name: "unlimited then limited", first: undefined, second: { maxCost: Money.USD.make(3) }, limited: true },
+      { name: "limited then unlimited", first: { maxCost: Money.USD.make(2) }, second: undefined, limited: false },
+      { name: "limited then limited", first: { maxCost: Money.USD.make(2) }, second: { maxCost: Money.USD.make(3) }, limited: true },
+    ] as const)
+      scenario(`binds a continued subagent to the continuing turn: ${row.name}`, function* (s) {
+        s.modelCost = [price]
+        const parentTurn = function* (turn: typeof row.first | typeof row.second, text: string) {
+          yield* s.session.prompt({ sessionID, text, turn, resume: false })
+          yield* s.llm.push(
+            toolStep(spend),
+            TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("parent-done")),
+          )
+          yield* s.resume
+        }
+        yield* parentTurn(row.first, "First")
+        yield* insertSession(otherSessionID)
+        yield* s.db
+          .update(SessionTable)
+          .set({ parent_id: sessionID, time_created: 1 })
+          .where(eq(SessionTable.id, otherSessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* TestClock.adjust("1 second")
+        yield* s.bus.publish(SessionEvent.Execution.Succeeded, { sessionID })
+        yield* TestClock.adjust("1 second")
+        yield* parentTurn(row.second, "Second")
+        yield* s.session.prompt({ sessionID: otherSessionID, text: "Continue the child", resume: false })
+        yield* s.llm.push(
+          ...Array.from({ length: 5 }, () => toolStep(spend)),
+          TestLLM.complete({ reason: { normalized: "stop" }, usage: spend }, ...lengthText("child-done")),
+        )
+
+        const exit = yield* s.session.resume(otherSessionID).pipe(Effect.exit)
+
+        expect(s.requests.length - 4).toBe(row.limited ? 1 : 6)
+        expect(Exit.isFailure(exit) ? JSON.stringify(exit.cause) : "").toContain(row.limited ? "limit.cost" : "")
+      })
+
     scenario("stops at the token limit", function* (s) {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxTokens: 3 }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend), toolStep(spend))
@@ -5643,7 +5899,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(spend))
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
     })
@@ -5653,7 +5909,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(5) }, resume: false })
       yield* s.llm.push(toolStep(), toolStep())
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("cannot be counted") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("cannot be counted") })
 
       expect(s.requests).toHaveLength(1)
     })
@@ -5676,7 +5932,7 @@ describe("SessionRunnerLLM", () => {
       yield* s.session.prompt({ sessionID, text: "Work", turn: { maxCost: Money.USD.make(2) }, resume: false })
       yield* s.llm.push(toolStep(spend), toolStep(spend))
 
-      expect(yield* limited(s)).toMatchObject({ type: "limit.cost", message: expect.stringContaining("no price") })
+      expect(yield* limited(s)).toMatchObject({ type: "limit.cost-unknown", message: expect.stringContaining("no price") })
 
       expect(s.requests).toHaveLength(0)
     })
@@ -5953,7 +6209,7 @@ describe("SessionRunnerLLM", () => {
       sessionID,
       assistantMessageID,
       id: "call-interrupted-subagent",
-      name: "subagent",
+      name: "Agent",
     })
     yield* s.bus.publish(SessionEvent.Tool.Input.Ended, {
       sessionID,
@@ -5992,7 +6248,7 @@ describe("SessionRunnerLLM", () => {
           {
             error: {
               type: "aborted",
-              message: "Tool execution interrupted: subagent (sessionID: ses_existing_child)",
+              message: "Tool execution interrupted: Agent (sessionID: ses_existing_child)",
             },
             metadata: { sessionID: "ses_existing_child", status: "running", internal: "private" },
           },
@@ -6405,7 +6661,7 @@ describe("SessionRunnerLLM", () => {
       })
       yield* s.admit("Call declined from Code Mode")
 
-      yield* s.llm.push(TestLLM.tool("call-execute", "execute", { code }))
+      yield* s.llm.push(TestLLM.tool("call-execute", "Execute", { code }))
 
       const exit = yield* s.resume.pipe(Effect.exit)
 
@@ -6594,8 +6850,8 @@ describe("SessionRunnerLLM", () => {
     yield* transformTools(
       registry,
       {
-        question: {
-          name: "question",
+        AskUserQuestion: {
+          name: "AskUserQuestion",
           description: "Ask the user",
           input: Schema.Struct({}),
           output: Schema.Struct({}),
@@ -6606,7 +6862,7 @@ describe("SessionRunnerLLM", () => {
     )
     yield* s.admit("Ask then stop")
 
-    yield* s.llm.push(TestLLM.tool("call-question", "question", {}), [])
+    yield* s.llm.push(TestLLM.tool("call-question", "AskUserQuestion", {}), [])
 
     const run = yield* s.resume.pipe(Effect.exit, Effect.forkChild)
     const exit = yield* Fiber.join(run)
@@ -8611,7 +8867,7 @@ describe("SessionRunnerLLM", () => {
   })
 
   scenario("rejects malformed streamed tool input ordering", function* (s) {
-    yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "read", text: "{}" })])
+    yield* s.llm.push([LLMEvent.toolInputDelta({ id: "call-1", name: "Read", text: "{}" })])
 
     const defect = yield* s.resume.pipe(Effect.catchDefect(Effect.succeed))
     expect(defect).toBeInstanceOf(Error)
@@ -9024,6 +9280,89 @@ describe("SessionRunnerLLM", () => {
     yield* s.session.resume(forked.id)
     expect(JSON.stringify(s.requests[0]?.messages)).toContain("Whole answer")
     expect(JSON.stringify(s.requests[0]?.messages)).not.toContain("FirstCut")
+  })
+
+  // A compaction between resumes drops the runner's history before it, so the caps must come from the durable rows.
+  // Each cut-off fills the 4k window, which makes the next pass compact before it resumes.
+  const overflowing = {
+    reason: { normalized: "length", raw: "max_tokens" },
+    usage: { nonCachedInputTokens: 3_950, outputTokens: 10 },
+  } as const
+  const text = (id: string, value: string) => [
+    LLMEvent.textStart({ id }),
+    LLMEvent.textDelta({ id, text: value }),
+    LLMEvent.textEnd({ id }),
+  ]
+  const withSummaries = (cuts: ReadonlyArray<ReturnType<typeof TestLLM.complete>>) =>
+    cuts.flatMap((cut, index) => [cut, TestLLM.text("## Objective\n- Keep going", `cmp-summary-${index}`)])
+  for (const row of [
+    { name: "text only", cut: (n: number) => TestLLM.complete(overflowing, ...text(`cmp-${n}`, String(n))) },
+    {
+      name: "a cut-off tool call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          overflowing,
+          LLMEvent.toolInputStart({ id: `cmp-call-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cmp-call-${n}`, name: "echo", text: '{"text":"par' }),
+          LLMEvent.toolCall({ id: `cmp-call-${n}`, name: "echo", input: { text: "par" }, partialInput: true }),
+        ),
+    },
+    {
+      name: "an input that never became a call",
+      cut: (n: number) =>
+        TestLLM.complete(
+          overflowing,
+          LLMEvent.toolInputStart({ id: `cmp-input-${n}`, name: "echo" }),
+          LLMEvent.toolInputDelta({ id: `cmp-input-${n}`, name: "echo", text: '{"text":' }),
+        ),
+    },
+    {
+      name: "a tool call that ran",
+      cut: (n: number) =>
+        TestLLM.complete(overflowing, LLMEvent.toolCall({ id: `cmp-ran-${n}`, name: "echo", input: { text: String(n) } })),
+    },
+  ])
+    scenario(`stops resuming after three output-limit stops with a compaction between them: ${row.name}`, function* (s) {
+      s.currentModel = compactModel
+      yield* s.admit("Never finishes")
+      yield* s.llm.push(
+        ...withSummaries(Array.from({ length: 8 }, (_, index) => row.cut(index + 1))),
+        TestLLM.text("Done", "cmp-done"),
+      )
+
+      yield* s.resume
+
+      const all = yield* s.session.messages({ sessionID })
+      expect(all.filter((message) => message.type === "assistant" && message.finish === "length")).toHaveLength(4)
+      expect(notices(all, "output-limit")).toHaveLength(3)
+    })
+
+  scenario("escalates a capped reply once even when a compaction follows the escalation", function* (s) {
+    yield* s.configControl!.setEntries([
+      new Document({ type: "document", info: new Info({ output_token_cap: 8_000 }) }),
+    ])
+    s.currentModel = fittedOutputModel
+    const full = {
+      reason: { normalized: "length", raw: "max_tokens" },
+      usage: { nonCachedInputTokens: 99_000, outputTokens: 10 },
+    } as const
+    yield* s.admit("Never finishes")
+    yield* s.llm.push(
+      // The escalated retry follows its cut-off directly; a compaction runs before each request after that.
+      TestLLM.complete(full, ...text("cmp-esc-0", "x")),
+      TestLLM.complete(full, ...text("cmp-esc-1", "x")),
+      ...Array.from({ length: 6 }, (_, index) => [
+        TestLLM.text("## Objective\n- Keep going", `cmp-esc-summary-${index}`),
+        TestLLM.complete(full, ...text(`cmp-esc-${index + 2}`, "x")),
+      ]).flat(),
+      TestLLM.text("Done", "cmp-esc-done"),
+    )
+
+    yield* s.resume
+
+    const all = yield* s.session.messages({ sessionID })
+    expect(notices(all, "output-escalation")).toHaveLength(1)
+    expect(notices(all, "output-limit")).toHaveLength(3)
   })
 
   scenario("does not escalate when a hook set the output limit", function* (s) {

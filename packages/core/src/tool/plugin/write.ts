@@ -18,11 +18,11 @@ import { FileAccess } from "../../file-access.js"
 import { Permission } from "../../permission.js"
 import { fileDiff } from "./file-diff.js"
 
-export const name = "write"
+export const name = "Write"
 
 // TODO: Revisit whether model-facing mutation schemas should prefer absolute `filePath` naming for trained-in compatibility after evaluating model behavior.
 export const Input = Schema.Struct({
-  path: Schema.String.annotate({
+  file_path: Schema.String.annotate({
     description: "Path to the file to write to",
   }),
   content: Schema.String.annotate({ description: "Content to write to the file" }),
@@ -57,10 +57,10 @@ export const Plugin = {
       .transform((editor) =>
         editor.add({
           name,
-          options: { authorizes: true, codemode: false, permission: "edit" },
+          options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
-            "Writes a file to the local filesystem, overwriting if one exists.\n\nMissing parent directories are created automatically.\n\nUse this tool to create new files or overwrite existing files. For partial changes, use the edit tool instead.",
+            "Writes a file to the local filesystem, overwriting if one exists.\n\nMissing parent directories are created automatically.\n\nUse this tool to create new files or overwrite existing files. For partial changes, use the Edit tool instead.",
           input: Input,
           output: Output,
           execute: (input, context) =>
@@ -70,16 +70,16 @@ export const Plugin = {
                 messageID: context.messageID,
                 id: context.id,
               }
-              const target = yield* access.resolve({ path: input.path, kind: "file" })
+              const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.path)
+              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
               const current = yield* FileMutation.readText(environment.files, target.absolute).pipe(
                 Effect.catchTag("Environment.NotFound", () => Effect.undefined),
               )
               const next = Bom.split(input.content)
               const preview = fileDiff(target.resource, current?.text ?? "", next.text, current ? "modified" : "added")
               yield* permission.assert({
-                action: "edit",
+                action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
                 metadata: { files: [preview] },
@@ -99,7 +99,7 @@ export const Plugin = {
               Effect.mapError((error) =>
                 error instanceof ToolFailure
                   ? error
-                  : new ToolFailure({ message: `Unable to write ${input.path}`, error }),
+                  : new ToolFailure({ message: `Unable to write ${input.file_path}`, error }),
               ),
             ),
         }),

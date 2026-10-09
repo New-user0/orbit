@@ -334,7 +334,7 @@ it.effect("object() reports malformed input, a missing call and a call to anothe
       answer("pear, sweetness 7"),
       TestLLM.complete(
         { reason: { normalized: "tool-calls" } },
-        LLMEvent.toolCall({ id: "call_2", name: "shell", input: { name: "pear", sweetness: 7 } }),
+        LLMEvent.toolCall({ id: "call_2", name: "Bash", input: { name: "pear", sweetness: 7 } }),
       ),
     )
 

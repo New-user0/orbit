@@ -112,8 +112,8 @@ Session context is mutable immediately before provider dispatch:
 yield *
   ctx.session.hook("context", (event) =>
     Effect.sync(() => {
-      event.tools.read.description = "Read a file using narrow line ranges."
-      delete event.tools.write
+      event.tools.Read.description = "Read a file using narrow line ranges."
+      delete event.tools.Write
     }),
   )
 
@@ -123,6 +123,25 @@ yield *
       if (event.attempt >= 3) event.decision = { retry: false }
     }),
   )
+```
+
+Tool and permission hooks are told the tool names the plugin was written for. A plugin that does not say otherwise is
+told the old names (`shell`, `read`, `edit`, `write` and the rest) in `tool` (`execute.before`, `execute.after`) and `action` (`permission.evaluate`),
+so a guard written before the reference names keeps matching. Declare `toolNames: "reference"` beside the `id` to be
+told `Bash`, `Read`, `Edit`, `Write` and the rest, and compare with those. A plugin that compares with `Bash` and does not declare it is
+never told that name, so its guard never fires. Reading is not translated: `editor.list()` in `tool.transform` and the tool names in a `tools` record that you iterate are the current names, so pick a built-in by `Bash`, not `shell`; `get`, `update`, `remove` and keyed reads accept either.
+
+```ts
+import { Tool } from "@orbit/schema/tool"
+
+export default Plugin.define({
+  id: "guard",
+  toolNames: "reference",
+  effect: (ctx) =>
+    ctx.tool.hook("execute.before", (event) =>
+      event.tool === "Bash" ? Effect.fail(new Tool.Error({ message: "The shell is off in this project." })) : Effect.void,
+    ),
+})
 ```
 
 ## Reloading A Domain

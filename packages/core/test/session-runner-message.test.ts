@@ -745,14 +745,14 @@ Earlier work
             SessionMessage.AssistantTool.make({
               type: "tool",
               id: "pending",
-              name: "read",
+              name: "Read",
               state: SessionMessage.ToolStateStreaming.make({ status: "streaming", input: '{"path":"README.md"}' }),
               time: { created },
             }),
             SessionMessage.AssistantTool.make({
               type: "tool",
               id: "running",
-              name: "read",
+              name: "Read",
               state: SessionMessage.ToolStateRunning.make({
                 status: "running",
                 input: { path: "README.md" },
@@ -763,7 +763,7 @@ Earlier work
             SessionMessage.AssistantTool.make({
               type: "tool",
               id: "completed",
-              name: "read",
+              name: "Read",
               state: SessionMessage.ToolStateCompleted.make({
                 status: "completed",
                 input: { path: "README.md" },
@@ -796,7 +796,7 @@ Earlier work
             SessionMessage.AssistantTool.make({
               type: "tool",
               id: "hosted-failed",
-              name: "write",
+              name: "Write",
               executed: true,
               providerState: { continuation: "failed" },
               state: SessionMessage.ToolStateError.make({
@@ -817,13 +817,13 @@ Earlier work
     expect(messages[0]?.content).toEqual([
       { type: "text", text: "Checking" },
       { type: "reasoning", text: "Think", providerMetadata: { provider: { signature: "sig_1" } } },
-      { type: "tool-call", id: "pending", name: "read", input: { path: "README.md" } },
-      { type: "tool-call", id: "running", name: "read", input: { path: "README.md" } },
+      { type: "tool-call", id: "pending", name: "Read", input: { file_path: "README.md" } },
+      { type: "tool-call", id: "running", name: "Read", input: { file_path: "README.md" } },
       {
         type: "tool-call",
         id: "completed",
-        name: "read",
-        input: { path: "README.md" },
+        name: "Read",
+        input: { file_path: "README.md" },
       },
       {
         type: "tool-call",
@@ -844,7 +844,7 @@ Earlier work
       {
         type: "tool-call",
         id: "hosted-failed",
-        name: "write",
+        name: "Write",
         input: { path: "README.md" },
         providerExecuted: true,
         providerMetadata: { provider: { continuation: "failed" } },
@@ -852,7 +852,7 @@ Earlier work
       {
         type: "tool-result",
         id: "hosted-failed",
-        name: "write",
+        name: "Write",
         providerExecuted: true,
         providerMetadata: { provider: { continuation: "failed" } },
         result: {
@@ -865,7 +865,7 @@ Earlier work
       {
         type: "tool-result",
         id: "completed",
-        name: "read",
+        name: "Read",
         result: {
           type: "content",
           value: [
@@ -1064,7 +1064,7 @@ Earlier work
             SessionMessage.AssistantTool.make({
               type: "tool",
               id: "local-old-model",
-              name: "read",
+              name: "Read",
               executed: false,
               providerState: { call: "old" },
               providerResultState: { result: "old" },
@@ -1107,8 +1107,8 @@ Earlier work
       {
         type: "tool-call",
         id: "local-old-model",
-        name: "read",
-        input: { path: "README.md" },
+        name: "Read",
+        input: { file_path: "README.md" },
         providerExecuted: false,
         providerMetadata: undefined,
       },
@@ -1117,7 +1117,7 @@ Earlier work
       {
         type: "tool-result",
         id: "local-old-model",
-        name: "read",
+        name: "Read",
         result: { type: "text", value: "Hello" },
         providerExecuted: false,
         cache: undefined,

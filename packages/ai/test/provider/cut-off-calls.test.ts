@@ -187,6 +187,54 @@ describe("a response that does not show it finished", () => {
     )
   })
 
+  // A call cut off before its first argument token looks like a call with no arguments, so only the finish tells them apart.
+  ;(
+    [
+      ["completed", responses.completed, 1, "tool-calls"],
+      [
+        "incomplete for max_output_tokens",
+        {
+          type: "response.incomplete",
+          response: { id: "resp_1", incomplete_details: { reason: "max_output_tokens" } },
+        },
+        0,
+        "length",
+      ],
+      ["incomplete with no reason", { type: "response.incomplete" }, 0, "unknown"],
+    ] as const
+  ).forEach(([name, frame, calls, normalized]) => {
+    it.effect(`Open Responses ${calls ? "runs" : "drops"} a call with no arguments when the response is ${name}`, () =>
+      Effect.gen(function* () {
+        const result = yield* run(responses.request, sseEvents(...responses.calls([""]), frame))
+
+        expect(result.calls).toHaveLength(calls)
+        expect(result.calls.every((call) => call.partialInput === true)).toBe(true)
+        expect(result.seen.filter(LLMEvent.is.toolInputEnd)).toHaveLength(1)
+        expect(result.finishes[0].reason.normalized).toBe(normalized)
+      }),
+    )
+  })
+
+  // With `requireFinishReason: false` a stream that ends without one has nothing that cut the call off, so a call with
+  // no argument text is a call to a tool that takes none. A finish that says the response was cut off still holds it.
+  ;(
+    [
+      ["the stream ends without a finish_reason", [], 1, "tool-calls"],
+      ["the last chunk has an empty finish_reason", [deltaChunk({}, "")], 1, "tool-calls"],
+      ["finish_reason is tool_calls", [deltaChunk({}, "tool_calls")], 1, "tool-calls"],
+      ["finish_reason is length", [deltaChunk({}, "length")], 0, "length"],
+    ] as const
+  ).forEach(([name, end, calls, normalized]) => {
+    it.effect(`OpenAI Chat ${calls ? "runs" : "drops"} a call with no arguments when ${name}`, () =>
+      Effect.gen(function* () {
+        const result = yield* run(chat.request(false), sseEvents(...chat.calls([""]), ...end))
+
+        expect(result.calls).toHaveLength(calls)
+        expect(result.finishes[0].reason.normalized).toBe(normalized)
+      }),
+    )
+  })
+
   it.effect("OpenAI Chat fails a stream without a finish_reason by default and never calls the cut-off call", () =>
     Effect.gen(function* () {
       const result = yield* run(chat.request(), sseEvents(...chat.calls([cutOff])))

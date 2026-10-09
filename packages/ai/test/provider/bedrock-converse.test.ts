@@ -1092,6 +1092,79 @@ describe("Bedrock Converse route", () => {
     )
   })
 
+  // A call cut off before its first argument token looks like a call with no arguments, so only the finish tells them apart.
+  ;(
+    [
+      ["tool_use", "tool-calls", 1],
+      ["end_turn", "tool-calls", 1],
+      ["max_tokens", "length", 0],
+      ["a_reason_added_later", "unknown", 0],
+    ] as const
+  ).forEach(([stopReason, normalized, calls]) => {
+    it.effect(`${calls ? "runs" : "drops"} a call with no arguments on ${stopReason}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(
+          LLMRequest.update(baseRequest, {
+            tools: [ToolDefinition.make({ name: "write", description: "Write", inputSchema: { type: "object" } })],
+          }),
+        ).pipe(
+          Effect.provide(
+            fixedBytes(
+              eventStreamBody(
+                ["messageStart", { role: "assistant" }],
+                [
+                  "contentBlockStart",
+                  { contentBlockIndex: 0, start: { toolUse: { toolUseId: "tool_1", name: "write" } } },
+                ],
+                ["contentBlockStop", { contentBlockIndex: 0 }],
+                ["messageStop", { stopReason }],
+              ),
+            ),
+          ),
+        )
+
+        expect(response.toolCalls).toHaveLength(calls)
+        expect(response.toolCalls.every((call) => call.partialInput === true)).toBe(true)
+        expect(response.finishReason).toEqual({ normalized, raw: stopReason })
+      }),
+    )
+  })
+
+  // A no-argument call that a later block follows was complete, so it keeps its place in front of that block.
+  ;(["tool_use", "end_turn", "max_tokens"] as const).forEach((stopReason) => {
+    it.effect(`keeps provider order for a no-argument call followed by another call on ${stopReason}`, () =>
+      Effect.gen(function* () {
+        const response = yield* LLMClient.generate(
+          LLMRequest.update(baseRequest, {
+            tools: [ToolDefinition.make({ name: "write", description: "Write", inputSchema: { type: "object" } })],
+          }),
+        ).pipe(
+          Effect.provide(
+            fixedBytes(
+              eventStreamBody(
+                ["messageStart", { role: "assistant" }],
+                [
+                  "contentBlockStart",
+                  { contentBlockIndex: 0, start: { toolUse: { toolUseId: "tool_1", name: "write" } } },
+                ],
+                ["contentBlockStop", { contentBlockIndex: 0 }],
+                [
+                  "contentBlockStart",
+                  { contentBlockIndex: 1, start: { toolUse: { toolUseId: "tool_2", name: "write" } } },
+                ],
+                ["contentBlockDelta", { contentBlockIndex: 1, delta: { toolUse: { input: '{"path":"a.ts"}' } } }],
+                ["contentBlockStop", { contentBlockIndex: 1 }],
+                ["messageStop", { stopReason }],
+              ),
+            ),
+          ),
+        )
+
+        expect(response.toolCalls.map((call) => call.id)).toEqual(["tool_1", "tool_2"])
+      }),
+    )
+  })
+
   it.effect("rejects a provider-emitted dotted name before normalizing its replay", () =>
     Effect.gen(function* () {
       const response = yield* LLMClient.generate(baseRequest).pipe(

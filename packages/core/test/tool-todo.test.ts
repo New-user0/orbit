@@ -40,14 +40,14 @@ describe("todo tool", () => {
   it.effect("leaves its calls to the registry gate", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      yield* expectRegistryAsks(registry, ["todo"])
+      yield* expectRegistryAsks(registry, ["TodoWrite"])
     }),
   )
 
   it.effect("changes the session's plan, so it is neither read-only nor safe beside other calls", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      expect(yield* toolTraits(registry, "todo", { todos: [] })).toMatchObject({
+      expect(yield* toolTraits(registry, "TodoWrite", { todos: [] })).toMatchObject({
         readOnly: false,
         concurrencySafe: false,
       })

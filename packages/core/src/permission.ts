@@ -10,6 +10,7 @@ import { SessionErrors } from "./session/error.js"
 import { SessionSchema } from "./session/schema.js"
 import { SessionStore } from "./session/store.js"
 import { Wildcard } from "./util/wildcard.js"
+import { ToolNames } from "./tool/names.js"
 import { PermissionSaved } from "./permission/saved.js"
 import { PluginHooks } from "./plugin/hooks.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
@@ -104,9 +105,15 @@ export function evaluate(
   return (
     rules.findLast(
       (rule) =>
-        Wildcard.match(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
+        actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
     ) ?? { action, resource: "*", effect: "ask" }
   )
+}
+
+// A rule names an action the way it was written: `edit` and `Edit` are one action, as `shell` and `Bash` are, so a rule
+// written before the tools took their current names still decides. Only the spellings of one tool are equal, never two tools.
+export function actionMatches(action: string, pattern: string) {
+  return ToolNames.spellings(action).some((spelling) => Wildcard.match(spelling, pattern))
 }
 
 export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
@@ -188,7 +195,7 @@ const layer = Layer.effect(
     }
 
     function relevant(input: AssertInput, rules: Permission.Ruleset) {
-      return rules.filter((rule) => Wildcard.match(input.action, rule.action))
+      return rules.filter((rule) => actionMatches(input.action, rule.action))
     }
 
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {

@@ -16,11 +16,13 @@ import { NonNegativeInt } from "../../schema.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
+import { ToolNames } from "../names.js"
+import { STYLE_HEADING } from "../../plugin/output-style.js"
 import { ShellParse } from "../../shell/parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
 
-export const name = "shell"
+export const name = "Bash"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
 
 const BACKGROUND_INSTRUCTION =
@@ -47,6 +49,10 @@ const description = (shell?: string) =>
 
 export const Input = Schema.Struct({
   command: Schema.String.annotate({ description: "Shell command string to execute" }),
+  description: Schema.optionalKey(Schema.String).annotate({
+    description:
+      "A short sentence saying what the command does, used as the title of the job when the command runs in the background.",
+  }),
   workdir: Schema.optionalKey(Schema.String).annotate({
     description:
       "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",
@@ -54,9 +60,9 @@ export const Input = Schema.Struct({
   timeout: Schema.optionalKey(NonNegativeInt).annotate({
     description: `Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to ${DEFAULT_TIMEOUT_MS} for foreground commands. Background commands have no timeout by default.`,
   }),
-  background: Schema.optionalKey(Schema.Boolean).annotate({
+  run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
-      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use shell_watch; to stop the command, use shell_stop.",
+      "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion. To wait for a server to become ready, use TaskWatch; to stop the command, use TaskStop.",
   }),
 })
 
@@ -199,7 +205,8 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              const timeout = input.background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
+              const timeout =
+                input.run_in_background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
               let finalTimeout = timeout
               const info = yield* shell.create(
                 {
@@ -240,8 +247,8 @@ export const Plugin = {
               const job = yield* jobs.start({
                 // CodeMode children share a tool-call ID, but each shell must own its job.
                 id: info.id,
-                type: name,
-                title: info.command,
+                type: "shell",
+                title: input.description ?? info.command,
                 metadata: { sessionID: context.sessionID, shellID: info.id },
                 recovery: {
                   kind: "shell",
@@ -252,7 +259,7 @@ export const Plugin = {
                 run,
               })
 
-              if (input.background === true) {
+              if (input.run_in_background === true) {
                 yield* jobs.background(job.id)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
                 return backgroundResult(info.id, info.file)
@@ -300,6 +307,45 @@ export const Plugin = {
         const tool = event.tools[name]
         if (!tool) return
         tool.description = description(ShellSelect.name(yield* compatibleShell))
+      })
+    yield* ctx.session.hook("context", hook)
+    yield* ctx.session.hook("compaction", hook)
+    yield* ctx.session.hook("generate", hook)
+  }),
+}
+
+/**
+ * Offers the shell tool to the model as PowerShell when that is the session shell. It is registered last among the
+ * internal plugins, so it runs after every other plugin's context, compaction and generate hook: a hook written for
+ * `shell` or `Bash` sees one name whatever the session shell is, and hides or replaces the tool however it is offered.
+ * The registry still runs and authorizes it as `Bash`, and the base prompt is told the name the model sees.
+ */
+export const AdvertisePlugin = {
+  id: "orbit.tool.shell.advertise",
+  effect: Effect.fn("ShellTool.AdvertisePlugin")(function* (ctx: Context) {
+    const shellSelect = yield* ShellSelect.Service
+    const compatibleShell = shellSelect.resolve({ priority: "compat" })
+    const hook = (event: SessionHooks["context"]) =>
+      Effect.gen(function* () {
+        const shellName = ShellSelect.name(yield* compatibleShell)
+        if (shellName !== "powershell" && shellName !== "pwsh") return
+        const tool = event.tools[name]
+        if (!tool) return
+        event.tools[ToolNames.powershell] = tool
+        delete event.tools[name]
+        // The guidance and the model prompts call the tool `Bash`. An agent's own system prompt is its author's text.
+        const system = event.system[0]
+        if (!system) return
+        const custom = yield* ctx.agent.get({ agentID: event.agent }).pipe(
+          Effect.map((agent) => agent.data.system !== undefined),
+          Effect.catch(() => Effect.succeed(true)),
+        )
+        if (custom) return
+        // An output style is appended to this text before this runs and is the person's own words, so it stays as written.
+        const at = system.text.indexOf(STYLE_HEADING)
+        const base = at < 0 ? system.text : system.text.slice(0, at)
+        const style = at < 0 ? "" : system.text.slice(at)
+        event.system[0] = { ...system, text: base.replace(/\bBash\b/g, ToolNames.powershell) + style }
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

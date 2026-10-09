@@ -6,9 +6,12 @@ import type {
   SessionMessageAssistantTool,
   SessionMessageInfo,
   SessionStructuredError,
+  SessionTurnOptions,
   ToolContent,
 } from "@orbit/client/promise"
 import { jsonLine, progress } from "@orbit/flow/plain"
+import { errorMessage } from "../util/error"
+import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { EOL } from "node:os"
 import { Option, Schema } from "effect"
@@ -41,7 +44,19 @@ type Input = {
   format: "default" | "json" | "stream-json" | "result"
   /** A JSON Schema the final answer must follow; the result then carries the parsed value. */
   jsonSchema?: unknown
+  /** Limits and a fallback model for this prompt; the server must echo them back or the run stops. */
+  turn?: SessionTurnOptions
   auto: boolean
+  /**
+   * The headless output contract of `orb -p`. With `format` "result" or "stream-json" it adds an init line before the
+   * prompt is admitted and ends with exactly one enriched result line; with "default" and a schema it prints only the
+   * parsed JSON. Without it the run prints what `orb run --format` always printed.
+   */
+  envelope?: { cwd: string; agent?: string; model?: string; version: string }
+  /** With the stream-json envelope: a line for every text, reasoning and tool input fragment as it streams. */
+  partial?: boolean
+  /** With the text format: tool output bodies and one usage line per step, on stderr. */
+  verbose?: boolean
   /** True when the client is attached to a shared server rather than an exclusive in-process one. */
   attached: boolean
   compatibility?: "v1"
@@ -86,10 +101,29 @@ const PERMISSION_REJECTED_FEEDBACK =
   "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action."
 
 export async function runNonInteractivePrompt(input: Input) {
+  const startedAt = Date.now()
   const controller = new AbortController()
   const stream = input.client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
   const connected = await stream.next()
   if (connected.done) throw new Error("Event stream disconnected before prompt admission")
+  // The lines of the envelope, and the schema text mode that prints only the parsed answer.
+  const lines = input.envelope !== undefined && (input.format === "result" || input.format === "stream-json")
+  const schemaText = input.envelope !== undefined && input.format === "default" && input.jsonSchema !== undefined
+  // The answer of these runs is gathered through `hold`, so every format joins output-limit continuations the same way.
+  const collecting = input.format === "result" || schemaText || (lines && input.format === "stream-json")
+  if (lines && input.envelope && input.format === "stream-json") {
+    process.stdout.write(
+      jsonLine({
+        type: "init",
+        protocol: 1,
+        sessionID: input.sessionID,
+        cwd: input.envelope.cwd,
+        agent: input.envelope.agent ?? null,
+        model: input.envelope.model ?? null,
+        version: input.envelope.version,
+      }) + EOL,
+    )
+  }
 
   const messageID = SessionMessage.ID.create()
   const starts = new Map<string, StartedPart>()
@@ -104,6 +138,9 @@ export async function runNonInteractivePrompt(input: Input) {
   let permissionRejected = false
   let formCancelled = false
   let interrupted = false
+  // Why the runner stopped the run when the user did not: a shutdown, inactivity or a newer prompt. The result reports
+  // it as an interruption with that reason.
+  let interruption: string | undefined
   let v1InvalidOutput = false
   let prePromotionError: { message: string; [key: string]: unknown } | undefined
   let finalizing = false
@@ -113,9 +150,22 @@ export async function runNonInteractivePrompt(input: Input) {
   // switching to a fallback model. The next step to start clears it. It is reported only when the run ends without one.
   let pendingStepError: { error: SessionStructuredError; time: number } | undefined
   let held: Held[] = []
+  // What the result line reports: the message of the failure, the totals of this run's sessions and the requests that
+  // were rejected because nobody could approve them.
+  let failure: string | undefined
+  const totals = { steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
+  const rejected: { action: string; resources: string[] }[] = []
   // The assistant messages whose step ended at the output limit, and the ones that a notice replaced.
   const lengthMessages = new Set<string>()
   const replaced = new Set<string>()
+  // Messages of notices that were already shown, so the history does not show again what the events did.
+  const shown = new Set<string>()
+  // What this session's own responses to this prompt spent (not its subagents'), read from the projected messages when
+  // the run ends; and how the last step finished, for the truncation warning.
+  const spent = { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
+  let lastFinish: string | undefined
+  let limit: SessionStructuredError | undefined
+  let ended = false
 
   const streaming = input.format === "json" || input.format === "stream-json"
   const answer: string[] = []
@@ -128,7 +178,7 @@ export async function runNonInteractivePrompt(input: Input) {
   const printText = (value: string) => {
     const text = value.trim()
     if (!text) return
-    if (input.format === "result") return void answer.push(text)
+    if (collecting) return void answer.push(text)
     if (!process.stdout.isTTY) {
       process.stdout.write(text + EOL)
       return
@@ -171,17 +221,32 @@ export async function runNonInteractivePrompt(input: Input) {
 
   // The runner raised the output limit and is answering again from the start. What the cut-off attempt wrote is
   // dropped from the answer, and a program that reads the JSON lines is told which message to drop.
-  const replace = (metadata: unknown, time: number) => {
+  const replace = (id: string, metadata: unknown, description: string | undefined, time: number) => {
     const notice = Option.getOrUndefined(decodeEscalation(metadata))
-    // A notice that does not name a message replaces nothing.
-    if (!notice) return
+    if (!notice) return showNotice(id, metadata, description, time)
     discard(notice.replaces)
     if (replaced.has(notice.replaces)) return
     replaced.add(notice.replaces)
     emit("notice", time, { notice: notice.notice, replaces: notice.replaces })
   }
 
+  // The output-escalation notice above prints no line and carries no message even when it has a description: a program
+  // reads it to drop the replaced text, and loop-robustness-16 decides whether to word it for a person.
+  // A message that the runner records for the person to read, such as a switch to the fallback model, names its kind in
+  // `metadata.notice` and says what happened in its description. A reminder only the model reads has no description,
+  // and prints nothing. The text comes from the runner but can quote a file, so it is written out as `progress` does.
+  const showNotice = (id: string, metadata: unknown, description: string | undefined, time: number) => {
+    const notice = Option.getOrUndefined(decodeNotice(metadata))
+    if (!notice || !description) return
+    // Keyed by the message, which the event and the history share, so two notices with the same words both print.
+    if (shown.has(id)) return
+    shown.add(id)
+    if (emit("notice", time, { notice: notice.notice, message: description })) return
+    UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL + progress(description))
+  }
+
   const endStep = (messageID: string, finish: string | undefined) => {
+    lastFinish = finish
     if (finish === "length") return void lengthMessages.add(messageID)
     release()
   }
@@ -194,23 +259,25 @@ export async function runNonInteractivePrompt(input: Input) {
   // A declined tool call ends its step with an interrupted-step error that is only a consequence of our own rejection,
   // which was reported when the call was declined.
   const surfaceStepError = () => {
-    const failure = pendingStepError
+    const step = pendingStepError
     pendingStepError = undefined
-    if (!failure || emittedError || permissionRejected || formCancelled) return
+    if (!step || emittedError || permissionRejected || formCancelled) return
     emittedError = true
     process.exitCode = 1
-    if (!emit("error", failure.time, { error: failure.error })) UI.error(failure.error.message)
+    failure = step.error.message
+    if (!emit("error", step.time, { subtype: "error", error: step.error })) UI.error(step.error.message)
   }
 
   const writeText = (part: { messageID: string; text: string; [key: string]: unknown }, timestamp: number) => {
-    if (emit("text", timestamp, { part })) return
+    const written = emit("text", timestamp, { part })
+    if (written && !collecting) return
     if (input.compatibility === "v1") return printText(part.text)
     hold(part.messageID, part.text)
   }
 
   const writeReasoning = (part: { text: string; [key: string]: unknown }, timestamp: number) => {
     if (emit("reasoning", timestamp, { part })) return
-    if (input.format === "result") return
+    if (collecting) return
     const text = part.text.trim()
     if (!text) return
     release()
@@ -260,6 +327,7 @@ export async function runNonInteractivePrompt(input: Input) {
     const continuing = !input.auto && input.compatibility !== "v1"
     if (!input.auto) {
       if (!continuing) permissionRejected = true
+      rejected.push({ action: request.action, resources: [...request.resources] })
       release()
       UI.println(
         UI.Style.TEXT_WARNING_BOLD + "!",
@@ -310,6 +378,32 @@ export async function runNonInteractivePrompt(input: Input) {
     surfaceStepError()
   }
 
+  const tally = (
+    event: Extract<V2Event, { type: "session.step.started" | "session.step.ended" | "session.step.failed" }>,
+  ) => {
+    if (event.type === "session.step.started") {
+      totals.steps += 1
+      return
+    }
+    const tokens = event.data.tokens
+    totals.cost += event.data.cost ?? 0
+    if (tokens) {
+      totals.tokens.input += tokens.input
+      totals.tokens.output += tokens.output
+      totals.tokens.reasoning += tokens.reasoning
+      totals.tokens.cache.read += tokens.cache.read
+      totals.tokens.cache.write += tokens.cache.write
+    }
+    if (input.verbose && input.format === "default" && event.data.cost !== undefined && tokens)
+      UI.println(
+        UI.Style.TEXT_DIM +
+          progress(
+            `usage: ${tokens.input} in, ${tokens.output} out, ${tokens.reasoning} reasoning, ${tokens.cache.read} cache read, ${tokens.cache.write} cache write, cost ${event.data.cost}`,
+          ) +
+          UI.Style.TEXT_NORMAL,
+      )
+  }
+
   const consume = async () => {
     while (!controller.signal.aborted) {
       const next = await stream.next().catch((error) => {
@@ -339,6 +433,17 @@ export async function runNonInteractivePrompt(input: Input) {
         await cancelForm(event.data.form)
         continue
       }
+      // Steps of this run's own sessions, subagents included, are counted before the filter that keeps only the root
+      // session's output. Other clients' sessions on a shared server are not owned and so are not counted.
+      if (
+        promoted &&
+        (input.envelope !== undefined || input.verbose) &&
+        (event.type === "session.step.started" ||
+          event.type === "session.step.ended" ||
+          event.type === "session.step.failed") &&
+        (await ownsSession(event.data.sessionID))
+      )
+        tally(event)
       if (!("sessionID" in event.data) || event.data.sessionID !== input.sessionID) continue
       const time = toMillis("created" in event ? event.created : undefined)
 
@@ -371,6 +476,22 @@ export async function runNonInteractivePrompt(input: Input) {
       )
         return
       if (!promoted) continue
+      if (lines && input.partial && event.type === "session.text.delta") {
+        emit("text_delta", time, {
+          messageID: event.data.assistantMessageID,
+          ordinal: event.data.ordinal,
+          delta: event.data.delta,
+        })
+        continue
+      }
+      if (lines && input.partial && input.thinking && event.type === "session.reasoning.delta") {
+        emit("reasoning_delta", time, {
+          messageID: event.data.assistantMessageID,
+          ordinal: event.data.ordinal,
+          delta: event.data.delta,
+        })
+        continue
+      }
       if (finalizing && !event.type.startsWith("session.execution.")) continue
 
       if (event.type === "session.step.started") {
@@ -468,6 +589,13 @@ export async function runNonInteractivePrompt(input: Input) {
       if (event.type === "session.tool.input.delta") {
         const current = tools.get(toolKey(event.data.assistantMessageID, event.data.id))
         if (current) current.raw = (current.raw ?? "") + event.data.delta
+        if (lines && input.partial)
+          emit("tool_input_delta", time, {
+            messageID: event.data.assistantMessageID,
+            toolID: event.data.id,
+            tool: current?.tool,
+            delta: event.data.delta,
+          })
         continue
       }
       if (event.type === "session.tool.called") {
@@ -642,7 +770,7 @@ export async function runNonInteractivePrompt(input: Input) {
         }
         emittedError = true
         process.exitCode = 1
-        if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
+        if (!emit("error", time, { subtype: "error", error: event.data.error })) UI.error(event.data.error.message)
         continue
       }
       if (event.type === "session.execution.failed") {
@@ -651,10 +779,18 @@ export async function runNonInteractivePrompt(input: Input) {
         // What ended the run replaces the failure of a step that was held back.
         pendingStepError = undefined
         endEvents()
+        if (event.data.error.type.startsWith("limit.")) limit = event.data.error
         if (!emittedError && !formCancelled) {
           emittedError = true
           process.exitCode = 1
-          if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
+          failure = event.data.error.message
+          if (
+            !emit("error", time, {
+              subtype: subtype({ failed: true, interrupted: false, limit }),
+              error: event.data.error,
+            })
+          )
+            UI.error(event.data.error.message)
         }
         return
       }
@@ -666,9 +802,11 @@ export async function runNonInteractivePrompt(input: Input) {
         // A declined tool call ends the step with an interruption; it was already reported above.
         if (event.data.reason !== "user" && !emittedError && !permissionRejected && !formCancelled) {
           emittedError = true
+          interruption = event.data.reason
           process.exitCode = 1
           const error = { type: "aborted" as const, message: `Session interrupted: ${event.data.reason}` }
-          if (!emit("error", time, { error })) UI.error(error.message)
+          failure = error.message
+          if (!emit("error", time, { subtype: "error", error })) UI.error(error.message)
         }
         return
       }
@@ -677,7 +815,13 @@ export async function runNonInteractivePrompt(input: Input) {
         return
       }
       if (event.type === "session.synthetic") {
-        if (input.compatibility !== "v1") replace(event.data.metadata, time)
+        if (input.compatibility !== "v1")
+          replace(
+            SessionMessage.ID.fromEvent(Event.ID.make(event.id)),
+            event.data.metadata,
+            event.data.description,
+            time,
+          )
         continue
       }
     }
@@ -703,12 +847,22 @@ export async function runNonInteractivePrompt(input: Input) {
 
   const reconcile = async () => {
     const projected = await projectedMessages()
+    Object.assign(spent, { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
     for (const message of projected.messages) {
       if (message.type === "synthetic") {
-        replace(message.metadata, message.time.created)
+        replace(message.id, message.metadata, message.description, message.time.created)
         continue
       }
       if (message.type !== "assistant") continue
+      // Only a response that finished one of these ways is a step, though what any response spent counts, as the
+      // server counts them (a failed or unknown finish is not a step).
+      if (message.finish && countedFinishes.has(message.finish)) spent.steps += 1
+      spent.cost += message.cost ?? 0
+      spent.input += message.tokens?.input ?? 0
+      spent.output += message.tokens?.output ?? 0
+      spent.reasoning += message.tokens?.reasoning ?? 0
+      spent.cacheRead += message.tokens?.cache.read ?? 0
+      spent.cacheWrite += message.tokens?.cache.write ?? 0
       const timestamp = message.time.completed ?? message.time.created
       let textOrdinal = 0
       let reasoningOrdinal = 0
@@ -815,9 +969,15 @@ export async function runNonInteractivePrompt(input: Input) {
     if (last) {
       pendingStepError = last.error ? { error: last.error, time: last.time.completed ?? last.time.created } : undefined
     }
-    surfaceStepError()
+    const failed = projected.messages.findLast((message) => message.type === "idle")?.outcome === "failed"
+    // A busy period that failed after a response that failed part way may have been stopped by a limit that the runner
+    // checked before retrying, so its terminal event, not the response, says why. The failure is held until that event
+    // has been waited for.
+    if (!failed || ended) surfaceStepError()
     return {
       found: projected.found,
+      failed,
+      cutOff: failed || last?.finish === "tool-calls",
       responded: projected.messages.some((message) => message.type === "assistant"),
     }
   }
@@ -832,6 +992,7 @@ export async function runNonInteractivePrompt(input: Input) {
   process.on("SIGINT", interrupt)
 
   let completed: Promise<void> | undefined
+  // Whether the loop has consumed the event that ended the run, which can trail the history and the wait.
   try {
     if (input.agent) {
       await input.client.session.switchAgent({ sessionID: input.sessionID, agent: input.agent })
@@ -857,7 +1018,9 @@ export async function runNonInteractivePrompt(input: Input) {
     const prepared = await Promise.all(input.files.map(prepareFile))
     if (interrupted) return
     submitted = true
-    completed = consume()
+    completed = consume().finally(() => {
+      ended = true
+    })
     admission = new AbortController()
     const response = await input.client.session
       .prompt(
@@ -871,6 +1034,7 @@ export async function runNonInteractivePrompt(input: Input) {
           ].join("\n\n"),
           files: prepared.flatMap((file) => (file.attachment ? [file.attachment] : [])),
           delivery: "steer",
+          ...(input.turn ? { turn: input.turn } : {}),
         },
         { signal: admission.signal },
       )
@@ -885,6 +1049,19 @@ export async function runNonInteractivePrompt(input: Input) {
       })
     admission = undefined
     if (!response) return
+    // An older server drops the fields it does not know, so it would run without the limits that were asked for.
+    if (input.turn && !echoes(input.turn, response.payload?.turn)) {
+      emittedError = true
+      process.exitCode = 1
+      failure =
+        "The server did not accept the limits or fallback model for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens and --fallback-model."
+      await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
+      controller.abort()
+      await completed?.catch(() => {})
+      if (!emit("error", Date.now(), { subtype: "error", error: { type: "version-mismatch", message: failure } }))
+        UI.error(failure)
+      return
+    }
     if (interrupted) await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
 
     const [permissions, forms, globals] = await Promise.all([
@@ -914,33 +1091,106 @@ export async function runNonInteractivePrompt(input: Input) {
     await Promise.race([waiting, completed.then(() => waiting)])
     finalizing = true
     const projected = await reconcile()
+    const unsettled = !projected.responded
+    // A limit stop leaves no error in the history, only a last response that is not a final one, so such a history is
+    // not written out as a success before the event that says why has been read. The bound keeps a lost event from
+    // hanging the run.
+    const cutOff = projected.cutOff && !ended
     if (
-      !projected.responded &&
+      (unsettled || cutOff) &&
       !interrupted &&
       !permissionRejected &&
       !formCancelled &&
       !emittedError &&
       !prePromotionError
     ) {
-      await completed
+      const timer = cutOff && !unsettled ? Promise.withResolvers<void>() : undefined
+      const timeout = timer && setTimeout(timer.resolve, 5000)
+      await (timer ? Promise.race([completed, timer.promise]) : completed).finally(() => clearTimeout(timeout))
+    }
+    surfaceStepError()
+    // The history alone marks a failed run as failed, even when no event said why.
+    if (projected.failed && !emittedError && !interrupted && !permissionRejected && !formCancelled) {
+      const error = { type: "unknown", message: "The run ended in failure." }
+      emittedError = true
+      process.exitCode = 1
+      failure = error.message
+      if (!emit("error", Date.now(), { subtype: "error", error })) UI.error(error.message)
     }
     if (!projected.found && !interrupted && !permissionRejected && !formCancelled && !emittedError) {
       const error = prePromotionError ?? { type: "unknown", message: "Prompt was not promoted" }
       emittedError = true
       process.exitCode = 1
-      if (!emit("error", Date.now(), { error })) UI.error(error.message)
+      failure = error.message
+      if (!emit("error", Date.now(), { subtype: "error", error })) UI.error(error.message)
     }
+    // The step events of the last steps can still be on their way, and the totals count them.
+    if (lines) await Promise.race([completed.catch(() => {}), Bun.sleep(3000)])
     reachedEnd = true
+  } catch (error) {
+    failure ??= errorMessage(error)
+    throw error
   } finally {
     // Whatever way the run ends, the text that was waiting for a continuation is written, so a result holds all of it.
     release()
+    const failed = !reachedEnd || emittedError || interrupted || permissionRejected || formCancelled
+    // A run that stopped at the output limit has an answer that ends in the middle; say so rather than pass it off.
+    const truncated = lastFinish === "length"
+    if (truncated) {
+      const message = "The answer was cut off by the output limit."
+      if (!emit("notice", Date.now(), { notice: "truncated", message }))
+        UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL + message)
+    }
     // Every way out of the run prints exactly one result, failed unless the run reached its end cleanly.
-    if (input.format === "result")
-      writeResult(
-        input.sessionID,
-        answer.join("\n\n"),
-        !reachedEnd || emittedError || interrupted || permissionRejected || formCancelled,
-        input.jsonSchema,
+    if (lines) {
+      writeEnvelopeResult({
+        sessionID: input.sessionID,
+        text: answer.join("\n\n"),
+        failed,
+        schema: input.jsonSchema,
+        subtype: subtype({ failed, interrupted, limit }),
+        truncated,
+        outcome: interrupted || interruption !== undefined ? "interrupted" : failed ? "failed" : "succeeded",
+        reason: !failed
+          ? undefined
+          : interrupted
+            ? "interrupted"
+            : interruption !== undefined
+              ? interruption
+              : failure !== undefined
+                ? "error"
+                : permissionRejected
+                  ? "permission_rejected"
+                  : formCancelled
+                    ? "form_cancelled"
+                    : "incomplete",
+        error: failure,
+        steps: totals.steps,
+        duration: Date.now() - startedAt,
+        cost: totals.cost,
+        tokens: totals.tokens,
+        rejected,
+      })
+    } else if (schemaText) writeSchemaText(answer.join("\n\n"), failed)
+    else if (input.format === "result")
+      writeResult({
+        sessionID: input.sessionID,
+        text: answer.join("\n\n"),
+        failed,
+        schema: input.jsonSchema,
+        subtype: subtype({ failed, interrupted, limit }),
+        usage: spent,
+        truncated,
+        error: failure,
+      })
+    // Nobody could approve these, so the model went on without them; the exit code does not change.
+    if (input.envelope && input.format === "default" && rejected.length > 0)
+      UI.println(
+        UI.Style.TEXT_WARNING_BOLD + "!",
+        UI.Style.TEXT_NORMAL +
+          progress(
+            `${rejected.length} request${rejected.length === 1 ? " was" : "s were"} auto-rejected: ${rejected.map((request) => request.action).join(", ")}`,
+          ),
       )
     process.off("SIGINT", interrupt)
     controller.abort()
@@ -1034,22 +1284,108 @@ export function wroteResult() {
 }
 
 // One JSON object for scripts: the final answer, whether the run failed, and with a schema, the parsed value.
-function writeResult(sessionID: string, text: string, failed: boolean, schema: unknown) {
-  const unfenced = text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
-  const parsed = schema === undefined ? undefined : parseJson(unfenced)
-  const invalid = schema !== undefined && parsed === undefined
-  if (failed || invalid) process.exitCode = 1
+function writeResult(input: {
+  sessionID: string
+  text: string
+  failed: boolean
+  schema: unknown
+  subtype: string
+  usage: {
+    steps: number
+    cost: number
+    input: number
+    output: number
+    reasoning: number
+    cacheRead: number
+    cacheWrite: number
+  }
+  truncated: boolean
+  error: string | undefined
+}) {
+  const parsed = input.schema === undefined ? undefined : parseJson(unfence(input.text))
+  const invalid = input.schema !== undefined && parsed === undefined
+  if (input.failed || invalid) process.exitCode = 1
   resultWritten = true
   process.stdout.write(
     jsonLine({
       type: "result",
-      sessionID,
-      is_error: failed || invalid,
-      result: text,
+      sessionID: input.sessionID,
+      is_error: input.failed || invalid,
+      subtype: invalid && !input.failed ? "error" : input.subtype,
+      result: input.text,
+      usage: {
+        steps: input.usage.steps,
+        cost: input.usage.cost,
+        tokens: {
+          input: input.usage.input,
+          output: input.usage.output,
+          reasoning: input.usage.reasoning,
+          cache: { read: input.usage.cacheRead, write: input.usage.cacheWrite },
+        },
+      },
+      truncated: input.truncated,
       ...(parsed === undefined ? {} : { structured_output: parsed.value }),
-      ...(invalid ? { error: "The answer was not valid JSON." } : {}),
+      ...(invalid ? { error: "The answer was not valid JSON." } : input.error ? { error: input.error } : {}),
     }) + EOL,
   )
+}
+
+// The result line of the envelope: what writeResult prints, plus how the run ended and what it used.
+function writeEnvelopeResult(run: {
+  sessionID: string
+  text: string
+  failed: boolean
+  schema: unknown
+  subtype: string
+  truncated: boolean
+  outcome: "succeeded" | "failed" | "interrupted"
+  reason: string | undefined
+  error: string | undefined
+  steps: number
+  duration: number
+  cost: number
+  tokens: unknown
+  rejected: unknown
+}) {
+  const parsed = run.schema === undefined ? undefined : parseJson(unfence(run.text))
+  // The run's own failure is what happened; an answer that is not JSON matters only when the run itself succeeded.
+  const invalid = !run.failed && run.schema !== undefined && parsed === undefined
+  const failed = run.failed || invalid
+  if (failed) process.exitCode = process.exitCode || 1
+  resultWritten = true
+  process.stdout.write(
+    jsonLine({
+      type: "result",
+      sessionID: run.sessionID,
+      is_error: failed,
+      subtype: invalid && !run.failed ? "error" : run.subtype,
+      outcome: run.outcome === "succeeded" && invalid ? "failed" : run.outcome,
+      ...(run.reason === undefined && !invalid ? {} : { reason: run.reason ?? "invalid_output" }),
+      result: run.text,
+      ...(parsed === undefined ? {} : { structured_output: parsed.value }),
+      ...(run.error !== undefined ? { error: run.error } : invalid ? { error: "The answer was not valid JSON." } : {}),
+      steps: run.steps,
+      duration_ms: run.duration,
+      cost: run.cost,
+      tokens: run.tokens,
+      rejected: run.rejected,
+      truncated: run.truncated,
+    }) + EOL,
+  )
+}
+
+// `orb -p --json-schema` in text format: stdout holds only the parsed answer, and an answer that is not JSON is an error.
+function writeSchemaText(text: string, failed: boolean) {
+  const parsed = parseJson(unfence(text))
+  if (failed || !parsed) process.exitCode = process.exitCode || 1
+  // The error was already printed when it happened.
+  if (failed) return
+  if (!parsed) return UI.error("The answer was not valid JSON.")
+  process.stdout.write(jsonLine(parsed.value) + EOL)
+}
+
+function unfence(text: string) {
+  return text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
 }
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
@@ -1058,6 +1394,35 @@ const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unkno
 const decodeEscalation = Schema.decodeUnknownOption(
   Schema.Struct({ notice: Schema.Literal("output-escalation"), replaces: SessionMessage.ID }),
 )
+
+const decodeNotice = Schema.decodeUnknownOption(Schema.Struct({ notice: Schema.String }))
+
+// The finishes the server counts as a step when it checks a step limit.
+const countedFinishes = new Set<string>(["stop", "length", "tool-calls", "content-filter"])
+
+// The limit that ended the run names its result subtype. `limit.cost-unknown` is the server refusing a cost limit it
+// cannot count, which is a plain error, not a limit that was reached.
+function subtype(input: { failed: boolean; interrupted: boolean; limit: SessionStructuredError | undefined }) {
+  if (input.interrupted) return "interrupted"
+  const type = input.limit?.type
+  if (type === "limit.steps") return "error_max_steps"
+  if (type === "limit.tokens") return "error_max_tokens"
+  if (type === "limit.cost") return "error_max_cost"
+  return input.failed ? "error" : "success"
+}
+
+// Whether the prompt the server admitted carries what was asked for.
+function echoes(sent: SessionTurnOptions, admitted: SessionTurnOptions | undefined) {
+  if (!admitted) return false
+  const model = (value: SessionTurnOptions["fallbackModel"]) =>
+    value && `${value.providerID}/${value.id}#${value.variant ?? ""}`
+  return (
+    sent.maxSteps === admitted.maxSteps &&
+    sent.maxCost === admitted.maxCost &&
+    sent.maxTokens === admitted.maxTokens &&
+    model(sent.fallbackModel) === model(admitted.fallbackModel)
+  )
+}
 
 function parseJson(text: string): { value: unknown } | undefined {
   return Option.match(decodeJson(text), { onNone: () => undefined, onSome: (value) => ({ value }) })

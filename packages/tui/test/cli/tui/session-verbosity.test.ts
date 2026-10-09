@@ -9,6 +9,7 @@ import {
   partPath,
   type SessionRow,
 } from "../../../src/routes/session/grouping/session"
+import { planItems } from "../../../src/routes/session/plan-dock"
 import { reduceSessionRows } from "../../../src/routes/session/rows"
 
 const model = { id: "model", providerID: "provider" }
@@ -235,6 +236,41 @@ test("activity summary counts distinct instruction files and skips redacted thou
   if (activity.type !== "group") throw new Error("Expected activity")
   const message = (id: string) => messages.find((item) => item.id === id)
   expect(summarizeActivity(activity, message, [], true).label).toBe("1 thought, 1 read, 3 instructions")
+})
+
+test("the reference tool names group and stand alone like the names they replace", () => {
+  for (const verbosity of ["low", "medium", "high"] as const) {
+    expect(partPath({ type: "tool", name: "AskUserQuestion" }, verbosity)).toEqual([])
+    expect(partPath({ type: "tool", name: "WebFetch" }, verbosity)).toEqual(
+      partPath({ type: "tool", name: "webfetch" }, verbosity),
+    )
+  }
+  expect(partPath({ type: "tool", name: "Grep" }, "high")).toEqual(["exploration"])
+})
+
+test("the plan dock finds a plan recorded under the old or the reference tool names", () => {
+  const withInput = (
+    name: string,
+    input: { todos: { content: string; status: string }[] },
+  ): SessionMessageAssistantTool => ({
+    ...tool("p", name),
+    state: { status: "completed", input, content: [{ type: "text", text: "ok" }], metadata: {} },
+  })
+  const withTodos = (name: string): SessionMessageAssistantTool => ({
+    ...tool("p", name),
+    state: {
+      status: "completed",
+      input: {},
+      content: [{ type: "text", text: "ok" }],
+      metadata: { todos: [{ content: "ship", status: "pending" }] },
+    },
+  })
+  const expected = [{ content: "ship", status: "pending" as const }]
+  for (const name of ["todo", "TodoWrite"])
+    expect(planItems([assistant("a", [withInput(name, { todos: expected })])])).toEqual(expected)
+  for (const name of ["task_create", "TaskCreate", "TaskUpdate", "TaskList"])
+    expect(planItems([assistant("a", [withTodos(name)])])).toEqual(expected)
+  expect(planItems([assistant("a", [withTodos("Read")])])).toEqual([])
 })
 
 test("questions stand alone at every level and end an activity run", () => {

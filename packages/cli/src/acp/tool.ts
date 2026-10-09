@@ -13,6 +13,7 @@ export type ToolContent = ReadonlyArray<
 export function toToolKind(toolName: string): ToolKind {
   switch (toolName.toLocaleLowerCase()) {
     case "bash":
+    case "powershell":
     case "shell":
       return "execute"
     case "webfetch":
@@ -32,6 +33,7 @@ export function toToolKind(toolName: string): ToolKind {
       return "read"
     case "task":
     case "subagent":
+    case "agent":
       return "think"
     default:
       return "other"
@@ -41,6 +43,7 @@ export function toToolKind(toolName: string): ToolKind {
 export function toLocations(toolName: string, input: ToolInput, cwd: string): ToolCallLocation[] {
   switch (toolName.toLocaleLowerCase()) {
     case "bash":
+    case "powershell":
     case "shell":
       return locationFrom(cwd, stringValue(input.workdir) ?? stringValue(input.cwd) ?? cwd)
     case "read":
@@ -117,8 +120,8 @@ export function completedToolUpdate(input: {
     read === undefined
       ? normalized.filter((part) => !images.includes(part))
       : [{ type: "content" as const, content: { type: "text" as const, text: read } }]
-  const oldText = stringValue(input.input.oldString)
-  const newText = stringValue(input.input.newString)
+  const oldText = stringValue(input.input.old_string) ?? stringValue(input.input.oldString)
+  const newText = stringValue(input.input.new_string) ?? stringValue(input.input.newString)
   const path = filePath(input.input)
   const diff: ToolCallContent[] =
     oldText === undefined || newText === undefined || path === undefined
@@ -180,7 +183,7 @@ function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {
 
 function isShell(toolName: string) {
   const tool = toolName.toLocaleLowerCase()
-  return tool === "bash" || tool === "shell"
+  return tool === "bash" || tool === "powershell" || tool === "shell"
 }
 
 function locationFrom(cwd: string, ...values: unknown[]): ToolCallLocation[] {
@@ -190,9 +193,14 @@ function locationFrom(cwd: string, ...values: unknown[]): ToolCallLocation[] {
   )
 }
 
-// Sessions migrated from V1 keep their original `filePath` tool inputs.
+// Sessions migrated from V1 keep their original `filePath` tool inputs, and sessions recorded before the tool rename keep `path`.
 export function filePath(input: ToolInput) {
-  return stringValue(input.path) ?? stringValue(input.filePath)
+  return (
+    stringValue(input.file_path) ??
+    stringValue(input.notebook_path) ??
+    stringValue(input.path) ??
+    stringValue(input.filePath)
+  )
 }
 
 export function patchHunks(input: ToolInput) {

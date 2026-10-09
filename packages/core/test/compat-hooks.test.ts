@@ -1,3 +1,4 @@
+import { ToolNames } from "@orbit/core/tool/names"
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -106,7 +107,8 @@ const nativeDocument = (file: string, hooks: unknown, scope: Scope = "project") 
   new Document({ type: "document", path: AbsolutePath.make(file), scope, info: decode({ hooks }) })
 
 const start = Effect.gen(function* () {
-  yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+  const plugins = yield* Plugin.Service
+  yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(plugins))
 })
 
 // The plugin in a session that runs in `directory`, which must exist: the hooks run in it.
@@ -161,7 +163,7 @@ describe("the compatibility alias table and the built-in tools", () => {
     WebSearchTool.name,
     SubagentTool.name,
     TodoTool.name,
-  ]
+  ].map(ToolNames.legacy)
 
   test("names only tools that Orbit has", () => {
     for (const names of Object.values(CompatNames.tools)) for (const name of names) expect(builtIn).toContain(name)
@@ -169,10 +171,12 @@ describe("the compatibility alias table and the built-in tools", () => {
 
   test("reaches patch from every editing name, as it takes the place of the editing tools on some models", () => {
     for (const foreign of ["Edit", "MultiEdit", "Write"]) {
-      expect(CompatAliases.toOrbit(foreign)).toContain(PatchTool.name)
-      expect(CompatAliases.toOrbit(foreign)).toContain(foreign === "Write" ? WriteTool.name : EditTool.name)
+      expect(CompatAliases.toOrbit(foreign)).toContain(ToolNames.legacy(PatchTool.name))
+      expect(CompatAliases.toOrbit(foreign)).toContain(
+        ToolNames.legacy(foreign === "Write" ? WriteTool.name : EditTool.name),
+      )
     }
-    expect(CompatAliases.toForeign(PatchTool.name)).toEqual(["Edit", "MultiEdit", "Write"])
+    expect(CompatAliases.toForeign(ToolNames.legacy(PatchTool.name))).toEqual(["Edit", "MultiEdit", "Write"])
   })
 })
 
@@ -348,9 +352,9 @@ describe("LifecycleHooksPlugin with another product's settings files", () => {
 
   it.live("keeps Orbit's name for a tool that the vendor has no name for", () =>
     Effect.gen(function* () {
-      expect(yield* eventsFor("memory", ["memory", undefined])).toMatchObject([
-        { tool_name: "memory" },
-        { tool_name: "memory" },
+      expect(yield* eventsFor("Memory", ["Memory", undefined])).toMatchObject([
+        { tool_name: "Memory" },
+        { tool_name: "Memory" },
       ])
     }),
   )
@@ -554,7 +558,7 @@ describe("LifecycleHooksPlugin with compatibility off", () => {
     Effect.gen(function* () {
       const directory = (yield* tmpdirScoped()).path
       yield* setEntries([
-        nativeDocument(path.join(directory, "orbit.json"), guard("Bash|Edit", "foreign name")),
+        nativeDocument(path.join(directory, "orbit.json"), guard("MultiEdit|Task", "foreign name")),
         nativeDocument(path.join(directory, "orbit.local.json"), guard("read|patch", "orbit name"), "local"),
       ])
       yield* start
@@ -563,6 +567,18 @@ describe("LifecycleHooksPlugin with compatibility off", () => {
       expect(yield* blockedBy(EditTool.name)).toBe("")
       expect(yield* blockedBy(ReadTool.name)).toContain("orbit name")
       expect(yield* blockedBy(PatchTool.name)).toContain("orbit name")
+    }),
+  )
+
+  itWithout.live("matches the current names of Orbit's own tools, which are also the vendor's", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      yield* setEntries([nativeDocument(path.join(directory, "orbit.json"), guard("Bash|Edit", "current name"))])
+      yield* start
+
+      expect(yield* blockedBy(ShellTool.name)).toContain("current name")
+      expect(yield* blockedBy(EditTool.name)).toContain("current name")
+      expect(yield* blockedBy(ReadTool.name)).toBe("")
     }),
   )
 

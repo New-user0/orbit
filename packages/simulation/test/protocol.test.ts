@@ -251,6 +251,7 @@ test("decodes the simulated tool lifecycle", () => {
     { ...registration, name: "1lookup" },
     { ...registration, options: { namespace: "bad group", codemode: false } },
     { ...registration, name: "execute", options: { codemode: false } },
+    { ...registration, name: "Execute", options: { codemode: false } },
     { ...registration, options: { namespace: "a".repeat(64), codemode: false } },
   ])
     expect(() =>

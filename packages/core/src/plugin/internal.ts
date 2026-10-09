@@ -302,6 +302,8 @@ const post = [
   ConfigWebPlugin.Plugin,
   ConfigWebSearchPlugin.Plugin,
   ConfigPolicyPlugin.Plugin,
+  // Last, so every other hook sees the shell tool under its registry name.
+  ShellTool.AdvertisePlugin,
 ] as const satisfies readonly InternalPlugin[]
 
 // Repository config must not switch off policy enforcement, so plugin remove operations skip these IDs.

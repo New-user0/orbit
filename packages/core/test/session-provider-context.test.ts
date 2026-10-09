@@ -164,8 +164,8 @@ it.effect("loads and replays a persisted pre-2.0.15 media checkpoint", () =>
 test("canonical provider context round-trips tools, opaque checkpoints and binary media through JSON", () => {
   const messages = [
     ...replacement,
-    Message.assistant(ToolCallPart.make({ id: "call_1", name: "read", input: { path: "file" } })),
-    Message.tool({ id: "call_1", name: "read", result: { text: "result" } }),
+    Message.assistant(ToolCallPart.make({ id: "call_1", name: "Read", input: { path: "file" } })),
+    Message.tool({ id: "call_1", name: "Read", result: { text: "result" } }),
     Message.user({ type: "media", media: Media.bytes(new Uint8Array([1, 2, 3]), "image/png") }),
   ]
   const context = SessionProviderContext.encode(providerContext.provenance, messages)

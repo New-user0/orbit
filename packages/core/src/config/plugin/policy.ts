@@ -5,6 +5,7 @@ import { Document, type Scope } from "@orbit/schema/config"
 import { Effect } from "effect"
 import { Config } from "../../config.js"
 import { ManagedPolicy } from "../../managed-policy.js"
+import { ToolNames } from "../../tool/names.js"
 import { Wildcard } from "../../util/wildcard.js"
 import { ConfigEntryObserver } from "./entry-observer.js"
 
@@ -55,8 +56,9 @@ export const Plugin = define({
         // the last policy matching any of its spellings decides.
         const denied = event.resources
           .map((resource) => {
-            const subjects = [resource, ...(event.aliases?.[resource] ?? [])].map(
-              (spelling) => `${event.action}:${spelling}`,
+            // A policy written with an old tool name (`shell:rm *`) still names the same action as `Bash:rm *`.
+            const subjects = ToolNames.spellings(event.action).flatMap((action) =>
+              [resource, ...(event.aliases?.[resource] ?? [])].map((spelling) => `${action}:${spelling}`),
             )
             return current.findLast(
               (policy) =>

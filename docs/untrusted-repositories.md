@@ -146,8 +146,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
-  `workflowCommands`, `workflowApprovals`, `workflowAgents`, `suiteCommands` and `suiteAgents`. Proof:
-  `packages/cli/test/trust.test.ts`, `packages/flow/test/load.test.ts`, `packages/flow/test/agents.test.ts`.
+  `workflowCommands`, `workflowApprovals`, `workflowAgents`, `workflowModels`, `suiteCommands`, `suiteAgents` and
+  `suiteModels`. The models list is the fields that pick a model or add attempts (`model`, `retry.fallbackModels`,
+  `retry.maxAttempts`, `maxIterations`, `maxRounds`, a judge's `model`, a suite's `models`): a node's `model` replaces the
+  person's `--model` (`runner.ts`), so an untrusted clone would choose what the person pays for. Proof:
+  `packages/cli/test/trust.test.ts`, `packages/flow/test/load.test.ts`, `packages/flow/test/models.test.ts`,
+  `packages/flow/test/agents.test.ts`.
 - Every command that starts work: `requireTrust`, `trustRefusal` and `warnUntrusted`. `orb acp` only warns, because the
   editor chooses its folders. Proof: `packages/cli/test/trust.test.ts`.
 - The run store, `.orbit/runs.db`, and the worktree paths built from it: `Store.run`, `Store.runs`, `Git.clean` and
@@ -159,8 +163,13 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the `result` object and the error that `reportRunError` prints, goes through `jsonLine` from `@orbit/flow/plain`.
   Every error line goes through `UI.error`, which writes it out line by line with `progress`, and so do the label of a
   step, the request for permission and the note about a tool call that the output limit cut off. The answer and the
-  thinking lines of the default format, and the tool blocks that `renderTool` and `renderToolError` draw in `run.ts`,
-  are message content and still open (see Known gaps; close them with `body` from `@orbit/flow/plain`). Proof:
+  thinking lines of the default format are message content and still open (see Known gaps). The tool lines that
+  `renderTool` and `renderToolError` draw in `run.ts` are closed: the title and the description of an inline tool, the
+  title of a block, and the failed line go through `progress`, and a block body and the `--verbose` tool output go
+  through `body`. So do the init, result and delta lines (`jsonLine`), the usage line and the summary of auto-rejected
+  requests (`progress`), and the schema text output (`jsonLine`). Proof:
+  `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
+  "a hostile tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
 
 **Terminal UI** (`packages/tui`):
@@ -348,7 +357,9 @@ its gate, before the first trust task. It names every surface that M1 found over
   yourself) before the load. Pass `imports` for a file that the command imports and `defines` for a file whose commands,
   approvals or agents it carries out. Both refuse an untrusted folder whatever it holds back. Without them the check
   refuses only a folder whose config holds something back, which is right for `orb run` and `orb loop`, because they
-  import nothing. This is `execute` in `packages/cli/src/commands/handlers/flow/execute.ts`:
+  import nothing. `strict` refuses any untrusted folder, and `orb -p` passes it (`handlers/print.ts`): a clean clone's
+  `AGENTS.md` still steers a model whose tool calls run unasked under the default rules. Whether `orb run` and
+  `orb loop` should be strict too is an open owner question. This is `execute` in `packages/cli/src/commands/handlers/flow/execute.ts`:
 
   ```ts
   Effect.gen(function* () {
@@ -399,7 +410,9 @@ and its data twins (commands, approvals, agents) at once.
 
 - For each file kind, list what it can make the code do: spawn, approve, choose an agent, a path, a model or a provider.
   The lists live in `packages/flow/src/load.ts`: `workflowCommands`, `suiteCommands`, `workflowApprovals`,
-  `workflowAgents`, `suiteAgents`, and `importsModule` for a module, which is code and not data.
+  `workflowAgents`, `workflowModels`, `suiteAgents`, `suiteModels`, and `importsModule` for a module, which is code and
+  not data. A field that picks a model or a budget in a data file belongs in the models list as it does in
+  `ConfigTrust.classification`, and a test in `models.test.ts` compares the list with what the runner is handed.
 - Read the file as the runner does. A workflow is read through `validate`, the function `compile` calls, so the gate
   scans what the runner executes and fails as the loader fails. Do not write a second parser that can drift.
 - Count a template. `{{plan.text}}` is filled in when the node starts, and a reply can say `auto` or name an agent.
@@ -1174,7 +1187,7 @@ already guarded elsewhere.
 
 - `requireTrust`, `trustRefusal` and `warnUntrusted` in `packages/cli/src/util/trust.ts`. The handlers for `run`,
   `loop`, `flow run`, `flow resume`, `flow replay`, `eval` and `orb -p` (`handlers/print.ts`, through the `headlessInput`
-  that `run` shares, so the `--server` and 404-stub variants of the `run` rows in `trust.test.ts` cover it) call them
+  that `run` shares, with `strict`; `trust.test.ts` pins a clean folder, `--bare`, `--continue` and the 404 stub) call them
   before any load. `orb acp` cannot stop, because
   the editor chooses the folders, so it warns on stderr and keeps stdout for the protocol.
 - `--trust` forces a private server and trusts for its lifetime without storing the grant (it rejects `--server`).
@@ -1424,8 +1437,8 @@ fixes it or asks.
   fork lists (`dialog-timeline.tsx`, `dialog-fork.tsx`), the `/btw` answer (`btw.tsx`), the attachment names of a user
   message, the terminal and subagent rows of the composer (`terminals-tab.tsx`, `subagents-tab.tsx`, whose titles are
   session titles), the Mini subagent picker and footer (`footer.subagent.tsx`), and the width checks of Mini form
-  rows. Open, with no sanitizer: `orb run`, whose default format writes the answer, the thinking lines and the tool
-  blocks as the model and the tools made them (its JSON formats write the same text out with `jsonLine`); the text of
+  rows. Open, with no sanitizer: `orb run`, whose default format writes the answer and the thinking lines as the model
+  made them (its JSON formats write the same text out with `jsonLine`, and its tool lines are escaped); the text of
   the desktop notification that `notifications.ts` sends through `context.attention.notify`, which carries the
   "Session failed" message (its title passes `plain`, below); the markdown export of a session; the prompt history search and the
   stash list, which draw text that the person typed or pasted. Session titles that pass `plain` but have no frame test:

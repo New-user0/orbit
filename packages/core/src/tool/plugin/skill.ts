@@ -7,7 +7,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Skill } from "../../skill.js"
 import { Permission } from "../../permission.js"
 
-export const name = "skill"
+export const name = "Skill"
 
 export const Input = Schema.Struct({
   id: Skill.ID.annotate({ description: "The ID of an available skill or a skill explicitly referenced by the user" }),

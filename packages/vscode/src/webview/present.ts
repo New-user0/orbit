@@ -1,4 +1,5 @@
 import type { Item, WorkflowAgent } from "../protocol.js"
+import { fieldNames, legacyToolName } from "../tool-name.js"
 
 // How chat items read on one line. Pure functions, shared by the webview and its tests.
 
@@ -14,7 +15,10 @@ export interface Shown {
 /** A tool call as `verb target  +add −del  meta`, with paths shown from the workspace folder down. */
 export function describe(item: Extract<Item, { type: "tool" }>, folder: string): Shown {
   const input = item.input ?? {}
-  const text = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "")
+  const text = (key: string) =>
+    (key in fieldNames ? fieldNames[key as keyof typeof fieldNames] : [key])
+      .map((field) => input[field])
+      .find((value): value is string => typeof value === "string") ?? ""
   const lines = (item.output ?? "").split("\n").filter((line) => line.trim()).length
   const additions = item.files?.reduce((total, file) => total + (file.additions ?? 0), 0) ?? 0
   const deletions = item.files?.reduce((total, file) => total + (file.deletions ?? 0), 0) ?? 0
@@ -23,11 +27,11 @@ export function describe(item: Extract<Item, { type: "tool" }>, folder: string):
     del: deletions ? `−${deletions}` : undefined,
   }
   const failed = item.status === "error" ? { meta: "failed", failed: true } : {}
-  switch (item.name) {
+  switch (legacyToolName(item.name)) {
     case "read":
       return {
         verb: "Read",
-        target: relative(text("path"), folder),
+        target: relative(text("file"), folder),
         meta: lines ? `${lines} lines` : undefined,
         ...failed,
       }
@@ -53,7 +57,7 @@ export function describe(item: Extract<Item, { type: "tool" }>, folder: string):
         .filter((line, index, all) => line || index < all.length - 1).length
       return {
         verb: created ? "Create" : "Write",
-        target: relative(text("path"), folder),
+        target: relative(text("file"), folder),
         add: changes.add ?? (created && written ? `+${written}` : undefined),
         del: changes.del,
         ...failed,
@@ -61,7 +65,7 @@ export function describe(item: Extract<Item, { type: "tool" }>, folder: string):
     }
     case "edit":
     case "notebook_edit":
-      return { verb: "Edit", target: relative(text("path"), folder), ...changes, ...failed }
+      return { verb: "Edit", target: relative(text("file"), folder), ...changes, ...failed }
     case "patch":
       return {
         verb: "Edit",
@@ -155,8 +159,8 @@ function firstString(input: Readonly<Record<string, unknown>>) {
 export function agentsOf(items: ReadonlyArray<Item>): WorkflowAgent[] {
   return items.flatMap((item): WorkflowAgent[] => {
     if (item.type !== "tool") return []
-    if (item.name === "workflow") return [...(item.agents ?? [])]
-    if (item.name !== "subagent") return []
+    if (legacyToolName(item.name) === "workflow") return [...(item.agents ?? [])]
+    if (legacyToolName(item.name) !== "subagent") return []
     const description = item.input?.description
     const agent = item.input?.agent
     return [

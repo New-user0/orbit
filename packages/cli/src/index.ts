@@ -105,6 +105,11 @@ const Handlers = Runtime.handlers(Commands, {
 // `orb -p <message>` is parsed with a spec that has no subcommands, so no word of the message is dispatched as one.
 const line = classify(process.argv.slice(2))
 
+if (line.mode === "usage") {
+  console.error(line.message)
+  process.exit(1)
+}
+
 const PrintHandlers = Runtime.handlers(Print, () => import("./commands/handlers/print"))
 
 Effect.gen(function* () {

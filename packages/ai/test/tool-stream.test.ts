@@ -269,9 +269,10 @@ describe("ToolStream partial input marker", () => {
     finishAll: (input: string, providerExecuted?: boolean) =>
       ToolStream.finishAll(ADAPTER, started(input, providerExecuted)),
   }
-  const inputs = [
+  const inputs: ReadonlyArray<{ name: string; input: string; marked: boolean; hostedFails?: boolean }> = [
     { name: "complete JSON", input: '{"path":"a.ts"}', marked: false },
-    { name: "no arguments", input: "", marked: false },
+    // Marked for a local call so it waits for the finish. A provider-executed one already ran: nothing is left to hold.
+    { name: "no arguments", input: "", marked: true, hostedFails: false },
     { name: "JSON cut off in a string", input: '{"path":"a.ts","content":"par', marked: true },
     { name: "JSON cut off after a key", input: '{"path":', marked: true },
     { name: "a malformed escape", input: '{"path":"A\\H"}', marked: true },
@@ -290,12 +291,12 @@ describe("ToolStream partial input marker", () => {
       )
 
       it.effect(
-        `${finalizer} keeps provider-executed ${fixture.name} ${fixture.marked ? "terminal" : "unmarked"}`,
+        `${finalizer} keeps provider-executed ${fixture.name} ${(fixture.hostedFails ?? fixture.marked) ? "terminal" : "unmarked"}`,
         () =>
           Effect.gen(function* () {
             const exit = yield* Effect.exit(finalize(fixture.input, true))
 
-            if (fixture.marked) return expect(Exit.isFailure(exit)).toBe(true)
+            if (fixture.hostedFails ?? fixture.marked) return expect(Exit.isFailure(exit)).toBe(true)
             const calls = Exit.isSuccess(exit) ? (exit.value.events ?? []).filter(LLMEvent.is.toolCall) : []
             expect(calls).toHaveLength(1)
             expect(calls[0].partialInput).toBeUndefined()
@@ -387,11 +388,81 @@ describe("ToolStream.gateOnFinish", () => {
       const held = recovered("call_2")
       const result = yield* gate(script(first, held, second, search, stepFinish("tool-calls"), finish("tool-calls")))
 
-      expect(result.seen).toEqual([first, second, search, held, stepFinish("tool-calls"), finish("tool-calls")])
-      expect(result.seen.slice(0, 3)).toEqual([first, second, search])
+      // The held call keeps its place: the calls that arrived behind it leave with it, in arrival order.
+      expect(result.seen).toEqual([first, held, second, search, stepFinish("tool-calls"), finish("tool-calls")])
       expect(result.seen[0]).toBe(first)
     }),
   )
+
+  describe("provider order", () => {
+    const blank = (id: string) => LLMEvent.toolCall({ id, name: "enter", input: {}, partialInput: true })
+    const start = (id: string) => LLMEvent.toolInputStart({ id, name: "write" })
+    const delta = (id: string, text: string) => LLMEvent.toolInputDelta({ id, name: "write", text, input: {} })
+    const ids = (events: ReadonlyArray<LLMEvent>) => events.filter(LLMEvent.is.toolCall).map((event) => event.id)
+
+    // [name, events, ids at tool-calls, ids at length]
+    ;(
+      [
+        ["a later tool call", [start("a"), blank("a"), start("b"), whole("b")], ["a", "b"], ["a", "b"]],
+        [
+          "a later text block",
+          [start("a"), blank("a"), LLMEvent.textStart({ id: "t" }), whole("b")],
+          ["a", "b"],
+          ["a", "b"],
+        ],
+        [
+          "a later reasoning block",
+          [start("a"), blank("a"), LLMEvent.reasoningStart({ id: "r" }), whole("b")],
+          ["a", "b"],
+          ["a", "b"],
+        ],
+        // The no-argument call is the last block, so the output limit may have cut it off.
+        ["nothing after it", [start("a"), blank("a")], ["a"], []],
+        [
+          "an unmarked call that arrives without any block start",
+          [start("a"), blank("a"), whole("b")],
+          ["a", "b"],
+          ["b"],
+        ],
+        // Half-written arguments are never proven complete by a block that follows.
+        [
+          "a later block after half-written arguments",
+          [start("a"), delta("a", '{"path"'), recovered("a"), start("b"), whole("b")],
+          ["a", "b"],
+          ["b"],
+        ],
+        [
+          "two blank calls with a block after the second",
+          [start("a"), blank("a"), start("b"), blank("b"), LLMEvent.textStart({ id: "t" })],
+          ["a", "b"],
+          ["a", "b"],
+        ],
+      ] as const
+    ).forEach(([name, events, released, cutOff]) => {
+      it.effect(`orders calls with ${name} as the provider sent them`, () =>
+        Effect.gen(function* () {
+          const done = yield* gate(script(...events, stepFinish("tool-calls"), finish("tool-calls")))
+          const limited = yield* gate(script(...events, stepFinish("length"), finish("length")))
+
+          expect(ids(done.seen)).toEqual(released)
+          expect(ids(limited.seen)).toEqual(cutOff)
+        }),
+      )
+    })
+
+    it.effect("passes the calls queued behind a held one when the stream fails or ends without a finish", () =>
+      Effect.gen(function* () {
+        const events = [blank("a"), whole("b")]
+
+        const failed = yield* gate(script(...events).pipe(Stream.concat(Stream.fail(failure))))
+        const ended = yield* gate(script(...events))
+
+        expect(ids(failed.seen)).toEqual(["b"])
+        expect(failed.exit).toEqual(Exit.fail(failure))
+        expect(ids(ended.seen)).toEqual(["b"])
+      }),
+    )
+  })
 
   it.effect("passes unmarked calls when the response is cut off", () =>
     Effect.gen(function* () {

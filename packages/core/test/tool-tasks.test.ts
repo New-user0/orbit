@@ -38,12 +38,12 @@ describe("task tools", () => {
   it.effect("create tasks with dependencies, update and delete them, and keep sessions apart", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      yield* expectRegistryAsks(registry, ["task_create", "task_update", "task_list"])
-      expect(yield* toolTraits(registry, "task_create")).toMatchObject({ readOnly: false, concurrencySafe: false })
-      expect(yield* toolTraits(registry, "task_update")).toMatchObject({ readOnly: false, concurrencySafe: false })
-      expect(yield* toolTraits(registry, "task_list")).toMatchObject({ readOnly: true, concurrencySafe: true })
-      yield* executeTool(registry, call("task_create", { subject: "Add the schema" }))
-      const second = yield* executeTool(registry, call("task_create", { subject: "Wire the API", blockedBy: ["1"] }))
+      yield* expectRegistryAsks(registry, ["TaskCreate", "TaskUpdate", "TaskList"])
+      expect(yield* toolTraits(registry, "TaskCreate")).toMatchObject({ readOnly: false, concurrencySafe: false })
+      expect(yield* toolTraits(registry, "TaskUpdate")).toMatchObject({ readOnly: false, concurrencySafe: false })
+      expect(yield* toolTraits(registry, "TaskList")).toMatchObject({ readOnly: true, concurrencySafe: true })
+      yield* executeTool(registry, call("TaskCreate", { subject: "Add the schema" }))
+      const second = yield* executeTool(registry, call("TaskCreate", { subject: "Wire the API", blockedBy: ["1"] }))
       expect(text(second)).toContain("#2 [pending] Wire the API (blocked by #1)")
       expect(second.metadata).toEqual({
         todos: [
@@ -52,21 +52,21 @@ describe("task tools", () => {
         ],
       })
 
-      expect((yield* executeTool(registry, call("task_create", { subject: "x", blockedBy: ["9"] }))).status).toBe(
+      expect((yield* executeTool(registry, call("TaskCreate", { subject: "x", blockedBy: ["9"] }))).status).toBe(
         "error",
       )
 
-      const early = yield* executeTool(registry, call("task_update", { id: "2", status: "in_progress" }))
+      const early = yield* executeTool(registry, call("TaskUpdate", { id: "2", status: "in_progress" }))
       expect(text(early)).toContain("still blocked by #1")
-      yield* executeTool(registry, call("task_update", { id: "1", status: "completed" }))
-      const listed = yield* executeTool(registry, call("task_list", {}))
+      yield* executeTool(registry, call("TaskUpdate", { id: "1", status: "completed" }))
+      const listed = yield* executeTool(registry, call("TaskList", {}))
       expect(text(listed)).toContain("#1 [completed] Add the schema\n#2 [in_progress] Wire the API")
 
-      const deleted = yield* executeTool(registry, call("task_update", { id: "1", status: "deleted" }))
+      const deleted = yield* executeTool(registry, call("TaskUpdate", { id: "1", status: "deleted" }))
       expect(text(deleted)).toContain("#2 [in_progress] Wire the API")
       expect(text(deleted)).not.toContain("blocked by #1")
 
-      expect(text(yield* executeTool(registry, call("task_list", {}, Session.ID.make("ses_other"))))).toContain(
+      expect(text(yield* executeTool(registry, call("TaskList", {}, Session.ID.make("ses_other"))))).toContain(
         "No tasks yet.",
       )
     }),

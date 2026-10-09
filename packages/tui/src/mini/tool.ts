@@ -19,6 +19,7 @@ import { LANGUAGE_EXTENSIONS } from "../util/filetype"
 import { Locale } from "../util/locale"
 import {
   canonicalToolName,
+  legacyToolInput,
   finiteNumber,
   primitiveInputSummary,
   toolDisplayContent,
@@ -187,7 +188,7 @@ export function readDisplayText(text: string): string | undefined {
 }
 
 function normalizeInput(name: string, value: unknown) {
-  const input = dict(value)
+  const input = dict(legacyToolInput(name, value))
   const path = typeof input.path === "string" ? input.path : text(input.filePath)
   const agent = typeof input.agent === "string" ? input.agent : text(input.subagent_type)
   return {

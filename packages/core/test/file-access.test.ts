@@ -60,7 +60,7 @@ describe("FileAccess.authorizeRead", () => {
       expect(target.externalDirectory).toBeUndefined()
       expect(requests).toEqual([
         {
-          action: "read",
+          action: "Read",
           resources: ["README.md"],
           save: ["*"],
           sessionID: invocation.sessionID,
@@ -79,7 +79,7 @@ describe("FileAccess.authorizeRead", () => {
 
       expect(requests).toMatchObject([
         { action: "external_directory", resources: [slash(path.join(path.dirname(target.absolute), "*"))] },
-        { action: "read", resources: [slash(target.absolute)] },
+        { action: "Read", resources: [slash(target.absolute)] },
       ])
       for (const request of requests) {
         expect(request).toMatchObject({
@@ -91,7 +91,7 @@ describe("FileAccess.authorizeRead", () => {
     }).pipe(provide(requests))
   })
 
-  for (const action of ["external_directory", "read"]) {
+  for (const action of ["external_directory", "Read"]) {
     it.live(`propagates ${action} denial without continuing authorization`, () => {
       const requests: Permission.AssertInput[] = []
       return Effect.gen(function* () {
@@ -100,7 +100,7 @@ describe("FileAccess.authorizeRead", () => {
 
         expect(error).toBeInstanceOf(Permission.BlockedError)
         expect(requests.map((request) => request.action)).toEqual(
-          action === "external_directory" ? ["external_directory"] : ["external_directory", "read"],
+          action === "external_directory" ? ["external_directory"] : ["external_directory", "Read"],
         )
       }).pipe(provide(requests, action))
     })
@@ -116,10 +116,10 @@ describe("FileAccess.authorizeRead", () => {
 
       expect(requests.map((request) => request.action)).toEqual([
         "external_directory",
-        "read",
-        "read",
+        "Read",
+        "Read",
         "external_directory",
-        "read",
+        "Read",
       ])
       expect(requests[2].resources).toEqual([slash(recovered.absolute)])
     }).pipe(provide(requests))
@@ -132,7 +132,7 @@ describe("FileAccess.authorizeRead", () => {
       const requested = yield* access.authorizeRead("README.md", invocation)
       yield* access.authorizeRead("../notes.txt", invocation, { siblingOf: requested })
 
-      expect(requests.map((request) => request.action)).toEqual(["read", "external_directory", "read"])
+      expect(requests.map((request) => request.action)).toEqual(["Read", "external_directory", "Read"])
     }).pipe(provide(requests))
   })
 
@@ -270,7 +270,7 @@ describe("FileAccess in a project that is not trusted", () => {
         yield* access.authorizeRead("docs/notes.md", invocation)
         expect(requests).toMatchObject([
           { action: "external_directory", resources: [slash(path.join(outside, "*"))] },
-          { action: "read", resources: [slash(path.join(outside, "notes.md"))] },
+          { action: "Read", resources: [slash(path.join(outside, "notes.md"))] },
         ])
 
         yield* access.authorizeExternal([yield* access.resolve({ path: "docs/new.txt", kind: "file" })], invocation)
@@ -285,7 +285,7 @@ describe("FileAccess in a project that is not trusted", () => {
         const access = yield* FileAccess.Service
         yield* access.authorizeRead("docs/notes.md", invocation)
         yield* access.authorizeExternal([yield* access.resolve({ path: "docs/new.txt", kind: "file" })], invocation)
-        expect(requests).toMatchObject([{ action: "read", resources: ["docs/notes.md"] }])
+        expect(requests).toMatchObject([{ action: "Read", resources: ["docs/notes.md"] }])
       }).pipe(provideProject(project, requests, true))
     })
   })

@@ -105,8 +105,8 @@ describe("plan mode tools", () => {
       const paths = yield* disk()
       yield* Effect.gen(function* () {
         const registry = yield* Tool.Service
-        yield* expectRegistryAsks(registry, ["enter_plan_mode", "exit_plan_mode"])
-        for (const name of ["enter_plan_mode", "exit_plan_mode"])
+        yield* expectRegistryAsks(registry, ["EnterPlanMode", "ExitPlanMode"])
+        for (const name of ["EnterPlanMode", "ExitPlanMode"])
           expect(yield* toolTraits(registry, name)).toMatchObject({ readOnly: false, requiresUserInteraction: true })
       }).pipe(Effect.provide(server({ ...paths, decisions: [] }).layer))
     }),
@@ -120,18 +120,18 @@ describe("plan mode tools", () => {
         const sessions = yield* Session.Service
         yield* sessions.create({ id: sessionID, location, agent: general })
 
-        const outside = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const outside = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(outside.status).toBe("error")
 
-        const entered = yield* callTool("enter_plan_mode", {})
+        const entered = yield* callTool("EnterPlanMode", {})
         expect(entered.status).toBe("completed")
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: plan })
 
-        const revised = yield* callTool("exit_plan_mode", { plan: "# Plan\n1. a" })
+        const revised = yield* callTool("ExitPlanMode", { plan: "# Plan\n1. a" })
         expect(revised.output).toEqual({ approved: false, feedback: "Split step 2 in two" })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: plan })
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan\n1. a\n2. b" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan\n1. a\n2. b" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: general })
         expect(test.asked[1]?.fields[0]).toMatchObject({ description: "# Plan\n1. a\n2. b" })
@@ -150,7 +150,7 @@ describe("plan mode tools", () => {
       yield* Effect.gen(function* () {
         const sessions = yield* Session.Service
         yield* sessions.create({ id: sessionID, location, agent: custom })
-        expect((yield* callTool("enter_plan_mode", {})).status).toBe("completed")
+        expect((yield* callTool("EnterPlanMode", {})).status).toBe("completed")
       }).pipe(Effect.provide(first.layer))
 
       // A new process: a new plugin instance with no memory of the first one.
@@ -162,7 +162,7 @@ describe("plan mode tools", () => {
           { agent: plan, previous: custom },
         ])
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: custom })
       }).pipe(Effect.provide(second.layer))
@@ -177,13 +177,13 @@ describe("plan mode tools", () => {
         const sessions = yield* Session.Service
         yield* sessions.create({ id: sessionID, location, agent: build })
 
-        yield* callTool("enter_plan_mode", {})
-        yield* callTool("exit_plan_mode", { plan: "# First" })
+        yield* callTool("EnterPlanMode", {})
+        yield* callTool("ExitPlanMode", { plan: "# First" })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: build })
 
         yield* sessions.switchAgent({ sessionID, agent: custom })
-        yield* callTool("enter_plan_mode", {})
-        yield* callTool("exit_plan_mode", { plan: "# Second" })
+        yield* callTool("EnterPlanMode", {})
+        yield* callTool("ExitPlanMode", { plan: "# Second" })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: custom })
       }).pipe(Effect.provide(test.layer))
     }),
@@ -199,7 +199,7 @@ describe("plan mode tools", () => {
         yield* sessions.create({ id: sessionID, location, agent: plan })
         expect(yield* sessions.messages({ sessionID, type: "agent-switched" })).toEqual([])
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: build })
       }).pipe(Effect.provide(test.layer))
@@ -216,7 +216,7 @@ describe("plan mode tools", () => {
         yield* sessions.create({ id: sessionID, location, agent: plan })
         expect(yield* sessions.messages({ sessionID, type: "agent-switched" })).toEqual([])
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: custom })
       }).pipe(Effect.provide(test.layer))
@@ -232,12 +232,12 @@ describe("plan mode tools", () => {
         yield* configureDefault(custom)
         // No agent selected: the runner runs this session as the configured default, so the tool is called as it.
         yield* sessions.create({ id: sessionID, location })
-        expect((yield* callTool("enter_plan_mode", {})).status).toBe("completed")
+        expect((yield* callTool("EnterPlanMode", {})).status).toBe("completed")
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: plan })
         // The history cannot say where the session came from, because the session row had no agent to record.
         expect(yield* PlanMode.previousAgent(sessions, sessionID)).toBeUndefined()
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: custom })
       }).pipe(Effect.provide(test.layer))
@@ -254,7 +254,7 @@ describe("plan mode tools", () => {
         // No agent selected, so the runner starts this session in Plan mode.
         yield* sessions.create({ id: sessionID, location })
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: build })
       }).pipe(Effect.provide(test.layer))
@@ -269,9 +269,9 @@ describe("plan mode tools", () => {
         const sessions = yield* Session.Service
         yield* configureDefault(custom)
         yield* sessions.create({ id: sessionID, location, agent: general })
-        yield* callTool("enter_plan_mode", {})
+        yield* callTool("EnterPlanMode", {})
 
-        const approved = yield* callTool("exit_plan_mode", { plan: "# Plan" })
+        const approved = yield* callTool("ExitPlanMode", { plan: "# Plan" })
         expect(approved.output).toEqual({ approved: true })
         expect(yield* sessions.get(sessionID)).toMatchObject({ agent: general })
       }).pipe(Effect.provide(test.layer))

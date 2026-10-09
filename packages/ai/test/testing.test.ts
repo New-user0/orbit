@@ -418,10 +418,10 @@ describe("TestLLM first-class client", () => {
       const cutOff = Array.from(yield* Stream.runCollect(llm.stream(request)))
       expect(cutOff.filter(LLMEvent.is.toolCall)).toEqual([whole])
 
-      // Released after the unmarked call that followed it and right before the step finish.
+      // Released in the order the script gave them, right before the step finish.
       const finished = Array.from(yield* Stream.runCollect(llm.stream(request)))
-      expect(finished.filter(LLMEvent.is.toolCall)).toEqual([whole, recovered])
-      expect(finished.at(-3)).toEqual(recovered)
+      expect(finished.filter(LLMEvent.is.toolCall)).toEqual([recovered, whole])
+      expect(finished.at(-3)).toEqual(whole)
 
       const observed: LLMEvent[] = []
       const error = yield* llm.stream(request).pipe(

@@ -735,7 +735,7 @@ describe("Session.create", () => {
         sessionID: parent.id,
         assistantMessageID,
         id: "call_running",
-        name: "shell",
+        name: "Bash",
       })
       yield* bus.publish(SessionEvent.Tool.Input.Ended, {
         sessionID: parent.id,

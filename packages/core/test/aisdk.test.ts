@@ -2,6 +2,7 @@ import { APICallError } from "@ai-sdk/provider"
 import type { LanguageModelV3, LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { AISDK } from "@orbit/core/aisdk"
+import { OpenAICompatibleChatLanguageModel } from "@orbit/core/github-copilot/chat/openai-compatible-chat-language-model"
 import { SessionRunnerRetry } from "@orbit/core/session/runner/retry"
 import { SessionSchema } from "@orbit/core/session/schema"
 import { toSessionError } from "@orbit/core/session/to-session-error"
@@ -915,6 +916,117 @@ it.effect("emits malformed AI SDK tool input without executing it", () =>
     expect(response.events.some(LLMEvent.is.toolInputEnd)).toBeTrue()
     expect(response.events.some(LLMEvent.is.toolCall)).toBeFalse()
     expect(response.finishReason).toEqual({ normalized: "tool-calls", raw: "tool_calls" })
+  }),
+)
+
+// A call cut off before its first argument token reaches this route as an empty input, exactly like a call to a tool that
+// takes no arguments, so only the finish tells them apart. Streamed argument text, even `{}`, says the call was written.
+for (const input of ["", "{}"]) {
+  for (const row of [
+    { finish: "length", streamed: false, calls: [] },
+    { finish: "other", streamed: false, calls: [] },
+    { finish: "tool-calls", streamed: false, calls: [{ input: {}, partial: true }] },
+    { finish: "stop", streamed: false, calls: [{ input: {}, partial: true }] },
+    { finish: "length", streamed: true, calls: input === "" ? [] : [{ input: {}, partial: false }] },
+  ] as const) {
+    if (row.streamed && input === "") continue
+    it.effect(
+      `${row.calls.length ? "runs" : "drops"} an AI SDK call with input ${JSON.stringify(input)}${row.streamed ? " that streamed it" : ""} when the response finishes with ${row.finish}`,
+      () =>
+        Effect.gen(function* () {
+          const aisdk = yield* AISDK.Service
+          yield* aisdk.hook.sdk((event) => {
+            event.sdk = {
+              languageModel: () =>
+                streamModel([
+                  { type: "tool-input-start", id: "call_1", toolName: "list" },
+                  ...(row.streamed ? [{ type: "tool-input-delta" as const, id: "call_1", delta: input }] : []),
+                  { type: "tool-input-end", id: "call_1" },
+                  { type: "tool-call", toolCallId: "call_1", toolName: "list", input },
+                  { type: "finish", finishReason: { unified: row.finish, raw: row.finish }, usage },
+                ]),
+            }
+          })
+
+          const resolved = yield* aisdk.model(model("test-ai-sdk"))
+          const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "List" })).pipe(
+            Effect.provide(client),
+          )
+
+          expect(response.toolCalls).toHaveLength(row.calls.length)
+          expect(response.toolCalls.map((call) => ({ input: call.input, partial: call.partialInput === true }))).toEqual(
+            [...row.calls],
+          )
+        }),
+    )
+  }
+}
+
+// The Copilot chat model flushes a call whose arguments never arrived as a `tool-call` with an empty input, right before
+// its `finish` part. Run the real model over a wire body, so the shape is the provider's and not a script's.
+for (const row of [
+  { finish: "length", calls: 0 },
+  { finish: "tool_calls", calls: 1 },
+  { finish: "stop", calls: 1 },
+] as const) {
+  it.effect(`${row.calls ? "runs" : "drops"} a Copilot chat call with no arguments when finish_reason is ${row.finish}`, () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      const body = [
+        { choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "list", arguments: "" } }] } }] },
+        { choices: [{ index: 0, delta: {}, finish_reason: row.finish }], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+      ]
+        .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+        .concat("data: [DONE]\n\n")
+        .join("")
+      yield* aisdk.hook.sdk((event) => {
+        event.sdk = {
+          languageModel: () =>
+            new OpenAICompatibleChatLanguageModel("test-model", {
+              provider: "copilot.chat",
+              url: () => "https://api.test.com/chat/completions",
+              headers: () => ({}),
+              fetch: Object.assign(async () =>
+                new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }), { preconnect: () => {} }),
+            }),
+        }
+      })
+
+      const resolved = yield* aisdk.model(model("test-ai-sdk"))
+      const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "List" })).pipe(
+        Effect.provide(client),
+      )
+
+      expect(response.toolCalls).toHaveLength(row.calls)
+    }),
+  )
+}
+
+it.effect("keeps AI SDK tool calls in provider order when an earlier one has no arguments", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () =>
+          streamModel([
+            { type: "tool-input-start", id: "call_1", toolName: "list" },
+            { type: "tool-input-end", id: "call_1" },
+            { type: "tool-call", toolCallId: "call_1", toolName: "list", input: "" },
+            { type: "tool-input-start", id: "call_2", toolName: "lookup" },
+            { type: "tool-input-delta", id: "call_2", delta: '{"query":"x"}' },
+            { type: "tool-input-end", id: "call_2" },
+            { type: "tool-call", toolCallId: "call_2", toolName: "lookup", input: '{"query":"x"}' },
+            { type: "finish", finishReason: { unified: "length", raw: "length" }, usage },
+          ]),
+      }
+    })
+
+    const resolved = yield* aisdk.model(model("test-ai-sdk"))
+    const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "List" })).pipe(
+      Effect.provide(client),
+    )
+
+    expect(response.toolCalls.map((call) => call.id)).toEqual(["call_1", "call_2"])
   }),
 )
 

@@ -103,13 +103,13 @@ describe("WebSearchTool registration", () => {
       const registry = fixture.registry
       yield* fixture.websearch.select(WebSearch.ID.make("exa"))
 
-      expect(yield* toolTraits(registry, "websearch", { query: "effect" })).toMatchObject({
+      expect(yield* toolTraits(registry, "WebSearch", { query: "effect" })).toMatchObject({
         readOnly: true,
         concurrencySafe: true,
         openWorld: true,
         interruptBehavior: "cancel",
       })
-      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["websearch", "execute"])
+      expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["WebSearch", "Execute"])
       expect(
         yield* executeTool(registry, {
           sessionID,
@@ -117,7 +117,7 @@ describe("WebSearchTool registration", () => {
           call: {
             type: "tool-call",
             id: "call-search",
-            name: "websearch",
+            name: "WebSearch",
             input: { query: "effect typescript" },
           },
         }),
@@ -128,7 +128,7 @@ describe("WebSearchTool registration", () => {
       expect(fixture.assertions).toMatchObject([
         {
           sessionID,
-          action: "websearch",
+          action: "WebSearch",
           resources: ["effect typescript"],
           save: ["*"],
           metadata: { query: "effect typescript" },
@@ -163,7 +163,7 @@ describe("WebSearchTool registration", () => {
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-parallel", name: "websearch", input: { query: "effect layers" } },
+          call: { type: "tool-call", id: "call-parallel", name: "WebSearch", input: { query: "effect layers" } },
         }),
       ).toEqual({
         status: "completed",
@@ -200,7 +200,7 @@ describe("WebSearchTool registration", () => {
         executeTool(fixture.registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-domains", name: "websearch", input: { query: "python", ...input } },
+          call: { type: "tool-call", id: "call-domains", name: "WebSearch", input: { query: "python", ...input } },
         }).pipe(
           Effect.map((result) => (result.output as { results: { url: string }[] }).results.map((item) => item.url)),
         )
@@ -226,7 +226,7 @@ describe("WebSearchTool registration", () => {
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-empty", name: "websearch", input: { query: "nothing" } },
+          call: { type: "tool-call", id: "call-empty", name: "WebSearch", input: { query: "nothing" } },
         }),
       ).toMatchObject({
         status: "completed",
@@ -244,7 +244,7 @@ describe("WebSearchTool registration", () => {
       const first = yield* executeTool(registry, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-enable", name: "websearch", input: { query: "effect" } },
+        call: { type: "tool-call", id: "call-enable", name: "WebSearch", input: { query: "effect" } },
       })
       expect(first.status).toBe("completed")
       expect(["exa", "parallel"]).toContain(first.metadata?.provider)
@@ -282,7 +282,7 @@ describe("WebSearchTool registration", () => {
       const second = yield* executeTool(registry, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-enabled", name: "websearch", input: { query: "effect schema" } },
+        call: { type: "tool-call", id: "call-enabled", name: "WebSearch", input: { query: "effect schema" } },
       })
       expect(second.status).toBe("completed")
       expect(["exa", "parallel"]).toContain(second.metadata?.provider)
@@ -300,7 +300,7 @@ describe("WebSearchTool registration", () => {
       const result = yield* executeTool(fixture.registry, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-missing", name: "websearch", input: { query: "effect" } },
+        call: { type: "tool-call", id: "call-missing", name: "WebSearch", input: { query: "effect" } },
       })
       expect(result.status).toBe("completed")
       expect(yield* fixture.kv.get(WebSearch.ProviderKey)).toBe("random")
@@ -324,7 +324,7 @@ describe("WebSearchTool registration", () => {
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-choose", name: "websearch", input: { query: "effect" } },
+          call: { type: "tool-call", id: "call-choose", name: "WebSearch", input: { query: "effect" } },
         }),
       ).toMatchObject({ status: "completed", metadata: { provider: "parallel" } })
       expect(yield* fixture.kv.get(WebSearch.ProviderKey)).toBe(WebSearch.ID.make("parallel"))
@@ -366,7 +366,7 @@ describe("WebSearchTool registration", () => {
             call: {
               type: "tool-call",
               id: `call-concurrent-${index}`,
-              name: "websearch",
+              name: "WebSearch",
               input: { query: `effect ${index}` },
             },
           }),
@@ -390,7 +390,7 @@ describe("WebSearchTool registration", () => {
         yield* executeTool(registry, {
           sessionID,
           ...toolIdentity,
-          call: { type: "tool-call", id: "call-disable", name: "websearch", input: { query: "effect" } },
+          call: { type: "tool-call", id: "call-disable", name: "WebSearch", input: { query: "effect" } },
         }),
       ).toMatchObject({ status: "error" })
       expect(yield* fixture.kv.get(WebSearch.ProviderKey)).toBe(false)
@@ -416,7 +416,7 @@ describe("WebSearchTool registration", () => {
       const result = yield* tools.execute({
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-failover", name: "websearch", input: { query: "effect" } },
+        call: { type: "tool-call", id: "call-failover", name: "WebSearch", input: { query: "effect" } },
         progress: (metadata) =>
           Effect.sync(() => {
             progress.push(metadata)
@@ -445,7 +445,7 @@ describe("WebSearchTool registration", () => {
             .execute({
               sessionID,
               ...toolIdentity,
-              call: { type: "tool-call", id: `call-${query}`, name: "websearch", input: { query } },
+              call: { type: "tool-call", id: `call-${query}`, name: "WebSearch", input: { query } },
             })
             .pipe(Effect.flip)
           expect(toSessionError(error)).toEqual({
@@ -484,7 +484,7 @@ describe("WebSearchTool registration", () => {
                 call: {
                   type: "tool-call",
                   id: `call-http-${index}`,
-                  name: "websearch",
+                  name: "WebSearch",
                   input: { query: "effect" },
                 },
                 progress: (metadata) => Effect.sync(() => progress.push(metadata)),

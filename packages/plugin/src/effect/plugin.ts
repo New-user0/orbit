@@ -55,6 +55,12 @@ export interface Context {
 
 export interface Plugin<R = Scope.Scope> {
   readonly id: string
+  /**
+   * Which names the plugin's `tool` and `permission` hooks are told for the built-in tools. Absent, a hook is told the
+   * names the tools had before they took the reference interface (`shell`, `edit`, `write`), so a guard written against
+   * them keeps matching. `"reference"` opts in to the current names (`Bash`, `Edit`, `Write`).
+   */
+  readonly toolNames?: "reference"
   readonly effect: (context: Context) => Effect.Effect<void, never, R>
 }
 

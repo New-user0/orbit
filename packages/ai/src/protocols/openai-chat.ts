@@ -1227,7 +1227,7 @@ const finishEvents = Effect.fn("OpenAIChat.finishEvents")(function* (state: Pars
   const events: LLMEvent[] = []
   const toolCallEvents =
     state.finishReason === undefined && Object.keys(state.tools).length > 0
-      ? (yield* ToolStream.finishAll(ADAPTER, state.tools)).events
+      ? (yield* ToolStream.finishAll(ADAPTER, state.tools, { emptyIsComplete: true })).events
       : state.toolCallEvents
   const hasToolCalls = toolCallEvents.length > 0
   // With no finish_reason the provider never said the response ended, so a call rebuilt from cut-off input cannot be

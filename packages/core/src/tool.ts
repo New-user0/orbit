@@ -38,8 +38,8 @@ import {
   normalizedName,
   normalizeContent,
 } from "./tool/runtime.js"
+import { ToolNames } from "./tool/names.js"
 import { ToolTraits } from "./tool/traits.js"
-import { Wildcard } from "./util/wildcard.js"
 
 /** The call that is executing; see `ToolCurrentCall`. */
 export const CurrentCall = ToolCurrentCall.Current
@@ -165,7 +165,8 @@ const layer = Layer.effect(
         agent: context.agent,
         messageID: context.messageID,
         id: context.id,
-        input,
+        // A guard keyed on an old field name still sees the field. The registry runs on the real input.
+        input: ToolNames.view(name, input),
       })
 
     // The registry gate, for every path that runs a tool: a direct call and a Code Mode inner call both pass through
@@ -215,7 +216,7 @@ const layer = Layer.effect(
         agent: context.agent,
         messageID: context.messageID,
         id: context.id,
-        input,
+        input: ToolNames.view(name, input),
       }
       if ("failure" in execution) {
         const afterEvent: PluginHooks.Domains["tool"]["execute.after"] = {
@@ -278,7 +279,7 @@ const layer = Layer.effect(
         Effect.flatMap((web) =>
           permission
             .assert({
-              action: "webfetch",
+              action: "WebFetch",
               ...web,
               sessionID: context.sessionID,
               agent: context.agent,
@@ -310,7 +311,7 @@ const layer = Layer.effect(
       }),
       editor: (editor) => ({
         list: () => Array.from(editor.tools.values()),
-        get: (id) => editor.tools.get(id),
+        get: (id) => editor.tools.get(held(editor.tools, id)),
         namespace: (namespace) => {
           const error = namespaceError(namespace.name)
           if (error) {
@@ -333,7 +334,8 @@ const layer = Layer.effect(
             traits: tool.traits && { ...tool.traits },
           })
         },
-        update: (id, update) => {
+        update: (given, update) => {
+          const id = held(editor.tools, given)
           const current = editor.tools.get(id)
           if (!current) return
           const tool = {
@@ -354,7 +356,7 @@ const layer = Layer.effect(
           editor.tools.set(id, tool)
         },
         remove: (id) => {
-          editor.tools.delete(id)
+          editor.tools.delete(held(editor.tools, id))
         },
         web: (settings) => {
           if (settings.allowLocal !== undefined) editor.web.allowLocal = settings.allowLocal
@@ -394,13 +396,15 @@ const layer = Layer.effect(
           const codeModeTools = new Map(exposed.get("deferred"))
           const namespaces = data.namespaces
           const codeModeInventory = { tools: codeModeTools, namespaces }
-          const codeModeEnabled = !whollyDisabled("execute", rules)
+          const codeModeEnabled = !whollyDisabled("Execute", rules)
           const codeModeTool = codeModeEnabled
             ? CodeModeTool.create(
                 codeModeInventory,
                 (name, tool, input, context) =>
                   beforeExecute(name, input, context).pipe(
-                    Effect.flatMap((event) => executeTool(tool, name, event.input, context)),
+                    Effect.flatMap((event) =>
+                      executeTool(tool, name, ToolNames.lowerInput(name, event.input), context),
+                    ),
                   ),
                 authorize,
                 resolve,
@@ -422,7 +426,7 @@ const layer = Layer.effect(
             if (!advertised && definitions && (direct.has(requested) || codeModeTool?.name === requested))
               return { type: "unavailable" as const }
             const name = advertised?.name ?? requested
-            const tool = name === "execute" && codeModeTool ? codeModeTool : direct.get(name)
+            const tool = name === "Execute" && codeModeTool ? codeModeTool : direct.get(name)
             return tool ? { type: "found" as const, name, tool } : { type: "unknown" as const, name }
           }
           return {
@@ -441,8 +445,11 @@ const layer = Layer.effect(
                 id: Tool.CallID.make(input.call.id),
                 progress: input.progress ?? (() => Effect.void),
               }
-              const event = yield* beforeExecute(input.call.name, input.call.input, context)
-              const found = find(event.tool, input.definitions)
+              // Hooks are told the registry name of the tool, so a guard on `Bash` also meets a shell offered as
+              // `PowerShell`. A hook that leaves the name as it was keeps the request as the model made it.
+              const registryName = input.definitions?.get(input.call.name)?.name ?? input.call.name
+              const event = yield* beforeExecute(registryName, input.call.input, context)
+              const found = find(event.tool === registryName ? input.call.name : event.tool, input.definitions)
               if (found.type === "unavailable")
                 return yield* new Tool.Error({
                   message: `Tool is not available for this request: ${event.tool}`,
@@ -453,7 +460,7 @@ const layer = Layer.effect(
                   message: `No tool named "${found.name}" is currently available. Please use a tool from the available tool list.`,
                   code: Tool.ErrorCode.Unknown,
                 })
-              return yield* executeTool(found.tool, found.name, event.input, context)
+              return yield* executeTool(found.tool, found.name, ToolNames.lowerInput(found.name, event.input), context)
             }),
             traits: Effect.fnUntraced(function* (input: Parameters<Snapshot["traits"]>[0]) {
               const found = find(input.call.name, input.definitions)
@@ -492,7 +499,7 @@ const layer = Layer.effect(
 )
 
 const whollyDisabled = (action: string, rules: Permission.Ruleset) => {
-  const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
+  const rule = rules.findLast((rule) => Permission.actionMatches(action, rule.action))
   return rule?.resource === "*" && rule.effect === "deny"
 }
 
@@ -521,6 +528,12 @@ function schemaMakeError(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+// A plugin written against the old names edits the registry by `shell` or `write`: an id with no exact entry is looked
+// up under its current name, and an exact entry wins, as in `ToolNames.aliased`.
+function held(tools: Map<string, unknown>, id: string) {
+  return tools.has(id) ? id : ToolNames.canonical(id)
+}
+
 function registrationError(tool: Tool.Info) {
   const namespace = tool.options?.namespace
   if (namespace !== undefined) {
@@ -531,8 +544,8 @@ function registrationError(tool: Tool.Info) {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(name))
     return new RegistrationError({ name, message: `Invalid tool name: ${name}` })
   const id = effectiveName(tool)
-  if (ToolTraits.exposure(tool) === "direct" && id === "execute")
-    return new RegistrationError({ name: id, message: 'Tool name "execute" is reserved for CodeMode' })
+  if (ToolTraits.exposure(tool) === "direct" && ToolNames.canonical(id) === "Execute")
+    return new RegistrationError({ name: id, message: 'Tool name "Execute" is reserved for CodeMode' })
   const result = Result.try({
     try: () => ToolDefinition.make(definition(tool)),
     catch: (error) =>

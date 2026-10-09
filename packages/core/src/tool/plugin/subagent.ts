@@ -16,7 +16,7 @@ import { SubagentCompletion } from "../../session/subagent-completion.js"
 import { SubagentJob } from "../../session/subagent-job.js"
 import type { Tool } from "../../tool.js"
 
-export const name = "subagent"
+export const name = "Agent"
 
 const backgroundResult = (sessionID: SessionSchema.ID) => ({
   sessionID,

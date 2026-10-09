@@ -78,21 +78,21 @@ describe("LifecycleHooksPlugin", () => {
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
 
       const shell = yield* registry
-        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .trigger("tool", "execute.before", { ...base, tool: "Bash", input: { command: "ls" } })
         .pipe(Effect.exit)
       expect(Exit.isFailure(shell) ? String(shell.cause) : "").toContain("Blocked by a PreToolUse hook: no shell today")
       const write = yield* registry
-        .trigger("tool", "execute.before", { ...base, tool: "write", input: {} })
+        .trigger("tool", "execute.before", { ...base, tool: "Write", input: {} })
         .pipe(Effect.exit)
       expect(Exit.isFailure(write) ? String(write.cause) : "").toContain("read-only checkout")
       const read = yield* registry
-        .trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+        .trigger("tool", "execute.before", { ...base, tool: "Read", input: {} })
         .pipe(Effect.exit)
       expect(Exit.isSuccess(read)).toBe(true)
 
       const after = {
         ...base,
-        tool: "read",
+        tool: "Read",
         input: { path: "a.ts" },
         status: "completed" as const,
         result: { output: "1: x", content: "Read file a.ts" } as Tool.Result,
@@ -164,7 +164,7 @@ describe("LifecycleHooksPlugin with settings it does not honor yet", () => {
         hooks({ disabled: true, managed_only: true }),
       ])
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
-      const fire = registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+      const fire = registry.trigger("tool", "execute.before", { ...base, tool: "Read", input: {} })
       yield* fire
       yield* fire
       expect(output).toEqual([
@@ -182,7 +182,7 @@ describe("LifecycleHooksPlugin with settings it does not honor yet", () => {
       const config = yield* Config.Test
       yield* config.setEntries([hooks({ disabled: false, managed_only: false })])
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
-      yield* registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+      yield* registry.trigger("tool", "execute.before", { ...base, tool: "Read", input: {} })
       expect(output).toEqual([])
     }).pipe(Effect.provide(collectWarnings(unenforced, output)))
   })
@@ -219,7 +219,7 @@ describe("LifecycleHooksPlugin with settings it does not honor yet", () => {
       ])
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
       const fire = registry
-        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .trigger("tool", "execute.before", { ...base, tool: "Bash", input: { command: "ls" } })
         .pipe(Effect.exit)
       const exit = yield* fire
       yield* fire
@@ -263,14 +263,14 @@ describe("LifecycleHooksPlugin with hooks of other types", () => {
 
       const after = {
         ...base,
-        tool: "read",
+        tool: "Read",
         input: {},
         status: "completed" as const,
         result: { output: "x" } as Tool.Result,
       }
       const fire = Effect.gen(function* () {
         const before = yield* registry
-          .trigger("tool", "execute.before", { ...base, tool: "read", input: {} })
+          .trigger("tool", "execute.before", { ...base, tool: "Read", input: {} })
           .pipe(Effect.exit)
         expect(Exit.isSuccess(before)).toBe(true)
         yield* registry.trigger("tool", "execute.after", after)
@@ -306,7 +306,7 @@ describe("LifecycleHooksPlugin with hooks of other types", () => {
       ])
       yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
       const exit = yield* registry
-        .trigger("tool", "execute.before", { ...base, tool: "shell", input: { command: "ls" } })
+        .trigger("tool", "execute.before", { ...base, tool: "Bash", input: { command: "ls" } })
         .pipe(Effect.exit)
       expect(Exit.isFailure(exit) ? String(exit.cause) : "").toContain("Blocked by a PreToolUse hook: no shell today")
     }),

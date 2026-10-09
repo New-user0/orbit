@@ -296,9 +296,10 @@ describe("SessionTurn.current", () => {
       const queued = yield* s.admitSynthetic("Later work finished", "queue")
       yield* s.promote("input")
 
-      expect(yield* s.current).toEqual({
+      // The notice began the turn, not a prompt, so the turn continues the limits of the one before it.
+      expect(yield* s.current).toMatchObject({
         boundary: yield* s.seq(queued.id),
-        options: undefined,
+        options: { maxSteps: 3 },
         fallback: undefined,
         notices: {},
       })
@@ -761,8 +762,8 @@ describe("SessionTurn.exceeded", () => {
     ["steps reached", { maxSteps: 2 }, spent, true, "limit.steps"],
     ["cost reached", { maxCost: Money.USD.make(3) }, spent, true, "limit.cost"],
     ["tokens reached", { maxTokens: 100 }, spent, true, "limit.tokens"],
-    ["cost limit, model without a price", { maxCost: Money.USD.make(50) }, spent, false, "limit.cost"],
-    ["cost limit, unknown spend", { maxCost: Money.USD.make(50) }, { ...spent, unknown: 1 }, true, "limit.cost"],
+    ["cost limit, model without a price", { maxCost: Money.USD.make(50) }, spent, false, "limit.cost-unknown"],
+    ["cost limit, unknown spend", { maxCost: Money.USD.make(50) }, { ...spent, unknown: 1 }, true, "limit.cost-unknown"],
     ["unknown spend, no cost limit", { maxTokens: 500 }, { ...spent, unknown: 1 }, false, undefined],
   ]
   for (const [name, options, usage, priced, type] of table)
