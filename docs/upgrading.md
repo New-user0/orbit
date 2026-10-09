@@ -1000,7 +1000,7 @@ The terminal UI and Mini used to fill an approval prompt from the input of the t
 whose own input can name a different URL, agent or file from the one asked about. The prompt now uses the call's input
 only when that call is the tool that asks, and otherwise shows the request's own URL, agent or file. A patch that
 changes several files used to be shown as an edit of its first file, with only that file's diff. Its prompt now names
-every file in the title and shows each file's diff under its path.
+every file in the title, the old name of a moved file included, and shows each file's diff under its path.
 
 **Affects:** people who approve edits made with the Patch tool, which some models get in place of Edit and Write, and
 approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini.

@@ -58,12 +58,13 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     const first = files[0] ?? {}
     const file = text(input.path) || text(first.file) || resources[0] || ""
     // A patch asks once for every file it changes, so the prompt names all of them and shows every file's diff: showing
-    // only the first would hide part of what is approved.
+    // only the first would hide part of what is approved. A moved file's old name is only in the resources, and each
+    // per-file entry carries the new one, so the names come from both.
     const named = files.map((item) => text(item.file)).filter(Boolean)
-    const targets = named.length > 1 ? named : resources.length > 1 ? resources : []
+    const targets = [...new Set([...resources, ...named])]
     if (targets.length > 1) {
       const diffs = files.map((item) => ({ file: text(item.file), diff: text(item.patch) || text(item.diff) }))
-      const each = named.length > 1 && diffs.every((item) => item.file && item.diff)
+      const each = diffs.length > 0 && diffs.every((item) => item.file && item.diff)
       return {
         icon: "→",
         title: `Edit ${targets.length} files: ${targets.map(formatPath).join(", ")}`,
@@ -137,7 +138,10 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     const url = text(dict(source.metadata).url) || resources[0] || text(input.url) || text(metadata.url)
     // A Code Mode fetch can write, and its prompt must not read like the read the person allowed: the method is part of
     // what is approved. The request's own metadata names it; a plain fetch is a GET.
-    const method = (text(dict(source.metadata).method) || (resources.find((item) => /^[A-Z][A-Z-]* \S/.test(item)) ?? "").split(" ")[0]!).toUpperCase()
+    const method = (
+      text(dict(source.metadata).method) ||
+      (resources.find((item) => /^[A-Z][A-Z-]* \S/.test(item)) ?? "").split(" ")[0]!
+    ).toUpperCase()
     const writes = method !== "" && method !== "GET" && method !== "HEAD"
     return {
       icon: "%",

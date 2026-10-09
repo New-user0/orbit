@@ -69,6 +69,36 @@ describe("a patch that changes several files", () => {
     }),
   )
 
+  // The Patch tool lists a moved file's old and new names in the resources, and names its per-file entry by the new one.
+  test("a patch that moves one file and edits another names the moved file's old name too", () => {
+    const moved = { file: "dst.txt", patch: "--- src.txt\n+++ dst.txt\n+MOVED_CHANGE" }
+    const shown = permissionPresentation({
+      action: "Edit",
+      tool: "Patch",
+      resources: ["src.txt", "dst.txt", files[0].file],
+      metadata: { files: [moved, files[0]] },
+    })
+    expect(shown.title).toBe("Edit 3 files: src.txt, dst.txt, README.md")
+    expect(shown.lines).toEqual(["Path: src.txt", "Path: dst.txt", "Path: README.md"])
+    expect(shown.diffs).toEqual([
+      { file: "dst.txt", diff: moved.patch },
+      { file: "README.md", diff: files[0].patch },
+    ])
+  })
+
+  test("a patch that only moves a file keeps the diff view", () => {
+    const moved = { file: "dst.txt", patch: "--- src.txt\n+++ dst.txt\n+MOVED_CHANGE" }
+    const shown = permissionPresentation({
+      action: "Edit",
+      tool: "Patch",
+      resources: ["src.txt", "dst.txt"],
+      metadata: { files: [moved], diff: `${moved.patch}\n` },
+    })
+    expect(shown.title).toBe("Edit 2 files: src.txt, dst.txt")
+    expect(shown.diffs).toEqual([{ file: "dst.txt", diff: moved.patch }])
+    expect(shown.patch).toBeUndefined()
+  })
+
   test("without a diff per file the joined diff is shown as plain text", () => {
     const shown = permissionPresentation({
       action: "Edit",

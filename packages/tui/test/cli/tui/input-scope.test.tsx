@@ -303,7 +303,9 @@ test("a permission request for a patch that changes two files draws both files' 
     await panes.app.renderOnce()
     const frame = panes.app.captureCharFrame()
     expect(frame).toContain("Edit 2 files: a.txt, b.txt")
+    expect(frame).toContain("Path: a.txt")
     expect(frame).toContain("FIRST_FILE_CHANGE")
+    expect(frame).toContain("Path: b.txt")
     expect(frame).toContain("SECOND_FILE_CHANGE")
   } finally {
     panes.app.renderer.destroy()

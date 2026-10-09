@@ -228,7 +228,9 @@ test.each([false, true])(
     try {
       await settle(app)
       const frame = app.captureCharFrame()
+      expect(frame).toContain("Path: a.txt")
       expect(frame).toContain("FIRST_FILE_CHANGE")
+      expect(frame).toContain("Path: b.txt")
       expect(frame).toContain("SECOND_FILE_CHANGE")
     } finally {
       app.renderer.destroy()

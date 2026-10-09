@@ -455,7 +455,7 @@ export function RunPermissionBody(props: {
                   >
                     <For each={diffs()}>
                       {(item) => (
-                        <box width="100%" flexDirection="column" flexShrink={0}>
+                        <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
                           <Show when={diffs().length > 1}>
                             <text width="100%" fg={props.theme.muted} wrapMode="word" flexShrink={0}>
                               {`Path: ${item.file}`}
