@@ -696,15 +696,13 @@ describe("WebSearchTool consent stays a user decision", () => {
     Effect.gen(function* () {
       const fixture = yield* setupReal
       const started = yield* start(fixture, "call-timeout")
-      yield* Effect.gen(function* () {
-        yield* TestClock.adjust("1 minute")
-        expectNotEnabled(yield* joinBounded(started.fiber))
-        expect(yield* fixture.forms.state(started.form.id)).toMatchObject({ status: "cancelled" })
-        expect(yield* fixture.forms.list({ sessionID })).toEqual([])
-        const late = yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "allow" } }).pipe(Effect.flip)
-        expect(late).toBeInstanceOf(Form.AlreadySettledError)
-        yield* expectNothingHappened(fixture)
-      })
+      yield* TestClock.adjust("1 minute")
+      expectNotEnabled(yield* joinBounded(started.fiber))
+      expect(yield* fixture.forms.state(started.form.id)).toMatchObject({ status: "cancelled" })
+      expect(yield* fixture.forms.list({ sessionID })).toEqual([])
+      const late = yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "allow" } }).pipe(Effect.flip)
+      expect(late).toBeInstanceOf(Form.AlreadySettledError)
+      yield* expectNothingHappened(fixture)
     }),
     1_000,
   )
@@ -715,12 +713,10 @@ describe("WebSearchTool consent stays a user decision", () => {
       const started = yield* start(fixture, "call-timeout-2")
       yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "choose" } })
       const second = yield* pending(fixture, [started.form.id])
-      yield* Effect.gen(function* () {
-        yield* TestClock.adjust("1 minute")
-        expectNotEnabled(yield* joinBounded(started.fiber))
-        expect(yield* fixture.forms.state(second.id)).toMatchObject({ status: "cancelled" })
-        yield* expectNothingHappened(fixture)
-      })
+      yield* TestClock.adjust("1 minute")
+      expectNotEnabled(yield* joinBounded(started.fiber))
+      expect(yield* fixture.forms.state(second.id)).toMatchObject({ status: "cancelled" })
+      yield* expectNothingHappened(fixture)
     }),
     1_000,
   )

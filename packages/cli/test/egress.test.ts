@@ -132,7 +132,10 @@ test(
     } finally {
       await Bun.write(file, original)
     }
-    expect(attempts.some((attempt) => attempt.includes("mcp.exa.ai:443"))).toBe(true)
+    // "random" picks one keyless provider per query and a dropped connection does not fall over to another, so any
+    // of their hosts counts as reaching the search service.
+    const hosts = ["mcp.exa.ai", "mcp.firecrawl.dev", "search.parallel.ai", "api.tavily.com", "agent.tinyfish.ai"]
+    expect(attempts.some((attempt) => hosts.some((host) => attempt.includes(`${host}:443`)))).toBe(true)
   },
   120_000,
 )
