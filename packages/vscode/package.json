@@ -292,6 +292,11 @@
             "Dock the chat in the Orbit side bar."
           ],
           "description": "Where the Orbit chat opens. Reload the window after changing it."
+        },
+        "orbit.notifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notice in the editor when Orbit needs your review or finishes while the Orbit chat is hidden or the window is in the background. These are notices inside VS Code, not operating system notifications."
         }
       }
     },

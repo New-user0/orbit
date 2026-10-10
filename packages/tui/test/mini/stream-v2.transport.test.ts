@@ -1620,6 +1620,36 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  test("hands the events of its session to the attention observer, and not those of an unknown session", async () => {
+    const events = feed()
+    events.push(connected())
+    const client = sdk({ streams: [events] })
+    const ui = footer()
+    const seen: string[] = []
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+      onEvent: (event) => seen.push(`${event.type}:${(event.data as { id?: string }).id ?? ""}`),
+    })
+    events.push({
+      id: "evt_permission",
+      created: 0,
+      type: "permission.asked",
+      data: { id: "per_1", sessionID: "ses_1", action: "read", resources: ["/tmp/file"] },
+    })
+    events.push({
+      id: "evt_other",
+      created: 0,
+      type: "permission.asked",
+      data: { id: "per_other", sessionID: "ses_unrelated", action: "read", resources: ["/tmp/file"] },
+    })
+    await Bun.sleep(20)
+    expect(seen).toEqual(["permission.asked:per_1"])
+    await transport.close()
+  })
+
   test("reconnects and hydrates without completing before session.wait", async () => {
     const first = feed()
     const second = feed()

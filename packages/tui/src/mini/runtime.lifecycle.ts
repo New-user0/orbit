@@ -18,6 +18,8 @@ import {
 } from "@opentui/core"
 import { isFallbackTitle } from "@orbit/util/session-title-fallback"
 import { createMiniTitle } from "../util/renderer"
+import { createTuiAttention } from "../attention"
+import { createAttentionEvents, isAttentionEvent } from "../attention-events"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -87,6 +89,8 @@ export type LifecycleInput = {
 
 export type Lifecycle = {
   footer: FooterApi
+  /** Reports a session event that may need the person, so Mini notifies like the TUI does. */
+  observe?(event: { type: string; data?: unknown }): void
   onResize(fn: () => void): () => void
   refreshTheme(): void
   setTitle(title?: string): void
@@ -203,6 +207,13 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   if (mono) renderer.off(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
 
   const { RunFooter } = await footerTask
+  const attention = createTuiAttention({ renderer, config: tuiConfig })
+  const attentionEvents = createAttentionEvents({
+    attention,
+    // Mini follows one session tree: the root, and the subagents it started.
+    session: (sessionID) => (sessionID === (input.getSessionID?.() ?? input.sessionID) ? {} : { parentID: "root" }),
+  })
+  renderer.keyInput.on("keypress", attentionEvents.keypress)
   let closed = false
   let sigintRegistered = false
   let detachSigintListener: (() => void) | undefined
@@ -310,6 +321,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
     closed = true
     detachSigint()
+    renderer.keyInput.off("keypress", attentionEvents.keypress)
+    attentionEvents.dispose()
+    attention.dispose()
     let wroteExit = false
 
     try {
@@ -345,6 +359,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
 
   return {
     footer,
+    observe: (event) => {
+      if (isAttentionEvent(event)) attentionEvents.handle(event)
+    },
     refreshTheme() {
       footer.refreshTheme()
     },

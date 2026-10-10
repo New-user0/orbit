@@ -1056,6 +1056,30 @@ have notifications, sound or the bell on, who get the reminder.
 
 **What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
 
+### System notifications for the TUI and Mini, and notices in VS Code
+
+`attention.backend` in `cli.json` chooses where a notification appears. `"terminal"`, the default, asks the terminal
+to show it, as before. `"system"` uses the operating system's own notifications (`notify-send` on Linux, Notification
+Center on macOS, a toast from Windows PowerShell on Windows) and falls back to the terminal when the program is missing,
+exits with an error or runs longer than 10 seconds. `attention.notifications` is still the master switch and still off by
+default, and a notification still shows only while the terminal is blurred. The title and the message reach the program
+as data, never as part of a script. Mini now honours `attention.notifications`, `attention.backend`, `attention.bell` and
+`attention.idle_reminder` exactly as the TUI does, including the reminder after a finished session.
+
+A subagent's permission request or form now notifies like a root session's does. It used to send a sound and a bell
+only. A subagent finishing stays silent.
+
+The VS Code extension has a new setting, `orbit.notifications` (on by default). While the Orbit chat is hidden or the
+window is in the background, it shows a notice when a permission needs review ("Orbit needs your review") and when a
+working period ends ("Orbit finished"), each with an Open button. These are notices inside VS Code, not operating
+system notifications.
+
+**Affects:** TUI and Mini users who turn notifications on, people who use subagents with notifications on, and VS Code
+users, who get the new notices unless they turn `orbit.notifications` off.
+
+**What to do:** Nothing. Set `"attention": { "backend": "system" }` to use the operating system's notifications, and
+`orbit.notifications` to `false` to silence the VS Code notices.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
