@@ -208,7 +208,7 @@ describe("language servers and formatters for a file outside the project", () =>
     }),
   )
 
-  it.live("Lsp.diagnostics and Lsp.request start nothing for a file whose owner is not trusted", () =>
+  it.live("Lsp.diagnostics, Lsp.request and Lsp.send start nothing for a file whose owner is not trusted", () =>
     Effect.gen(function* () {
       const { marker, project, untrusted, trusted, services } = yield* layout
       const files = [path.join(project, "sub", "in.fake"), path.join(untrusted, "out.fake"), path.join(trusted, "ok.fake")]
@@ -224,6 +224,12 @@ describe("language servers and formatters for a file outside the project", () =>
           "Language servers stay off for a file whose folder is not trusted.",
         )
         expect(yield* hover(files[2]!)).toEqual({ contents: { kind: "markdown", value: "a fake symbol" } })
+        // `send` takes the same gate: no server is told about a file whose owner is not trusted.
+        const search = (file: string) => lsp.send("workspace/symbol", file, { query: "" })
+        expect((yield* search(files[1]!).pipe(Effect.flip)).message).toBe(
+          "Language servers stay off for a file whose folder is not trusted.",
+        )
+        expect(yield* search(files[2]!)).toBeArray()
       }).pipe(Effect.provide(services))
       const text = yield* opened(marker)
       expect(text).toContain("in.fake")

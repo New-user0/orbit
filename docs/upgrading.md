@@ -2225,3 +2225,25 @@ A new key, `webfetch.verbatim_hosts`, lists hosts (`docs.example.com`, `*.exampl
 **Affects:** prompts, scripts and plugins that called WebFetch without a `prompt`, or relied on it returning the raw page or HTML.
 
 **What to do:** Ask for what you need in `prompt`. To read a documentation site whole, list its host in `webfetch.verbatim_hosts` in your own configuration.
+
+### The LSP tool finds implementations, searches workspace symbols and walks call hierarchies
+
+The `LSP` tool has five new actions: `implementation`, `workspace_symbols` (with a new `query` input, sent as an empty
+string when left out; `path` only chooses the language server), `prepare_call_hierarchy`, `incoming_calls` and
+`outgoing_calls`. The call actions take the position of a function's name and use the first item the server finds there.
+The language server client also declares link, implementation, call hierarchy and workspace symbol support when it
+starts, retries a request up to three times (after 0.5 s, 1 s and 2 s) when a server answers that its content changed
+while it was indexing, and refuses a file larger than 10 MB with a message instead of sending it.
+
+The existing actions print differently: `definition` and `references` give a headline with a count, references are grouped
+by file, a link falls back to its whole target when it has no selection range, hover shows a list as separate paragraphs
+and starts with the range's position when the server sends one, and `symbols` shows each symbol's kind, detail and the line
+where its range starts. Paths are relative to the session's folder only when that is shorter and does not climb two folders, use
+forward slashes, and a result that is not a file path (for example a `jdt:` address) is printed as given. Results in
+git-ignored files are left out of `definition`, `implementation`, `references` and `workspace_symbols`; a file git tracks is
+always shown, and a folder that is not a repository hides nothing.
+
+**Affects:** models and scripts that parse the text of an `LSP` result, and anyone who relied on seeing results inside
+git-ignored folders such as `node_modules`.
+
+**What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.
