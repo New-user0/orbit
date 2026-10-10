@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { CliRenderer } from "@opentui/core"
 import { createRuntimeLifecycle } from "../../src/mini/runtime.lifecycle"
@@ -23,7 +23,11 @@ function host(platform: NodeJS.Platform): MiniHost {
   }
 }
 
-async function start(platform: NodeJS.Platform, sessionTitle?: string) {
+async function start(
+  platform: NodeJS.Platform,
+  sessionTitle?: string,
+  attention?: NonNullable<Parameters<typeof createTuiResolvedConfig>[0]>["attention"],
+) {
   const app = await createTestRenderer({
     width: 100,
     height: 24,
@@ -51,13 +55,20 @@ async function start(platform: NodeJS.Platform, sessionTitle?: string) {
     agent: "build",
     model: undefined,
     variant: undefined,
-    tuiConfig: createTuiResolvedConfig({}),
+    tuiConfig: createTuiResolvedConfig({ attention }),
     onPermissionReply: () => {},
     onFormReply: () => {},
     onFormCancel: () => {},
   })
-  return { app, lifecycle, titles }
+  const notified: Array<{ message: string; title?: string }> = []
+  app.renderer.triggerNotification = (message, title) => {
+    notified.push({ message, title })
+    return true
+  }
+  return { app, lifecycle, titles, notified }
 }
+
+const asked = (id: string, sessionID = "ses_1") => ({ type: "permission.asked", data: { id, sessionID } })
 
 // The Mini footer reports what it is doing; the lifecycle turns that into the window title (Linux only).
 test("the Mini window title follows the footer on Linux, with the title cleaned", async () => {
@@ -113,4 +124,100 @@ test.each(["win32", "darwin"] as const)("the Mini window title is left alone on 
     lifecycle.footer.destroy()
     app.renderer.destroy()
   }
+})
+
+describe("attention in Mini", () => {
+  test("notifies once for an ask while blurred, and not while focused or when switched off", async () => {
+    const blurred = await start("linux", undefined, { notifications: true })
+    try {
+      blurred.app.renderer.emit("blur")
+      blurred.lifecycle.observe?.(asked("perm_1"))
+      blurred.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(blurred.notified).toEqual([{ message: "Permission needs input", title: "Orbit" }])
+      // A subagent's ask notifies like the root's.
+      blurred.lifecycle.observe?.(asked("perm_2", "ses_child"))
+      await Bun.sleep(20)
+      expect(blurred.notified).toHaveLength(2)
+    } finally {
+      blurred.lifecycle.footer.destroy()
+      blurred.app.renderer.destroy()
+    }
+
+    const focused = await start("linux", undefined, { notifications: true })
+    try {
+      focused.app.renderer.emit("focus")
+      focused.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(focused.notified).toEqual([])
+    } finally {
+      focused.lifecycle.footer.destroy()
+      focused.app.renderer.destroy()
+    }
+
+    const off = await start("linux", undefined, { notifications: false })
+    try {
+      off.app.renderer.emit("blur")
+      off.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(off.notified).toEqual([])
+    } finally {
+      off.lifecycle.footer.destroy()
+      off.app.renderer.destroy()
+    }
+  })
+
+  test("titles the notification with the session title the footer last received", async () => {
+    const harness = await start("linux", "First", { notifications: true })
+    try {
+      harness.app.renderer.emit("blur")
+      harness.lifecycle.setTitle("Fix the build")
+      harness.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(harness.notified).toEqual([{ message: "Permission needs input", title: "Fix the build" }])
+    } finally {
+      harness.lifecycle.footer.destroy()
+      harness.app.renderer.destroy()
+    }
+  })
+
+  test("cleans a hostile session title before it reaches a notification", async () => {
+    const harness = await start("linux", "First", { notifications: true })
+    try {
+      harness.app.renderer.emit("blur")
+      harness.lifecycle.setTitle("Fix‮evil\x1b]0;x\x07 build")
+      harness.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(harness.notified.length).toBe(1)
+      expect(harness.notified[0].title).toContain("build")
+      expect(harness.notified[0].title ?? "").not.toMatch(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/)
+    } finally {
+      harness.lifecycle.footer.destroy()
+      harness.app.renderer.destroy()
+    }
+  })
+
+  test("the idle reminder fires once after the configured seconds and a keypress cancels it", async () => {
+    const harness = await start("linux", undefined, { notifications: true, idle_reminder: 0.05 })
+    try {
+      harness.app.renderer.emit("blur")
+      const done = { type: "session.execution.succeeded", data: { sessionID: "ses_1" } }
+      harness.lifecycle.observe?.(done)
+      await Bun.sleep(300)
+      expect(harness.notified.map((item) => item.message)).toEqual(["Session done", "Orbit is waiting for your input"])
+
+      harness.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+      harness.lifecycle.observe?.(done)
+      harness.app.renderer.keyInput.emit("keypress", { name: "a" } as never)
+      await Bun.sleep(300)
+      expect(harness.notified.map((item) => item.message)).toEqual([
+        "Session done",
+        "Orbit is waiting for your input",
+        "Session done",
+      ])
+    } finally {
+      harness.lifecycle.footer.destroy()
+      harness.app.renderer.destroy()
+    }
+  })
 })

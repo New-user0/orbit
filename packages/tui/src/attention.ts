@@ -12,6 +12,7 @@ import { Schema } from "effect"
 import stripAnsi from "strip-ansi"
 import * as TuiAudio from "./audio"
 import { ringTerminalBell } from "./util/terminal-bell"
+import { notifySystem } from "./util/os-notify"
 import {
   defaultSoundPath,
   questionSoundPath,
@@ -91,10 +92,47 @@ export function createTuiAttention(input: {
   audio?: Pick<typeof TuiAudio, "loadSoundFile" | "play">
   /** Where the bell byte goes; defaults to the process stdout. */
   writeBell?: (text: string) => unknown
+  /** Shows an operating system notification; true only when one was shown. Defaults to the real programs. */
+  notifySystem?: (input: { title: string; message: string }) => Promise<boolean>
 }): AttentionHost {
   let focus: FocusState = "unknown"
   let disposed = false
   const audio = input.audio ?? TuiAudio
+  const showSystem = input.notifySystem ?? notifySystem
+
+  // One operating system program runs at a time. The newest request waits in a single slot and replaces an older one,
+  // which resolves undefined: a burst of asks must not start a program for each.
+  let running = false
+  let waiting: { title: string; message: string; resolve: (shown: boolean | undefined) => void } | undefined
+
+  async function system(title: string, message: string): Promise<boolean | undefined> {
+    if (running) {
+      waiting?.resolve(undefined)
+      return new Promise((resolve) => {
+        waiting = { title, message, resolve }
+      })
+    }
+    running = true
+    const shown = await showSystem({ title, message }).catch((error) => {
+      console.debug("failed to show system notification", { error })
+      return false
+    })
+    running = false
+    const next = waiting
+    waiting = undefined
+    if (next && !disposed) void system(next.title, next.message).then(next.resolve)
+    else next?.resolve(undefined)
+    return shown
+  }
+
+  function terminal(message: string, title: string) {
+    try {
+      return input.renderer.triggerNotification(message, title)
+    } catch (error) {
+      console.debug("failed to trigger attention notification", { error })
+      return false
+    }
+  }
 
   const onFocus = () => {
     focus = "focused"
@@ -147,19 +185,11 @@ export function createTuiAttention(input: {
         const notificationSkip = focusSkip(requestedNotification?.when ?? "blurred", focus)
         const notificationRequested = input.config.attention.notifications && request.notification !== false
         const shouldNotify = notificationRequested && !notificationSkip
-        const notification = shouldNotify
-          ? (() => {
-              try {
-                return input.renderer.triggerNotification(
-                  message,
-                  normalizeText(request.title, DEFAULT_TITLE, TITLE_LIMIT),
-                )
-              } catch (error) {
-                console.debug("failed to trigger attention notification", { error })
-                return false
-              }
-            })()
-          : false
+        const title = normalizeText(request.title, DEFAULT_TITLE, TITLE_LIMIT)
+        // The operating system attempt starts now and is awaited after the sound and the bell, so it never delays them.
+        const systemAttempt =
+          shouldNotify && input.config.attention.backend === "system" ? system(title, message) : undefined
+        const terminalNotification = shouldNotify && !systemAttempt ? terminal(message, title) : false
         const volume = soundVolume(request, input.config)
         const requestedSound = typeof request.sound === "object" ? request.sound : undefined
         const soundSkip = volume === undefined ? undefined : focusSkip(requestedSound?.when ?? "always", focus)
@@ -177,6 +207,14 @@ export function createTuiAttention(input: {
           input.config.attention.bell && (request.bell !== undefined || request.notification !== false) && !bellSkip
             ? await ringTerminalBell(input.renderer, input.writeBell)
             : false
+
+        const shown = await systemAttempt
+        // A program that was missing, failed or timed out falls back to the terminal. A replaced request stays silent.
+        const notification = systemAttempt
+          ? shown === undefined
+            ? false
+            : shown || terminal(message, title)
+          : terminalNotification
 
         if (!notification && !sound && !bell) {
           if (notificationRequested && notificationSkip) return skipped(notificationSkip)
@@ -202,6 +240,8 @@ export function createTuiAttention(input: {
     dispose() {
       if (disposed) return
       disposed = true
+      waiting?.resolve(undefined)
+      waiting = undefined
       input.renderer.off("focus", onFocus)
       input.renderer.off("blur", onBlur)
     },
