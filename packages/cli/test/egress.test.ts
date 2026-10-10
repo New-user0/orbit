@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
 import fs from "node:fs/promises"
@@ -40,6 +40,11 @@ beforeAll(async () => {
   await fs.mkdir(path.join(root, "config"), { recursive: true })
   await fs.mkdir(path.join(root, "workspace"), { recursive: true })
   await Bun.write(path.join(root, "config", "orbit.json"), JSON.stringify(config()))
+})
+
+beforeEach(() => {
+  attempts.length = 0
+  requests.length = 0
 })
 
 afterAll(async () => {
@@ -116,6 +121,32 @@ test(
   120_000,
 )
 
+test(
+  "control C1: a provider selected in the user's own config reaches the search service",
+  async () => {
+    const file = path.join(root, "config", "orbit.json")
+    const original = await Bun.file(file).text()
+    await Bun.write(file, JSON.stringify({ ...config(), websearch: { provider: "random" } }))
+    try {
+      await run(await fresh("control-user"), [], { ORBIT_TRUST_PROJECT: "1" })
+    } finally {
+      await Bun.write(file, original)
+    }
+    expect(attempts.some((attempt) => attempt.includes("mcp.exa.ai:443"))).toBe(true)
+  },
+  120_000,
+)
+
+test(
+  "control C2: --trust on a repository that selects firecrawl is the user's grant, so the selection applies",
+  async () => {
+    const workspace = await fresh("control-trust", { websearch: { provider: "firecrawl" } })
+    const result = await run(workspace, ["--trust"], {})
+    expect(result.code).toBe(0)
+    expect(attempts.some((attempt) => attempt.includes("mcp.firecrawl.dev:443"))).toBe(true)
+  },
+  120_000,
+)
 
 test(
   "an idle server makes no outbound connections",

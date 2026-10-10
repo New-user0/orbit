@@ -658,7 +658,14 @@ describe("WebSearchTool consent stays a user decision", () => {
     })
     expect(toSessionError(error)).toEqual({ type: "websearch.not-enabled", message: WebSearchTool.NOT_ENABLED })
     expect(WebSearchTool.NOT_ENABLED).toContain("websearch")
+    expect(WebSearchTool.NOT_ENABLED).toContain("do not change any Orbit config or settings file yourself")
+    expect(WebSearchTool.NOT_ENABLED).toContain("some other way")
   }
+
+  // A broken timeout would leave the call holding the provider lock, so the join is bounded in real time: the test
+  // fails by itself instead of cascading into every test after it.
+  const joinBounded = (fiber: Fiber.Fiber<Tool.Error, unknown>) =>
+    Fiber.join(fiber).pipe(Effect.timeout("200 millis"), TestClock.withLive, Effect.orDie)
 
   it.effect("fails not-enabled when the first form is cancelled, with or without a message", () =>
     Effect.gen(function* () {
@@ -691,14 +698,13 @@ describe("WebSearchTool consent stays a user decision", () => {
       const started = yield* start(fixture, "call-timeout")
       yield* Effect.gen(function* () {
         yield* TestClock.adjust("1 minute")
-        expectNotEnabled(yield* Fiber.join(started.fiber))
+        expectNotEnabled(yield* joinBounded(started.fiber))
         expect(yield* fixture.forms.state(started.form.id)).toMatchObject({ status: "cancelled" })
         expect(yield* fixture.forms.list({ sessionID })).toEqual([])
         const late = yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "allow" } }).pipe(Effect.flip)
         expect(late).toBeInstanceOf(Form.AlreadySettledError)
         yield* expectNothingHappened(fixture)
-        // A broken timeout must not leave this fiber holding the provider lock for the tests after it.
-      }).pipe(Effect.ensuring(Fiber.interrupt(started.fiber)))
+      })
     }),
     1_000,
   )
@@ -711,10 +717,10 @@ describe("WebSearchTool consent stays a user decision", () => {
       const second = yield* pending(fixture, [started.form.id])
       yield* Effect.gen(function* () {
         yield* TestClock.adjust("1 minute")
-        expectNotEnabled(yield* Fiber.join(started.fiber))
+        expectNotEnabled(yield* joinBounded(started.fiber))
         expect(yield* fixture.forms.state(second.id)).toMatchObject({ status: "cancelled" })
         yield* expectNothingHappened(fixture)
-      }).pipe(Effect.ensuring(Fiber.interrupt(started.fiber)))
+      })
     }),
     1_000,
   )

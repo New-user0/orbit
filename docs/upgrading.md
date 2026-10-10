@@ -2028,7 +2028,7 @@ truncation note for more results.
 ### A web search that nobody agreed to fails as "websearch.not-enabled"
 
 When the web search consent form is cancelled, is not answered within a minute, or cannot be shown, the `WebSearch` tool now
-fails with the type `websearch.not-enabled` and a fixed message that names the `websearch` setting, tells the model not to
+fails with the type `websearch.not-enabled` and a fixed message that names the `websearch` setting, tells the model that only the user can turn search on (it must not edit Orbit's config or settings files or send the query to a search service some other way) and not to
 call the tool again in this run, and says how the user can turn search on. Before, the failure had the type `tool.execution`
 and the message "Unable to search the web for ...". Nothing is searched or stored: a cancelled or timed-out form does not
 save a choice, so the next call asks again. Headless runs (`orb run` with no flag, `--auto` or
