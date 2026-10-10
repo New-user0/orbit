@@ -1068,6 +1068,31 @@ approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini
 
 **What to do:** Nothing.
 
+### `--mcp-config` and `--agents` add MCP servers and agents for one run
+
+`orb`, `orb run` and `orb -p` take `--mcp-config` (repeatable) and `--agents`. Each value is a JSON file or the JSON
+itself (comments and trailing commas are allowed). `--mcp-config` takes `{"servers": {"<name>": {"type": "local",
+"command": ["<program>"]}}}`, the shape of the `mcp` key, and `--agents` takes a map from agent name to the same fields as
+the `agents` key. A relative program or `cwd` in a file means the folder of that file. Another product's `mcpServers` map
+is refused with a hint. The values are checked before anything starts, an error names the flag and the path inside the
+value, and the merged document may not pass 4 MiB. They layer over `ORBIT_CONFIG_CONTENT`, then `--mcp-config` in order,
+then `--agents`.
+
+A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not run anything on the
+background service. The config reaches that server in a file in Orbit's state folder that only your user can open,
+which the server deletes when it has read it, and `orb` removes the variable and the folder as soon as the server is up. The environment that `orb` hands to a session no longer carries
+`ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
+the run stops, before the interface starts, when the background service reports that session as running, or when a service is registered and alive
+but cannot be asked, because two servers would run it at once; `--fork` is not checked, since a fork never runs the
+session it copies, and an `orb` that opens the session list cannot tell, and does not check. A value that starts, after whitespace, with `{`, a `/*` comment, or a `//` comment followed by another line is read as inline JSONC and anything else is a file name (so a one-line `//server/share/mcp.json` is a path); the disk never decides, so a folder that ships a file named after the text you typed cannot replace it (a file whose name starts with `{` is reached as `./{...}`). This replaces the earlier rule that a value was a file whenever a file of that name existed. A relative file name is
+taken from the folder you typed it in, also with `orb <directory>`; a relative `{file:...}` inside the value is taken from the folder of the file that holds it, or the folder you typed an inline value in, also when it holds an `{env:NAME}` (a reference that starts with `{env:NAME}` is anchored when NAME holds a relative path, and left to Orbit when it holds an absolute one). Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
+the same agent already has from `ORBIT_CONFIG_CONTENT`. A `ORBIT_CONFIG_CONTENT_FILE` that you set yourself is ignored (a server logs one line)
+and never deleted.
+
+**Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
+
+**What to do:** Nothing.
+
 ### Terminal bell, idle reminder and a status in the window title
 
 `attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the
@@ -2032,6 +2057,14 @@ The Read, Grep and Glob tools now refuse a device or stream path with a message 
 
 **What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
 
+### A touched file no longer blocks an edit, and a repeat read is short
+
+The file tools remember what a Session read of a file and what its own edits left behind. When a file's modification time is newer than the one remembered but its bytes are the same (a touch, a checkout that rewrote the same content, a formatter that changed nothing), Edit, Write, NotebookEdit and Patch now go ahead instead of reporting that the file changed. This applies to files of up to 256 KiB that the Session read, whatever range it asked for, and files it last edited or wrote; a larger file still compares modification times only. A file whose content changed is refused as before, and a change of line endings alone (CRLF to LF) counts as no change while adding or removing a byte order mark does not. A file that was never read is refused before any of it is loaded. A file reached through a symbolic link is compared by the link target's modification time, as its read recorded it. Separately, reading the same range of an unchanged text file or notebook again in the same Session answers with a short "unchanged since your last read" note instead of the text; the tool's structured output is unchanged and its metadata says `unchanged: true`. Only the last range read of a file is remembered, so reading range A, then range B, then A again returns A in full. The note is never used for a directory listing, an image or a PDF, and never skips the permission check. The note is not used after the Session is compacted or a revert is committed, nor after any Edit, Write, Patch or NotebookEdit of that file. A completed compaction also forgets that the Session read any file: a file has to be read again after a compaction before Edit, Write, Patch or NotebookEdit may change it (a failed compaction changes nothing).
+
+**Affects:** people who run formatters, version control or build tools while a Session is open, and clients that show Read results.
+
+**What to do:** Nothing.
+
 ### Grep returns up to 250 matches in a token-bounded page, and clips long lines
 
 Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
@@ -2073,3 +2106,21 @@ only.
 **Affects:** people with a language server configured or on `PATH`, mostly Rust users.
 
 **What to do:** Nothing. Set `lsp` to `false` to turn language servers off.
+
+### A web search that nobody agreed to fails as "websearch.not-enabled"
+
+When the web search consent form is cancelled, is not answered within a minute, or cannot be shown, the `WebSearch` tool now
+fails with the type `websearch.not-enabled` and a fixed message that names the `websearch` setting, tells the model that
+only the user can turn search on (it must not edit Orbit's config or settings files or send the query to a search
+service some other way) and not to
+call the tool again in this run, and says how the user can turn search on. Before, the failure had the type `tool.execution`
+and the message "Unable to search the web for ...". Nothing is searched or stored: a cancelled or timed-out form does not
+save a choice, so the next call asks again. Headless runs (`orb run` with no flag, `--auto` or
+`--dangerously-skip-permissions`) still never answer the form, so they search only when the user has already chosen: by
+answering the prompt in an interactive client, or by setting `websearch` in their own config or a trusted project's
+config; the exit code of such a run does not change.
+
+**Affects:** clients and hooks that match on the error type of a failed `WebSearch` call, and people who read logs.
+
+**What to do:** Nothing. To allow search in a headless run, set `websearch` (for example `{ "provider": "random" }`) in your
+own Orbit config.

@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Environment } from "@orbit/core/environment/index"
 import { AbsolutePath } from "@orbit/core/schema"
+import { FileLedger } from "@orbit/core/file-ledger"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
 import { Token } from "@orbit/core/util/token"
@@ -21,6 +22,8 @@ const fixture = Effect.gen(function* () {
   return { environment: Environment.makeFiles(Environment.makeLocalDriver(spawner)), files, directory }
 })
 const absolute = (value: string) => AbsolutePath.make(value)
+const readContent = (...args: Parameters<typeof ReadToolFileSystem.read>) =>
+  ReadToolFileSystem.read(...args).pipe(Effect.map((result) => result.content))
 // The estimate of the text a page becomes in the model's message, with its `N: ` prefixes.
 const renderedTokens = (content: string, first: number) =>
   Token.estimate(
@@ -114,7 +117,7 @@ describe("ReadTool text serialization", () => {
         const file = absolute(path.join(current.directory, "lines.txt"))
         yield* current.files.writeFileString(file, input.content)
 
-        const result = yield* ReadToolFileSystem.read(current.environment, file, "lines.txt", input.page)
+        const result = yield* readContent(current.environment, file, "lines.txt", input.page)
 
         expect(result).toMatchObject(input.output)
         expect(ReadTool.toModelContent("lines.txt", undefined, result)).toBe(input.model)
@@ -129,7 +132,7 @@ describe("ReadToolFileSystem", () => {
       const { environment, directory } = yield* fixture
       const file = path.join(directory, "missing.txt")
 
-      const error = yield* ReadToolFileSystem.read(environment, absolute(file), "missing.txt").pipe(Effect.flip)
+      const error = yield* readContent(environment, absolute(file), "missing.txt").pipe(Effect.flip)
 
       expect(error).toBeInstanceOf(Environment.NotFound)
     }),
@@ -141,7 +144,7 @@ describe("ReadToolFileSystem", () => {
       yield* files.makeDirectory(path.join(directory, "folder"))
       yield* files.writeFileString(path.join(directory, "file.txt"), "hello")
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(directory), "folder")
+      const result = yield* readContent(environment, absolute(directory), "folder")
 
       expect(result).toMatchObject({
         type: "list-page",
@@ -161,8 +164,8 @@ describe("ReadToolFileSystem", () => {
       yield* files.writeFile(binary, Uint8Array.of(0, 1, 2, 3))
       yield* files.writeFile(malformed, Uint8Array.of(0x68, 0x69, 0x80))
 
-      const binaryError = yield* ReadToolFileSystem.read(environment, absolute(binary), "archive.dat").pipe(Effect.flip)
-      const malformedResult = yield* ReadToolFileSystem.read(environment, absolute(malformed), "malformed.txt")
+      const binaryError = yield* readContent(environment, absolute(binary), "archive.dat").pipe(Effect.flip)
+      const malformedResult = yield* readContent(environment, absolute(malformed), "malformed.txt")
 
       expect(binaryError).toBeInstanceOf(ReadToolFileSystem.BinaryFileError)
       expect(binaryError.message).toBe("Cannot read binary file: archive.dat")
@@ -176,7 +179,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "notes.docx")
       yield* files.writeFileString(file, "plain text")
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "notes.docx")
+      const result = yield* readContent(environment, absolute(file), "notes.docx")
 
       expect(result).toMatchObject({ type: "file", content: "plain text", encoding: "utf8" })
     }),
@@ -192,7 +195,7 @@ describe("ReadToolFileSystem", () => {
       yield* Effect.promise(() => fs.symlink(path.join(outside, "target.txt"), path.join(directory, "escape")))
       yield* Effect.promise(() => fs.symlink(path.join(directory, "missing.txt"), path.join(directory, "broken")))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(directory), "folder")
+      const result = yield* readContent(environment, absolute(directory), "folder")
 
       expect(result.type).toBe("list-page")
       if (result.type !== "list-page") return
@@ -215,7 +218,7 @@ describe("ReadToolFileSystem", () => {
       yield* files.writeFileString(path.join(target, "file.txt"), "hello")
       yield* Effect.promise(() => fs.symlink(target, link))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(link), "link")
+      const result = yield* readContent(environment, absolute(link), "link")
 
       expect(result).toMatchObject({
         type: "list-page",
@@ -230,9 +233,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "short.txt")
       yield* files.writeFileString(file, "one\n")
 
-      const error = yield* ReadToolFileSystem.read(environment, absolute(file), "short.txt", { offset: 2 }).pipe(
-        Effect.flip,
-      )
+      const error = yield* readContent(environment, absolute(file), "short.txt", { offset: 2 }).pipe(Effect.flip)
 
       expect(error).toBeInstanceOf(ReadToolFileSystem.OffsetOutOfRangeError)
       expect(error.message).toBe("Offset 2 is out of range for this file (1 line)")
@@ -245,7 +246,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "lines.txt")
       yield* files.writeFileString(file, "one\r\ntwo\nthree")
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "lines.txt", {
+      const result = yield* readContent(environment, absolute(file), "lines.txt", {
         offset: 2,
         limit: 1,
       })
@@ -260,7 +261,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "long.txt")
       yield* files.writeFileString(file, "a".repeat(2_001))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "long.txt", { limit: 1 })
+      const result = yield* readContent(environment, absolute(file), "long.txt", { limit: 1 })
 
       expect(result).toMatchObject({
         type: "text-page",
@@ -284,8 +285,8 @@ describe("ReadToolFileSystem", () => {
           Effect.sync(() => ranges.push(range)).pipe(Effect.andThen(environment.read(path, range))),
       }
 
-      const lines = yield* ReadToolFileSystem.read(environment, absolute(linesFile), "many-lines.txt", { limit: 2_000 })
-      const bytes = yield* ReadToolFileSystem.read(tracked, absolute(bytesFile), "many-bytes.txt", {})
+      const lines = yield* readContent(environment, absolute(linesFile), "many-lines.txt", { limit: 2_000 })
+      const bytes = yield* readContent(tracked, absolute(bytesFile), "many-bytes.txt", {})
 
       expect(lines).toMatchObject({ type: "text-page", truncated: true, next: 2_001 })
       expect(lines.type === "text-page" ? lines.content.split("\n") : []).toHaveLength(2_000)
@@ -304,7 +305,7 @@ describe("ReadToolFileSystem", () => {
       // About 90 KB, which the former 50 KB cap paged.
       yield* files.writeFileString(file, Array.from({ length: 1_100 }, () => "w".repeat(80)).join("\n"))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "wide.txt")
+      const result = yield* readContent(environment, absolute(file), "wide.txt")
 
       expect(result.type).toBe("file")
       expect(result.type === "file" ? result.content.split("\n") : []).toHaveLength(1_100)
@@ -318,7 +319,7 @@ describe("ReadToolFileSystem", () => {
       // About 5 KB: far under the budget, over the line limit.
       yield* files.writeFileString(file, Array.from({ length: 2_500 }, () => "x").join("\n"))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "tiny.txt")
+      const result = yield* readContent(environment, absolute(file), "tiny.txt")
 
       expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true, next: 2_001 })
     }),
@@ -333,7 +334,7 @@ describe("ReadToolFileSystem", () => {
         Array.from({ length: 9_500 }, (_, index) => String(index).padStart(9, "0")).join("\n"),
       )
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "short.txt")
+      const result = yield* readContent(environment, absolute(file), "short.txt")
 
       expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true, next: 2_001 })
       expect(result.type === "text-page" ? result.content.split("\n") : []).toHaveLength(2_000)
@@ -347,7 +348,7 @@ describe("ReadToolFileSystem", () => {
       // 1,300 lines of 80 characters render to about 29,000 tokens: fewer than 2,000 lines, over the budget.
       yield* files.writeFileString(file, Array.from({ length: 1_300 }, () => "d".repeat(80)).join("\n"))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "dense.txt")
+      const result = yield* readContent(environment, absolute(file), "dense.txt")
 
       expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true })
       if (result.type !== "text-page" || result.next === undefined) throw new Error("expected a truncated page")
@@ -371,7 +372,7 @@ describe("ReadToolFileSystem", () => {
       let offset: number | undefined
       for (let guard = 0; guard < 20; guard++) {
         const page: ReadToolFileSystem.PageInput = offset === undefined ? {} : { offset }
-        const result = yield* ReadToolFileSystem.read(environment, absolute(file), "big.txt", page)
+        const result = yield* readContent(environment, absolute(file), "big.txt", page)
         if (result.type !== "text-page") throw new Error("expected a page")
         expect(result.offset).toBe(offset ?? 1)
         expect(renderedTokens(result.content, result.offset)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS)
@@ -394,7 +395,7 @@ describe("ReadToolFileSystem", () => {
       yield* files.makeDirectory(path.join(directory, "a"))
       yield* files.writeFileString(path.join(directory, "b.txt"), "")
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(directory), "folder", {
+      const result = yield* readContent(environment, absolute(directory), "folder", {
         offset: 2,
         limit: 1,
       })
@@ -414,7 +415,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "nul.txt")
       yield* files.writeFile(file, Uint8Array.from([...new TextEncoder().encode("one\n"), 0]))
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "nul.txt", { limit: 1 })
+      const result = yield* readContent(environment, absolute(file), "nul.txt", { limit: 1 })
 
       expect(result).toMatchObject({ type: "text-page", content: "one", truncated: true, next: 2 })
     }),
@@ -426,7 +427,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "nul-prefix.txt")
       yield* files.writeFile(file, Uint8Array.from([...new TextEncoder().encode("one"), 0, 10, 116, 119, 111, 10]))
 
-      const error = yield* ReadToolFileSystem.read(environment, absolute(file), "nul-prefix.txt", {
+      const error = yield* readContent(environment, absolute(file), "nul-prefix.txt", {
         offset: 2,
         limit: 1,
       }).pipe(Effect.flip)
@@ -441,7 +442,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "large.txt")
       yield* files.writeFileString(file, `${"a".repeat(300 * 1024)}\nsecond\n`)
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "large.txt", {
+      const result = yield* readContent(environment, absolute(file), "large.txt", {
         offset: 2,
         limit: 1,
       })
@@ -456,7 +457,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "boundary.txt")
       yield* files.writeFileString(file, `${"a".repeat(256 * 1024 - 1)}\nsecond\n`)
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "boundary.txt", {
+      const result = yield* readContent(environment, absolute(file), "boundary.txt", {
         offset: 2,
         limit: 1,
       })
@@ -472,7 +473,7 @@ describe("ReadToolFileSystem", () => {
       yield* files.writeFile(file, Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a))
       yield* files.truncate(file, ReadToolFileSystem.MAX_MEDIA_INGEST_BYTES + 1)
 
-      const error = yield* ReadToolFileSystem.read(environment, absolute(file), "oversized.png").pipe(Effect.flip)
+      const error = yield* readContent(environment, absolute(file), "oversized.png").pipe(Effect.flip)
 
       expect(error).toBeInstanceOf(ReadToolFileSystem.MediaIngestLimitError)
       expect(error.message).toBe(
@@ -487,7 +488,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "document.pdf")
       yield* files.writeFileString(file, "%PDF-1.7\ncontent")
 
-      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "document.pdf")
+      const result = yield* readContent(environment, absolute(file), "document.pdf")
 
       expect(result).toMatchObject({
         type: "file",
@@ -495,6 +496,34 @@ describe("ReadToolFileSystem", () => {
         encoding: "base64",
         mime: "application/pdf",
       })
+    }),
+  )
+
+  it.effect("reports what a read saw: the mtime always, the digest only when it held every byte", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const small = path.join(directory, "small.txt")
+      const pdf = path.join(directory, "document.pdf")
+      const large = path.join(directory, "large.txt")
+      yield* files.writeFileString(small, "one\ntwo\n")
+      yield* files.writeFileString(pdf, "%PDF-1.7\ncontent")
+      // Longer than the first chunk, so paging reads it piece by piece and never holds all of it at once.
+      yield* files.writeFileString(large, "line\n".repeat(80_000))
+      const digest = (text: string) => FileLedger.digest(new TextEncoder().encode(text))
+
+      const whole = yield* ReadToolFileSystem.read(environment, absolute(small), "small.txt")
+      const paged = yield* ReadToolFileSystem.read(environment, absolute(small), "small.txt", { offset: 2 })
+      const media = yield* ReadToolFileSystem.read(environment, absolute(pdf), "document.pdf")
+      const big = yield* ReadToolFileSystem.read(environment, absolute(large), "large.txt", { limit: 5 })
+      const folder = yield* ReadToolFileSystem.read(environment, absolute(directory), "folder")
+
+      expect(whole.seen?.digest).toBe(digest("one\ntwo\n"))
+      expect(whole.seen?.mtimeMs).toBeGreaterThan(0)
+      expect(paged.seen?.digest).toBe(digest("one\ntwo\n"))
+      expect(media.seen?.digest).toBe(digest("%PDF-1.7\ncontent"))
+      expect(big.seen?.mtimeMs).toBeGreaterThan(0)
+      expect(big.seen).not.toHaveProperty("digest")
+      expect(folder.seen).toBeUndefined()
     }),
   )
 })

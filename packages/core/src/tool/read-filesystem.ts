@@ -6,6 +6,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { lookup } from "mime-types"
 import { Environment } from "../environment/index.js"
+import { FileLedger } from "../file-ledger.js"
 import type { Files } from "../environment/index.js"
 import { FileSystem } from "../filesystem.js"
 import { Mime } from "../mime.js"
@@ -106,13 +107,15 @@ export class ListPage extends Schema.Class<ListPage>("ReadTool.ListPage")({
   next: Schema.optionalKey(PositiveInt),
 }) {}
 
+/** What a read returned, and what it saw of the file (nothing for a directory) for the FileLedger. */
+export interface ReadResult {
+  readonly content: FileContent | TextPage | ListPage
+  readonly seen?: FileLedger.Seen
+}
+
 export interface Interface {
   readonly list: (path: AbsolutePath) => ReturnType<Files["list"]>
-  readonly read: (
-    path: AbsolutePath,
-    resource: string,
-    page?: PageInput,
-  ) => Effect.Effect<FileContent | TextPage | ListPage, ReadError>
+  readonly read: (path: AbsolutePath, resource: string, page?: PageInput) => Effect.Effect<ReadResult, ReadError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/ReadToolFileSystem") {}
@@ -137,7 +140,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
       )
     }),
   )
-  if (first instanceof ListPage) return first
+  if (first instanceof ListPage) return { content: first } satisfies ReadResult
 
   const media = Mime.detect(first.bytes)
   if (MEDIA_MIMES.has(media)) {
@@ -145,15 +148,37 @@ export const read = Effect.fn("ReadTool.read")(function* (
       return yield* new MediaIngestLimitError({ resource, maximumBytes: MAX_MEDIA_INGEST_BYTES })
     const whole = yield* readFile(files, input, resource)
     return {
-      type: "file" as const,
-      uri: pathToFileURL(input).href,
-      name: path.basename(input),
-      content: Buffer.from(whole.bytes).toString("base64"),
-      encoding: "base64" as const,
-      mime: media,
-    }
+      content: {
+        type: "file" as const,
+        uri: pathToFileURL(input).href,
+        name: path.basename(input),
+        content: Buffer.from(whole.bytes).toString("base64"),
+        encoding: "base64" as const,
+        mime: media,
+      },
+      seen: { mtimeMs: whole.info.mtimeMs, digest: FileLedger.digest(whole.bytes) },
+    } satisfies ReadResult
   }
 
+  const content = yield* readText(files, first, input, resource, page)
+  // The digest covers the raw bytes and exists only when the first chunk held the whole file: hashing more would mean
+  // reading the rest of a large file on every paged read.
+  return {
+    content,
+    seen: {
+      mtimeMs: first.info.mtimeMs,
+      ...(first.bytes.length >= first.info.size ? { digest: FileLedger.digest(first.bytes) } : {}),
+    },
+  } satisfies ReadResult
+})
+
+const readText = Effect.fn("ReadTool.readText")(function* (
+  files: Files,
+  first: Effect.Success<ReturnType<Files["read"]>>,
+  input: AbsolutePath,
+  resource: string,
+  page: PageInput,
+) {
   // The whole file comes back only when the first chunk holds it, it is no longer than a page, and its rendered text
   // fits the budget; anything else pages from the first line, with the next offset to continue from.
   const whole =

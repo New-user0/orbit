@@ -209,6 +209,25 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
+- The run-scoped config of `--mcp-config` and `--agents` (`packages/cli/src/config-overlay.ts`), which reads a file by
+  name, hands its content to a private server, and can start programs through `--mcp-config`. The values are the
+  person's own, so they are read and checked in the folder the person typed them in, before `orb <directory>` changes
+  folder (a clone at that directory may ship a file of the same name) and before any server starts. The overlay does not
+  trust the folder: the private server keeps `ORBIT_TRUST_PROJECT` as it was, and `orb -p` still stops in an untrusted
+  folder. The file that carries the content to the server is read only when it is a file the CLI wrote
+  (`overlays/overlay-*/<id>.json` in Orbit's per-user state folder, which is in no folder an agent may write without
+  asking) and holds a version 1 envelope; any other path in `ORBIT_CONFIG_CONTENT_FILE` is left untouched with one log
+  line, and the background service never reads it. A relative `{file:}` reference in a value is made absolute against
+  the folder of the file that holds it (the start folder for an inline value) before it is merged, because core would
+  otherwise read it in the opened folder. Errors that echo the value or keys from inside it go through `plain`, and a
+  refusal before a session exists goes out in the requested output format. `--continue` is checked against the session
+  the run will use, resolved once in the folder the run works in (`process.cwd()` after `orb <directory>` has changed
+  folder). Only the session named at start is checked: the session list,
+  restored tabs and `/resume` of an overlay run can still open one the service is running, as with `--standalone`. A value is inline JSONC or a file name by its shape (`{`, a `/*` comment or a `//` comment with more lines first), never by what is on disk, so a clone cannot supply a file named after the typed text (class 1; "no spelling of an inline value"). A `{file:}` that holds an `{env:}` is anchored by what its head resolves to, with a leading `{env:NAME}` read from this process's environment, which the server inherits.
+  Proof: `packages/cli/test/config-overlay.test.ts`, `packages/cli/test/config-overlay-flags.test.ts` ("names a file in
+  the folder the person typed it in", "is read from the person's folder", "is not trusted", "never drains", "orb
+  --agents --continue", "refused as a result object"),
+  `packages/cli/test/server-process.test.ts`.
 
 **Terminal UI** (`packages/tui`):
 
