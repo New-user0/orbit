@@ -28,8 +28,7 @@ export type Result = { kind: "scanned"; commands: Command[] } | { kind: "opaque"
 
 // limit: size, depth or budget bound; syntax: bash would reject the text; unsupported: valid or unknown text this scanner declines.
 export type OpaqueClass = "limit" | "syntax" | "unsupported"
-// substitution and heredoc are Bash; subexpression and block are PowerShell. group is both.
-export type Origin = "substitution" | "heredoc" | "group" | "subexpression" | "block"
+export type Origin = "substitution" | "heredoc" | "group"
 export type WordFlags = {
   // Expansions seen unquoted or inside double quotes.
   parameter?: true
@@ -76,57 +75,8 @@ export type Inspection =
   | { kind: "scanned"; commands: Detail[]; statements: Detail[]; features: Features }
   | { kind: "opaque"; reason: OpaqueReason; class: OpaqueClass }
 
-// A member call on a type or an expression, or a read of the env: drive, found outside any nested block.
-export type Invocation =
-  // [Type]::Member( ; dynamic when the type or member is not literal text, such as $type::Member( or [T]::$name(.
-  | { kind: "static"; type: string; member: string; dynamic?: true }
-  // <expression>.Member( ; dynamic when the member is computed, such as $x.$name( or $x.('a'+'b')(.
-  | { kind: "instance"; member: string; dynamic?: true }
-  // $env:NAME or ${env:NAME}, also inside double quotes and expandable here-strings, and %NAME% after --%.
-  | { kind: "env"; name: string }
-  // [Type]value, -as [Type] or [Type]$x = ...: converting runs the type's constructors and converters.
-  | { kind: "conversion"; type: string }
-  // <expression>.Member = value or [Type]::Member = value: a property setter runs code. dynamic when the member is computed.
-  | { kind: "setter"; member: string; type?: string; dynamic?: true }
-export type PowerShellDetail = Command & {
-  // Parallel to words. Single-quoted text has no flags; ( ) and @( ) count as command, because their value is computed.
-  flags: WordFlags[]
-  // Redirects of this statement. A merge such as 2>&1 has operator ">&" and no target.
-  redirects: Redirect[]
-  invocations: Invocation[]
-  // Commands scanned out of this node's groups, blocks and subexpressions.
-  nested: PowerShellDetail[]
-  origin?: Origin
-  // An expression statement (a quoted string, a variable, a group, a type literal or a here-string) that has redirects or invocations.
-  commandless?: true
-}
-export type PowerShellFeatures = {
-  // $x = ..., += and the like.
-  assignment: boolean
-  // An assignment whose target is $env:NAME.
-  envAssignment: boolean
-  // --% was seen.
-  stopParsing: boolean
-  // & or . ahead of a command; dynamic when the target is a variable, a group or another computed word.
-  callOperator: false | "literal" | "dynamic"
-  // Set-Alias, New-Alias, sal or nal as a command.
-  aliasDefinition: boolean
-  // function or filter
-  functionDefinition: boolean
-}
-export type PowerShellInspection =
-  | { kind: "scanned"; commands: PowerShellDetail[]; statements: PowerShellDetail[]; features: PowerShellFeatures }
-  | { kind: "opaque"; reason: OpaqueReason; class: OpaqueClass }
-
 type Scanned = { kind: "scanned"; commands: Detail[]; roots: Detail[]; features: Features }
 type Opaque = Extract<Inspection, { kind: "opaque" }>
-type PowerShellScanned = {
-  kind: "scanned"
-  commands: PowerShellDetail[]
-  roots: PowerShellDetail[]
-  features: PowerShellFeatures
-}
-type PowerShellOpaque = Extract<PowerShellInspection, { kind: "opaque" }>
 
 const BASH_REDIRECTS = ["&>>", "&>", "<<<", "<<-", "<<", "<>", "<&", ">&", ">|", ">>", ">", "<"]
 const BASH_DECLARATIONS = new Set(["declare", "typeset", "export", "readonly", "local", "unset", "unsetenv"])
@@ -135,20 +85,7 @@ const BASH_ASSIGNING_DECLARATIONS = new Set(["declare", "typeset", "export", "re
 const MAX_INPUT_LENGTH = 64 * 1024
 const MAX_SUBSTITUTION_DEPTH = 32
 
-export function inspect(input: string, shell?: "bash"): Inspection
-export function inspect(input: string, shell: "powershell"): PowerShellInspection
-export function inspect(input: string, shell: "bash" | "powershell"): Inspection | PowerShellInspection
-export function inspect(input: string, shell: "bash" | "powershell" = "bash"): Inspection | PowerShellInspection {
-  if (shell === "powershell") {
-    const result = inspectPowerShell(input)
-    if (result.kind === "opaque") return result
-    return {
-      kind: "scanned",
-      commands: result.roots.filter((root) => !root.commandless),
-      statements: result.roots.filter((root) => root.commandless),
-      features: result.features,
-    }
-  }
+export function inspect(input: string): Inspection {
   const result = inspectBash(input)
   if (result.kind === "opaque") return result
   return {
@@ -166,7 +103,7 @@ export function scan(input: string): Result {
   return { kind: "scanned", commands: result.commands.map(plain) }
 }
 
-function plain(detail: Command): Command {
+function plain(detail: Detail): Command {
   return {
     resource: detail.resource,
     words: detail.words,
@@ -1447,88 +1384,18 @@ function bashHeredoc(input: string, start: number, delimiter: { delimiter: strin
   }
 }
 
-// Flattens the detail pass to the legacy command list, in the order it has always been emitted.
 export function scanPowerShell(input: string): Result {
-  const result = inspectPowerShell(input)
-  if (result.kind === "opaque") return { kind: "opaque", reason: result.reason }
-  return { kind: "scanned", commands: result.commands.map(plain) }
+  return scanPowerShellNested(input, 0, { remaining: MAX_INPUT_LENGTH * MAX_SUBSTITUTION_DEPTH })
 }
 
-// depthLimitHit is set when a nesting bound refuses text, so the failure that follows is classed as a limit.
-type PowerShellBudget = { remaining: number; depthLimitHit: boolean }
-
-const POWERSHELL_ALIAS_COMMANDS = new Set(["set-alias", "new-alias", "sal", "nal"])
-// Cmdlets that write an item, so naming the alias: or function: drive defines a command.
-const POWERSHELL_DRIVE_WRITERS = new Set(
-  "set-item si new-item ni set-content sc add-content ac rename-item rni ren rn copy-item cpi cp copy move-item mi mv move".split(
-    " ",
-  ),
-)
-
-function inspectPowerShell(input: string): PowerShellScanned | PowerShellOpaque {
-  return scanPowerShellNested(input, 0, { remaining: MAX_INPUT_LENGTH * MAX_SUBSTITUTION_DEPTH, depthLimitHit: false })
-}
-
-function powerShellFeatures(): PowerShellFeatures {
-  return {
-    assignment: false,
-    envAssignment: false,
-    stopParsing: false,
-    callOperator: false,
-    aliasDefinition: false,
-    functionDefinition: false,
-  }
-}
-
-function mergePowerShellFeatures(into: PowerShellFeatures, from: PowerShellFeatures) {
-  into.assignment ||= from.assignment
-  into.envAssignment ||= from.envAssignment
-  into.stopParsing ||= from.stopParsing
-  into.aliasDefinition ||= from.aliasDefinition
-  into.functionDefinition ||= from.functionDefinition
-  if (from.callOperator === "dynamic" || (from.callOperator && !into.callOperator))
-    into.callOperator = from.callOperator
-}
-
-function scanPowerShellNested(
-  input: string,
-  depth: number,
-  budget: PowerShellBudget,
-  hash = false,
-): PowerShellScanned | PowerShellOpaque {
+function scanPowerShellNested(input: string, depth: number, budget: { remaining: number }, hash = false): Result {
   budget.remaining -= input.length
   if (input.length > MAX_INPUT_LENGTH || depth >= MAX_SUBSTITUTION_DEPTH || budget.remaining < 0)
-    return { kind: "opaque", reason: "invalid-structure", class: "limit" }
+    return { kind: "opaque", reason: "invalid-structure" }
   // PowerShell's Unicode quotes, dashes, and whitespace differ from JavaScript's token rules.
-  if (/[\0\u0085\u2013-\u2015\u2018-\u201e\ufeff]/.test(input))
-    return { kind: "opaque", reason: "invalid-structure", class: "unsupported" }
-  const syntax = (reason: OpaqueReason): PowerShellOpaque => ({ kind: "opaque", reason, class: "syntax" })
-  const blockFailure = (): PowerShellOpaque => ({
-    kind: "opaque",
-    reason: "invalid-structure",
-    class: budget.depthLimitHit ? "limit" : "syntax",
-  })
-  // commands is the flat legacy sequence; roots is the tree whose nodes own their nested commands.
-  const commands: PowerShellDetail[] = []
-  const roots: PowerShellDetail[] = []
-  const features = powerShellFeatures()
-  const nestedCommands: PowerShellDetail[] = []
-  const pendingNested: PowerShellDetail[] = []
-  const pendingGroups: PowerShellDetail[] = []
-  const redirects: Redirect[] = []
-  let redirectPending: { operator: string; fd?: string } | undefined
-  // Start of the statement's first word, so invocations are read from its own source.
-  let statementStart = -1
-  // Index of the first word after --%, which PowerShell passes on literally.
-  let literalFrom = -1
-  // The statement assigns with =, so a member before it is a setter call.
-  let assigned = false
-  const adopt = (result: PowerShellScanned, origin: Origin, target: PowerShellDetail[]) => {
-    result.roots.forEach((root) => (root.origin ??= origin))
-    target.push(...result.roots)
-    nestedCommands.push(...result.commands)
-    mergePowerShellFeatures(features, result.features)
-  }
+  if (/[\0\u0085\u2013-\u2015\u2018-\u201e\ufeff]/.test(input)) return { kind: "opaque", reason: "invalid-structure" }
+  const commands: Command[] = []
+  const nestedCommands: Command[] = []
   const words: string[] = []
   const rawWords: string[] = []
   const wordEnds: number[] = []
@@ -1552,32 +1419,14 @@ function scanPowerShellNested(
   const finishWord = (end: number) => {
     if (!started) return
     // Generic tokens can spell stop-parsing with escapes or embedded quotes; literal strings cannot.
-    if (word === "--%" && words.length > 0 && !expression && !/['"]/.test(input[wordStart])) {
-      stopParsing = true
-      features.stopParsing = true
-    }
-    if (statementStart < 0) statementStart = wordStart
+    if (word === "--%" && words.length > 0 && !expression && !/['"]/.test(input[wordStart])) stopParsing = true
     if (!redirectTarget) {
       if (!words.length && !invocation && !expression) segment = wordStart
       words.push(word)
       rawWords.push(input.slice(wordStart, end))
       wordEnds.push(end)
       dangling = false
-    } else if (redirectPending) {
-      const raw = input.slice(wordStart, end)
-      const flags = powerShellWordFlags(raw, word, depth, budget)
-      const nullSink = /^\$null$/i.test(raw)
-      redirects.push({
-        operator: redirectPending.operator,
-        ...(redirectPending.fd ? { fd: redirectPending.fd } : {}),
-        target: word,
-        raw,
-        write: true,
-        dynamic: !nullSink && Object.keys(flags).length > 0,
-        nullSink,
-      })
     }
-    redirectPending = undefined
     commandEnd = end
     redirectTarget = false
     word = ""
@@ -1587,75 +1436,17 @@ function scanPowerShellNested(
     finishWord(end)
     const start = segment + input.slice(segment, commandEnd).search(/\S|$/)
     const resource = input.slice(start, commandEnd).trimEnd()
-    const invocations =
-      statementStart >= 0 ? powerShellInvocations(input.slice(statementStart, commandEnd), depth, budget, assigned) : []
-    // PowerShell expands %NAME% in the text after --%.
-    if (literalFrom >= 0)
-      words.slice(literalFrom).forEach((text) => {
-        for (const match of text.matchAll(/%([^%\s]+)%/g)) invocations.push({ kind: "env", name: match[1] })
-      })
-    let node: PowerShellDetail | undefined
-    if (words.length && !expression) {
-      const flags = rawWords.map((raw, position) =>
-        literalFrom >= 0 && position >= literalFrom
-          ? /%[^%\s]+%/.test(words[position])
-            ? { parameter: true as const }
-            : {}
-          : powerShellWordFlags(raw, words[position], depth, budget),
-      )
-      node = {
+    if (words.length && !expression)
+      commands.push({
         resource,
         words: [...words],
         rawWords: [...rawWords],
         wordEnds: wordEnds.map((end) => end - start),
         ...(statementHead && !invocation ? { statementHead: true as const } : {}),
-        flags,
-        redirects: [...redirects],
-        invocations,
-        nested: [],
-      }
-      commands.push(node)
-      roots.push(node)
-      if (invocation) {
-        const target = Object.keys(flags[0]).length > 0 ? "dynamic" : "literal"
-        mergePowerShellFeatures(features, { ...powerShellFeatures(), callOperator: target })
-      }
-      // A module-qualified name such as Microsoft.PowerShell.Utility\Set-Alias runs the same command.
-      const name = words[0].toLowerCase().replace(/^[a-z_][\w.]*\\/, "")
-      if (POWERSHELL_ALIAS_COMMANDS.has(name)) features.aliasDefinition = true
-      // Writing to the alias: or function: drive defines one as well.
-      if (POWERSHELL_DRIVE_WRITERS.has(name)) {
-        if (words.some((text) => /^(?:-path:?)?alias:/i.test(text))) features.aliasDefinition = true
-        if (words.some((text) => /^(?:-path:?)?function:/i.test(text))) features.functionDefinition = true
-      }
-    } else if ((!expression && invocation) || (required && !words.length && !nestedCommands.length)) invalid = true
-    // Every expression statement is an entry, even a bare literal: it can run code through a cast or a setter.
-    if (!node && (redirects.length > 0 || invocations.length > 0 || (expression && !compound && !hash && words.length > 0))) {
-      node = {
-        resource,
-        words: [],
-        rawWords: [],
-        flags: [],
-        redirects: [...redirects],
-        invocations,
-        nested: [],
-        commandless: true,
-      }
-      roots.push(node)
-    }
-    if (node) {
-      node.nested.push(...pendingGroups.splice(0))
-      // Expansions with no command to own them become top-level entries.
-      if (node.commandless) roots.push(...pendingNested.splice(0))
-      else node.nested.push(...pendingNested.splice(0))
-    } else roots.push(...pendingNested.splice(0), ...pendingGroups.splice(0))
+      })
+    else if ((!expression && invocation) || (required && !words.length && !nestedCommands.length)) invalid = true
     if (redirectTarget) invalid = true
     commands.push(...nestedCommands.splice(0))
-    redirects.length = 0
-    redirectPending = undefined
-    assigned = false
-    statementStart = -1
-    literalFrom = -1
     words.length = 0
     rawWords.length = 0
     wordEnds.length = 0
@@ -1666,21 +1457,6 @@ function scanPowerShellNested(
     stopParsing = false
   }
 
-  // True when the text before a line break ends in . or ::, which member access continues over. In an expression that
-  // holds for any token; in a command argument Windows PowerShell 5.1 never continues, so the next line is a command.
-  let expressionLedStart = -1
-  let expressionLed = false
-  const memberContinues = (at: number) => {
-    let end = at
-    // Windows PowerShell 5.1 treats form feed, vertical tab and Unicode spaces as blanks too.
-    while (end > 0 && /[^\S\r\n]/.test(input[end - 1])) end--
-    const accessor = input.startsWith("::", end - 2) ? 2 : input[end - 1] === "." ? 1 : 0
-    if (accessor === 0 || quote) return false
-    if (!expression) return false
-    const before = input.slice(Math.max(0, end - accessor - 64), end - accessor)
-    // A number such as 1. ends the statement.
-    return !/(?:^|[^\w$.])[+-]?\d+$/.test(before) && before !== ""
-  }
   for (let index = 0; index < input.length; index++) {
     const char = input[index]
     if (!started) wordStart = index
@@ -1691,7 +1467,6 @@ function scanPowerShellNested(
         wordStart = index + input.slice(index, stop).search(/\S/)
         word = text
         started = true
-        if (literalFrom < 0) literalFrom = words.length
         finishWord(wordStart + text.length)
       }
       stopParsing = false
@@ -1718,15 +1493,15 @@ function scanPowerShellNested(
         if (standalone) finishWord(index + 1)
       } else if (char === "`") {
         const escape = powerShellEscape(input, index)
-        if (!escape) return syntax("unterminated-escape")
+        if (!escape) return { kind: "opaque", reason: "unterminated-escape" }
         word += escape.value
         index = escape.end
       } else if (char === "$" && input[index + 1] === "(") {
-        const block = powerShellBlock(input, index + 1, depth, budget)
-        if (!block) return blockFailure()
+        const block = powerShellBlock(input, index + 1, depth)
+        if (!block) return { kind: "opaque", reason: "invalid-structure" }
         const result = scanPowerShellNested(block.source, depth + 1, budget)
         if (result.kind === "opaque") return result
-        adopt(result, "subexpression", pendingNested)
+        nestedCommands.push(...result.commands)
         word += input.slice(index, block.end + 1)
         index = block.end
       } else word += char
@@ -1739,32 +1514,9 @@ function scanPowerShellNested(
       started = true
       continue
     }
-    // In a command argument or a redirect target Windows PowerShell 5.1 ends an expression word at a glued # or <# and
-    // starts a comment, and continues a glued . or :: over a comment or a backtick-newline. The scanner reads those
-    // as text, so it refuses the whole input instead of guessing.
-    if (started && (redirectTarget || !expression)) {
-      const blockOrLine = char === "#" || (char === "<" && input[index + 1] === "#")
-      if (blockOrLine || (char === "`" && /[\r\n]/.test(input[index + 1] ?? ""))) {
-        const accessor = input.startsWith("::", index - 2) ? 2 : input[index - 1] === "." ? 1 : 0
-        if (accessor > 0 && /[\w)\]}"'$]/.test(input[index - accessor - 1] ?? ""))
-          return syntax("invalid-structure")
-        if (blockOrLine) {
-          // Decided once per word: a regex at every # is quadratic in a word that holds many.
-          if (expressionLedStart !== wordStart) {
-            expressionLedStart = wordStart
-            // A word that starts right after a group or a closing quote, such as the .a of @{a=1}.a, is a member too.
-            expressionLed =
-              /[)\]}"']/.test(input[wordStart - 1] ?? "") ||
-              /^(?:-[^\s:]*:)?[$@"']/.test(input.slice(wordStart, wordStart + 80))
-          }
-          if (expressionLed) return syntax("invalid-structure")
-        }
-      }
-    }
     if (char === "`") {
-      if (/[\r\n]/.test(input[index + 1] ?? "") && memberContinues(index)) return syntax("invalid-structure")
       const escape = powerShellEscape(input, index)
-      if (!escape) return syntax("unterminated-escape")
+      if (!escape) return { kind: "opaque", reason: "unterminated-escape" }
       // At a token boundary escaped whitespace is trivia, not a new argument.
       if (started || /\S/.test(escape.value)) {
         started = true
@@ -1778,24 +1530,17 @@ function scanPowerShellNested(
       started = true
       finishWord(index + 3)
       stopParsing = true
-      features.stopParsing = true
       index += 2
       continue
     }
-    // After a trailing . or :: Windows PowerShell 5.1 also continues over comments and blank lines. The scanner does
-    // not follow that, so it refuses the whole input instead of guessing where the member name is.
-    if ((char === "#" || (char === "<" && input[index + 1] === "#")) && memberContinues(index))
-      return syntax("invalid-structure")
-    // A <# #> comment ends an expression token wherever it is glued to one; `$x<# c #>; ...` is not a line comment.
-    if (char === "<" && input[index + 1] === "#" && (!started || (expression && !redirectTarget))) {
-      if (started) finishWord(index)
+    if (char === "<" && input[index + 1] === "#" && !started) {
       const end = powerShellComment(input, index)
-      if (end === undefined) return syntax("invalid-structure")
+      if (end === undefined) return { kind: "opaque", reason: "invalid-structure" }
       if (!words.length && !invocation) segment = end + 1
       index = end
       continue
     }
-    if (char === "#" && (!started || (expression && !redirectTarget))) {
+    if (char === "#" && (!started || expression)) {
       if (words.length || started || invocation) finishCommand(index)
       statementHead = !dangling
       comment = true
@@ -1807,31 +1552,13 @@ function scanPowerShellNested(
       segment = index + 1
       continue
     }
-    // A ">" ends an expression token such as $v, ${v}, $(...) or $x.Length, so `$v>f` writes f. It does not end a
-    // generic argument token: Windows PowerShell 5.1 prints the text of `Write-Output a>f` and creates no file. A
-    // $-led command argument such as `Write-Output $x>f` also ends at ">" here, which over-reports a write that 5.1
-    // does not make; the over-report is the safe direction and a test pins it.
-    if (char === ">" && started && !redirectTarget && input[index - 1] !== ">" && (expression || /^(?:\$|@[({])/.test(input.slice(wordStart, index))))
-      finishWord(index)
     const redirect =
       !started && (char === ">" || char === "*" || /\d/.test(char)) ? powerShellRedirect(input, index) : undefined
-    if (redirect === false) return syntax("invalid-redirect")
+    if (redirect === false) return { kind: "opaque", reason: "invalid-redirect" }
     if (redirect) {
-      if (redirectTarget) return syntax("invalid-redirect")
-      if (words.length === 0) return syntax("invalid-redirect")
+      if (redirectTarget) return { kind: "opaque", reason: "invalid-redirect" }
+      if (words.length === 0) return { kind: "opaque", reason: "invalid-redirect" }
       redirectTarget = !redirect.includes("&")
-      const fd = /^(?:\*|\d+)/.exec(redirect)?.[0]
-      if (redirectTarget) redirectPending = { operator: redirect.includes(">>") ? ">>" : ">", ...(fd ? { fd } : {}) }
-      else
-        redirects.push({
-          operator: ">&",
-          ...(fd ? { fd } : {}),
-          // The destination, as the Bash scanner stores it.
-          raw: redirect.slice(redirect.indexOf("&") + 1),
-          write: false,
-          dynamic: false,
-          nullSink: false,
-        })
       index += redirect.length - 1
       commandEnd = index + 1
       continue
@@ -1846,7 +1573,6 @@ function scanPowerShellNested(
       ) {
         expression = true
         compound = true
-        if (keyword === "function" || keyword === "filter") features.functionDefinition = true
         index += keyword.length - 1
         continue
       }
@@ -1862,18 +1588,8 @@ function scanPowerShellNested(
         continue
       }
     }
-    if (expression && !compound && !redirectTarget && (char === "=" || (/[-+*/%]/.test(char) && input[index + 1] === "="))) {
+    if (expression && !compound && (char === "=" || (/[-+*/%]/.test(char) && input[index + 1] === "="))) {
       finishWord(index)
-      // A hashtable entry or a type literal's content is not an assignment.
-      if (!hash) {
-        features.assignment = true
-        assigned = true
-        const target = rawWords[0] ?? ""
-        if (/^(?:\[[^\]]*\])*\$(?:\{env:|env:)/i.test(target)) features.envAssignment = true
-        // $alias:name = and $function:name = define a command like Set-Alias and function do.
-        if (/^(?:\[[^\]]*\])*\$(?:\{alias:|alias:)/i.test(target)) features.aliasDefinition = true
-        if (/^(?:\[[^\]]*\])*\$(?:\{function:|function:)/i.test(target)) features.functionDefinition = true
-      }
       words.length = 0
       rawWords.length = 0
       wordEnds.length = 0
@@ -1893,12 +1609,12 @@ function scanPowerShellNested(
     }
     if (char === "@" && /['"]/.test(input[index + 1] ?? "")) {
       const literal = powerShellHereString(input, index)
-      if (!literal) return syntax("unterminated-quote")
+      if (!literal) return { kind: "opaque", reason: "unterminated-quote" }
       if (!words.length && !invocation) expression = true
       if (input[index + 1] === '"') {
         const result = powerShellExpansions(literal.source, depth + 1, budget)
         if (result.kind === "opaque") return result
-        adopt(result, "subexpression", pendingNested)
+        nestedCommands.push(...result.commands)
       }
       word = literal.source
       started = true
@@ -1908,7 +1624,7 @@ function scanPowerShellNested(
     }
     if (char === "$" && input[index + 1] === "{") {
       const end = input.indexOf("}", index + 2)
-      if (end < 0) return syntax("invalid-structure")
+      if (end < 0) return { kind: "opaque", reason: "invalid-structure" }
       if (!started && !words.length && !invocation) expression = true
       word += input.slice(index, end + 1)
       started = true
@@ -1929,8 +1645,8 @@ function scanPowerShellNested(
         wordStart = index
       }
       if (!started && !words.length && !invocation) expression = true
-      const block = powerShellBlock(input, opener, depth, budget)
-      if (!block) return blockFailure()
+      const block = powerShellBlock(input, opener, depth)
+      if (!block) return { kind: "opaque", reason: "invalid-structure" }
       const result = scanPowerShellNested(
         block.source,
         depth + 1,
@@ -1938,9 +1654,7 @@ function scanPowerShellNested(
         input[opener] === "[" || (char === "@" && input[opener] === "{"),
       )
       if (result.kind === "opaque") return result
-      // Grouping passes objects, not text, so only $( ) and @( ) count as a subexpression.
-      if (input[opener] === "(" && char !== "(") adopt(result, "subexpression", pendingNested)
-      else adopt(result, input[opener] === "{" ? "block" : "group", pendingGroups)
+      nestedCommands.push(...result.commands)
       started = true
       word += input.slice(index, block.end + 1)
       index = block.end
@@ -1951,14 +1665,14 @@ function scanPowerShellNested(
       }
       continue
     }
-    if (char === "}" || char === ")") return syntax("invalid-structure")
+    if (char === "}" || char === ")") return { kind: "opaque", reason: "invalid-structure" }
     if (
       !started &&
       words.length === 0 &&
       ((char === "&" && input[index + 1] !== "&") ||
         (char === "." && (/\s/.test(input[index + 1] ?? "") || !input[index + 1])))
     ) {
-      if (invocation) return syntax("invalid-structure")
+      if (invocation) return { kind: "opaque", reason: "invalid-structure" }
       invocation = true
       continue
     }
@@ -1976,13 +1690,6 @@ function scanPowerShellNested(
           : char === ";" || char === "|" || char === "&" || char === "\n" || char === "\r"
             ? char
             : undefined
-    if (separator && (separator === "\n" || separator === "\r" || separator === "\r\n") && memberContinues(index)) {
-      // Member access goes on over a line break after . or ::, so the next line is part of this statement. A second
-      // line break or a comment in between continues too, but the scanner does not follow it.
-      if (/^[^\S\r\n]*(?:[\r\n]|#|<#|`)/.test(input.slice(index + separator.length))) return syntax("invalid-structure")
-      index += separator.length - 1
-      continue
-    }
     if (separator) {
       if (
         (separator === "\n" || separator === "\r" || separator === "\r\n") &&
@@ -2006,24 +1713,15 @@ function scanPowerShellNested(
     word += char
   }
 
-  if (quote) return syntax("unterminated-quote")
+  if (quote) return { kind: "opaque", reason: "unterminated-quote" }
   if (!comment) finishCommand(input.length)
-  if (redirectTarget || invalid || dangling) return syntax("invalid-structure")
-  if (commands.some((command) => !command.words[0]))
-    return { kind: "opaque", reason: "dynamic-command-name", class: "unsupported" }
-  return { kind: "scanned", commands, roots, features }
+  if (redirectTarget || invalid || dangling) return { kind: "opaque", reason: "invalid-structure" }
+  if (commands.some((command) => !command.words[0])) return { kind: "opaque", reason: "dynamic-command-name" }
+  return { kind: "scanned", commands }
 }
 
-function powerShellBlock(
-  input: string,
-  start: number,
-  depth: number,
-  budget: PowerShellBudget,
-): { source: string; end: number } | undefined {
-  if (depth >= MAX_SUBSTITUTION_DEPTH) {
-    budget.depthLimitHit = true
-    return
-  }
+function powerShellBlock(input: string, start: number, depth: number): { source: string; end: number } | undefined {
+  if (depth >= MAX_SUBSTITUTION_DEPTH) return
   let quote: "single" | "double" | undefined
   let standalone = false
   let started = false
@@ -2058,7 +1756,7 @@ function powerShellBlock(
         started = !standalone
         if (standalone) token = ""
       } else if (char === "$" && input[index + 1] === "(") {
-        const nested = powerShellBlock(input, index + 1, depth + 1, budget)
+        const nested = powerShellBlock(input, index + 1, depth + 1)
         if (!nested) return
         index = nested.end
       } else token += char
@@ -2143,9 +1841,9 @@ function powerShellBlock(
       continue
     }
     if (char === close) return { source: input.slice(start + 1, index), end: index }
-    if (char === "(" || char === "{" || (char === "[" && (!started || expression || close === "]"))) {
+    if (char === "(" || char === "{" || (char === "[" && (!started || expression))) {
       if (head && !started) expression = true
-      const nested = powerShellBlock(input, index, depth + 1, budget)
+      const nested = powerShellBlock(input, index, depth + 1)
       if (!nested) return
       index = nested.end
       started = false
@@ -2238,315 +1936,22 @@ function powerShellHereString(input: string, start: number) {
   }
 }
 
-function powerShellExpansions(
-  input: string,
-  depth: number,
-  budget: PowerShellBudget,
-): PowerShellScanned | PowerShellOpaque {
-  const commands: PowerShellDetail[] = []
-  const roots: PowerShellDetail[] = []
-  const features = powerShellFeatures()
+function powerShellExpansions(input: string, depth: number, budget: { remaining: number }): Result {
+  const commands: Command[] = []
   for (let index = 0; index < input.length; index++) {
     if (input[index] === "`") {
       index++
       continue
     }
     if (!input.startsWith("$(", index)) continue
-    const block = powerShellBlock(input, index + 1, depth, budget)
-    if (!block) return { kind: "opaque", reason: "invalid-structure", class: budget.depthLimitHit ? "limit" : "syntax" }
+    const block = powerShellBlock(input, index + 1, depth)
+    if (!block) return { kind: "opaque", reason: "invalid-structure" }
     const result = scanPowerShellNested(block.source, depth + 1, budget)
     if (result.kind === "opaque") return result
     commands.push(...result.commands)
-    roots.push(...result.roots)
-    mergePowerShellFeatures(features, result.features)
     index = block.end
   }
-  return { kind: "scanned", commands, roots, features }
-}
-
-// Expansion and wildcard flags of one word, read from its source spelling. Single-quoted text has none.
-function powerShellWordFlags(raw: string, value: string, depth: number, parent: PowerShellBudget): WordFlags {
-  const budget = scratchBudget(parent)
-  const flags: WordFlags = {}
-  // The file system provider replaces a leading ~ even when it is quoted.
-  if (/^~(?:[\\/]|$)/.test(value)) flags.tilde = true
-  const skip = (open: number) => powerShellBlock(raw, open, depth, budget)?.end
-  let quote: "single" | "double" | undefined
-  for (let index = 0; index < raw.length; index++) {
-    const char = raw[index]
-    if (quote === "single") {
-      if (char === "'") {
-        if (raw[index + 1] === "'") index++
-        else quote = undefined
-      }
-      continue
-    }
-    if (char === "`") {
-      index++
-      continue
-    }
-    if (quote === "double") {
-      if (char === '"') {
-        if (raw[index + 1] === '"') index++
-        else quote = undefined
-        continue
-      }
-    } else if (char === "'" || char === '"') {
-      quote = char === "'" ? "single" : "double"
-      continue
-    }
-    if (char === "$") {
-      const next = raw[index + 1] ?? ""
-      if (next === "(") {
-        flags.command = true
-        const end = skip(index + 1)
-        if (end === undefined) break
-        index = end
-      } else if (next === "{") {
-        flags.parameter = true
-        const end = raw.indexOf("}", index + 2)
-        if (end < 0) break
-        index = end
-      } else if (/[\w?$^:]/.test(next)) {
-        flags.parameter = true
-        // $? $$ and $^ are variables, so their second character is not a wildcard.
-        if (!/\w/.test(next)) index++
-      }
-      continue
-    }
-    if (quote) continue
-    if (char === "@" && raw[index + 1] === "(") flags.command = true
-    if (char === "(") flags.command = true
-    if ((char === "@" && (raw[index + 1] === "(" || raw[index + 1] === "{")) || char === "(" || char === "{") {
-      const end = skip(char === "@" ? index + 1 : index)
-      if (end === undefined) break
-      index = end
-      continue
-    }
-    if (char === "*" || char === "?") flags.glob = true
-    // $x[0] and (expr)[0] are indexes. Any other [ may open a wildcard set, so a type literal argument is over-reported.
-    if (char === "[" && !/^[$(@]/.test(raw)) flags.glob = true
-  }
-  return flags
-}
-
-// Member calls and env: reads in one statement's own source. Text inside ( ), { } and $( ) belongs to nested nodes.
-function powerShellInvocations(
-  source: string,
-  depth: number,
-  parent: PowerShellBudget,
-  assigned: boolean,
-): Invocation[] {
-  const budget = scratchBudget(parent)
-  const found: Invocation[] = []
-  const envRead = /^\$(?:\{env:([^}]+)\}|env:([A-Za-z_]\w*))/i
-  let closers: Map<number, number> | undefined
-  let quote: "single" | "double" | undefined
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index]
-    const skip = (open: number) => {
-      const end = powerShellBlock(source, open, depth, budget)?.end
-      if (end !== undefined) index = end
-      return end !== undefined
-    }
-    if (quote === "single") {
-      if (char === "'") {
-        if (source[index + 1] === "'") index++
-        else quote = undefined
-      }
-      continue
-    }
-    if (char === "`") {
-      index++
-      continue
-    }
-    if (quote === "double") {
-      if (char === '"') {
-        if (source[index + 1] === '"') index++
-        else quote = undefined
-      } else if (char === "$" && source[index + 1] === "(") {
-        if (!skip(index + 1)) break
-      } else if (char === "$") {
-        const env = envRead.exec(source.slice(index))
-        if (env) found.push({ kind: "env", name: env[1] ?? env[2] })
-      }
-      continue
-    }
-    if (char === "'" || char === '"') {
-      quote = char === "'" ? "single" : "double"
-      continue
-    }
-    if (char === "<" && source[index + 1] === "#") {
-      const end = powerShellComment(source, index)
-      if (end === undefined) break
-      index = end
-      continue
-    }
-    if (char === "#" && /\s/.test(source[index - 1] ?? " ")) {
-      const newline = source.slice(index).search(/[\r\n]/)
-      if (newline < 0) break
-      index += newline
-      continue
-    }
-    if (char === "@" && /['"]/.test(source[index + 1] ?? "")) {
-      const literal = powerShellHereString(source, index)
-      if (!literal) break
-      if (source[index + 1] === '"') found.push(...expandableEnvReads(literal.source, depth, budget))
-      index = literal.end
-      continue
-    }
-    if (char === "$") {
-      const env = envRead.exec(source.slice(index))
-      if (env) {
-        found.push({ kind: "env", name: env[1] ?? env[2] })
-        index += env[0].length - 1
-      } else if (source[index + 1] === "(") {
-        if (!skip(index + 1)) break
-      } else if (source[index + 1] === "{") {
-        const end = source.indexOf("}", index + 2)
-        if (end < 0) break
-        index = end
-      }
-      continue
-    }
-    if (char === "@" && (source[index + 1] === "(" || source[index + 1] === "{")) {
-      if (!skip(index + 1)) break
-      continue
-    }
-    if (char === "(" || char === "{") {
-      if (!skip(index)) break
-      continue
-    }
-    if (char === "[") {
-      closers ??= typeLiteralEnds(source)
-      const end = closers.get(index)
-      if (end === undefined) continue
-      const type = source.slice(index + 1, end).trim()
-      const rest = source.slice(end + 1)
-      const accessor = /^::\s*/.exec(rest)
-      if (!accessor) {
-        // [Type]operand and -as [Type] convert; [Type] alone, [Type].Name and a numeric index do not.
-        if (
-          // A [ right after a name is a generic argument list or an index, not a cast.
-          !/\w/.test(source[index - 1] ?? "") &&
-          /^[A-Za-z_][\w.+`,\s[\]]*$/.test(type) &&
-          (/^\s*[$'"(@[{\w]|^\s*-\d/.test(rest) || /-as\s*$/i.test(source.slice(Math.max(0, index - 8), index)))
-        )
-          found.push({ kind: "conversion", type })
-        continue
-      }
-      const memberStart = end + 1 + accessor[0].length
-      const named = GENERIC_CALL.exec(source.slice(memberStart))
-      if (named) found.push({ kind: "static", type, member: named[1] })
-      else if (computedMember(source, memberStart, depth, budget))
-        found.push({ kind: "static", type, member: "", dynamic: true })
-      else if (assigned) {
-        const setter = memberAssignment(source, memberStart)
-        if (setter !== undefined) found.push({ kind: "setter", type, member: setter, ...(setter ? {} : { dynamic: true as const }) })
-      }
-      continue
-    }
-    if (char === ":" && source[index + 1] === ":" && source[index - 1] !== "]") {
-      const accessor = /^::\s*/.exec(source.slice(index))
-      const start = index + (accessor?.[0].length ?? 2)
-      const named = GENERIC_CALL.exec(source.slice(start))
-      const type = staticReceiver(source, index)
-      if (named) found.push({ kind: "static", type, member: named[1], dynamic: true })
-      else if (computedMember(source, start, depth, budget))
-        found.push({ kind: "static", type, member: "", dynamic: true })
-      else if (assigned) {
-        const setter = memberAssignment(source, start)
-        if (setter !== undefined) found.push({ kind: "setter", type, member: setter, dynamic: true })
-      }
-      index++
-      continue
-    }
-    if (char === ".") {
-      // Not a member access after whitespace or another dot (dot-sourcing, ranges, numbers).
-      if (index === 0 || /[\s.;|&(,{=]/.test(source[index - 1])) continue
-      const rest = source.slice(index + 1)
-      const named = GENERIC_CALL.exec(rest.trimStart())
-      const memberStart = index + 1 + rest.length - rest.trimStart().length
-      if (named) found.push({ kind: "instance", member: named[1] })
-      else if (computedMember(source, memberStart, depth, budget)) found.push({ kind: "instance", member: "", dynamic: true })
-      else if (assigned) {
-        const setter = memberAssignment(source, memberStart)
-        if (setter !== undefined) found.push({ kind: "setter", member: setter, ...(setter ? {} : { dynamic: true as const }) })
-      }
-    }
-  }
-  return found
-}
-
-// Name( and, since PowerShell 7.3, Name[type, type]( for a generic method.
-const GENERIC_CALL = /^([A-Za-z_]\w*)(?:\[[\w.,\s[\]]{0,200}\])?\(/
-
-// The member name when the member at start is assigned (= += -= and the like), "" when it is computed, else undefined.
-function memberAssignment(source: string, start: number) {
-  const match = /^\s*(?:([A-Za-z_]\w*)|\$\{?[\w:]+\}?|'[^']*'|"[^"]*")\s*(?:[-+*/%]|\?\?)?=(?!=)/.exec(
-    source.slice(start, start + 400),
-  )
-  return match ? (match[1] ?? "") : undefined
-}
-
-// env: reads in the body of an expandable here-string. Text inside $( ) belongs to the nested node.
-function expandableEnvReads(body: string, depth: number, budget: PowerShellBudget) {
-  const found: Invocation[] = []
-  for (let index = 0; index < body.length; index++) {
-    if (body[index] === "`") index++
-    else if (body[index] === "$" && body[index + 1] === "(") {
-      const end = powerShellBlock(body, index + 1, depth, budget)?.end
-      if (end === undefined) break
-      index = end
-    } else if (body[index] === "$") {
-      const env = /^\$(?:\{env:([^}]+)\}|env:([A-Za-z_]\w*))/i.exec(body.slice(index, index + 300))
-      if (env) found.push({ kind: "env", name: env[1] ?? env[2] })
-    }
-  }
-  return found
-}
-
-// The non-scanner passes only look for what they report. A nesting bound they hit must not class a later syntax error as a limit.
-function scratchBudget(budget: PowerShellBudget): PowerShellBudget {
-  return { remaining: budget.remaining, depthLimitHit: false }
-}
-
-// True when a computed member name ($name, 'name', "name" or (expression)) at start is followed by a call.
-function computedMember(source: string, start: number, depth: number, budget: PowerShellBudget) {
-  const rest = source.slice(start)
-  if (/^(?:\$\{?[\w:]+\}?|'[^']*'|"[^"]*")\(/.test(rest)) return true
-  if (rest[0] !== "(") return false
-  const block = powerShellBlock(source, start, depth, budget)
-  return block !== undefined && source[block.end + 1] === "("
-}
-
-// Every [ of a type literal such as [IO.File] or [List[int]] mapped to its matching ]. A [ that closes nowhere before
-// a character that cannot be inside a type name is absent. One pass keeps this linear however many [ the text has.
-function typeLiteralEnds(source: string) {
-  const ends = new Map<number, number>()
-  let open: number[] = []
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index]
-    if (char === "[") open.push(index)
-    else if (char === "]") {
-      const start = open.pop()
-      if (start !== undefined) ends.set(start, index)
-    } else if (/[\r\n'"$(){};|]/.test(char)) open = []
-  }
-  return ends
-}
-
-// The token before a :: that names its type or variable, read backwards so a long prefix costs nothing.
-function staticReceiver(source: string, colons: number) {
-  const end = source[colons - 1] === "}" ? colons - 1 : colons
-  let name = end
-  while (name > 0 && /[\w:]/.test(source[name - 1])) name--
-  const open = source[name - 1] === "{" ? name - 1 : name
-  const dollar = name < end && source[open - 1] === "$" ? open - 1 : -1
-  let plain = colons
-  while (plain > 0 && /[\w.]/.test(source[plain - 1])) plain--
-  if (dollar < 0) return source.slice(plain, colons)
-  return source.slice(plain === colons ? dollar : Math.min(dollar, plain), colons)
+  return { kind: "scanned", commands }
 }
 
 function powerShellRedirect(input: string, index: number) {
