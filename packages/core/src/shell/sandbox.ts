@@ -71,10 +71,11 @@ export function wrap(input: Input): Result {
       "/dev",
       "--proc",
       "/proc",
-      // WSL2 interop lets a Linux process start Windows programs on the host, outside every limit below. Hiding the
-      // interop sockets stops that. Only when they exist: bwrap cannot create a mount point under the read-only root.
-      ...(kind === "wsl2" && input.interop ? ["--tmpfs", "/run/WSL"] : []),
       ...writable.flatMap((directory) => ["--bind", directory, directory]),
+      // WSL2 interop lets a Linux process start Windows programs on the host, outside every limit here. Hiding the
+      // interop sockets stops that. Only when they exist: bwrap cannot create a mount point under the read-only root.
+      // After the writable binds, so a bind of /run or / cannot put the real sockets back.
+      ...(kind === "wsl2" && input.interop ? ["--tmpfs", "/run/WSL"] : []),
       ...(input.settings.network ? [] : ["--unshare-net"]),
       "--die-with-parent",
       "--chdir",
@@ -99,9 +100,15 @@ function profile(writable: readonly string[], network: boolean) {
 const quote = (value: string) => JSON.stringify(value)
 
 /** The machine commands run on. Mutable only so a test can stand in for another platform, as it does for `TOOL`. */
-export const host: { platform: NodeJS.Platform; release: string; env: Readonly<Record<string, string | undefined>> } = {
+export const host: {
+  platform: NodeJS.Platform
+  release: string
+  interop: boolean
+  env: Readonly<Record<string, string | undefined>>
+} = {
   platform: process.platform,
   release: release(),
+  interop: process.platform === "linux" && existsSync("/run/WSL"),
   env: process.env,
 }
 
@@ -116,7 +123,7 @@ export function launch(input: Pick<Input, "settings" | "shell" | "args" | "cwd" 
     platform: host.platform,
     release: host.release,
     env: host.env,
-    interop: host.platform === "linux" && existsSync("/run/WSL"),
+    interop: host.interop,
     tool: input.settings.enabled && tool ? (which(tool) ?? undefined) : undefined,
   })
 }

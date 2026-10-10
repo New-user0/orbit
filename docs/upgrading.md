@@ -1813,7 +1813,9 @@ permission request.
 
 **What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.
 
-## WSL1 cannot run sandboxed shell commands
+## Shell sandbox
+
+### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
 
 With `sandbox.enabled` set, Orbit now recognises Windows Subsystem for Linux from the kernel release. WSL2 uses the same
 bubblewrap sandbox as Linux, and Orbit hides the WSL interop sockets (`/run/WSL`) from the sandboxed command, so a

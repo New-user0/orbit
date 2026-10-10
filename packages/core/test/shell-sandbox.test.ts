@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs"
+import os from "node:os"
 import { describe, expect, test } from "bun:test"
 import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { which } from "@orbit/core/util/which"
@@ -112,6 +114,54 @@ describe("ShellSandbox.wrap", () => {
     expect(args("6.1.0-generic", true)).not.toContain("/run/WSL")
   })
 
+  test("hides the WSL interop sockets after every writable bind, so a bind of /run or / cannot restore them", () => {
+    const wsl2 = "5.15.153.1-microsoft-standard-WSL2"
+    ;[["/run"], ["/"]].forEach((writable) => {
+      const result = ShellSandbox.wrap({
+        ...base,
+        writable,
+        platform: "linux",
+        release: wsl2,
+        interop: true,
+        settings: { enabled: true },
+        tool: "bwrap",
+      })
+      if (result.type !== "wrapped") throw new Error("expected a wrapped command")
+      expect(result.args.indexOf("--tmpfs")).toBeGreaterThan(result.args.lastIndexOf("--bind"))
+    })
+  })
+
+  test("launch passes the host's interop flag, so only a WSL2 host with /run/WSL gets the tmpfs", () => {
+    const previous = { ...ShellSandbox.host }
+    const previousTool = ShellSandbox.TOOL.linux
+    ShellSandbox.TOOL.linux = "bun"
+    try {
+      const args = (interop: boolean) => {
+        Object.assign(ShellSandbox.host, {
+          platform: "linux",
+          release: "5.15.153.1-microsoft-standard-WSL2",
+          env: {},
+          interop,
+        })
+        const result = ShellSandbox.launch({
+          settings: { enabled: true },
+          shell: "/bin/sh",
+          args: ["-c", "echo hi"],
+          cwd: "/repo",
+          writable: ["/repo"],
+        })
+        if (result.type !== "wrapped") throw new Error("expected a wrapped command")
+        return result.args.join(" ")
+      }
+      expect(args(true)).toContain("--tmpfs /run/WSL")
+      expect(args(false)).not.toContain("/run/WSL")
+    } finally {
+      Object.assign(ShellSandbox.host, previous)
+      if (previousTool === undefined) delete ShellSandbox.TOOL.linux
+      else ShellSandbox.TOOL.linux = previousTool
+    }
+  })
+
   test("generates a sandbox-exec profile on macOS that only allows the writable directories", () => {
     const result = ShellSandbox.wrap({
       ...base,
@@ -137,9 +187,10 @@ describe("ShellSandbox.wrap", () => {
         cwd: project.trim(),
         writable: [project.trim()],
         platform: "linux",
-        release: "",
+        // The real host values: on a WSL2 kernel without /run/WSL (a container) this fails if the guard is dropped.
+        release: os.release(),
         env: {},
-        interop: false,
+        interop: existsSync("/run/WSL"),
         settings: { enabled: true },
         tool: which("bwrap")!,
       })
