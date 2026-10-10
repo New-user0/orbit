@@ -4,9 +4,15 @@ import { createNoticeTracker, notice } from "../src/notify"
 describe("createNoticeTracker", () => {
   test("a pending permission notices once per id", () => {
     const tracker = createNoticeTracker()
-    expect(tracker.permission({ id: "per_1" })).toBe("permission")
-    expect(tracker.permission({ id: "per_1" })).toBeUndefined()
-    expect(tracker.permission({ id: "per_2" })).toBe("permission")
+    expect(tracker.permission({ id: "per_1", status: "pending" })).toBe("permission")
+    expect(tracker.permission({ id: "per_1", status: "pending" })).toBeUndefined()
+    expect(tracker.permission({ id: "per_2", status: "pending" })).toBe("permission")
+  })
+
+  test("an answered permission gives no notice and a later pending one does", () => {
+    const tracker = createNoticeTracker()
+    expect(tracker.permission({ id: "per_1", status: "approved" })).toBeUndefined()
+    expect(tracker.permission({ id: "per_2", status: "pending" })).toBe("permission")
   })
 
   test("only the end of a busy period notices", () => {

@@ -499,7 +499,7 @@ class Chat implements vscode.WebviewViewProvider {
           )
           return
         }
-        if (update.item.type === "permission" && update.item.status === "pending") {
+        if (update.item.type === "permission") {
           const asked = this.notices.permission(update.item)
           if (asked) this.notice(asked)
         }

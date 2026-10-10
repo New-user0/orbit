@@ -26,6 +26,7 @@ async function setup(
     subagent: session("subagent", "Subagent session", "session"),
     abort: session("abort", "Abort session"),
     timeout: session("timeout", "Timeout session"),
+    hostile: session("hostile", "Fix‮evil\x1b]0;x\x07 build"),
   }
 
   await Notifications.setup({
@@ -341,6 +342,14 @@ describe("internal notifications TUI plugin", () => {
     expect(shown.join("")).toContain("bad")
     // The toast is a message body and keeps its line breaks; every other control is still written out.
     shown.forEach((text) => expect((text ?? "").replaceAll("\n", "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202e]/))
+  })
+
+  test("cleans a session title before it reaches a notification", async () => {
+    const harness = await setup()
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1", "hostile") })
+    expect(harness.notifications.length).toBe(1)
+    expect(harness.notifications[0].title).toContain("build")
+    expect(harness.notifications[0].title ?? "").not.toMatch(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/)
   })
 
   test("notifies session errors once and suppresses the following idle done notification", async () => {

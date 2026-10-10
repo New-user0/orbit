@@ -25,8 +25,8 @@ export function createNoticeTracker() {
   const noticed = new Set<string>()
   let busy = false
   return {
-    permission(item: { id: string }): "permission" | undefined {
-      if (noticed.has(item.id)) return
+    permission(item: { id: string; status: string }): "permission" | undefined {
+      if (item.status !== "pending" || noticed.has(item.id)) return
       noticed.add(item.id)
       return "permission"
     },

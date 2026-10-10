@@ -236,7 +236,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `attention.backend` is `"system"`: found with `which` over absolute `PATH` entries only, started through
   `CrossSpawnSpawner` (`AppProcess`) in the person's home folder with a script that is a constant of the module, and the
   title and message passed as separate arguments (Linux, macOS) or environment values (Windows), after the host removed
-  control characters and the session and form text went through `plain`. `cli.json` is read from the global folder only,
+  control characters and the session title, the form title and the failure message went through `plain`. `cli.json` is read from the global folder only,
   so a project cannot choose the backend. Proof: `test/util/os-notify.test.ts` (a message that breaks quoting, run against
   the real Windows PowerShell with a dry-run switch; decoys in the working folder and a relative `PATH` entry, with a
   control).

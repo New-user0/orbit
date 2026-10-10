@@ -181,6 +181,22 @@ describe("attention in Mini", () => {
     }
   })
 
+  test("cleans a hostile session title before it reaches a notification", async () => {
+    const harness = await start("linux", "First", { notifications: true })
+    try {
+      harness.app.renderer.emit("blur")
+      harness.lifecycle.setTitle("Fix‮evil\x1b]0;x\x07 build")
+      harness.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(harness.notified.length).toBe(1)
+      expect(harness.notified[0].title).toContain("build")
+      expect(harness.notified[0].title ?? "").not.toMatch(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/)
+    } finally {
+      harness.lifecycle.footer.destroy()
+      harness.app.renderer.destroy()
+    }
+  })
+
   test("the idle reminder fires once after the configured seconds and a keypress cancels it", async () => {
     const harness = await start("linux", undefined, { notifications: true, idle_reminder: 0.05 })
     try {
