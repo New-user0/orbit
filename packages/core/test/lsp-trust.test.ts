@@ -85,7 +85,7 @@ describe("language servers and formatters for a file outside the project", () =>
 
   it.live("decides on the real path of the file and the folder that owns it", () =>
     Effect.gen(function* () {
-      const { root, project, untrusted, trusted, services } = yield* layout
+      const { root, project, untrusted, trusted, trust, services } = yield* layout
       const upper = (file: string) => file.toUpperCase()
       // Links: a folder link needs no privilege on Windows (a junction); a dangling file link does.
       yield* Effect.promise(async () => {
@@ -96,10 +96,22 @@ describe("language servers and formatters for a file outside the project", () =>
         await fs.symlink(project, path.join(untrusted, "to-project"), "junction")
         await fs.symlink(untrusted, path.join(trusted, "to-untrusted"), "junction")
         await fs.symlink(path.join(project, "sub"), path.join(trusted, "to-project"), "junction")
+        // Folders with no marker own themselves: `bare` is not granted, `plain` is.
+        await fs.mkdir(path.join(root, "bare"), { recursive: true })
+        await fs.mkdir(path.join(root, "plain"), { recursive: true })
+        await fs.mkdir(path.join(trusted, "dir"), { recursive: true })
+        await fs.symlink(trusted, path.join(root, "bare", "to-trusted"), "junction")
+        await fs.symlink(path.join(root, "plain"), path.join(root, "bare", "to-plain"), "junction")
+        await fs.symlink(trusted, path.join(root, "plain", "to-trusted"), "junction")
+        await fs.symlink(path.join(trusted, "dir"), path.join(root, "plain", "to-trusted-dir"), "junction")
+        await fs.symlink(path.join(root, "bare"), path.join(trusted, "to-bare"), "junction")
+        await fs.symlink(root, path.join(root, "alias"), "junction")
+        await fs.symlink(trusted, path.join(trusted, "self"), "junction")
         if (!canLinkFile) return
         await fs.symlink(path.join(untrusted, "new.fake"), path.join(project, "dangling-untrusted.fake"))
         await fs.symlink(path.join(trusted, "new.fake"), path.join(project, "dangling-trusted.fake"))
       })
+      yield* trust.grant(path.join(root, "plain"), { persist: false, via: "test" })
       const rows: ReadonlyArray<readonly [string, string, boolean]> = [
         ["inside", path.join(project, "sub", "a.fake"), true],
         ["inside, not there yet", path.join(project, "new", "deeper", "a.fake"), true],
@@ -117,6 +129,13 @@ describe("language servers and formatters for a file outside the project", () =>
         ["a link in an untrusted folder that leads into the project", path.join(untrusted, "to-project", "sub", "a.fake"), false],
         ["a link in a trusted folder that leads into an untrusted folder", path.join(trusted, "to-untrusted", "a.fake"), false],
         ["a link in a trusted folder that leads into the project (control)", path.join(trusted, "to-project", "a.fake"), true],
+        ["a link in a folder with no marker that leads to a trusted root", path.join(root, "bare", "to-trusted", "t.fake"), false],
+        ["a link in a folder with no marker that leads to a granted folder", path.join(root, "bare", "to-plain", "p.fake"), false],
+        ["a trusted folder reached through a link in a folder with no marker", path.join(trusted, "to-bare", "to-trusted", "t.fake"), false],
+        ["a granted folder with no marker that links to a trusted root", path.join(root, "plain", "to-trusted", "t.fake"), true],
+        ["a granted folder with no marker that links into a trusted subfolder", path.join(root, "plain", "to-trusted-dir", "a.fake"), true],
+        ["a trusted folder reached through a link above it", path.join(root, "alias", "trusted", "a.fake"), true],
+        ["a trusted folder that links to itself", path.join(trusted, "self", "a.fake"), true],
         ["a folder with no marker, beside the project", path.join(root, "a.fake"), false],
         ...(canLinkFile
           ? ([
@@ -227,6 +246,10 @@ describe("language servers and formatters for a file outside the project", () =>
         await Bun.write(path.join(trusted, "config.cjs"), script)
         await fs.symlink(path.join(trusted, "dir"), path.join(untrusted, "tlink"), "junction")
         await fs.symlink(path.join(trusted, "dir"), path.join(trusted, "tlink"), "junction")
+        // No marker anywhere on the bare spelling: the script of `bare` is the only config the walk meets first.
+        await fs.mkdir(path.join(root, "bare"), { recursive: true })
+        await Bun.write(path.join(root, "bare", "config.cjs"), script)
+        await fs.symlink(trusted, path.join(root, "bare", "tlink"), "junction")
       })
       const walk = `let d = require('path').dirname(process.argv.at(-1)); for (;;) { const c = require('path').join(d, 'config.cjs'); if (require('fs').existsSync(c)) { require(c); break } const n = require('path').dirname(d); if (n === d) break; d = n }`
       const run = (file: string) =>
@@ -239,6 +262,8 @@ describe("language servers and formatters for a file outside the project", () =>
         }).pipe(Effect.provide(services))
       const ranCount = () => Effect.promise(async () => ((await Bun.file(ran).exists()) ? (await Bun.file(ran).text()).length : 0))
       expect(yield* run(path.join(untrusted, "tlink", "t.fake"))).toBe(false)
+      expect(yield* ranCount()).toBe(0)
+      expect(yield* run(path.join(root, "bare", "tlink", "t.fake"))).toBe(false)
       expect(yield* ranCount()).toBe(0)
       expect(yield* run(path.join(trusted, "tlink", "t.fake"))).toBe(true)
       expect(yield* ranCount()).toBeGreaterThan(0)

@@ -45,7 +45,8 @@ export interface Interface {
    * folder that owns it is trusted in its own right. The owner is found as `Project.root` finds one, from the folder the
    * file really lives in (the nearest folder above it that holds `.git` or `.hg`, else its own folder). A link in the
    * project that leads out is decided by where it leads, and a link that points nowhere by where a write through it
-   * would land. A linked worktree of a trusted repository, reached as an outside file, needs a grant of its own.
+   * would land. A link on the spelling that is not on that real path's walk must lead inside the project or to a
+   * folder with a trusted owner too, since a program walking up the spelling reads config there. A linked worktree of a trusted repository, reached as an outside file, needs a grant of its own.
    */
   readonly trustedAt: (file: string) => Effect.Effect<boolean>
   /**
@@ -258,28 +259,30 @@ const layer = Layer.effect(
         return [...folders, ...real].some((folder) => FSUtil.contains(folder, leads)) ? undefined : leads
       }),
       // The stricter answer wins: a tool and a spawned program act on the spelling they were given, and a link can
-      // lead somewhere else, so both the spelling and the real path need a trusted owner. A program walks up the
-      // spelling looking for config, and a link can show a trusted folder's `.git` below an untrusted one, so when a
-      // link is in the way every owner above the spelling must be trusted.
+      // lead somewhere else. The real path needs a trusted owner. A program also walks up the spelling looking for
+      // config, so each folder on the spelling that is a link, and is not on the real path's own walk, must lead to
+      // a folder inside the project or to one with a trusted owner: a link in a folder with no marker, which owns
+      // itself, cannot lend it a trusted folder's `.git`.
       trustedAt: Effect.fn("ProjectTrust.trustedAt")(function* (file) {
         if (!(yield* trust.status(root)).trusted) return false
         const spelled = path.resolve(file)
         const leads = yield* lead(file)
-        // Whether the owners of a path are trusted: the nearest one, or with `every` each one above it as well.
-        const owned = Effect.fnUntraced(function* (candidate: string, every: boolean) {
-          if ([...folders, ...real].some((folder) => FSUtil.contains(folder, candidate))) return true
-          let folder = path.dirname(candidate)
-          for (;;) {
-            const owner = yield* Project.root(fs, AbsolutePath.make(folder))
-            if (!(yield* trust.status(owner ?? folder)).trusted) return false
-            if (!every || owner === undefined || path.dirname(owner) === owner) return true
-            folder = path.dirname(owner)
-            // Above the first owner, a folder with no marker owns nothing.
-            if ((yield* Project.root(fs, AbsolutePath.make(folder))) === undefined) return true
-          }
+        // The owner is the nearest folder above that holds `.git` or `.hg`, else the folder itself.
+        const ownerTrusted = Effect.fnUntraced(function* (folder: string) {
+          if ([...folders, ...real].some((item) => FSUtil.contains(item, folder))) return true
+          const owner = yield* Project.root(fs, AbsolutePath.make(folder))
+          return (yield* trust.status(owner ?? folder)).trusted
         })
-        const linked = !(FSUtil.contains(spelled, leads) && FSUtil.contains(leads, spelled))
-        return (yield* owned(spelled, linked)) && (yield* owned(leads, false))
+        const walk = path.dirname(leads)
+        if (!(yield* ownerTrusted(walk))) return false
+        if (FSUtil.contains(spelled, leads) && FSUtil.contains(leads, spelled)) return true
+        for (let folder = path.dirname(spelled); ; folder = path.dirname(folder)) {
+          const led = yield* lead(folder)
+          // Folders above the project are reached by the real walk as well; they do not own what is below.
+          const above = [...folders, ...real].some((item) => FSUtil.contains(led, item))
+          if (!above && !FSUtil.contains(led, walk) && !(yield* ownerTrusted(led))) return false
+          if (path.dirname(folder) === folder) return true
+        }
       }),
       supplies,
     })
