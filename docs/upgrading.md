@@ -1896,3 +1896,38 @@ bubblewrap's own namespace error.
 Windows program now fail.
 
 **What to do:** convert the distribution with `wsl --set-version <name> 2`, or turn the sandbox off.
+
+### The status line refreshes on events, gets more fields and can keep colors
+
+The status line command (`status_line.command`) used to run only on its interval and received a short JSON object. It
+now also runs when a step ends or an execution starts or ends in the session, and when the selected agent, model or
+model variant changes. Runs start at least 300 ms apart (the interval aside), and a trigger that arrives while a run is
+in flight causes exactly one more run, 300 ms after the first started or when it ends, whichever is later. A command
+that has not closed its output and exited within 2 s of starting is stopped together with the programs it
+started, and the last good line stays. On macOS and Linux the command runs in its own session, so it has
+no controlling terminal: a script that reads the terminal size from `/dev/tty` (`stty size`) fails, and the command is
+given no terminal size. On Windows
+that covers what the shell is still running when it is stopped; a program that the shell started detached
+(`start /b`) and then left is not stopped. Its stdin JSON gains `version`, `session` (`id`, `title`), `cwd`,
+`project_dir`, `model` (`provider`, `id`, `name`, `variant`, the model selected for the next prompt), `agent`,
+`output_style`, `context` (`used`, `limit`, `percent`, all three for the selected model), `cost` (`usd`, `duration_ms`,
+`lines_added`, `lines_removed`), `status` (`idle` or `running`) and `vim_mode`; `session_id` stays. The `model` object
+now names its provider `provider` (it was `providerID`), `cost` is an object, where it was a number, and `context`
+holds `used`, `limit` and `percent`, where it held `tokens` and `percent`. `session_id` and `model` are `null` on the
+home screen, where they used to be absent. `lines_added` and `lines_removed` are `null` until Orbit tracks them. The new
+`status_line.colors` key (default `false`) renders the command's colors, bold, dim, italic and underline instead of
+removing them. Every other escape sequence, such as a
+title change or a clipboard write, is dropped in both modes, control characters are shown as their control pictures,
+and format characters such as a right-to-left override or a zero-width space are written out (`\u{202e}`). Private Use
+Area glyphs (Powerline, Nerd Font) and the zero-width joiner of an emoji sequence are drawn as they are. On Windows the
+command runs through `cmd.exe` by its full path and no longer finds a program of the same name in the working folder
+first.
+
+Known gap: the prompt, and with it the status line, is replaced by the permission prompt while a permission is
+pending, so the line is not drawn then, and `status` has no `waiting` value.
+
+**Affects:** people with a `status_line` command, in particular scripts that read `model` or `cost` from stdin.
+
+**What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
+read `model.provider`, and one that read `context.tokens` to read `context.used`.
+Set `status_line.colors` to `true` to see your script's colors.
