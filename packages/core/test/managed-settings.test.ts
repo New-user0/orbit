@@ -524,7 +524,11 @@ describe("ManagedSettings service", () => {
     { spelling: "~", resource: "~", expected: home() },
     { spelling: "~/.ssh/*", resource: "~/.ssh/*", expected: home(".ssh", "*") },
     { spelling: "$HOME/.ssh/*", resource: "$HOME/.ssh/*", expected: home(".ssh", "*") },
-    { spelling: "$HOME\\.ssh\\*", resource: "$HOME\\.ssh\\*", expected: home(".ssh", "*") },
+    {
+      spelling: "$HOME\\.ssh\\*",
+      resource: "$HOME\\.ssh\\*", // A backslash separates only on Windows.
+      expected: process.platform === "win32" ? home(".ssh", "*") : home(".ssh\\*"),
+    },
     { spelling: "$HOME", resource: "$HOME", expected: home() },
   ]) {
     for (const action of ["Read", "Edit", "external_directory"]) {
