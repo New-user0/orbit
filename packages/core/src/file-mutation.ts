@@ -105,7 +105,7 @@ export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
 // The key is the file's long name (for a file that exists; a new file keeps the spelling it is given) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock. A path that cannot be resolved keeps its lexical key.
 function lockKey(target: string) {
   const lexical = FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target)))
-  // Resolving a share's path connects to its host; FileAccess refuses such a path, so a key for one stays lexical.
+  // Resolving a share's path connects to its host. Outside the project's own folder FileAccess refuses such a path, and every file tool checks before it locks, so a key for one stays lexical.
   if (process.platform === "win32" && (lexical.startsWith("\\\\") || lexical.startsWith("//"))) return lexical
   try {
     return FSUtil.resolve(lexical)
