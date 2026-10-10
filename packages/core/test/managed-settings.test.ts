@@ -497,6 +497,7 @@ describe("ManagedSettings service", () => {
         "managed-settings.json": {
           permissions: [rule("deny", "rm *")],
           experimental: { policies: [{ action: "provider.use", resource: "openai", effect: "deny" }] },
+          agents: { reviewer: { permissions: [rule("deny", "curl *")] }, plain: { description: "no rules" } },
           managed: { organization: "Acme", network: { denied_domains: ["bad.example"] } },
         },
       })
@@ -506,6 +507,7 @@ describe("ManagedSettings service", () => {
 
         expect(policy.statements).toEqual([{ action: "provider.use", resource: "openai", effect: "deny" }])
         expect(policy.rules).toEqual([rule("deny", "rm *")])
+        expect(policy.agentRules).toEqual({ reviewer: [rule("deny", "curl *")] })
         expect(policy.restrictions).toEqual({ organization: "Acme", network: { denied_domains: ["bad.example"] } })
         expect(policy.organization).toBe("Acme")
       }).pipe(Effect.provide(layers(tmp.path)))

@@ -403,6 +403,11 @@ export const layer = (options?: Options) =>
         policy.set("file", {
           statements: snapshot.info.experimental?.policies ?? [],
           rules: snapshot.info.permissions ?? [],
+          agentRules: Object.fromEntries(
+            Object.entries(snapshot.info.agents ?? {}).flatMap(([id, agent]) =>
+              agent.permissions === undefined ? [] : [[id, agent.permissions]],
+            ),
+          ),
           restrictions: snapshot.restrictions,
           ...(snapshot.restrictions.organization === undefined
             ? {}

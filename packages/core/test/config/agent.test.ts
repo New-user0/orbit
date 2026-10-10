@@ -14,6 +14,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Permission } from "@orbit/core/permission"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AgentPlugin } from "@orbit/core/plugin/agent"
 import { AbsolutePath } from "@orbit/core/schema"
@@ -26,7 +27,7 @@ import { testEffect } from "../lib/effect"
 import { agentHost, host } from "../plugin/host"
 
 const it = testEffect(
-  Layer.merge(AppNodeBuilder.build(LayerNode.group([Agent.node, Bus.node, FSUtil.node, Global.node])), trustedProject),
+  Layer.merge(AppNodeBuilder.build(LayerNode.group([Agent.node, Bus.node, FSUtil.node, Global.node, ManagedPolicy.node])), trustedProject),
 )
 const decode = Schema.decodeUnknownSync(Info)
 const defaultPermissions = (global: Global.Interface): Permission.Ruleset => [
@@ -297,6 +298,41 @@ permissions:
         expect(agent.permissions).not.toContainEqual({ action: "shell", resource: "rm *", effect: "deny" })
         expect(agent.permissions).not.toContainEqual({ action: "webfetch", resource: "*", effect: "deny" })
       }
+    }),
+  )
+
+  it.effect("under managed_permissions_only drops project and user permission rules but keeps built-in agent rules", () =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      const policy = yield* ManagedPolicy.Service
+      yield* policy.set("file", { statements: [], restrictions: { managed_permissions_only: true } })
+      const builtin = { action: "read", resource: "*.env", effect: "ask" as const }
+      yield* agents.transform((editor) => editor.update(Agent.defaultID, (agent) => agent.permissions.push(builtin)))
+
+      const entries = ["user", "project"].map(
+        (scope) =>
+          new Document({
+            type: "document",
+            scope: scope as "user" | "project",
+            info: decode({
+              permissions: [{ action: "bash", resource: `${scope} *`, effect: "allow" }],
+              agents: {
+                build: { permissions: [{ action: "edit", resource: `${scope} *`, effect: "allow" }] },
+                fresh: { permissions: [{ action: "read", resource: `${scope} *`, effect: "allow" }] },
+              },
+            }),
+          }),
+      )
+      yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+        Effect.provide(Config.testLayer(entries)),
+      )
+
+      const build = yield* agents.get(Agent.defaultID)
+      const fresh = yield* agents.get(Agent.ID.make("fresh"))
+      if (!build || !fresh) throw new Error("expected the configured agents")
+      expect(build.permissions).toContainEqual(builtin)
+      for (const agent of [build, fresh])
+        expect(agent.permissions.filter((rule) => rule.resource.endsWith(" *"))).toEqual([])
     }),
   )
 

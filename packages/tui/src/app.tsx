@@ -394,7 +394,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                             }
                                           >
                                             <ClientProvider api={api} url={input.server.endpoint.url} service={service}>
-                                              <PermissionProvider>
+                                              <PermissionProvider directory={directory}>
                                                 <DataProvider directory={directory}>
                                                   <LocationProvider>
                                                     <SessionTabsProvider>

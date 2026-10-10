@@ -81,6 +81,7 @@ for (const scenario of [
         const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-config-trust-")))
         const global = path.join(tmp.path, "global")
         const project = path.join(tmp.path, "project")
+      const managedDirectory = path.join(tmp.path, "managed")
         const config = path.join(project, "orbit.json")
         yield* Effect.promise(() =>
           Promise.all([fs.mkdir(global, { recursive: true }), fs.mkdir(project, { recursive: true })]),
@@ -210,7 +211,7 @@ function assign(values: Record<string, string | undefined>) {
 // What the server reports as the effective configuration of a project, given the config files each scope holds. The
 // home directory is a fresh one, so the developer's own ~/.orbit cannot decide the outcome.
 const effective = (
-  files: { user?: unknown; project?: unknown; local?: unknown } = {},
+  files: { user?: unknown; project?: unknown; local?: unknown; managed?: unknown } = {},
   env: Record<string, string | undefined> = {},
 ) =>
   Effect.scoped(
@@ -219,8 +220,9 @@ const effective = (
       const home = path.join(tmp.path, "home")
       const global = path.join(tmp.path, "global")
       const project = path.join(tmp.path, "project")
+      const managedDirectory = path.join(tmp.path, "managed")
       yield* Effect.promise(() =>
-        Promise.all([home, global, project].map((directory) => fs.mkdir(directory, { recursive: true }))),
+        Promise.all([home, global, project, managedDirectory].map((directory) => fs.mkdir(directory, { recursive: true }))),
       )
       const write = (file: string, value: unknown) =>
         value === undefined ? Effect.void : Effect.promise(() => fs.writeFile(file, JSON.stringify(value)))
@@ -228,15 +230,16 @@ const effective = (
         write(path.join(global, "orbit.json"), files.user),
         write(path.join(project, "orbit.json"), files.project),
         write(path.join(project, "orbit.local.json"), files.local),
+        write(path.join(managedDirectory, "managed-settings.json"), files.managed),
       ])
       yield* environment({ ORBIT_TEST_HOME: home, ORBIT_DISABLE_COMPAT: undefined, ...env })
-      const server = yield* startServer(global)
+      const server = yield* startServer(global, { managed: managedDirectory })
       const url = new URL("/api/config/effective", server.base)
       url.searchParams.set("location[directory]", project)
       const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
       expect(response.status).toBe(200)
       const body: unknown = yield* Effect.promise(() => response.json())
-      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility"])
+      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility", "permissions"])
       return Schema.decodeUnknownSync(Config.Effective)(body)
     }),
   )
@@ -246,31 +249,51 @@ const on = { compatibility: { enabled: true } }
 
 it.live("reports compatibility as on unless something that may turn it off says so", () =>
   Effect.gen(function* () {
-    expect(yield* effective()).toEqual({ compatibility: true })
-    expect(yield* effective({ user: on })).toEqual({ compatibility: true })
+    expect(yield* effective()).toMatchObject({ compatibility: true })
+    expect(yield* effective({ user: on })).toMatchObject({ compatibility: true })
   }),
 )
 
 it.live("reports the compatibility switch the user's config sets, whatever the project says", () =>
   Effect.gen(function* () {
-    expect(yield* effective({ user: off })).toEqual({ compatibility: false })
-    expect(yield* effective({ user: off, project: on, local: on })).toEqual({ compatibility: false })
+    expect(yield* effective({ user: off })).toMatchObject({ compatibility: false })
+    expect(yield* effective({ user: off, project: on, local: on })).toMatchObject({ compatibility: false })
   }),
 )
 
 it.live("ignores a compatibility switch in the project's own files", () =>
   Effect.gen(function* () {
-    expect(yield* effective({ project: off })).toEqual({ compatibility: true })
-    expect(yield* effective({ local: off })).toEqual({ compatibility: true })
-    expect(yield* effective({ user: on, project: off, local: off })).toEqual({ compatibility: true })
+    expect(yield* effective({ project: off })).toMatchObject({ compatibility: true })
+    expect(yield* effective({ local: off })).toMatchObject({ compatibility: true })
+    expect(yield* effective({ user: on, project: off, local: off })).toMatchObject({ compatibility: true })
   }),
 )
 
 it.live("reports compatibility as off when the server's environment disables it", () =>
   Effect.gen(function* () {
-    expect(yield* effective({}, { ORBIT_DISABLE_COMPAT: "1" })).toEqual({ compatibility: false })
+    expect(yield* effective({}, { ORBIT_DISABLE_COMPAT: "1" })).toMatchObject({ compatibility: false })
     // The environment outranks a user config that turns it on.
-    expect(yield* effective({ user: on }, { ORBIT_DISABLE_COMPAT: "true" })).toEqual({ compatibility: false })
+    expect(yield* effective({ user: on }, { ORBIT_DISABLE_COMPAT: "true" })).toMatchObject({ compatibility: false })
+  }),
+)
+
+it.live("reports what managed settings leave open about permission prompts", () =>
+  Effect.gen(function* () {
+    expect((yield* effective()).permissions).toEqual({ bypass: true, always: true })
+    expect((yield* effective({ managed: { managed: {} } })).permissions).toEqual({ bypass: true, always: true })
+    expect((yield* effective({ managed: { managed: { disable_bypass_permissions: true } } })).permissions).toEqual({
+      bypass: false,
+      always: true,
+    })
+    expect((yield* effective({ managed: { managed: { managed_permissions_only: true } } })).permissions).toEqual({
+      bypass: true,
+      always: false,
+    })
+    // A project's own file cannot lift or set either one.
+    expect((yield* effective({ project: { managed: { disable_bypass_permissions: true } } })).permissions).toEqual({
+      bypass: true,
+      always: true,
+    })
   }),
 )
 

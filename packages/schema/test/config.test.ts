@@ -202,17 +202,25 @@ describe("Config.Entry", () => {
 })
 
 describe("Config.Effective", () => {
-  test("round-trips the compatibility switch the server resolved", () => {
+  const permissions = { bypass: true, always: false }
+
+  test("round-trips the switches the server resolved", () => {
     const decode = Schema.decodeUnknownSync(Config.Effective)
     for (const compatibility of [true, false])
-      expect(Schema.encodeSync(Config.Effective)(decode({ compatibility }))).toEqual({ compatibility })
+      expect(Schema.encodeSync(Config.Effective)(decode({ compatibility, permissions }))).toEqual({
+        compatibility,
+        permissions,
+      })
   })
 
-  test("requires the switch to be present and a boolean", () => {
+  test("requires the switches to be present and booleans", () => {
     const decode = Schema.decodeUnknownSync(Config.Effective)
     expect(() => decode({})).toThrow()
-    expect(() => decode({ compatibility: "yes" })).toThrow()
-    expect(() => decode({ compatibility: undefined })).toThrow()
+    expect(() => decode({ compatibility: true })).toThrow()
+    expect(() => decode({ compatibility: true, permissions: { bypass: true } })).toThrow()
+    expect(() => decode({ compatibility: true, permissions: { bypass: "yes", always: true } })).toThrow()
+    expect(() => decode({ compatibility: "yes", permissions })).toThrow()
+    expect(() => decode({ compatibility: undefined, permissions })).toThrow()
     expect(() => decode(undefined)).toThrow()
   })
 

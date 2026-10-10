@@ -70,7 +70,7 @@ export async function renderLocal(
                     <ClientProvider api={createApi(calls.fetch)}>
                       <DataProvider directory={input.directory ?? directory}>
                         <LocationProvider>
-                          <PermissionProvider>
+                          <PermissionProvider directory={directory}>
                             <LocalProvider>
                               <DialogProvider>
                                 <Probe />

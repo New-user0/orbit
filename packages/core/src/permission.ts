@@ -14,6 +14,7 @@ import { Wildcard } from "./util/wildcard.js"
 import { ToolNames } from "./tool/names.js"
 import { PermissionSaved } from "./permission/saved.js"
 import { PluginHooks } from "./plugin/hooks.js"
+import { ManagedPolicy } from "./managed-policy.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
 
 const PermissionEffect = Permission.Effect
@@ -159,6 +160,7 @@ const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const hooks = yield* PluginHooks.Service
+    const managed = yield* ManagedPolicy.Service
     const pending = new Map<ID, Pending>()
     // Orbit's own allows are marked where `Agent.folders` makes them, not recognised by value: a copy that an agent took
     // of them, as Explore does, keeps the mark, and a rule of the person's with the same value does not have it.
@@ -204,12 +206,34 @@ const layer = Layer.effect(
       )
     })
 
+    // Under managed_permissions_only a session can only narrow what the agent allows, never widen it.
     const configured = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, agentID?: Agent.ID) {
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionErrors.NotFoundError({ sessionID })
-      const agent = yield* agents.resolve(agentID ?? session.agent)
-      return merge(agent?.permissions ?? missingAgentPermissions, session.permissions ?? [])
+      const name = agentID ?? session.agent
+      const agent = yield* agents.resolve(name)
+      const own = session.permissions ?? []
+      return {
+        agent: name,
+        rules: merge(
+          agent?.permissions ?? missingAgentPermissions,
+          managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,
+        ),
+      }
     })
+
+    // The last managed rule that matches a resource decides it. No match leaves the resource to the hooks and the rest.
+    function managedEffect(
+      input: Pick<AssertInput, "action" | "aliases">,
+      resource: string,
+      rules: Permission.Ruleset,
+    ): Permission.Effect | undefined {
+      const subjects = [resource, ...(input.aliases?.[resource] ?? [])]
+      return rules.findLast(
+        (rule) =>
+          actionMatches(input.action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
+      )?.effect
+    }
 
     function denied(
       input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped">,
@@ -223,9 +247,13 @@ const layer = Layer.effect(
     }
 
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
-      const rules = yield* configured(input.sessionID, input.agent)
+      const current = managed.current()
+      const only = current.restrictions.managed_permissions_only === true
+      const configuredRules = yield* configured(input.sessionID, input.agent)
+      const rules = configuredRules.rules
       if (denied(input, rules)) return { effect: "deny" as const, rules }
-      const approvals = yield* savedRules()
+      // Saved approvals are grants; managed_permissions_only ignores every one of them.
+      const approvals = only ? [] : yield* savedRules()
       const all = [...rules, ...approvals]
       const effects = input.resources.map((resource) => decide(input, resource, rules, approvals).effect)
       const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
@@ -239,7 +267,20 @@ const layer = Layer.effect(
         source: input.source,
         effect,
       })
-      return { effect: event.effect, message: event.message, rules: all }
+      // The managed layer runs last and in core, so no plugin hook (nor a later classifier) can override it. Order:
+      // configured deny > managed rule > plugin hooks > grants and config rules > default ask.
+      const layer = [...current.rules, ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? []))]
+      const decided = input.resources.map((resource) => managedEffect(input, resource, layer))
+      const blocked = current.organization === undefined ? "Blocked by managed settings" : `Blocked by ${current.organization}'s managed settings`
+      if (decided.includes("deny")) return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
+      if (decided.includes("ask")) return { effect: "ask" as const, message: event.message, rules: all }
+      // A managed allow only lifts an ask. It never undoes a hook's deny, and it does not decide a place that a link in
+      // an untrusted project leads out to.
+      const lifted =
+        event.effect === "ask" &&
+        decided.length > 0 &&
+        decided.every((effect, index) => effect === "allow" && !input.escaped?.includes(input.resources[index]!))
+      return { effect: lifted ? ("allow" as const) : event.effect, message: event.message, rules: all }
     })
 
     function request(input: AssertInput, message?: string): Request {
@@ -248,7 +289,8 @@ const layer = Layer.effect(
         sessionID: input.sessionID,
         action: input.action,
         resources: input.resources,
-        save: input.save,
+        // An "always" reply would save a grant, and managed_permissions_only ignores grants, so it offers none.
+        save: managed.current().restrictions.managed_permissions_only ? undefined : input.save,
         metadata: input.metadata,
         source: input.source,
         message,
@@ -368,7 +410,9 @@ const layer = Layer.effect(
             return
           }
 
-          if (input.reply === "always" && existing.request.save?.length) {
+          // Under managed_permissions_only an "always" reply acts as "once": nothing is saved and no other ask is lifted.
+          const always = input.reply === "always" && !managed.current().restrictions.managed_permissions_only
+          if (always && existing.request.save?.length) {
             yield* saved.add({
               projectID: location.project.id,
               action: existing.request.action,
@@ -377,7 +421,7 @@ const layer = Layer.effect(
           }
           yield* Deferred.succeed(existing.deferred, undefined)
           pending.delete(input.requestID)
-          if (input.reply !== "always" || !existing.request.save?.length) return
+          if (!always || !existing.request.save?.length) return
 
           for (const [id, item] of pending) {
             const result = yield* evaluateInput({
@@ -422,5 +466,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, Location.node, Agent.node, SessionStore.node, PermissionSaved.node, PluginHooks.node, Global.node],
+  deps: [Bus.node, Location.node, Agent.node, SessionStore.node, PermissionSaved.node, PluginHooks.node, ManagedPolicy.node, Global.node],
 })

@@ -10,6 +10,7 @@ import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Config } from "@orbit/core/config"
@@ -120,6 +121,40 @@ describe("LifecycleHooksPlugin", () => {
       expect(prompt.prompt.text).toBe("Fix the build\n\nCurrent branch: main")
     }),
   )
+
+  for (const item of [
+    { name: "nothing set", restrictions: {}, ran: ["user", "managed"] },
+    { name: "managed_hooks_only", restrictions: { managed_hooks_only: true }, ran: ["managed"] },
+    { name: "disable_hooks", restrictions: { disable_hooks: true }, ran: [] },
+    { name: "both set", restrictions: { disable_hooks: true, managed_hooks_only: true }, ran: [] },
+  ]) {
+    it.live(`runs ${item.ran.length === 0 ? "no hooks" : item.ran.join(" and ")} hooks with ${item.name}`, () =>
+      Effect.gen(function* () {
+        const registry = yield* PluginHooks.Service
+        const config = yield* Config.Test
+        const policy = yield* ManagedPolicy.Service
+        yield* policy.set("file", { statements: [], restrictions: item.restrictions })
+        const entry = (scope: "user" | "managed") =>
+          new Document({
+            type: "document",
+            scope,
+            info: decode({ hooks: { UserPromptSubmit: [command(`echo ${scope}-hook`)] } }),
+          })
+        yield* config.setEntries([entry("user"), entry("managed")])
+        yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+
+        const prompt = {
+          sessionID: base.sessionID,
+          messageID: base.messageID,
+          prompt: { text: "go" },
+          delivery: "steer" as const,
+        }
+        yield* registry.trigger("session", "prompt", prompt)
+        const context = item.ran.map((scope) => `${scope}-hook`).join("\n")
+        expect(prompt.prompt.text).toBe(context === "" ? "go" : `go\n\n${context}`)
+      }),
+    )
+  }
 
   it.live("gives the reason of the highest-ranked document that blocks, and of the first of its hooks", () =>
     Effect.gen(function* () {

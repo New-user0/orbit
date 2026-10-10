@@ -37,6 +37,7 @@ function recording(edit?: (directory: string) => Promise<unknown>) {
     return "ok"
   }
   const client = {
+    config: { effective: async () => ({ permissions: { bypass: true } }) },
     session: {
       create: async (input: {
         readonly agent?: string

@@ -10,6 +10,7 @@ import { ConfigTrust } from "../trust.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Permission } from "../../permission.js"
+import { ManagedPolicy } from "../../managed-policy.js"
 import { ProjectTrust } from "../../project-trust.js"
 import type { FileAccess } from "../../file-access.js"
 import type { ReadTool } from "../../tool/plugin/read.js"
@@ -29,6 +30,7 @@ export const Plugin = define({
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const trust = yield* ProjectTrust.Service
+    const managed = yield* ManagedPolicy.Service
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [entry]
       if (entry.type !== "directory") return []
@@ -69,9 +71,14 @@ export const Plugin = define({
     )
     loaded.documents = yield* load()
     yield* ctx.agent.transform((editor) => {
-      // Managed rules are enforced from ManagedPolicy, not by copying them into agents, so a managed document adds none.
+      // Managed rules are enforced from ManagedPolicy (Permission.evaluateInput), not by copying them into agents, so a
+      // managed document adds none. Under managed_permissions_only no document adds any: the agents keep only their
+      // built-in rules.
+      const only = managed.current().restrictions.managed_permissions_only === true
       const permissions = expandPermissions(
-        loaded.documents.flatMap((document) => (document.scope === "managed" ? [] : (document.info.permissions ?? []))),
+        loaded.documents.flatMap((document) =>
+          document.scope === "managed" || only ? [] : (document.info.permissions ?? []),
+        ),
         global.home,
       )
       const configuredDefault = Config.latest(loaded.documents, "default_agent")
@@ -107,7 +114,7 @@ export const Plugin = define({
             if (item.hidden !== undefined) agent.hidden = item.hidden
             if (item.color !== undefined) agent.color = item.color
             if (item.steps !== undefined) agent.steps = item.steps
-            if (item.permissions !== undefined && document.scope !== "managed") {
+            if (item.permissions !== undefined && document.scope !== "managed" && !only) {
               agent.permissions.push(...expandPermissions(item.permissions, global.home))
             }
           })
