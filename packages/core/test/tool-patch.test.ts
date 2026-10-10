@@ -4,6 +4,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Exit, Layer, Schema } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { FileLedger } from "@orbit/core/file-ledger"
+import { readNow } from "./fixture/ledger"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Environment } from "@orbit/core/environment/index"
 import { Formatter } from "@orbit/core/formatter"
@@ -1371,8 +1372,10 @@ describe("PatchTool", () => {
                     },
                   })
 
-                  yield* (yield* FileLedger.Service).record(sessionID, target)
+                  yield* readNow(sessionID, target)
                   const later = new Date(Date.now() + 60_000)
+                  // Different content, not only a newer time (a touch alone passes: see tool-ledger-matrix.test.ts).
+                  yield* Effect.promise(() => fs.writeFile(target, "changed\n"))
                   yield* Effect.promise(() => fs.utimes(target, later, later))
                   expect(yield* executeTool(registry, call(patch))).toEqual({
                     status: "error",
@@ -1382,7 +1385,7 @@ describe("PatchTool", () => {
                     },
                   })
                   expect(assertions).toEqual([])
-                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before\n")
+                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("changed\n")
                 }),
               tmp.path,
               "real",
