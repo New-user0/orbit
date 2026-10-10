@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
+import { existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import net from "node:net"
 import os from "node:os"
@@ -11,6 +13,7 @@ import { isolatedEnv } from "./fixture/environment"
 const idle = Number(process.env.ORBIT_EGRESS_IDLE_MS ?? 5_000)
 const attempts: string[] = []
 const requests: unknown[] = []
+const script = { search: false }
 const trap = net.createServer((socket) => {
   socket.once("data", (chunk) => {
     attempts.push(chunk.toString("latin1").split("\r\n")[0] ?? "")
@@ -23,8 +26,11 @@ const llm = Bun.serve({
   async fetch(request) {
     if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/chat/completions")
       return new Response("Not found", { status: 404 })
-    requests.push(await request.json().catch(() => undefined))
-    return new Response(completion("ok"), { headers: { "content-type": "text/event-stream" } })
+    const body = await request.json().catch(() => undefined)
+    requests.push(body)
+    // A test that arms the script gets a WebSearch call as the answer to its first request.
+    const text = script.search && offersSearch(body) && !hasToolResult(body) ? searchCall() : completion("ok")
+    return new Response(text, { headers: { "content-type": "text/event-stream" } })
   },
 })
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-egress-"))
@@ -54,6 +60,46 @@ test(
   120_000,
 )
 
+// Web search sends the query to a third-party provider, so only a person can agree to it. Headless runs cancel the
+// consent form, whatever the permission flag says, and an untrusted folder cannot select a provider for itself.
+// The search providers' HTTP client does not follow the proxy variables, so the trap cannot see their traffic. These
+// rows rest on the refusal the model receives (the provider never ran) and on the stored consent staying empty.
+const searchFlags = [[], ["--auto"], ["--dangerously-skip-permissions"]]
+searchFlags.forEach((flags) => {
+  test(
+    `a headless run${flags.length ? ` with ${flags.join(" ")}` : ""} cannot search the web without consent`,
+    async () => {
+      const workspace = await fresh("trusted")
+      const result = await run(workspace, flags, { ORBIT_TRUST_PROJECT: "1" })
+      expect(result.stderr).not.toContain("is not trusted")
+      expect(requests.length).toBeGreaterThanOrEqual(2)
+      // The tool was offered, called and refused, so a missing attempt below is not because the call never happened.
+      expect(requests.some((request) => offersSearch(request))).toBe(true)
+      expect(requests.some((request) => JSON.stringify(request).includes("Web search is not enabled"))).toBe(true)
+      expect(attempts).toEqual([])
+      expect(consent()).toBeUndefined()
+    },
+    120_000,
+  )
+})
+
+test(
+  "an untrusted repository that selects a search provider is refused before any work",
+  async () => {
+    const workspace = await fresh("untrusted", { websearch: { provider: "random" } })
+    const result = await run(workspace, [], {})
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("is not trusted")
+    expect(result.stderr).toContain("orbit.json")
+    expect(result.stderr).toContain("network")
+    expect(requests).toEqual([])
+    expect(attempts).toEqual([])
+    expect(consent()).toBeUndefined()
+  },
+  120_000,
+)
+
+
 test(
   "an idle server makes no outbound connections",
   async () => {
@@ -66,7 +112,62 @@ test(
   idle + 60_000,
 )
 
-function spawn(args: string[]) {
+// A git repository of its own, with the given project config; the run's folder comes from PWD.
+async function fresh(name: string, project?: object) {
+  const directory = path.join(root, "work", name)
+  await fs.mkdir(directory, { recursive: true })
+  expect(Bun.spawnSync(["git", "init", "--quiet", directory]).exitCode).toBe(0)
+  if (project) await Bun.write(path.join(directory, "orbit.json"), JSON.stringify(project))
+  return directory
+}
+
+async function run(directory: string, flags: string[], env: Record<string, string | undefined>) {
+  requests.length = 0
+  attempts.length = 0
+  script.search = true
+  try {
+    const child = spawn(["run", "--standalone", "--model", "test/test-model", ...flags, "Search the web"], {
+      PWD: directory,
+      ORBIT_TRUST_PROJECT: undefined,
+      ...env,
+    })
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+    return { code, stderr }
+  } finally {
+    script.search = false
+  }
+}
+
+function toolNames(request: unknown) {
+  const tools = (request as { tools?: { function?: { name?: string } }[] } | undefined)?.tools ?? []
+  return tools.map((tool) => tool.function?.name)
+}
+
+// The consent value, read straight from the database the run used.
+function consent() {
+  const file = path.join(root, "orbit.db")
+  if (!existsSync(file)) return undefined
+  const db = new Database(file, { readonly: true })
+  try {
+    return (db.query("select value from kv where key = 'websearch:provider'").get() as { value: string } | null)?.value
+  } catch {
+    return undefined
+  } finally {
+    db.close()
+  }
+}
+
+function searchCall() {
+  const call = { index: 0, id: "call_search", type: "function", function: { name: "WebSearch", arguments: JSON.stringify({ query: "orbit release notes" }) } }
+  const chunks = [
+    { choices: [{ delta: { role: "assistant", tool_calls: [call] }, finish_reason: null }], usage: null },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: null },
+    { choices: [], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } },
+  ]
+  return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`
+}
+
+function spawn(args: string[], overrides: Record<string, string | undefined> = {}) {
   const proxy = `http://127.0.0.1:${(trap.address() as net.AddressInfo).port}`
   return Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
@@ -86,6 +187,7 @@ function spawn(args: string[]) {
       // Loopback covers the configured model and the CLI's own local server; everything else is trapped.
       NO_PROXY: "127.0.0.1,localhost,::1",
       no_proxy: "127.0.0.1,localhost,::1",
+      ...overrides,
     }),
     stdin: "ignore",
     stdout: "pipe",
@@ -120,4 +222,12 @@ function completion(text: string) {
     { choices: [], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } },
   ]
   return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`
+}
+
+function offersSearch(request: unknown) {
+  return toolNames(request).includes("WebSearch")
+}
+
+function hasToolResult(request: unknown) {
+  return ((request as { messages?: { role?: string }[] } | undefined)?.messages ?? []).some((message) => message.role === "tool")
 }

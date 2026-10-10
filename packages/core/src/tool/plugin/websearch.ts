@@ -3,6 +3,7 @@ export * as WebSearchTool from "./websearch.js"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { ToolFailure } from "@orbit/ai"
+import { Tool } from "@orbit/schema/tool"
 import { Effect, Schema, Semaphore } from "effect"
 import { HttpClientError } from "effect/unstable/http"
 import { Form } from "../../form.js"
@@ -16,6 +17,12 @@ const httpErrors = new Map([
   [429, "Web search rate limited (HTTP 429)"],
   [401, "Web search authentication failed (HTTP 401)"],
 ])
+
+// Fixed text: it never repeats the model's query, and it tells the model to stop rather than work around the missing consent.
+export const NOT_ENABLED =
+  'Web search is not enabled: the user has not agreed to it, so nothing was searched. The user can turn it on by answering the web search prompt in an interactive client, or by setting `websearch` in their own Orbit config (for example { "provider": "random" }, or a provider ID). Do not call WebSearch again in this run; carry on without it, or tell the user how to turn it on.'
+
+const notEnabled = () => new ToolFailure({ message: NOT_ENABLED, code: Tool.ErrorCode.WebSearchNotEnabled })
 
 // Placed before the first result: the session runner keeps the head of an oversized result, so a trailing line is lost.
 export const SOURCES_REMINDER =
@@ -124,8 +131,7 @@ export const Plugin = {
                             },
                           ],
                         })
-                        if (response.status === "cancelled")
-                          return yield* Effect.fail(new Error("Web search cancelled"))
+                        if (response.status === "cancelled") return yield* notEnabled()
                         if (response.answer.choice === "disable") {
                           yield* websearch.select(false)
                           return yield* new WebSearch.DisabledError()
@@ -151,8 +157,7 @@ export const Plugin = {
                                 ],
                               })
                             : undefined
-                        if (selection?.status === "cancelled")
-                          return yield* Effect.fail(new Error("Web search cancelled"))
+                        if (selection?.status === "cancelled") return yield* notEnabled()
                         const providerID = selection?.answer.provider ?? "random"
                         if (providerID === "random") {
                           yield* websearch.select("random")
@@ -165,9 +170,20 @@ export const Plugin = {
                       }),
                     )
                     .pipe(
+                      // Consent is a user decision: no answer (a form that cannot be shown, or a minute without a reply)
+                      // means no search. The minute includes the wait for the permit, so a queued call can fail without
+                      // seeing a form. The timeout interrupts the pending form, which cancels it; a late reply is rejected.
+                      Effect.catchIf(
+                        (error): error is Form.AlreadyExistsError | Form.InvalidFormError =>
+                          error instanceof Form.AlreadyExistsError || error instanceof Form.InvalidFormError,
+                        (error) =>
+                          Effect.logWarning("web search consent form could not be created", error).pipe(
+                            Effect.andThen(Effect.fail(notEnabled())),
+                          ),
+                      ),
                       Effect.timeoutOrElse({
                         duration: "1 minute",
-                        orElse: () => Effect.fail(new Error("Web search cancelled")),
+                        orElse: () => Effect.fail(notEnabled()),
                       }),
                       Effect.flatMap(search),
                     )
@@ -188,6 +204,7 @@ export const Plugin = {
               return { output, content, metadata: { provider: output.provider } }
             }).pipe(
               Effect.mapError((error) => {
+                if (error instanceof ToolFailure && error.code === Tool.ErrorCode.WebSearchNotEnabled) return error
                 const fallback = `Unable to search the web for ${input.query}`
                 if (!Schema.is(WebSearch.RequestError)(error)) return new ToolFailure({ message: fallback, error })
                 const status = HttpClientError.isHttpClientError(error.cause) ? error.cause.response?.status : undefined
