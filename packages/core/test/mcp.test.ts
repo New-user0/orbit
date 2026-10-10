@@ -2716,7 +2716,7 @@ it.effect("waits for permission before calling an MCP tool", () =>
           type: "tool-call",
           id: "call_mcp_permission",
           name: "Execute",
-          input: { code: "return await tools.demo.search({})" },
+          input: { code: "return await tools.demo.search({ query: 'needle', limit: 3 })" },
         },
       })
       .pipe(Effect.forkScoped)
@@ -2724,7 +2724,8 @@ it.effect("waits for permission before calling an MCP tool", () =>
       action: "demo_search",
       resources: ["*"],
       save: ["*"],
-      metadata: {},
+      // The arguments the server receives, so a call through Code Mode is approved with them.
+      metadata: { arguments: { query: "needle", limit: 3 } },
       sessionID: Session.ID.make("ses_mcp_permission"),
       agent: toolIdentity.agent,
       source: {

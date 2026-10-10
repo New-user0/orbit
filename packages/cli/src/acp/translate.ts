@@ -7,7 +7,9 @@ import type {
   TokenUsageInfo,
 } from "@orbit/client/promise"
 import { Event } from "@orbit/schema/event"
+import { PermissionView } from "@orbit/schema/permission-view"
 import { SessionMessage } from "@orbit/schema/session-message"
+import { ToolNames } from "@orbit/schema/tool-names"
 import { TokenUsage } from "@orbit/schema/token-usage"
 import { partsToContentChunks, type ReplayPart } from "./content"
 import { ACPError } from "./error"
@@ -38,6 +40,8 @@ type Tool = {
   readonly name: string
   readonly input: ToolInput
   readonly metadata: Record<string, unknown>
+  /** The places the server named on this call's permission request: where the tool acts. */
+  readonly places?: ReadonlyArray<string>
 }
 
 type RetryStatus = {
@@ -159,7 +163,15 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
     const tool = event.data.source?.id
       ? state.tools.get(toolKey(event.data.sessionID, event.data.source.id))
       : undefined
-    return { state, outputs: [{ _tag: "PermissionAsk", event, tool, child }] }
+    // The places the server resolved are where the tool acts: the call's later updates name them, not the input's spelling.
+    const view = PermissionView.of(event.data)
+    const served = view.places.length > 0 ? view.places : view.folder ? [view.folder] : undefined
+    // A Patch asks as an Edit, for every file it changes.
+    const next =
+      tool && served && (ToolNames.owns(event.data.action, tool.name) || PermissionView.action(tool.name) === "patch")
+        ? new Map(state.tools).set(toolKey(tool.sessionID, tool.id), { ...tool, places: served })
+        : state.tools
+    return { state: { ...state, tools: next }, outputs: [{ _tag: "PermissionAsk", event, tool, child }] }
   }
   if (event.type === "form.created" && (event.data.form.sessionID === ctx.sessionID || child)) {
     return {
@@ -285,6 +297,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             toolName: tool.name,
             state: { input: tool.input },
             cwd: ctx.cwd,
+            places: tool.places,
           }),
         }),
       }
@@ -302,6 +315,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             toolName: current.name,
             state: { input: current.input },
             cwd: ctx.cwd,
+            places: current.places,
           }),
         }),
       }
@@ -320,6 +334,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             metadata: event.data.metadata,
             content: event.data.content,
             cwd: ctx.cwd,
+            places: tool.places,
           }),
         }),
       }
@@ -339,6 +354,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             content: event.data.content ?? [],
             error: event.data.error.message,
             cwd: ctx.cwd,
+            places: tool.places,
           }),
         }),
       }
@@ -421,6 +437,7 @@ export function abandonTools(state: TurnState, ctx: Context): Step {
           content: [],
           error: "Cancelled",
           cwd: ctx.cwd,
+          places: tool.places,
         }),
       }),
     ),

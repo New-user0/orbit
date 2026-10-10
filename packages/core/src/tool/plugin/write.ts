@@ -82,7 +82,8 @@ export const Plugin = {
                 action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
-                metadata: { files: [preview] },
+                // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show.
+                metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source,

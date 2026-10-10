@@ -133,7 +133,8 @@ export const Plugin = {
                 aliases: web.aliases,
                 save: web.save,
                 // The model and the TUI keep seeing the URL exactly as requested.
-                metadata: input,
+                // The method is the one the request below uses, so a client shows it rather than assuming it.
+                metadata: { ...input, method: web.metadata.method },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source: { type: "tool", messageID: context.messageID, id: context.id },

@@ -448,7 +448,7 @@ describe("WebFetchTool registration", () => {
           resources: [url],
           aliases: { [url]: ["example.com"] },
           save: ["http://example.com/*"],
-          metadata: { url, format: "text", timeout: 4 },
+          metadata: { url, format: "text", timeout: 4, method: "GET" },
         },
       ])
       expect(requests).toMatchObject([

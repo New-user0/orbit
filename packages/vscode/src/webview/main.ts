@@ -11,6 +11,7 @@ import type {
   WorkflowAgent,
   Workspace,
 } from "../protocol.js"
+import { approvalCard } from "./approval.js"
 import { agentsOf, describe, duration, excerpt, phases, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
@@ -392,10 +393,9 @@ function tool(item: Extract<Item, { type: "tool" }>) {
 
 function permission(item: Extract<Item, { type: "permission" }>) {
   const files = item.files
-  const title =
-    files.length > 0
-      ? `${verb(item.action)} ${files.map((file) => basename(file.file)).join(", ")}`
-      : `${verb(item.action)} ${item.resources.join(", ")}`
+  // The card draws the request's own values: the places, folder, method, URL, arguments and diffs the server resolved.
+  const shown = approvalCard(item)
+  const title = shown.title
   if (item.status !== "pending") {
     const label = { once: "Allowed", always: "Always allowed", reject: "Rejected" }[item.status]
     return element("div", item.status === "reject" ? "note error" : "note muted", `${label} · ${title}`)
@@ -413,8 +413,7 @@ function permission(item: Extract<Item, { type: "permission" }>) {
     lines.forEach((line) => diff.append(element("div", line.kind, `${line.kind === "add" ? "+" : "−"} ${line.text}`)))
     card.append(diff)
   }
-  if (files.length === 0 && item.resources.length > 0)
-    card.append(element("pre", "resources", item.resources.join("\n")))
+  if (shown.lines.length > 0) card.append(element("pre", "resources", shown.lines.join("\n")))
   const actions = element("div", "actions")
   const reply = (decision: "once" | "always" | "reject") => () =>
     vscode.postMessage({ type: "permission", id: item.id, decision })
@@ -629,10 +628,6 @@ function button(label: string, onClick: () => void, className?: string) {
   node.type = "button"
   node.addEventListener("click", onClick)
   return node
-}
-
-function verb(action: string) {
-  return { edit: "Edit", write: "Write", shell: "Run", read: "Read", webfetch: "Fetch" }[action] ?? action
 }
 
 function basename(file: string) {

@@ -1,0 +1,111 @@
+[
+  {
+    "id": "Glob/folder",
+    "tool": "Glob",
+    "pinnedBy": "tool-search.test.ts",
+    "input": {
+      "path": "DECOY/path",
+      "cwd": "DECOY/cwd",
+      "workdir": "DECOY/workdir",
+      "url": "https://decoy.example/",
+      "method": "GET",
+      "files": [{ "file": "DECOY/files.txt", "patch": "--- DECOY\n+++ DECOY\n@@ -1 +1 @@\n-a\n+b\n" }],
+      "pattern": "needle",
+      "hidden": true
+    },
+    "request": { "action": "Glob", "resources": ["needle"], "metadata": { "root": ".", "path": "{outside}/searched" } },
+    "truth": { "folder": "{outside}/searched" }
+  },
+  {
+    "id": "Grep/folder",
+    "tool": "Grep",
+    "pinnedBy": "tool-search.test.ts",
+    "input": {
+      "path": "DECOY/path",
+      "cwd": "DECOY/cwd",
+      "workdir": "DECOY/workdir",
+      "url": "https://decoy.example/",
+      "method": "GET",
+      "files": [{ "file": "DECOY/files.txt", "patch": "--- DECOY\n+++ DECOY\n@@ -1 +1 @@\n-a\n+b\n" }],
+      "pattern": "needle"
+    },
+    "request": { "action": "Grep", "resources": ["needle"], "metadata": { "root": ".", "path": "{outside}/searched" } },
+    "truth": { "folder": "{outside}/searched" }
+  },
+  {
+    "id": "Bash/folder",
+    "tool": "Bash",
+    "pinnedBy": "tool-shell.test.ts",
+    "input": {
+      "path": "DECOY/path",
+      "cwd": "DECOY/cwd",
+      "workdir": "DECOY/workdir",
+      "url": "https://decoy.example/",
+      "method": "GET",
+      "files": [{ "file": "DECOY/files.txt", "patch": "--- DECOY\n+++ DECOY\n@@ -1 +1 @@\n-a\n+b\n" }],
+      "command": "echo hello"
+    },
+    "request": { "action": "Bash", "resources": ["echo hello"], "metadata": { "workdir": "{outside}/run-here" } },
+    "truth": { "folder": "{outside}/run-here" }
+  },
+  {
+    "id": "PowerShell/folder",
+    "tool": "PowerShell",
+    "pinnedBy": "tool-shell.test.ts",
+    "input": {
+      "path": "DECOY/path",
+      "cwd": "DECOY/cwd",
+      "workdir": "DECOY/workdir",
+      "url": "https://decoy.example/",
+      "method": "GET",
+      "files": [{ "file": "DECOY/files.txt", "patch": "--- DECOY\n+++ DECOY\n@@ -1 +1 @@\n-a\n+b\n" }],
+      "command": "echo hello"
+    },
+    "request": { "action": "PowerShell", "resources": ["echo hello"], "metadata": { "workdir": "{outside}/run-here" } },
+    "truth": { "folder": "{outside}/run-here" }
+  },
+  {
+    "id": "WebFetch/get",
+    "tool": "WebFetch",
+    "pinnedBy": "tool-webfetch.test.ts",
+    "input": {
+      "path": "DECOY/path",
+      "cwd": "DECOY/cwd",
+      "workdir": "DECOY/workdir",
+      "url": "https://decoy.example/page",
+      "method": "POST",
+      "files": [{ "file": "DECOY/files.txt", "patch": "--- DECOY\n+++ DECOY\n@@ -1 +1 @@\n-a\n+b\n" }],
+      "format": "text"
+    },
+    "request": {
+      "action": "WebFetch",
+      "resources": ["https://docs.example/page"],
+      "metadata": { "url": "https://docs.example/page", "format": "text", "method": "GET" }
+    },
+    "truth": { "method": "GET", "url": "https://docs.example/page" }
+  },
+  {
+    "id": "WebFetch/code-mode-post",
+    "tool": "Execute",
+    "pinnedBy": "codemode.test.ts",
+    "input": { "code": "await fetch('https://DECOY.example/', { method: 'GET' }) // DECOY" },
+    "request": {
+      "action": "WebFetch",
+      "resources": ["https://api.example/collect", "POST https://api.example/collect"],
+      "metadata": { "method": "POST", "url": "https://api.example/collect" }
+    },
+    "truth": { "method": "POST", "url": "https://api.example/collect" }
+  },
+  {
+    "id": "MCP/code-mode",
+    "tool": "Execute",
+    "pinnedBy": "mcp.test.ts",
+    "input": { "code": "await tools.slack.post({ channel: 'DECOY' }) // DECOY" },
+    "request": {
+      "action": "slack_post_message",
+      "resources": ["*"],
+      "metadata": { "arguments": { "channel": "#ops", "text": "deploy done" } }
+    },
+    "truth": { "arguments": "{\"channel\":\"#ops\",\"text\":\"deploy done\"}" }
+  }
+]

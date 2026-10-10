@@ -1,3 +1,4 @@
+import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
@@ -50,55 +51,48 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   // all ask under their caller's ID, so a caller's own input is shown only when the caller is the tool that asks.
   const owned = ownsAction(action, source.tool)
   const input = owned ? normalizeInput(action, source.input, source.tool) : {}
+  // The calling tool's recorded progress is its own, and only a web search reads it (its provider).
   const metadata = { ...(owned ? dict(source.toolMetadata) : {}), ...dict(source.metadata) }
   const resources = source.resources.filter((item): item is string => typeof item === "string")
-  // A request about files names them in its resources as the server resolved them, and the tool acts on those: the
-  // caller's input can spell another place (`~/..` is not a folder in the project, filename recovery reads a sibling).
-  const resolved = resources.find((item) => item !== "*") ?? ""
+  // The place, file, method, URL and diff come from the request as the server resolved them and the tool acts on them:
+  // the caller's input can spell another place (`~/..` is not a folder in the project, filename recovery reads a
+  // sibling) and can carry keys the model added.
+  const view = PermissionView.of({ action: source.action, resources, metadata: dict(source.metadata) })
 
   if (action === "edit") {
-    const files = (Array.isArray(metadata.files) ? metadata.files : []).map(dict)
-    const first = files[0] ?? {}
-    const file = resolved || text(first.file) || text(input.path)
+    const files = view.files
+    const file = view.places[0] ?? files[0]?.place ?? files[0]?.file ?? ""
     // A patch asks once for every file it changes, so the prompt names all of them and shows every file's diff: showing
-    // only the first would hide part of what is approved. A moved file's old name is only in the resources, and each
-    // per-file entry carries the new one, so the names come from both.
-    const named = files.map((item) => text(item.file)).filter(Boolean)
-    const targets = [...new Set([...resources, ...named])]
+    // only the first would hide part of what is approved. A moved file's source is only in the places, and each
+    // per-file entry carries the destination, so the names come from both.
+    const targets = [...new Set([...view.places, ...files.map((item) => item.place ?? item.file)])]
     if (targets.length > 1) {
-      const diffs = files.map((item) => ({ file: text(item.file), diff: text(item.patch) || text(item.diff) }))
-      const each = diffs.length > 0 && diffs.every((item) => item.file && item.diff)
+      const each = files.length > 0
       return {
         icon: "→",
         title: `Edit ${targets.length} files: ${targets.map(formatPath).join(", ")}`,
         lines: targets.map((target) => `Path: ${formatPath(target)}`),
         // The diff view draws one file's patch, so each file keeps its own; without them the joined text is shown as
         // plain text, never through the diff view.
-        diffs: each ? diffs.map((item) => ({ file: formatPath(item.file), diff: item.diff })) : undefined,
-        patch: each
-          ? undefined
-          : text(metadata.diff) ||
-            diffs
-              .map((item) => item.diff)
-              .filter(Boolean)
-              .join("\n") ||
-            undefined,
+        diffs: each
+          ? files.map((item) => ({ file: formatPath(item.place ?? item.file), diff: item.patch }))
+          : undefined,
+        patch: each ? undefined : view.diff,
         file,
       }
     }
-    const diff = text(first.patch) || text(first.diff) || text(metadata.diff) || undefined
+    const diff = files[0]?.patch || view.diff || undefined
     return {
       icon: "→",
       title: `Edit ${formatPath(file)}`,
       lines: [],
       diff,
-      patch: diff ? undefined : text(input.patchText) || undefined,
       file,
     }
   }
 
   if (action === "read" || action === "list") {
-    const value = resolved || text(input.path)
+    const value = view.places[0] ?? ""
     const title = action === "read" ? "Read" : "List"
     return {
       icon: "→",
@@ -108,12 +102,15 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 
   if (action === "glob" || action === "grep") {
-    const pattern = text(input.pattern) || resources[0] || ""
+    const pattern = view.pattern ?? ""
     const title = action === "glob" ? "Glob" : "Grep"
     return {
       icon: "✱",
       title: `${title} "${pattern}"`,
-      lines: pattern ? [`Pattern: ${pattern}`] : [],
+      lines: [
+        ...(pattern ? [`Pattern: ${pattern}`] : []),
+        ...(view.folder ? [`Folder: ${formatPath(view.folder)}`] : []),
+      ],
     }
   }
 
@@ -122,7 +119,10 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     return {
       icon: "#",
       title: "Shell command",
-      lines: command ? [`$ ${command}`] : resources.map((item) => `- ${item}`),
+      lines: [
+        ...(command ? [`$ ${command}`] : resources.map((item) => `- ${item}`)),
+        ...(view.folder ? [`Folder: ${formatPath(view.folder)}`] : []),
+      ],
     }
   }
 
@@ -137,14 +137,10 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 
   if (action === "webfetch") {
-    // The request's own URL is what gets fetched, so it comes before anything the calling input says.
-    const url = text(dict(source.metadata).url) || resources[0] || text(input.url) || text(metadata.url)
     // A Code Mode fetch can write, and its prompt must not read like the read the person allowed: the method is part of
-    // what is approved. The request's own metadata names it; a plain fetch is a GET.
-    const method = (
-      text(dict(source.metadata).method) ||
-      (resources.find((item) => /^[A-Z][A-Z-]* \S/.test(item)) ?? "").split(" ")[0]!
-    ).toUpperCase()
+    // what is approved. Both come from the request, which names the URL that gets fetched.
+    const url = view.url ?? ""
+    const method = view.method ?? ""
     const writes = method !== "" && method !== "GET" && method !== "HEAD"
     return {
       icon: "%",
@@ -181,7 +177,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   }
 
   if (action === "external_directory") {
-    const raw = text(metadata.parentDir) || text(metadata.filepath) || resources[0] || ""
+    const raw = text(dict(source.metadata).parentDir) || text(dict(source.metadata).filepath) || resources[0] || ""
     const directory = wildcardDirectory(raw)
     return {
       icon: "←",
@@ -201,7 +197,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   return {
     icon: "⚙",
     title: `Call tool ${source.action}`,
-    lines: [`Tool: ${source.action}`],
+    lines: [`Tool: ${source.action}`, ...(view.arguments ? [`Arguments: ${view.arguments}`] : [])],
   }
 }
 
@@ -236,11 +232,9 @@ export function permissionOptionLabel(option: "once" | "always" | "reject" | "co
 
 function normalizeInput(action: string, value: unknown, tool?: string): Dict {
   const input = dict(legacyToolInput(tool ?? action, value))
-  const path = text(input.path) || text(input.filePath) || text(input.filepath)
   const agent = text(input.agent) || text(input.subagent_type)
   return {
     ...input,
-    ...(["read", "edit", "list", "lsp"].includes(action) && path ? { path } : {}),
     ...(action === "subagent" && agent ? { agent } : {}),
   }
 }

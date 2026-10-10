@@ -304,6 +304,9 @@ const layer = Layer.effect(
         action: "Read",
         resources: [target.resource],
         save: ["*"],
+        // The place as resolved here, absolute, so a client shows it rather than the input's spelling, and the real place
+        // when a link in an untrusted project leads there.
+        metadata: { paths: [target.place] },
         ...invocation(context),
       })
       return target

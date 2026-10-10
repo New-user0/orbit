@@ -1225,6 +1225,27 @@ search.
 
 **What to do:** answer the question, or allow the path for Read in your own rules or the agent's.
 
+### Every approval is drawn from the request, and names the folder, the method and the arguments
+
+The terminal interface, Mini, ACP and the VS Code card used to work out parts of an approval from the model's own tool
+input. They now draw only what the server put on the permission request. The request carries the absolute place of every
+file a Read, Edit, Write, NotebookEdit, LSP or Patch asks about (a moved file's source too), the folder a shell command
+runs in and a Grep or Glob searches, the method and URL of a fetch, the diff of each file with the place it is written to,
+and the arguments of an MCP tool. So the terminal interface, Mini and VS Code now say which folder a shell, Grep or Glob
+approval is for; an MCP call made through Code Mode shows its arguments, where it used to be approved by name alone; VS
+Code and ACP take a NotebookEdit's file from the request; and an ACP approval and the updates of the call after it show the
+place the tool acts on, where an ordinary tool call showed the path as the model spelled it, a link's own path included. A
+key the model adds to its input, such as a `cwd`, a `files` array or an old field name, changes nothing that is shown.
+ACP no longer works out a diff from the `old_string` and `new_string` of the input: it shows the server's diffs only, so a
+request without one shows none. An ACP tool call's `rawInput` is still the call's input, as before.
+
+**Affects:** people who approve calls in the terminal interface, Mini, VS Code or an ACP client, ACP clients that read the
+locations, title or content of a tool call or an approval, and plugins or SDK callers that read the metadata of a
+permission request. The request gains `metadata.paths` (and, per file, `place` and `from`) on file requests,
+`metadata.method` on a WebFetch request and `metadata.arguments` on an MCP request; nothing is removed.
+
+**What to do:** nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

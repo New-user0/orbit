@@ -911,9 +911,9 @@ for (const row of linkRows)
           },
           (run) => {
             expect(toolResult(run)).not.toContain("file.spelling")
-            expect(run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))).toEqual(
-              [],
-            )
+            expect(
+              run.permissions.filter((item) => String(item.toolCall.title).includes("external directory")),
+            ).toEqual([])
           },
         ),
       90_000,
@@ -928,6 +928,64 @@ type Run = {
   readonly bodies: string[]
 }
 
+// The matrix row of `clients-ux-61` over a real `orb acp` process: a NotebookEdit asks as an Edit, and its approval and
+// its later updates name the notebook its request resolved, whatever keys the model adds beside `notebook_path`. Each row
+// runs in an untrusted folder and again in a trusted one as the control. The notebook is read first, as the tool requires.
+const notebook = JSON.stringify({
+  cells: [{ cell_type: "code", execution_count: null, id: "calc", metadata: {}, outputs: [], source: ["print(1)"] }],
+  metadata: {},
+  nbformat: 4,
+  nbformat_minor: 5,
+})
+for (const trusted of [false, true])
+  test(
+    `${trusted ? "a trusted" : "an untrusted"} NotebookEdit is shown at the notebook its request resolved, whatever keys the model adds`,
+    () =>
+      approval(
+        {
+          tool: "Read",
+          args: () => ({ file_path: "nb.ipynb" }),
+          then: {
+            tool: "NotebookEdit",
+            args: () => ({
+              notebook_path: "nb.ipynb",
+              mode: "replace",
+              cellId: "calc",
+              source: "print(2)",
+              file_path: "DECOY/elsewhere.ipynb",
+              filePath: "DECOY/other.ipynb",
+              path: "DECOY/dir",
+            }),
+          },
+          permissions: [{ action: "Edit", resource: "*", effect: "ask" }],
+          trusted,
+          reply: "once",
+          setup: (root) => Bun.write(path.join(root, "workspace", "nb.ipynb"), notebook),
+        },
+        async (run) => {
+          const place = path.join(run.workspace, "nb.ipynb")
+          const asked = run.permissions.filter((item) => item.toolCall.toolCallId === "call_2")
+          expect(asked).toHaveLength(1)
+          const call = asked[0].toolCall
+          // The raw input is the one place the model's own keys appear, labelled as such.
+          expect(JSON.stringify({ ...call, rawInput: undefined })).not.toContain("DECOY")
+          expect((call.locations as { path: string }[]).map((item) => path.resolve(item.path))).toEqual([place])
+          for (const item of call.content ?? []) if (item.type === "diff") expect(path.resolve(item.path)).toBe(place)
+          const later = run.updates.filter(
+            (item) => item.sessionUpdate === "tool_call_update" && item.toolCallId === "call_2" && item.locations,
+          )
+          expect(later.map((item) => item.status)).toContain("completed")
+          for (const item of later) {
+            expect(JSON.stringify({ ...item, rawInput: undefined })).not.toContain("DECOY")
+            expect(item.locations.map((entry: { path: string }) => path.resolve(entry.path))).toEqual([place])
+          }
+          // The runner acted where the approval said.
+          expect(await Bun.file(place).text()).toContain("print(2)")
+        },
+      ),
+    120_000,
+  )
+
 async function approval(
   input: {
     tool: string
@@ -941,6 +999,8 @@ async function approval(
     trusted?: boolean
     reply?: "once" | "reject"
     setup?: (root: string) => Promise<unknown>
+    // A second tool call, made once the first one has been answered: a file is read before it is edited.
+    then?: { tool: string; args: (root: string) => Record<string, unknown> }
   },
   check: (run: Run) => unknown,
 ) {
@@ -961,15 +1021,19 @@ async function approval(
       const body: any = JSON.parse(text || "null")
       if (body?.tools) bodies.push(text)
       primary += body?.tools ? 1 : 0
-      const call = Boolean(body?.tools) && primary === 1
+      const next = input.then && primary === 2 ? input.then : undefined
+      const call = Boolean(body?.tools) && (primary === 1 || next !== undefined)
       const delta = call
         ? {
             tool_calls: [
               {
                 index: 0,
-                id: "call_1",
+                id: `call_${primary}`,
                 type: "function",
-                function: { name: input.tool, arguments: JSON.stringify(input.args(root)) },
+                function: {
+                  name: next ? next.tool : input.tool,
+                  arguments: JSON.stringify((next ? next.args : input.args)(root)),
+                },
               },
             ],
           }
