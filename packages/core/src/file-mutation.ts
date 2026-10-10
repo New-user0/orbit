@@ -57,7 +57,7 @@ export const readSnapshot = Effect.fn("FileMutation.readSnapshot")(function* (fi
   return { ...Bom.decodeBytes(file.bytes), mtimeMs: file.info.mtimeMs, digest: FileLedger.digest(file.bytes) }
 })
 
-export const syncTextBom =Effect.fn("FileMutation.syncTextBom")(function* (
+export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
   files: Files,
   target: string,
   bom: boolean,

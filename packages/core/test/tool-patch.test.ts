@@ -1374,6 +1374,8 @@ describe("PatchTool", () => {
 
                   yield* readNow(sessionID, target)
                   const later = new Date(Date.now() + 60_000)
+                  // Different content, not only a newer time (a touch alone passes: see tool-ledger-matrix.test.ts).
+                  yield* Effect.promise(() => fs.writeFile(target, "changed\n"))
                   yield* Effect.promise(() => fs.utimes(target, later, later))
                   expect(yield* executeTool(registry, call(patch))).toEqual({
                     status: "error",
@@ -1383,7 +1385,7 @@ describe("PatchTool", () => {
                     },
                   })
                   expect(assertions).toEqual([])
-                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before\n")
+                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("changed\n")
                 }),
               tmp.path,
               "real",

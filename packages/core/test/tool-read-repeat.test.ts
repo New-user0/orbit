@@ -102,8 +102,7 @@ const readCall = (
   call: { type: "tool-call", id, name: "Read", input: { file_path: file, ...page } },
 })
 
-const text = (result: unknown) =>
-  JSON.stringify(result)
+const text = (result: unknown) => JSON.stringify(result)
 
 describe("Read repeat stubs", () => {
   const setup = Effect.gen(function* () {
@@ -181,30 +180,42 @@ describe("Read repeat stubs", () => {
     }),
   )
 
-  it.live("Compaction.Ended and RevertEvent.Committed clear the marks but keep freshness", () =>
-    Effect.gen(function* () {
-      const { file, sessionID, bus } = yield* setup
-      const ledger = yield* FileLedger.Service
-      yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: "boundary", description: "boundary" })
-      const store = yield* SessionStore.Service
-      const boundary = (yield* store.context(sessionID)).filter((message) => message.type === "synthetic")[0]!.id
-      const mark = () => ledger.markRead(sessionID, file, "1:default", "digest")
+  it.live(
+    "Compaction.Ended clears marks and freshness, RevertEvent.Committed only the marks, Compaction.Failed nothing",
+    () =>
+      Effect.gen(function* () {
+        const { file, sessionID, bus } = yield* setup
+        const ledger = yield* FileLedger.Service
+        yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: "boundary", description: "boundary" })
+        const store = yield* SessionStore.Service
+        const boundary = (yield* store.context(sessionID)).filter((message) => message.type === "synthetic")[0]!.id
+        const mark = () => ledger.markRead(sessionID, file, "1:default", "digest")
 
-      yield* ledger.recordRead(sessionID, file, { mtimeMs: 1 })
-      yield* mark()
-      expect(yield* mark()).toBe(true)
-      yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
-      yield* bus.publish(SessionEvent.Compaction.Ended, { sessionID, reason: "manual", text: "summary", recent: "" })
-      expect(yield* mark()).toBe(false)
+        yield* ledger.recordRead(sessionID, file, { mtimeMs: 1 })
+        yield* mark()
+        expect(yield* mark()).toBe(true)
+        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+        yield* bus.publish(SessionEvent.Compaction.Failed, {
+          sessionID,
+          reason: "manual",
+          error: { type: "compaction.failed", message: "failed" },
+        })
+        expect(yield* mark()).toBe(true)
+        yield* ledger.assertFresh(sessionID, file, "notes.txt", { mtimeMs: 1, digest: "x" })
 
-      expect(yield* mark()).toBe(true)
-      yield* bus.publish(SessionEvent.RevertEvent.Staged, { sessionID, revert: { messageID: boundary, files: [] } })
-      yield* bus.publish(SessionEvent.RevertEvent.Committed, { sessionID, to: boundary })
-      expect(yield* mark()).toBe(false)
+        yield* bus.publish(SessionEvent.RevertEvent.Staged, { sessionID, revert: { messageID: boundary, files: [] } })
+        yield* bus.publish(SessionEvent.RevertEvent.Committed, { sessionID, to: boundary })
+        expect(yield* mark()).toBe(false)
+        // The revert kept freshness: the file is still the one the session read.
+        yield* ledger.assertFresh(sessionID, file, "notes.txt", { mtimeMs: 1, digest: "x" })
 
-      // Freshness survived both: the file is still the one the session read.
-      yield* ledger.assertFresh(sessionID, file, "notes.txt", { mtimeMs: 1, digest: "x" })
-    }),
+        expect(yield* mark()).toBe(true)
+        yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+        yield* bus.publish(SessionEvent.Compaction.Ended, { sessionID, reason: "manual", text: "summary", recent: "" })
+        expect(yield* mark()).toBe(false)
+        // A completed compaction forgot the read itself, so the file has to be read again before it is changed.
+        expect((yield* ledger.assertFresh(sessionID, file, "notes.txt").pipe(Effect.flip)).code).toBe("file.unread")
+      }),
   )
 
   it.live("never stubs a directory listing", () =>

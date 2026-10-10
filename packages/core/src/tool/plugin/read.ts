@@ -255,7 +255,7 @@ export const Plugin = {
 export const unchangedStub = (path: string) =>
   `Read file ${path}: unchanged since your last read of this range. The text you were given then is still current, so use it instead of reading again.`
 
-export const toModelContent =(path: string, offset: number | undefined, output: typeof Output.Type) => {
+export const toModelContent = (path: string, offset: number | undefined, output: typeof Output.Type) => {
   if (output.type === "file" && output.encoding === "base64")
     return [
       { type: "text", text: output.mime === "application/pdf" ? "PDF read successfully" : "Image read successfully" },

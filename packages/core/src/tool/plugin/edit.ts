@@ -203,7 +203,8 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               if (target.externalDirectory) return
               yield* Effect.gen(function* () {
-                // Read first so the ledger can tell a touched file from an edited one without a second look.
+                // An unread file is refused before any of it is loaded; the snapshot then tells a touched file from an edited one.
+                yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
                 const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
                   Effect.tap((snapshot) =>
                     ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot),
@@ -234,8 +235,11 @@ export const Plugin = {
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
+              yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
               const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
-                Effect.tap((snapshot) => ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot)),
+                Effect.tap((snapshot) =>
+                  ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot),
+                ),
               )
               const source = original.text
               const edit = plan(input, source)

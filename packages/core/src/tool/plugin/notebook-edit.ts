@@ -66,6 +66,7 @@ export const Plugin = {
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
+              yield* ledger.assertRead(context.sessionID, target.absolute, input.notebook_path)
               const original = yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
                 Effect.tap((snapshot) =>
                   ledger.assertFresh(context.sessionID, target.absolute, input.notebook_path, snapshot),
