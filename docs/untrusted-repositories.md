@@ -138,8 +138,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
   `test/file-access.test.ts`, `test/tool-edit.test.ts` (that link, with a trusted project as the control),
   `test/tool-write.test.ts`.
-- Language servers and formatters: `ProjectTrust.trusted()` in `Lsp` and `Formatter`. Proof: `test/lsp.test.ts`,
-  `test/formatter.test.ts`.
+- Language servers and formatters: `ProjectTrust.trustedAt(file)` per file in `Lsp.diagnostics`, `Lsp.request` and
+  `Formatter.file`. It needs the Location's project trusted, and a file outside the project's folders also needs the
+  folder that owns it (found as `Project.root` finds one, from the real folder of the file) to be trusted. It decides the
+  spelling the tool and the spawned program act on and the real path, and the real path needs a trusted owner, and so does the
+  target of every link on the spelling that is not on the real path's own walk (the stricter answer wins, class 3), so a
+  link in an untrusted folder, with or without a marker, that leads into a trusted one is refused, as are a link that leads out,
+  a dangling link, `..` and the Windows case of a name. A refused file is skipped. Proof: `test/lsp.test.ts`, `test/lsp-trust.test.ts`,
+  `test/plugin/lsp-diagnostics.test.ts` (a Write by `~`, Git Bash, Cygwin, WSL, trailing dot and space and case
+  spellings), `test/formatter.test.ts`.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
@@ -164,8 +171,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/util/src/program-lookup.test.ts`, `test/effect/cross-spawn-spawner.test.ts`, `test/project.test.ts` (a
   folder with `.hg` and an `hg.exe`) and `test/mcp.test.ts`, and the `test/program-lookup.test.ts` of `packages/cli`,
   `packages/sdk` and `packages/server`. They delete the variable from `process.env` first, and those that run a decoy
-  plant real `.exe` files. No test of its own covers the language server client, which starts a server through
-  `cross-spawn` directly, or the bare `git` fallback (see Known gaps).
+  plant real `.exe` files. The language server client starts its server through the spawner, and `test/lsp-spawn.test.ts`
+  runs it against `.exe`, `.bat` and `.cmd` decoys with a copy on `PATH` as the control. The bare `git` fallback has no
+  test of its own (see Known gaps).
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
 - Code Mode `fetch`: `PermissionWeb.request` for every hop, then `AddressGuard.check`. Proof: `test/codemode.test.ts`,
@@ -1204,8 +1212,8 @@ kind in turn.
   on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
-- One member of the class is still open: a relative `PATH` entry. Three more rest on `ProgramLookup.install()` alone,
-  with no test of their own: the language server client, the bare `git` fallback and the terminal UI's external editor.
+- One member of the class is still open: a relative `PATH` entry. Two more rest on `ProgramLookup.install()` alone,
+  with no test of their own: the bare `git` fallback and the terminal UI's external editor.
   Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
@@ -1591,7 +1599,6 @@ fixes it or asks.
 - **A stale-stamp window.** `ProjectTrust.allows` mixes the live decision with stale stamps for about 100 ms after a
   grant or a revoke (N2). Nothing consumes `allows` yet, so fix this before its first consumer, which class 1 prescribes
   for a file that carries code.
-- **The formatter gate keys on the Location's project**, not on the folder of an externally edited file (N3).
 - **Advice that cannot be followed.** `Trust.Withheld.directory` can name a folder, such as the middle one of outer,
   middle and inner repositories, that `orb trust` cannot lift, because a grant always goes to `project.canonical`. There
   is no revoke-by-directory route for a deleted folder. The VS Code extension names such a folder and gives no command
@@ -1626,8 +1633,8 @@ fixes it or asks.
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
   holds only without a leading wildcard. The review of #3 left it to the owner: change what such a pattern matches, or
   say so in the note.
-- **The `webfetch` tool.** It still follows redirects through `HttpClient` with no per-hop ask and no address guard, and
-  a proxy sees the address and not the name (task `file-web-tools-19`, M3).
+- **The `webfetch` tool and a proxy.** `webfetch` now asks per hop, passes `AddressGuard.check` and connects to the checked
+  address, as Code Mode `fetch` does. A user-configured proxy still sees that address and not the name; the owner has yet to decide.
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
@@ -1637,12 +1644,7 @@ fixes it or asks.
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.
-- **The language server client and the bare `git` fallback.** The language server client
-  (`packages/core/src/lsp/client.ts`) starts a server through `cross-spawn` directly. It hands `process.env` to the
-  server, so the variable that each entry sets reaches it, but it has neither the spawner's `ProgramLookup.install()`
-  before the launch nor `ProgramLookup.environment()`, and no test starts it against a decoy. It starts one only for a
-  trusted folder (class 1), so keep that gate and move the call to `CrossSpawnSpawner` (task `file-web-tools-7`). And
-  when `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`. That goes through the
+- **The bare `git` fallback.** When `which` finds no git on Windows, `gitExecutable` falls back to the bare name `git`. That goes through the
   spawner, which sets the variable before it launches. The spawner's tests run under Bun, and the core also runs under
   Node, where only the launcher's test shows that Node's own spawn honors the variable, so a test that plants a
   `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).

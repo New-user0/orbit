@@ -76,6 +76,13 @@ type Data = {
 export interface Interface extends State.Transformable<Editor> {
   readonly list: () => Effect.Effect<ReadonlyArray<Tool.Info & { readonly id: string }>>
   readonly snapshot: (permissions?: Permission.Ruleset) => Effect.Effect<Snapshot>
+  /**
+   * Checks where a web request to `host` may go, with the settings of `fetch` in Code Mode, and answers with the addresses
+   * it must connect to instead of the host (none for a host that is an address). Resolving a name is a request to the
+   * network, so ask permission for the host first. It fails for an address that is not public (unless the configuration
+   * allows local servers), for any link-local or metadata address, and for a name that resolves to nothing.
+   */
+  readonly resolveWeb: (host: string) => Effect.Effect<ReadonlyArray<string>, Error>
 }
 
 /** The context of a call before `execute` resolves its tool's traits and adds them. */
@@ -381,6 +388,7 @@ const layer = Layer.effect(
     return Service.of({
       transform: state.transform,
       reload: state.reload,
+      resolveWeb: resolve,
       list: () => Effect.sync(() => Array.from(state.get().tools.values())),
       snapshot: Effect.fn("Tool.snapshot")((permissions) =>
         Effect.sync(() => {

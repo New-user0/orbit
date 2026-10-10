@@ -2,10 +2,12 @@ export * as LspPlugin from "./plugin.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { isRecord } from "@orbit/ai/utils/record"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import path from "path"
+import { FileAccess } from "../file-access.js"
 import { Location } from "../location.js"
 import type { PluginInternal } from "../plugin/internal.js"
+import { WriteTool } from "../tool/plugin/write.js"
 import { Lsp } from "./index.js"
 
 /**
@@ -26,9 +28,15 @@ export const Plugin = define({
     yield* ctx.tool.hook("execute.after", (event) =>
       Effect.gen(function* () {
         if (event.status !== "completed" || !EDITING_TOOLS.has(event.tool)) return
-        const files = changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
+        // Write returns no file list. Its output names the path it wrote, which can differ from the spelling in its
+        // input (a link that leads into the project), so the server is told that path. A result without Write's output
+        // falls back to the input, resolved lexically. The other tools report the files they changed.
+        const files =
+          event.tool === "Write"
+            ? writtenFile(event.input, event.result.output, location.directory)
+            : changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
         if (files.length === 0) return
-        const found = yield* lsp.diagnostics(files)
+        const found = yield* lsp.diagnostics(files, { save: true })
         const errors = Object.entries(found).flatMap(([file, items]) => {
           const list = items.filter((item) => item.severity === ERROR)
           return list.length === 0 ? [] : [[file, list] as const]
@@ -65,6 +73,12 @@ export const Plugin = define({
     )
   }),
 } satisfies PluginInternal.InternalPlugin)
+
+function writtenFile(input: unknown, output: unknown, directory: string) {
+  if (Schema.is(WriteTool.Output)(output)) return [output.target]
+  const target = isRecord(input) ? (input.file_path ?? input.path) : undefined
+  return typeof target === "string" ? [FileAccess.resolvePath(directory, target)] : []
+}
 
 function changedFiles(value: unknown): string[] {
   if (!Array.isArray(value)) return []

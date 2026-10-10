@@ -2041,6 +2041,19 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
 
+### The shell tool no longer runs commands in csh or tcsh
+
+When the tool shell is picked for compatibility, Orbit used to accept a `csh` or `tcsh` login shell and run commands in
+it. Those shells cannot run the POSIX syntax that models write, and Orbit cannot analyse their syntax to decide which
+commands need a question. They are now skipped like `fish` and `nu`: the tool falls back to the shell Orbit picks
+otherwise (`zsh` on macOS, `bash` or `sh` on Linux, PowerShell or Git Bash on Windows). Your own terminal and your login
+shell are unchanged.
+
+**Affects:** people whose login shell, `SHELL` or `shell` setting is `csh` or `tcsh`.
+
+**What to do:** nothing. Commands that relied on csh syntax (`setenv`, `set x = y`) must be written for the shell Orbit
+picks.
+
 ## Tools
 
 ### Web search results start with a Sources reminder
@@ -2100,6 +2113,25 @@ those version-control folders.
 **What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
 truncation note for more results.
 
+### Language servers hear about every write, and about each save
+
+A file created or overwritten with Write now goes to its language server, so the tool result carries the same inline
+errors that Edit already reported; before, a Write got none. After every edit (Write, Edit, Patch and NotebookEdit),
+the server is also sent `textDocument/didSave` once the new text is synced, with the text only when the server asked
+for it. Servers that run extra checks on save, such as rust-analyzer with `cargo check`, may now do so after each edit.
+The `LSP` tool never saves.
+
+Language servers and formatters now also decide per file. A file outside the project is served only when the folder that
+owns it (the nearest folder above it with a `.git` or `.hg`, else its own folder) is trusted too; trusting the project
+is no longer enough for an edit that reaches into another folder. A link is decided twice, by the spelling it was
+given and by where it really leads, and the stricter answer wins: a link in an untrusted folder, even one with no
+`.git`, that leads into a trusted one is refused. A skipped file leaves the tool result as it was. A server is started through Orbit's process spawner: a bare program name is found on `PATH`
+only.
+
+**Affects:** people with a language server configured or on `PATH`, mostly Rust users.
+
+**What to do:** Nothing. Set `lsp` to `false` to turn language servers off.
+
 ### A web search that nobody agreed to fails as "websearch.not-enabled"
 
 When the web search consent form is cancelled, is not answered within a minute, or cannot be shown, the `WebSearch` tool now
@@ -2117,3 +2149,56 @@ config; the exit code of such a run does not change.
 
 **What to do:** Nothing. To allow search in a headless run, set `websearch` (for example `{ "provider": "random" }`) in your
 own Orbit config.
+
+### WebFetch follows same-site redirects only, checks every hop and caches pages for 15 minutes
+
+`WebFetch` used to let the HTTP client follow every redirect to any host, with one approval for the URL the model named.
+It now sends each request itself:
+
+- A redirect within the same site is followed: the same protocol (or `http:` to `https:`), the same port, no credentials
+  in the target, and the same host once one leading `www.` is dropped from each. A redirect to anything else is not
+  followed. The call succeeds with a note that names the URL that redirected, the target and the status, and says to call
+  `WebFetch` again with the target. Nothing is sent to the target, and the note is not cached. A 303 is a status error.
+  At most 10 redirects are followed; an 11th fails with "Too many redirects". (Tests: `WebFetchTool redirects` in
+  `packages/core/test/tool-webfetch.test.ts`.)
+- Every request is asked about, not only the first, so a rule written for a URL applies to a redirect target on the same
+  site. A hop from `example.com` to `www.example.com` is a different host, so it can prompt once. The approval of a hop
+  shows the hop's own method and URL, with the hop it came from in `redirect`. (Tests: "follows a same-host redirect" and
+  "follows a hop that only adds or drops a leading www.")
+- An `http:` URL is fetched over `https:`, and the approval shows the `https:` URL. A single-label host such as
+  `localhost` or an address keeps its scheme. A URL with a username or password, or one longer than 2000 characters, is
+  refused before anything is asked or sent. (Tests: `WebFetchTool URL checks`.)
+- After the permission for a request, the host is checked: a name that resolves to a loopback or private-network address
+  is refused unless `experimental.allow_local_fetch` is on, a link-local or cloud metadata address is always refused, and
+  so is a name that resolves to nothing. The request then connects to the address that was checked, with the name in
+  `Host` and in the TLS handshake. Fetching a local development server therefore needs `experimental.allow_local_fetch`,
+  which a repository cannot turn on. (Tests: `WebFetchTool address guard and pinning`.)
+- A response body may be up to 10 MiB, up from 5 MiB; an HTML page is still converted to Markdown within a 5 MiB budget.
+  (Tests: `WebFetchTool size cap`.)
+- A fetched page is cached for 15 minutes from the moment it is stored, up to 50 MiB in all, and shared by the sessions of
+  one project. A repeat call within that time sends no request, but still asks permission for the URL and for each
+  redirect it was reached through, in order, so a rule or a decline written for a hop applies to a cached page as it does
+  to a live one. A failure, a redirect note or a timeout is never cached. (Tests: `WebFetchTool cache` and
+  `tool-webfetch-cache.test.ts`.)
+- The timeout (30 seconds by default, at most 120) applies to each request and to the read of the body, not to the whole
+  call and never to a question put to you, which can wait as long as you take. A chain of redirects can therefore take
+  longer than the timeout in all, and the limit of 10 redirects bounds it. (Tests: `WebFetchTool timeout`.)
+- The name of a site is now resolved on this machine, and a name that does not resolve there is refused. Through a proxy
+  the name used to be resolved by the proxy. A configured proxy now sees the address that was checked, not the name, so a
+  `NO_PROXY` entry written by name no longer matches. Whether a proxy should be given the name instead is an open question
+  for the owner, kept under Known gaps in `docs/untrusted-repositories.md`.
+
+**Affects:** people and scripts that fetch a local server or a private address with `WebFetch`, pages that redirect to
+another host, and anyone with `WebFetch` rules written for `http:` URLs, which now match the `https:` URL.
+
+**What to do:** To fetch local servers, set `experimental.allow_local_fetch` to `true` in your own configuration. Write
+rules for the `https:` form of a URL. Behind a proxy that resolves names this machine cannot, or one that is picked by
+`NO_PROXY` entries written by name, `WebFetch` does not work yet. When a note reports a redirect, call `WebFetch` again with the target it names.
+
+### Edit keeps a file's curly quotes and removes the line break of a deleted line
+
+When Edit finds `old_string` only after matching typography (curly quotes, dashes, spaces) or ignoring trailing whitespace, and the quote characters of the text it found differ from those of `old_string`, it writes the straight `"` and `'` of `new_string` in the quote style of the text it replaced: curly doubles are used only if the replaced text has curly doubles, curly singles only if it has curly singles, and a quote opens at the start of `new_string`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else (a no-break space and a hyphen-minus close). A match whose quotes equal `old_string`'s (an exact match, or one that differs only in whitespace, dashes or spaces) is never restyled. When `new_string` is empty and the matched text is the only thing on its line (apart from whitespace), Edit also removes the line break, so no blank line is left; a deletion in the middle of a line, or one whose `old_string` starts or ends with a line break, removes only the matched text.
+
+**Affects:** people and scripts that rely on the exact bytes Edit writes.
+
+**What to do:** Nothing.

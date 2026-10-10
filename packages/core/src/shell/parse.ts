@@ -399,6 +399,9 @@ function resolve(asset: string) {
 
 const load = lazy(initialize)
 
+/** The tree-sitter parsers that `scan` uses, loaded once. Shared with ShellAnalysis so both read the same instances. */
+export const parsers = load
+
 async function initialize() {
   const { Parser, Language } = await import("web-tree-sitter")
   await Parser.init({ locateFile: () => resolve(shellParserWasm.runtime) })

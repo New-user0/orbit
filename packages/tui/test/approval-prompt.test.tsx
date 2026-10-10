@@ -59,6 +59,7 @@ const kinds = [
   "Bash/folder",
   "PowerShell/folder",
   "WebFetch/get",
+  "WebFetch/redirect-hop",
   "WebFetch/code-mode-post",
   "MCP/code-mode",
 ]
