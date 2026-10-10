@@ -1667,14 +1667,14 @@ function scanPowerShellNested(
   }
 
   // True when the text before a line break ends in . or ::, which member access continues over. In an expression that
-  // holds for any token; in an argument Windows PowerShell 5.1 continues after ) and a quote but not after a variable.
+  // holds for any token; in a command argument Windows PowerShell 5.1 never continues, so the next line is a command.
   const memberContinues = (at: number) => {
     let end = at
     while (end > 0 && /[ \t]/.test(input[end - 1])) end--
     const accessor = input.startsWith("::", end - 2) ? 2 : input[end - 1] === "." ? 1 : 0
     if (accessor === 0 || quote) return false
+    if (!expression) return false
     const before = input.slice(Math.max(0, end - accessor - 64), end - accessor)
-    if (!expression) return /["')]$/.test(before)
     // A number such as 1. ends the statement.
     return !/(?:^|[^\w$.])[+-]?\d+$/.test(before) && before !== ""
   }

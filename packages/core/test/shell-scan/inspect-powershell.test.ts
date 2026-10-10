@@ -503,7 +503,6 @@ describe("ShellScan.inspect powershell .NET statements", () => {
     ["[IO.File]::\r\nDelete('x')", [{ kind: "static", type: "IO.File", member: "Delete" }]],
     ["$t::\nDelete('x')", [{ kind: "static", type: "$t", member: "Delete", dynamic: true }]],
     ["(Get-Item a).\nDelete()", [{ kind: "instance", member: "Delete" }]],
-    ["Write-Output (1).\nDelete()", [{ kind: "instance", member: "Delete" }]],
     ["$w = [IO.StreamWriter]'victim-chain.txt'; $w.AutoFlush = $true; $w.\nWrite('payload')", undefined],
   ])("a line break after . or :: continues the statement: %j", (input, invocations) => {
     const result = scanned(input)
@@ -520,8 +519,8 @@ describe("ShellScan.inspect powershell .NET statements", () => {
     expect([...result.commands, ...result.statements].flatMap((item) => item.invocations)).toEqual(invocations)
   })
 
-  test("a line break after a number, a path or a variable argument still ends the statement", () => {
-    for (const input of ["$x = 1.\nRemove-Item a", "cd .\nRemove-Item a", "cd ..\nRemove-Item a", "Write-Output $f.\nRemove-Item a"]) {
+  test("a line break after a number, a path or any command argument (variable, quote, parenthesis) still ends the statement", () => {
+    for (const input of ["$x = 1.\nRemove-Item a", "cd .\nRemove-Item a", "cd ..\nRemove-Item a", "Write-Output $f.\nRemove-Item a", 'Write-Output "s".\nRemove-Item a', "Write-Output 's'.\nRemove-Item a", "Get-Content (gi x).\nRemove-Item a", "Write-Output (1).\nRemove-Item a", "Write-Output (1)\nRemove-Item a", 'Write-Output "s"\nRemove-Item a']) {
       expect(scanned(input).commands.map((command) => command.words[0])).toContain("Remove-Item")
     }
   })
