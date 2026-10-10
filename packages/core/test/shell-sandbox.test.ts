@@ -7,6 +7,9 @@ const base = {
   args: ["-c", "echo hi"],
   cwd: "/repo/pkg",
   writable: ["/repo", "/repo/pkg", "/tmp"],
+  release: "",
+  env: {},
+  interop: false,
 }
 
 describe("ShellSandbox.wrap", () => {
@@ -90,6 +93,25 @@ describe("ShellSandbox.wrap", () => {
     expect(ShellSandbox.wrap({ ...wsl2, settings: { enabled: true } })).toEqual({ type: "missing", tool: "bwrap" })
   })
 
+  test("hides the WSL interop sockets only on WSL2 where they exist", () => {
+    const args = (release: string, interop: boolean) => {
+      const result = ShellSandbox.wrap({
+        ...base,
+        platform: "linux",
+        release,
+        interop,
+        settings: { enabled: true },
+        tool: "bwrap",
+      })
+      if (result.type !== "wrapped") throw new Error("expected a wrapped command")
+      return result.args.join(" ")
+    }
+    const wsl2 = "5.15.153.1-microsoft-standard-WSL2"
+    expect(args(wsl2, true)).toContain("--tmpfs /run/WSL")
+    expect(args(wsl2, false)).not.toContain("/run/WSL")
+    expect(args("6.1.0-generic", true)).not.toContain("/run/WSL")
+  })
+
   test("generates a sandbox-exec profile on macOS that only allows the writable directories", () => {
     const result = ShellSandbox.wrap({
       ...base,
@@ -115,6 +137,9 @@ describe("ShellSandbox.wrap", () => {
         cwd: project.trim(),
         writable: [project.trim()],
         platform: "linux",
+        release: "",
+        env: {},
+        interop: false,
         settings: { enabled: true },
         tool: which("bwrap")!,
       })

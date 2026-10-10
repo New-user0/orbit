@@ -2,6 +2,7 @@ export * as ShellSandbox from "./sandbox.js"
 
 import type { ConfigSandbox } from "@orbit/schema/config/sandbox"
 import { SandboxPlatform } from "@orbit/util/sandbox-platform"
+import { existsSync } from "node:fs"
 import { release } from "node:os"
 import { which } from "../util/which.js"
 
@@ -13,9 +14,11 @@ import { which } from "../util/which.js"
 
 export interface Input {
   readonly platform: NodeJS.Platform
-  /** `os.release()`; tells WSL1 and WSL2 apart on Linux. */
-  readonly release?: string
-  readonly env?: Readonly<Record<string, string | undefined>>
+  /** `os.release()`; tells WSL1 and WSL2 apart on Linux. Required so a caller cannot skip the WSL1 check by omission. */
+  readonly release: string
+  readonly env: Readonly<Record<string, string | undefined>>
+  /** Whether the host has `/run/WSL`, the sockets WSL2 interop uses to start Windows programs. */
+  readonly interop: boolean
   readonly settings: ConfigSandbox.Info
   readonly shell: string
   readonly args: readonly string[]
@@ -32,15 +35,20 @@ export type Result =
   | { readonly type: "missing"; readonly tool: string }
   | { readonly type: "unsupported"; readonly reason: string }
 
-export const TOOL: Partial<Record<NodeJS.Platform, string>> = { linux: "bwrap", darwin: "sandbox-exec" }
+export const TOOL: Partial<Record<NodeJS.Platform, string>> = {
+  linux: SandboxPlatform.TOOL.linux,
+  darwin: SandboxPlatform.TOOL.darwin,
+}
 
 export function wrap(input: Input): Result {
   if (!input.settings.enabled) return { type: "unwrapped" }
   // WSL1 has no namespaces, so bubblewrap cannot work there; WSL2 is a real Linux kernel and takes the Linux path.
-  if (SandboxPlatform.platform({ platform: input.platform, release: input.release ?? "", env: input.env ?? {} }) === "wsl1")
+  const kind = SandboxPlatform.platform({ platform: input.platform, release: input.release, env: input.env })
+  if (kind === "wsl1")
     return {
       type: "unsupported",
-      reason: "Shell sandboxing is enabled but WSL1 cannot sandbox commands. Upgrade the distribution to WSL2 (wsl --set-version) or turn the sandbox off",
+      reason:
+        "Shell sandboxing is enabled but WSL1 cannot sandbox commands. Upgrade the distribution to WSL2 (wsl --set-version) or turn the sandbox off",
     }
   const tool = TOOL[input.platform]
   if (!tool) return { type: "unwrapped" }
@@ -63,6 +71,9 @@ export function wrap(input: Input): Result {
       "/dev",
       "--proc",
       "/proc",
+      // WSL2 interop lets a Linux process start Windows programs on the host, outside every limit below. Hiding the
+      // interop sockets stops that. Only when they exist: bwrap cannot create a mount point under the read-only root.
+      ...(kind === "wsl2" && input.interop ? ["--tmpfs", "/run/WSL"] : []),
       ...writable.flatMap((directory) => ["--bind", directory, directory]),
       ...(input.settings.network ? [] : ["--unshare-net"]),
       "--die-with-parent",
@@ -105,6 +116,7 @@ export function launch(input: Pick<Input, "settings" | "shell" | "args" | "cwd" 
     platform: host.platform,
     release: host.release,
     env: host.env,
+    interop: host.platform === "linux" && existsSync("/run/WSL"),
     tool: input.settings.enabled && tool ? (which(tool) ?? undefined) : undefined,
   })
 }
