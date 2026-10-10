@@ -118,7 +118,45 @@ const plan = (input: typeof Input.Type, source: string) => {
   // These one-to-one mappings preserve offsets into the original source.
   const unicode = exact.length > 0 ? [] : findOccurrences(normalizeForMatch(source), normalizeForMatch(oldText))
   const trailing = exact.length > 0 || unicode.length > 0 ? [] : findLineOccurrences(source, oldText)
-  return { matches: exact.length > 0 ? exact : unicode.length > 0 ? unicode : trailing, newText }
+  const matches = exact.length > 0 ? exact : unicode.length > 0 ? unicode : trailing
+  const selected = input.replace_all === true ? matches : matches.slice(0, 1)
+  // A deletion that leaves a whole line empty takes the line break with it. A mid-line deletion, an old_string that
+  // already ends or starts with a line break, and a match whose widened range would touch another match are left alone.
+  const wholeLines = input.new_string === "" && !input.old_string.endsWith("\n") && !/^\r?\n/.test(input.old_string)
+  const edits = selected.map((match) => {
+    // An exact match is never restyled: the model spelled it the way the file does.
+    const text = exact.length > 0 ? newText : restyleQuotes(source.slice(match.start, match.end), newText)
+    const range = wholeLines ? wholeLine(source, match) : undefined
+    const widened =
+      range && !selected.some((other) => other !== match && other.end > range.start && other.start < range.end)
+    return { ...(widened ? range : match), text }
+  })
+  return { matches, edits }
+}
+
+/** The line `match` sits on, with its line break, when nothing but whitespace is on that line outside the match. */
+const wholeLine = (source: string, match: Match) => {
+  const start = source.lastIndexOf("\n", match.start - 1) + 1
+  if (!/^[^\S\n]*$/.test(source.slice(start, match.start))) return
+  const tail = /^[^\S\n]*(\n|$)/.exec(source.slice(match.end))
+  if (!tail) return
+  return { start, end: match.end + tail[0].length }
+}
+
+const opening = new Set([" ", "\t", "\n", "\r", "(", "[", "{", "—", "–"])
+
+/**
+ * Writes `text` in the quote style of the file text it replaces. A quote kind is restyled only when `slice` holds
+ * that kind in curly form; detection and output cover U+2018, U+2019, U+201C and U+201D only. A straight quote
+ * opens at the start of `text` or after whitespace, an opening bracket, or an en or em dash, and closes anywhere else.
+ */
+const restyleQuotes = (slice: string, text: string) => {
+  const restyle = (value: string, straight: string, left: string, right: string) =>
+    Array.from(value, (char, index) =>
+      char !== straight ? char : index === 0 || opening.has(value[index - 1]) ? left : right,
+    ).join("")
+  const doubled = /[“”]/.test(slice) ? restyle(text, '"', "“", "”") : text
+  return /[‘’]/.test(slice) ? restyle(doubled, "'", "‘", "’") : doubled
 }
 
 /** Why an edit that needs no file cannot work, if it cannot. */
@@ -189,7 +227,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false, permission: "Edit" },
           traits: { readOnly: false, concurrencySafe: false },
           description:
-            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in old_string or new_string. The edit fails if old_string is not found. By default, old_string must identify a UNIQUE location. Multiple matches FAIL unless replace_all is true. Add more surrounding context to disambiguate, or set replace_all to true to replace every occurrence. Use replace_all when the change should apply to every occurrence, such as renaming a variable.",
+            "Edit the contents of a file by finding and replacing exact text. When editing text from Read output, preserve the exact indentation (tabs or spaces) and omit the line-number prefix, such as `1: `. Never include the prefix in old_string or new_string. The edit fails if old_string is not found. By default, old_string must identify a UNIQUE location. Multiple matches FAIL unless replace_all is true. Add more surrounding context to disambiguate, or set replace_all to true to replace every occurrence. Use replace_all when the change should apply to every occurrence, such as renaming a variable. To delete whole lines, set new_string to an empty string; the line break after them is removed too, so no blank line is left.",
           input: Input,
           output: Output,
           // Refuses an edit that cannot work before `execute` asks anyone to approve it. A file outside the Location is
@@ -247,10 +285,10 @@ export const Plugin = {
               // The person is asked to approve an edit only once it is known to work, whichever file it is for.
               const mismatched = mismatch(input, replacements)
               if (mismatched) return yield* mismatched
-              const replaced = (input.replace_all === true ? edit.matches : edit.matches.slice(0, 1))
+              const replaced = edit.edits
                 .toReversed()
                 .reduce(
-                  (content, match) => `${content.slice(0, match.start)}${edit.newText}${content.slice(match.end)}`,
+                  (content, match) => `${content.slice(0, match.start)}${match.text}${content.slice(match.end)}`,
                   source,
                 )
               yield* permission.assert({
