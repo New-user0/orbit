@@ -207,10 +207,7 @@ const notReadOnly = [
   "jq -L dir .",
   "jq",
   // Heads that other tasks own: pinned so they flip on purpose
-  "grep x a",
   "git status",
-  "find .",
-  "sed -n 1p a",
   "xargs ls",
   "curl x",
   "rm a",
@@ -329,5 +326,284 @@ describe("the allowlist shape", () => {
   test("windows heads: a .exe is stripped only there", () => {
     expect(bash("sort.exe -n a", windows()).readOnly).toBe(true)
     expect(bash("sort.exe -n a", linux()).readOnly).toBe(false)
+  })
+})
+
+// Search and transform tools (shell-safety-4).
+const searchReadOnly = [
+  "rg -n foo src",
+  "rg foo",
+  "rg -e a -e b src",
+  "rg -A20 foo src",
+  "rg -i -g '*.ts' foo",
+  "grep -rn x .",
+  "grep -rn x",
+  "grep -l foo a b",
+  "grep -e x a",
+  "grep --color=always x a",
+  "grep --color always /etc/passwd",
+  "grep -c 'x$' a",
+  "grep -E 'a|b' a",
+  "grep -d recurse x .",
+  "grep --directories=skip x a",
+  "grep -e5 a",
+  "grep -m5 x a",
+  "grep --version",
+  "fd foo",
+  "fd -e ts foo src",
+  "fd -t f -0 foo",
+  "fdfind foo .",
+  "fd --hyperlink pat src",
+  "find .",
+  "find . -name '*.ts'",
+  "find -O3 src -type f",
+  "find . \\( -name a -o -name b \\) -print",
+  "find . -newer stamp",
+  "find . -path ./node_modules -prune -o -print",
+  "find -L . -name a",
+  "find . -executable -follow",
+  "find . -name foo-exec",
+  "find -D tree /etc -name x",
+  "sed -n '1,20p' file",
+  "sed -n 1p a",
+  "sed -n '1p;3p' a b",
+  "sed -nE 5p a",
+  "sed -n -- 5p a",
+  "sed 's/a/b/g'",
+  "sed -E 's/x/y/2'",
+  "sed 's/x/hello world/'",
+  "sed 's/yes/no/'",
+  "sed 's/#{;}!/b/'",
+  "sort -n a",
+  "sort -u a b",
+  "echo a b | xargs echo",
+  "ls | xargs",
+  "find . -name '*.ts' -type f -print0 | xargs -0 grep -n foo",
+  "find src -type f -print0 | xargs -0 wc -l",
+  "find . -type f -print0 2>/dev/null | xargs -0 -I {} head {}",
+  "find . -type f -print0 | xargs -0 -n 5 -P 2 tail",
+]
+
+const searchNotReadOnly = [
+  // find
+  "find . -name x -exec rm {} \\;",
+  "find . -delete",
+  "find . -execdir x \\;",
+  "find . -ok rm {} \\;",
+  "find . -okdir rm {} \\;",
+  "find . -fprint out",
+  "find . -fprint0 out",
+  "find . -fprintf out x",
+  "find . -fls out",
+  "find -files0-from list",
+  "find . -files0-from list",
+  "find . -name -delete",
+  "find . -Bmin 5",
+  "find . -name *.ts",
+  "find . -H",
+  "find . -name",
+  "find -D",
+  // fd
+  "fd x -x rm",
+  "fd x --exec rm",
+  "fd x -X rm",
+  "fd x --exec-batch rm",
+  "fd -l x",
+  "fd -u x",
+  "fdfind x -x rm",
+  // rg
+  "rg --pre 'sh -c' x",
+  "rg --pre-glob '*' --pre x y",
+  "rg -L foo",
+  "rg --follow foo",
+  "rg --files",
+  "rg -r x foo",
+  "rg -0 foo",
+  "rg -P foo",
+  "rg --sort path foo",
+  'rg "a\nb" f',
+  "RIPGREP_CONFIG_PATH=x rg foo",
+  "RIPGREP_CONFIG_PATH=x; rg foo",
+  // grep
+  "grep -R x .",
+  "grep --dereference-recursive x .",
+  "grep -5 x a",
+  "egrep x a",
+  "fgrep x a",
+  "grep -d bogus x a",
+  "grep -D bogus x a",
+  "grep -rR x .",
+  'grep "a\nb" f',
+  "grep -e",
+  // sort
+  "sort -o out a",
+  "sort --output=out a",
+  "sort --compress-program=sh a",
+  "sort -T /tmp a",
+  "sort --files0-from=l",
+  "sort -k2 a",
+  // sed
+  "sed -n 'w out' a",
+  "sed 's/a/b/e' a",
+  "sed -i s/a/b/ a",
+  "sed --in-place s/a/b/ a",
+  "sed -f s.sed a",
+  "sed -n -e 1p a",
+  "sed 's/a/b/' f",
+  "sed -n 's/a/b/p'",
+  "sed -n '$p' a",
+  "sed -n '/x/p' a",
+  "sed 1d a",
+  "sed y/a/b/",
+  "sed -s -n 1p a",
+  "sed --debug -n 1p a",
+  "sed -n 1pw a",
+  "sed",
+  "sed -n",
+  "sed 's|a|b|'",
+  "sed 's/a/b/w out'",
+  // xargs: unlisted targets and options
+  "xargs rm",
+  "xargs sh -c 'x'",
+  "xargs ls",
+  "cat list.txt | xargs cat",
+  "xargs -p cat",
+  "xargs -i echo",
+  "xargs -e EOF echo",
+  "xargs -l 5 echo",
+  "xargs -a f echo",
+  "xargs --null echo",
+  "xargs -E= EOF echo",
+  "xargs -rI echo sh",
+  "xargs -I x echo",
+  "xargs -n5 echo",
+  "xargs -o echo",
+  "xargs /bin/echo",
+  // xargs: items that are not known
+  "cat list | xargs head",
+  "find . -name '*.ts' | xargs grep -n foo",
+  "find . -type f | xargs head",
+  "find . -type f -print0 | xargs head",
+  "find . -print0 | xargs -0 head",
+  "find . -print0 -type f | xargs -0 head",
+  "find -L . -type f -print0 | xargs -0 head",
+  "find . -follow -type f -print0 | xargs -0 head",
+  "find . -type f -o -name x -print0 | xargs -0 head",
+  "find . -type f -print0 -print | xargs -0 head",
+  "find . -type f -print0 -ls | xargs -0 head",
+  "find . ! -type f -print0 | xargs -0 head",
+  "find . -type f -print0 | xargs -0 -d x head",
+  "find . -type f -print0 |& xargs -0 head",
+  "find . -type f -print0 | xargs -0 head < l",
+  "find . -type f -print0 | xargs -0 head <<< x",
+  "find . -type f -print0 | xargs -0 -I {} head {}/../x",
+  "find -type f -print0 | xargs -0 head",
+  "fd -0 -t f . | xargs -0 head",
+  "find . -type f -print0 | xargs -0 grep -R x",
+  "find . -type f -print0 | xargs -0 wc --files0-from=l",
+  "(find . -type f -print0) | xargs -0 head",
+  "find . -type f -print0 | cat | xargs -0 head",
+  "find . -type f -delete -print0 | xargs -0 head",
+]
+
+describe("search and transform tools", () => {
+  test.each(searchReadOnly)("ro: %s", (text) => {
+    expect(bash(text).readOnly).toBe(true)
+  })
+  test.each(searchNotReadOnly)("no: %j", (text) => {
+    expect(bash(text).readOnly).toBe(false)
+  })
+  test("xargs is never read-only on Windows", () => {
+    expect(bash("echo a b | xargs echo").readOnly).toBe(true)
+    expect(bash("echo a b | xargs echo", windows()).readOnly).toBe(false)
+    expect(bash("find . -type f -print0 | xargs -0 head", windows()).readOnly).toBe(false)
+  })
+  test("a program in the working folder is not the xargs target", () => {
+    expect(bash("echo a | xargs echo", linux({ local: (head) => head === "echo" })).readOnly).toBe(false)
+    expect(bash("echo a | xargs echo", linux({ env: { PATH: ".:/usr/bin" } })).readOnly).toBe(false)
+  })
+  test("an exec in a quoted name is a name, an exec predicate is not", () => {
+    expect(bash("find . -name '-delete'").readOnly).toBe(false)
+    expect(bash("find . -name foo-exec").readOnly).toBe(true)
+  })
+})
+
+describe("search read paths", () => {
+  const rows: Array<[string, string[]]> = [
+    ["rg -n foo src", ["src"]],
+    ["rg foo", ["."]],
+    ["rg -e foo a b", ["a", "b"]],
+    ["rg -f pats a", ["pats", "a"]],
+    ["rg -e5 a", ["a"]],
+    ["rg -f5 a", ["5", "a"]],
+    ["grep foo a b", ["a", "b"]],
+    ["grep -e x /etc/passwd", ["/etc/passwd"]],
+    ["grep -e5 /etc/passwd", ["/etc/passwd"]],
+    ["grep --regexp=x /etc/passwd", ["/etc/passwd"]],
+    ["grep -f /etc/pats a", ["/etc/pats", "a"]],
+    ["grep --file=/etc/pats a", ["/etc/pats", "a"]],
+    ["grep --color always /etc/passwd", ["/etc/passwd"]],
+    ["grep --exclude-from=/x/l -r y", ["/x/l", "."]],
+    ["grep x", []],
+    ["grep -- -x f", ["f"]],
+    ["grep -rn x ~/src", ["/home/u/src"]],
+    ["fd foo /etc", ["/etc"]],
+    ["fd --search-path /etc foo", ["/etc"]],
+    ["fd --base-directory /srv foo sub", ["/srv", "/srv/sub"]],
+    ["fd --base-directory /srv foo", ["/srv", "/srv"]],
+    ["fd --ignore-file /etc/ign foo", ["/etc/ign", "."]],
+    ["fd --hyperlink pat /etc", ["/etc"]],
+    ["fd", ["."]],
+    ["find -O3 /etc -name x", ["/etc"]],
+    ["find -D tree /etc", ["/etc"]],
+    ["find . -newer /etc/x", [".", "/etc/x"]],
+    ["find . -path '*/node_modules' -prune", [".", "*/node_modules"]],
+    ["find a b -type f", ["a", "b"]],
+    ["find -type f", ["."]],
+    ["find ~ -name x", ["/home/u"]],
+    ["find -- a -name x", ["a", "a", "-name", "x"]],
+    ["sed -n 1p a b", ["a", "b"]],
+    ["sed -n 1p -- -x", ["-x"]],
+    ["sed -n 1p", []],
+    ["sed s/a/b/", []],
+    ["find src -type f -print0 | xargs -0 grep -f p x", ["src", "p", "x"]],
+    ["find src -type f -print0 | xargs -0 -I {} head {}", ["src"]],
+    ["diff --from-file=/etc/x /dev/null", ["/etc/x", "/dev/null"]],
+    ["diff --to-file /etc/x a", ["/etc/x", "a"]],
+    ["diff -X /etc/x a b", ["/etc/x", "a", "b"]],
+    ["diff --exclude='*.o' a b", ["a", "b"]],
+    ["du --exclude-from=/etc/x .", ["/etc/x", "."]],
+    ["head a -c /etc/passwd", ["a", "/etc/passwd"]],
+    ["head -n 5 a", ["a"]],
+  ]
+  test.each(rows)("%s", (text, expected) => {
+    expect(bash(text).readPaths).toEqual(expected)
+  })
+  test("a file list that wc or du reads is dynamic and refuses, whatever the spelling", () => {
+    for (const text of ["wc --files0-from=l", "wc --files0-from l", "du --files0-from=l", "wc --files0=l", "wc --f=l"])
+      expect(bash(text).readOnly).toBe(false)
+  })
+})
+
+describe("PowerShell search read paths (pwsh on win32)", () => {
+  const rows: Array<[string, string[]]> = [
+    ["Select-String foo a.txt", ["a.txt"]],
+    ["sls foo a.txt", ["a.txt"]],
+    ["Select-String -Pattern foo -Path a.txt", ["a.txt"]],
+    ["Select-String -Pattern foo a.txt", ["a.txt"]],
+    ["Select-String -Path a.txt foo", ["a.txt"]],
+    ["Select-String C:\\x -Pattern foo", ["C:\\x"]],
+    ["Get-Content a | Select-String foo", ["a"]],
+    ["Select-String -Pattern a,b x", ["x"]],
+    ["Select-String foo -Context 2,3 a", ["a"]],
+    ["findstr /I foo *.ts", ["*.ts"]],
+    ["findstr /C:foo a b", ["a", "b"]],
+    ["findstr /G:pats.txt a", ["pats.txt", "a"]],
+  ]
+  test.each(rows)("%s", (text, expected) => {
+    expect(powershell(text, pwsh()).readPaths).toEqual(expected)
+  })
+  test("findstr /D: joins each folder onto each file", () => {
+    expect(powershell("findstr '/D:x;y' foo f", pwsh()).readPaths.toSorted()).toEqual(["x", "x\\f", "y", "y\\f"])
   })
 })
