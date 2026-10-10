@@ -1176,6 +1176,16 @@ describe("EditTool fidelity", () => {
       expected: "He said “bye”.\nnext\n",
     },
     { name: "Q8 CRLF opens after break", file: "x\r\n“a”\r\n", old: 'x\n"a"', new: 'x\n"b"', expected: "x\r\n“b”\r\n" },
+    {
+      name: "Q10 trailing whitespace only keeps straight code quotes",
+      file: "const a = 'x'   \nconst msg = \"Don’t\"\n",
+      old: "const a = 'x'\nconst msg = \"Don’t\"",
+      new: "const a = 'y'\nconst msg = \"Don’t\"",
+      expected: "const a = 'y'\nconst msg = \"Don’t\"\n",
+    },
+    { name: "Q11 em dash only", file: 'x = “a” + "b"—c\n', old: 'x = “a” + "b"-c', new: 'x = “a” + "d"-c', expected: 'x = “a” + "d"-c\n' },
+    { name: "Q12 no-break space only", file: "\u2018a\u2019 <a k='b'\u00a0/>\n", old: "\u2018a\u2019 <a k='b' />", new: "\u2018a\u2019 <a k='c' />", expected: "\u2018a\u2019 <a k='c' />\n" },
+    { name: "Q13 dash differs, quotes curly in both", file: "a “b”—c\n", old: "a “b”-c", new: 'a "b"-c', expected: 'a "b"-c\n' },
     { name: "Q9 low-9 quotes detect nothing", file: "x „y‟\n", old: 'x "y"', new: 'x "z"', expected: 'x "z"\n' },
     ...(
       [

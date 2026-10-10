@@ -124,8 +124,10 @@ const plan = (input: typeof Input.Type, source: string) => {
   // already ends or starts with a line break, and a match whose widened range would touch another match are left alone.
   const wholeLines = input.new_string === "" && !input.old_string.endsWith("\n") && !/^\r?\n/.test(input.old_string)
   const edits = selected.map((match) => {
-    // An exact match is never restyled: the model spelled it the way the file does.
-    const text = exact.length > 0 ? newText : restyleQuotes(source.slice(match.start, match.end), newText)
+    // Restyle only when the file's quotes differ from the ones old_string spelled. A match that differs in whitespace,
+    // dashes or spaces alone leaves the model's own quote characters as they are.
+    const slice = source.slice(match.start, match.end)
+    const text = quotesOf(slice) === quotesOf(oldText) ? newText : restyleQuotes(slice, newText)
     const range = wholeLines ? wholeLine(source, match) : undefined
     const widened =
       range && !selected.some((other) => other !== match && other.end > range.start && other.start < range.end)
@@ -150,6 +152,8 @@ const opening = new Set([" ", "\t", "\n", "\r", "(", "[", "{", "—", "–"])
  * that kind in curly form; detection and output cover U+2018, U+2019, U+201C and U+201D only. A straight quote
  * opens at the start of `text`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else.
  */
+const quotesOf = (value: string) => value.replace(/[^"'‘’“”„‟‚‛]/g, "")
+
 const restyleQuotes = (slice: string, text: string) => {
   const restyle = (value: string, straight: string, left: string, right: string) =>
     // Index the code-point array being mapped: a string index drifts after any astral character.
