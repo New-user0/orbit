@@ -12,7 +12,7 @@ import type {
   Workspace,
 } from "../protocol.js"
 import { approvalCard } from "./approval.js"
-import { agentsOf, describe, duration, excerpt, phases, segments, tokens } from "./present.js"
+import { agentsOf, describe, duration, phases, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
 // Runs inside the webview. Every string from the model or the server is set as text, never parsed as HTML.
@@ -407,10 +407,9 @@ function permission(item: Extract<Item, { type: "permission" }>) {
   if (totals.additions) head.append(element("span", "add", `+${totals.additions}`))
   if (totals.deletions) head.append(element("span", "del", `−${totals.deletions}`))
   card.append(head)
-  const lines = files.flatMap((file) => excerpt(file.patch, 6))
-  if (lines.length > 0) {
+  if (shown.changes.length > 0) {
     const diff = element("div", "mini-diff")
-    lines.forEach((line) => diff.append(element("div", line.kind, `${line.kind === "add" ? "+" : "−"} ${line.text}`)))
+    shown.changes.forEach((line) => diff.append(element("div", line.kind, `${line.kind === "add" ? "+" : "−"} ${line.text}`)))
     card.append(diff)
   }
   if (shown.lines.length > 0) card.append(element("pre", "resources", shown.lines.join("\n")))

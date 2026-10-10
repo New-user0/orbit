@@ -200,3 +200,19 @@ test("the session prompt for an MCP call draws every argument, including the one
   expect(frame).toContain("#leak-HIDDEN")
   expect(frame).toContain("secrets")
 })
+
+// On a short screen the body is taller than the room it has: the value after the long one is off the first screen, and
+// scrolling the prompt brings it into view. The prompt already scrolls as a whole, so this pins that and is not a
+// mutation test of any change.
+test("the session prompt for an MCP call on a short screen scrolls to the arguments after a long value", async () => {
+  const request = {
+    action: "mcp__chat__post",
+    resources: ["*"],
+    metadata: { arguments: { note: "x".repeat(2100), channel: "#leak-HIDDEN", text: "secrets" } },
+  }
+  const first = flat(await draw(request, 60, 14))
+  expect(first).not.toContain("#leak-HIDDEN")
+  const scrolled = flat(await draw(request, 60, 14, 40))
+  expect(scrolled).toContain("#leak-HIDDEN")
+  expect(scrolled).toContain("secrets")
+})

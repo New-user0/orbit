@@ -1,6 +1,7 @@
 import type { PermissionView } from "@orbit/schema/permission-view"
 import { body } from "@orbit/flow/plain"
 import type { FileChange } from "../protocol.js"
+import { excerpt } from "./present.js"
 
 // What the approval card says, from the request's own values alone: the places, folder, pattern, method, URL, arguments
 // and files its view carries. The calling tool's input never reaches the card. Pure, so the webview and its tests share it.
@@ -9,6 +10,8 @@ export interface Card {
   readonly title: string
   /** One line per value the card shows beside its title. */
   readonly lines: ReadonlyArray<string>
+  /** The first changed lines of every file's diff, written out like the rest of the card. */
+  readonly changes: ReadonlyArray<{ readonly kind: "add" | "del"; readonly text: string }>
 }
 
 export function approvalCard(item: {
@@ -20,7 +23,11 @@ export function approvalCard(item: {
   const card = build(item)
   // Every string here can come from a model or a file (a command, an MCP argument), so control characters, including the
   // ones that reorder text, are written out before the card is drawn (class 9).
-  return { title: body(card.title), lines: card.lines.map(body) }
+  return {
+    title: body(card.title),
+    lines: card.lines.map(body),
+    changes: item.files.flatMap((file) => excerpt(file.patch, 6)).map((line) => ({ ...line, text: body(line.text) })),
+  }
 }
 
 function build(item: {
@@ -28,7 +35,7 @@ function build(item: {
   readonly resources: ReadonlyArray<string>
   readonly view: PermissionView.View
   readonly files: ReadonlyArray<FileChange>
-}): Card {
+}): Omit<Card, "changes"> {
   const view = item.view
   const verb = verbOf(item.action)
   if (item.files.length > 0)

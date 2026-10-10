@@ -43,7 +43,7 @@ const instantiate = (row: Row): Row => {
 }
 // What a rule matches on a command or a search, which a person must see to approve it.
 const resourcesOf = (row: Row) =>
-  ["Bash", "PowerShell", "Glob", "Grep"].includes(row.tool) ? row.request.resources.filter((item) => item !== "*") : []
+  ["Bash", "PowerShell", "Glob", "Grep", "read_mcp_resource", "list_mcp_resources", "Skill"].includes(row.tool) ? row.request.resources.filter((item) => item !== "*") : []
 const patchesOf = (row: Row) => ((row.request.metadata?.files ?? []) as { patch: string }[]).map((file) => file.patch)
 
 const fixture = path.join(import.meta.dir, "../../core/test/fixture")
@@ -65,6 +65,19 @@ const present = (row: Row) =>
   })
 
 const text = (value: unknown) => JSON.stringify(value)
+
+// The input's own spelling of the file, when it names another place than the request does (a link, a spelling that
+// leads elsewhere): read lexically against the project, as a person reading the prompt would. Whatever a client draws
+// outside the raw input must not contain it, so a title built from the input rather than the request fails here.
+const slashed = (value: string) => value.replaceAll("\\", "/").toLowerCase()
+const misleading = (row: Row) => {
+  const raw = [row.input.file_path, row.input.notebook_path, row.input.path].find(
+    (item): item is string => typeof item === "string" && !item.includes("DECOY"),
+  )
+  if (raw === undefined) return undefined
+  const lexical = slashed(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(world.project, raw))
+  return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
+}
 const request = (row: Row): MiniPermissionRequest => ({
   id: "per_matrix",
   sessionID: "ses_matrix",
@@ -83,6 +96,8 @@ test("the matrix has every tool, every spelling and both trust states", () => {
     expect(spellings.has(name)).toBe(true)
   expect(golden.some((row) => row.id.endsWith("/trusted"))).toBe(true)
   expect(golden.some((row) => row.id.endsWith("/untrusted"))).toBe(true)
+  // Rows whose own spelling leads somewhere else than the request's place exist, or the check above is vacuous.
+  expect(golden.filter((row) => misleading(row) !== undefined).length).toBeGreaterThan(0)
   // The control: every row's input carries the decoys, so a client that read it would show one.
   for (const row of golden) expect(text(row.input)).toContain("DECOY")
 })
@@ -91,6 +106,8 @@ for (const row of rows)
   test(`the terminal UI's prompt for ${row.id} shows the request's values and no decoy`, () => {
     const shown = text(present(row))
     expect(shown).not.toContain("DECOY")
+    const own = misleading(row)
+    if (own !== undefined) expect(shown).not.toContain(own)
     for (const place of row.truth.places ?? []) expect(shown).toContain(place)
     if (row.truth.folder) expect(shown).toContain(row.truth.folder)
     if (row.truth.url) expect(shown).toContain(row.truth.url)
@@ -110,6 +127,8 @@ for (const row of rows)
     for (const mono of [false, true]) {
       const shown = text(permissionInfo(request(row), undefined, mono))
       expect(shown).not.toContain("DECOY")
+      const own = misleading(row)
+      if (own !== undefined) expect(shown).not.toContain(own)
       for (const place of row.truth.places ?? []) expect(shown).toContain(toolPath(place, { home: true }))
       if (row.truth.folder) expect(shown).toContain(toolPath(row.truth.folder, { home: true }))
       if (row.truth.url) expect(shown).toContain(row.truth.url)

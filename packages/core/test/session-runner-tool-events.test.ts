@@ -289,6 +289,42 @@ test("local failure metadata completes the progress snapshot", async () => {
   })
 })
 
+// A client that replays the call later names the places the tool resolved, not the spelling of the call's input: the
+// settled record keeps them whatever progress came after (class 8).
+test("a settled call keeps the places the tool reported, whatever progress followed", async () => {
+  const place = "D:\\outside\\config\\notes.md"
+  const settled = [
+    {
+      name: "success",
+      type: "session.tool.success.2",
+      settle: (publisher: ReturnType<typeof capture>["publisher"]) =>
+        publisher.toolExecution(call.id, call.name, {
+          output: { type: "text" },
+          content: [{ type: "text", text: "ok" }],
+          metadata: { bytes: 1 },
+        }),
+    },
+    {
+      name: "failure",
+      type: "session.tool.failed.2",
+      settle: (publisher: ReturnType<typeof capture>["publisher"]) =>
+        publisher.failTool(call.id, { type: "tool.execution", message: "failed" }),
+    },
+  ]
+  for (const item of settled) {
+    const { published, publisher } = capture()
+    await Effect.runPromise(publisher.publish(call))
+    await Effect.runPromise(publisher.progress(call.id, { places: [place] }))
+    await Effect.runPromise(publisher.progress(call.id, { phase: "later" }))
+    await Effect.runPromise(item.settle(publisher))
+
+    expect([item.name, published.find((event) => event.type === item.type)?.data]).toEqual([
+      item.name,
+      expect.objectContaining({ metadata: expect.objectContaining({ places: [place] }) }),
+    ])
+  }
+})
+
 test("a scheduling hint is published live but never reaches a failure's metadata", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(publisher.publish(call))

@@ -107,5 +107,33 @@
       "metadata": { "arguments": { "channel": "#ops", "text": "deploy done" } }
     },
     "truth": { "arguments": "{\"channel\":\"#ops\",\"text\":\"deploy done\"}" }
+  },
+  {
+    "id": "MCP resource/read",
+    "tool": "read_mcp_resource",
+    "pinnedBy": "mcp.test.ts",
+    "input": { "server": "DECOY", "uri": "DECOY://record" },
+    "request": {
+      "action": "orbit_read_mcp_resource",
+      "resources": ["crm:record://customers/42"],
+      "metadata": { "server": "crm", "uri": "record://customers/42" }
+    },
+    "truth": {}
+  },
+  {
+    "id": "MCP resource/list",
+    "tool": "list_mcp_resources",
+    "pinnedBy": "mcp.test.ts",
+    "input": { "server": "DECOY" },
+    "request": { "action": "orbit_list_mcp_resources", "resources": ["crm", "wiki"], "metadata": {} },
+    "truth": {}
+  },
+  {
+    "id": "Skill/load",
+    "tool": "Skill",
+    "pinnedBy": "tool-skill.test.ts",
+    "input": { "id": "DECOY-skill" },
+    "request": { "action": "Skill", "resources": ["release-notes"], "metadata": {} },
+    "truth": {}
   }
 ]

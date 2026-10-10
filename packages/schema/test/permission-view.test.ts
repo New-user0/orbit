@@ -51,7 +51,7 @@ test("a fetch names its method and URL, from the metadata or from the resources"
   })
 })
 
-test("MCP arguments are text, and a long set is cut with its length said", () => {
+test("MCP arguments are text, and a long set is shown whole, never cut", () => {
   expect(
     PermissionView.of({ action: "slack_post", resources: ["*"], metadata: { arguments: { text: "hi" } } }).arguments,
   ).toBe('{"text":"hi"}')

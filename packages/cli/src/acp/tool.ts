@@ -212,14 +212,15 @@ export function completedToolUpdate(input: {
   const oldText = stringValue(declaredInput.old_string) ?? stringValue(declaredInput.oldString)
   const newText = stringValue(declaredInput.new_string) ?? stringValue(declaredInput.newString)
   // The place the server named, else the declared fields of the input: not a key the model added.
-  const path = input.places?.[0] ?? filePath(declaredFields(input.toolName, input.input))
+  // A call that has places but none to name draws no diff either: the input's spelling can be a link.
+  const path = input.places ? input.places[0] : filePath(declaredFields(input.toolName, input.input))
   const diff: ToolCallContent[] =
     oldText === undefined || newText === undefined || path === undefined
       ? []
       : [
           {
             type: "diff",
-            path: input.places?.[0] === undefined ? absolutePath(path, input.cwd) : resourcePath(path, input.cwd),
+            path: input.places ? resourcePath(path, input.cwd) : absolutePath(path, input.cwd),
             oldText,
             newText,
           },

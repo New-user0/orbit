@@ -16,12 +16,14 @@ import { FileLedger } from "@orbit/core/file-ledger"
 import { FileMutation } from "@orbit/core/file-mutation"
 import { Formatter } from "@orbit/core/formatter"
 import { Location } from "@orbit/core/location"
+import { Lsp } from "@orbit/core/lsp/index"
 import { Permission } from "@orbit/core/permission"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
 import { NotebookEditTool } from "@orbit/core/tool/plugin/notebook-edit"
+import { LspTool } from "@orbit/core/tool/plugin/lsp"
 import { PatchTool } from "@orbit/core/tool/plugin/patch"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { Global } from "@orbit/util/global"
@@ -44,6 +46,7 @@ const plugins = makeLocationNode({
       registerToolPlugin(WriteTool.Plugin),
       registerToolPlugin(PatchTool.Plugin),
       registerToolPlugin(NotebookEditTool.Plugin),
+      registerToolPlugin(LspTool.Plugin),
     ]),
   ),
   deps: [
@@ -55,6 +58,7 @@ const plugins = makeLocationNode({
     Formatter.node,
     Location.node,
     Permission.node,
+    Lsp.node,
   ],
 })
 
@@ -171,15 +175,17 @@ describe("approval values: the request carries what the tool acts on", () => {
                             ? {
                                 patchText: `*** Begin Patch\n*** Update File: ${spelled}\n*** Move to: ${moved}\n@@\n-alpha\n+beta\n*** End Patch`,
                               }
-                            : { file_path: spelled }
+                            : tool === "LSP"
+                          ? { action: "diagnostics", path: spelled }
+                          : { file_path: spelled }
                 const call = withAdded(input)
                 const assertions: Permission.AssertInput[] = []
                 // The places the tool reports as its first act, for a client to name when no rule asks about the call.
                 const reported: Tool.Metadata[] = []
                 const progress = (update: Tool.Metadata) => Effect.sync(() => void reported.push(update))
                 yield* withTools(project.path, assertions, trusted, (registry, access) =>
-                  tool === "Read" || tool === "LSP"
-                    ? // Read and LSP ask through the same door: the place is resolved once, for both.
+                  tool === "Read"
+                    ? // Read asks through the same door as LSP: the place is resolved once, for both.
                       access
                         .authorizeRead(spelled, { sessionID, ...toolIdentity, id: Tool.CallID.make("call-values"), progress })
                         .pipe(Effect.asVoid)
@@ -204,7 +210,7 @@ describe("approval values: the request carries what the tool acts on", () => {
                 expect(request).toBeDefined()
                 const places =
                   tool === "Patch (move)" ? [named("file.txt"), named("file-moved.txt")] : [named(path.basename(real))]
-                const same = (items: readonly string[]) => items.map((item) => FSUtil.resolve(item))
+                const same = (items: readonly string[]) => items.map((item) => path.resolve(item))
                 expect(same(request!.metadata?.paths as string[])).toEqual(same(places))
                 expect(JSON.stringify(request)).not.toContain(decoy)
                 // The tool reported the same places before it asked or acted (the last report is the whole of a patch).
@@ -332,6 +338,8 @@ const withTools = <A, E, R>(
         ),
         Formatter.node.replace(Layer.mock(Formatter.Service, { file: () => Effect.succeed(false) })),
         Permission.node.replace(permissionLayer({ assert: (input) => Effect.sync(() => void assertions.push(input)) })),
+        // The language server is not the subject: the LSP tool asks its question through the real file access.
+        Lsp.node.replace(Layer.mock(Lsp.Service, { diagnostics: () => Effect.succeed({}) })),
         ...(trusted ? [] : untrustedProjectNodes),
       ]),
     ),

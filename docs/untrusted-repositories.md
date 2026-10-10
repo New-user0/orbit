@@ -867,8 +867,11 @@ runs" is a permission.
   `metadata.path` of a Grep or Glob request; `metadata.method` and `metadata.url` of a fetch; and
   `metadata.arguments` of an MCP call, so a call through Code Mode is approved with what it sends. A client draws only
   those, through `PermissionView.of`, and its own `rawInput` is the one place the model's keys appear, labelled as such.
-  A path from a tool's input is used only to show a call before any request exists (an ACP tool call that is not yet
-  asked about), through `FSUtil.resolveFrom` as the tools resolve it, and from the fields the tool declares.
+  A path from a tool's input is used only for a call that has recorded no place and is not being replayed, through
+  `FSUtil.resolveFrom` as the tools resolve it, and from the fields the tool declares. A pending call is sent with an
+  empty input, and a replayed call names the places its record holds and none otherwise.
+  An approval for a fetch shows the URL that the rules matched and the fetch connects to (no credentials, an ASCII host),
+  not the spelling the model chose, and a request for a resource or a skill lists what it names.
   `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP and `packages/tui/test/util/path-format.test.ts`
   the terminal interface's and Mini's.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
@@ -1701,11 +1704,12 @@ fixes it or asks.
   the mark of Orbit's own folder allows in every built-in agent, Explore among them") builds the agents through the
   real `orbit.agent` plugin with an editor that does not copy and fails when Explore copies its rules. The copying
   `agentHost` of the test fixtures does not keep the mark.
-- **Parts of a pending ACP tool call still come from its input.** The approval and the updates after it name the places the
-  server put on the request or that the tool reported in its progress. The pending call, sent while the model is still
-  writing its input, shows the place from the fields the tool declares, and the running update that follows names none
-  until the tool reports one. The finished call's own diff is still built from the input's `old_string` and `new_string` (not an
-  approval), at the reported place.
+- **An ACP tool call's diff still comes from its input's text.** The approval and the updates after it name the places
+  the server put on the request or that the tool reported in its progress, and the settled record keeps those places
+  (`places` in the metadata of a completed or failed call), so a replay on `session/load` names them too and names none
+  for a call recorded without them. The pending call is sent with an empty input and names no place. The finished call's
+  own diff is still built from the input's `old_string` and `new_string` (not an approval), at the recorded place, and
+  not drawn at all when the call has no place.
 
 ## Review checklist
 

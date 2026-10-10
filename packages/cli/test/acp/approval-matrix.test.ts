@@ -4,6 +4,7 @@
 // pinned by their own core tests. Each goes through the real ACP translation over the wire. The approval shows the
 // request's places, files, method, URL and arguments and no decoy outside the labelled raw input, and the call's later
 // updates name the place the server resolved (class 8, class 14).
+import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "../fixture/tmpdir"
@@ -52,6 +53,17 @@ const world = {
   project: dir.path.replaceAll("\\", "/"),
   outside: path.join(dir.path, "..", "approval-matrix-outside").replaceAll("\\", "/"),
 }
+// The input's own spelling of the file, when it names another place than the request does (a link, a spelling that
+// leads elsewhere): read lexically against the project. Nothing drawn outside the raw input may contain it.
+const slashed = (value: string) => value.replaceAll("\\", "/").toLowerCase()
+const misleading = (row: Row) => {
+  const raw = [row.input.file_path, row.input.notebook_path, row.input.path].find(
+    (item): item is string => typeof item === "string" && !item.includes("DECOY"),
+  )
+  if (raw === undefined) return undefined
+  const lexical = slashed(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(world.project, raw))
+  return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
+}
 const same = (items: ReadonlyArray<{ path: string }> | null | undefined) =>
   (items ?? []).map((item) => path.resolve(item.path))
 
@@ -85,6 +97,8 @@ describe("acp approvals show what the request carries", () => {
       // The raw input is the one place the model's own keys may appear, labelled as such.
       const drawn = JSON.stringify({ ...call, rawInput: undefined })
       expect(drawn).not.toContain("DECOY")
+      const own = misleading(row)
+      if (own !== undefined) expect(drawn).not.toContain(own)
 
       const places = row.truth.places ?? (row.truth.folder ? [row.truth.folder] : [])
       if (places.length > 0 || row.truth.folder)
@@ -132,6 +146,7 @@ describe("acp approvals show what the request carries", () => {
         // from its input, so a key added to it shows nothing.
         const drawn = { ...update, rawInput: undefined, content: row.tool === "Edit" ? undefined : update.content }
         expect(JSON.stringify(drawn)).not.toContain("DECOY")
+        if (own !== undefined) expect(JSON.stringify(drawn)).not.toContain(own)
         if (places.length > 0) expect(same(update.locations)).toEqual(places.map((item) => path.resolve(item)))
       }
     })

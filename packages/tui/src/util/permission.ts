@@ -180,7 +180,12 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   return {
     icon: "⚙",
     title: `Call tool ${source.action}`,
-    lines: [`Tool: ${source.action}`, ...(view.arguments ? [`Arguments: ${view.arguments}`] : [])],
+    // What the request is about: the MCP resource or server an MCP resource tool reads, the skill a Skill call loads.
+    lines: [
+      `Tool: ${source.action}`,
+      ...resources.filter((item) => item !== "*").map((item) => `Resource: ${item}`),
+      ...(view.arguments ? [`Arguments: ${view.arguments}`] : []),
+    ],
   }
 }
 

@@ -496,15 +496,14 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
       }
       continue
     }
+    // As live, the pending call carries no input and names no place. The updates name the places the tool recorded
+    // when it resolved them, and none when it recorded none: the input's spelling of a path can be a link that leads
+    // somewhere else.
     yield {
       sessionUpdate: "tool_call",
-      ...pendingToolCall({
-        toolCallId: part.id,
-        toolName: part.name,
-        state: { input: part.state.status === "streaming" ? {} : part.state.input },
-        cwd,
-      }),
+      ...pendingToolCall({ toolCallId: part.id, toolName: part.name, state: { input: {} }, cwd }),
     }
+    const places = part.state.status === "streaming" ? [] : recordedPlaces(part.state.metadata)
     switch (part.state.status) {
       case "completed":
         yield {
@@ -516,13 +515,14 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
             metadata: part.state.metadata,
             content: part.state.content,
             cwd,
+            places,
           }),
         }
         break
       case "running":
         yield {
           sessionUpdate: "tool_call_update",
-          ...runningToolUpdate({ toolCallId: part.id, toolName: part.name, state: { input: part.state.input }, cwd }),
+          ...runningToolUpdate({ toolCallId: part.id, toolName: part.name, state: { input: part.state.input }, cwd, places }),
         }
         break
       case "error":
@@ -536,6 +536,7 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
             content: part.state.content,
             error: part.state.error.message,
             cwd,
+            places,
           }),
         }
         break
@@ -543,6 +544,11 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
         break
     }
   }
+}
+
+function recordedPlaces(metadata: Readonly<Record<string, unknown>> | undefined) {
+  const recorded = metadata?.places
+  return Array.isArray(recorded) && recorded.every((item) => typeof item === "string") ? (recorded as string[]) : []
 }
 
 function newTool(sessionID: string, id: string, name = "tool"): Tool {

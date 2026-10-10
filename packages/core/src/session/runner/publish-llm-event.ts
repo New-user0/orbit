@@ -88,12 +88,20 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     settled: boolean
     providerExecuted: boolean
     progress?: Tool.Metadata
+    /** The places the tool reported it resolved. Later progress replaces the snapshot, so they are kept apart. */
+    places?: ReadonlyArray<string>
   }
   const tools = new Map<string, ToolState>()
-  const failureSnapshot = (tool: { readonly progress?: Tool.Metadata }, metadata?: Tool.Metadata) => {
-    if (tool.progress === undefined) return metadata === undefined ? {} : { metadata }
-    if (metadata === undefined) return { metadata: tool.progress }
-    return { metadata: { ...tool.progress, ...metadata } }
+  // The settled record names the places the tool acted on, so a client that replays the call later names them too
+  // instead of the spelling of the call's input, which can be a link that leads somewhere else.
+  const failureSnapshot = (
+    tool: { readonly progress?: Tool.Metadata; readonly places?: ReadonlyArray<string> },
+    metadata?: Tool.Metadata,
+  ) => {
+    const merged =
+      tool.progress === undefined && metadata === undefined ? undefined : { ...tool.progress, ...metadata }
+    if (tool.places === undefined) return merged === undefined ? {} : { metadata: merged }
+    return { metadata: { ...merged, places: tool.places } }
   }
   const assistantMessageID = input.assistantMessageID
   let stepStarted = false
@@ -582,6 +590,8 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
     const tool = tools.get(id)
     if (!tool?.called || tool.settled) return yield* Effect.die(new Error(`Tool progress outside running call: ${id}`))
     tool.progress = update
+    if (Array.isArray(update.places) && update.places.every((item) => typeof item === "string"))
+      tool.places = update.places as string[]
     yield* bus.publish(SessionEvent.Tool.Progress, {
       sessionID: input.sessionID,
       assistantMessageID,
@@ -615,7 +625,11 @@ export const createLLMEventPublisher = (bus: Pick<Bus.Interface, "publish">, inp
       assistantMessageID,
       id,
       content,
-      ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+      ...(tool.places === undefined
+        ? result.metadata === undefined
+          ? {}
+          : { metadata: result.metadata }
+        : { metadata: { ...result.metadata, places: tool.places } }),
       executed: tool.providerExecuted,
     })
   })

@@ -55,7 +55,7 @@ for (const row of rows)
     for (const file of (row.request.metadata?.files ?? []) as { from?: string }[])
       if (file.from) expect(shown).toContain(file.from)
     // What a rule matches on a command or a search is on the card, beside the folder: the command is what a person approves.
-    if (["Bash", "PowerShell", "Glob", "Grep"].includes(row.tool))
+    if (["Bash", "PowerShell", "Glob", "Grep", "read_mcp_resource", "list_mcp_resources", "Skill"].includes(row.tool))
       for (const resource of row.request.resources.filter((item) => item !== "*"))
         expect(shown).toContain(JSON.stringify(resource).slice(1, -1))
     // The diff is the request's patch of each file, and the lines drawn for it are that patch's changed lines.
@@ -87,6 +87,24 @@ test("the card writes out the characters that reorder or hide text", () => {
   expect(JSON.stringify(card)).not.toContain("‮")
   expect(JSON.stringify(card)).not.toContain("\u001b")
   expect(card.lines.join("\n")).toContain("\\u{202e}")
+})
+
+test("the card writes out those characters in the changed lines of a diff too", () => {
+  const card = approvalCard(
+    permissionItem({
+      id: "per_diff",
+      sessionID: "ses_diff",
+      action: "edit",
+      resources: ["a.ts"],
+      metadata: {
+        files: [{ file: "a.ts", place: "/p/a.ts", patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+safe‮gpj.exe\u001b[2K\n" }],
+      },
+    }),
+  )
+  expect(card.changes.length).toBe(2)
+  expect(JSON.stringify(card.changes)).not.toContain("‮")
+  expect(JSON.stringify(card.changes)).not.toContain("\u001b")
+  expect(card.changes[1]?.text).toContain("\\u{202e}")
 })
 
 test("the card shows every argument of an MCP call, including the ones after a long value", () => {

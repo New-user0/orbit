@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import type { SessionMessageInfo } from "@orbit/client/promise"
 import { assistantMessage, makeSession, startWire } from "./wire-fixture"
 
@@ -47,7 +48,7 @@ describe("acp session replay over the wire", () => {
       toolCallId: "call_running",
       status: "in_progress",
       title: "pwd",
-      locations: [{ path: "/workspace" }],
+      locations: [],
     })
     expect(updates[10]?.update).toMatchObject({
       toolCallId: "call_failed",
@@ -100,6 +101,61 @@ describe("acp session replay over the wire", () => {
       ["call_after", "tool_call_update"],
     ])
   })
+})
+
+// A replayed call names the places the tool recorded when it resolved them, never the input's own spelling of a path:
+// `cfg/notes.md` can be a link to a folder outside the project. With no place recorded (a call from before the places
+// were kept, or a tool that never resolved one) a replayed update names none and draws no diff. Class 4, 8 and 12.
+describe("acp session replay names the recorded places", () => {
+  const real = path.resolve("/outside/config/notes.md")
+  const link = path.resolve("/workspace/cfg/notes.md")
+  const input = { file_path: "cfg/notes.md", old_string: "a", new_string: "b", content: "b" }
+  const states = {
+    completed: { status: "completed", content: [{ type: "text", text: "ok" }] },
+    running: { status: "running" },
+    error: { status: "error", error: { type: "tool.error", message: "no" } },
+  }
+  for (const tool of ["write", "edit", "read", "notebook_edit", "glob", "grep", "lsp", "patch"])
+    for (const [name, state] of Object.entries(states))
+      for (const recorded of [true, false])
+        test(`${tool} ${name} with ${recorded ? "the recorded place" : "no recorded place"}`, async () => {
+          await using acp = await startWire()
+          acp.server.sessions.set("ses_places", makeSession("ses_places"))
+          acp.server.messages.set("ses_places", [
+            {
+              ...assistantMessage("msg_places"),
+              content: [
+                {
+                  type: "tool",
+                  id: "call_places",
+                  name: tool,
+                  time: { created: 1, completed: 2 },
+                  state: { ...state, input, metadata: recorded ? { places: [real] } : {} },
+                },
+              ],
+            },
+          ] as unknown as SessionMessageInfo[])
+          await acp.initialize()
+          await acp.request("session/load", { cwd: "/workspace", sessionId: "ses_places", mcpServers: [] })
+
+          const updates = acp.updates.flatMap((item) =>
+            item.update.sessionUpdate === "tool_call" || item.update.sessionUpdate === "tool_call_update"
+              ? [item.update]
+              : [],
+          )
+          expect(updates.length).toBe(2)
+          // Everything a person is shown outside the raw input: the places and the diff's file.
+          const shown = updates.flatMap((update) => [
+            ...(update.locations ?? []).map((item) => item.path),
+            ...(update.content ?? []).flatMap((item) => (item.type === "diff" ? [item.path] : [])),
+          ])
+          expect(shown).not.toContain(link)
+          expect(shown.every((item) => item === real)).toBe(true)
+          if (!recorded) expect(shown).toEqual([])
+          // The pending call is sent as it is live: no input and no place.
+          expect(updates[0]).toMatchObject({ status: "pending", rawInput: {} })
+          expect(updates[0]?.locations ?? []).toEqual([])
+        })
 })
 
 function replayToolMessage(id: string, state: Record<string, unknown>) {

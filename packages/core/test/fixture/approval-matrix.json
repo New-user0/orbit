@@ -801,10 +801,10 @@
     "id": "LSP/absolute path outside/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -818,7 +818,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "{outside}/file.txt"
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -842,10 +843,10 @@
     "id": "LSP/absolute path outside/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -859,7 +860,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "{outside}/file.txt"
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -883,10 +885,10 @@
     "id": "LSP/absolute path/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -900,7 +902,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "{project}/src/file.txt"
+      "action": "diagnostics",
+      "path": "{project}/src/file.txt"
     },
     "request": {
       "action": "Read",
@@ -924,10 +927,10 @@
     "id": "LSP/absolute path/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -941,7 +944,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "{project}/src/file.txt"
+      "action": "diagnostics",
+      "path": "{project}/src/file.txt"
     },
     "request": {
       "action": "Read",
@@ -965,10 +969,10 @@
     "id": "LSP/dot-dot path/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -982,7 +986,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "../{outsideName}/file.txt"
+      "action": "diagnostics",
+      "path": "../{outsideName}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1006,10 +1011,10 @@
     "id": "LSP/dot-dot path/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1023,7 +1028,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "../{outsideName}/file.txt"
+      "action": "diagnostics",
+      "path": "../{outsideName}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1047,10 +1053,10 @@
     "id": "LSP/git bash drive path/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1064,7 +1070,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "{outside}/file.txt"
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1088,10 +1095,10 @@
     "id": "LSP/git bash drive path/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1105,7 +1112,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "{outside}/file.txt"
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1129,10 +1137,10 @@
     "id": "LSP/link/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1146,7 +1154,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "linked/file.txt"
+      "action": "diagnostics",
+      "path": "linked/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1170,10 +1179,10 @@
     "id": "LSP/link/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1187,7 +1196,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "linked/file.txt"
+      "action": "diagnostics",
+      "path": "linked/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1211,10 +1221,10 @@
     "id": "LSP/relative path/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1228,7 +1238,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "src/file.txt"
+      "action": "diagnostics",
+      "path": "src/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1252,10 +1263,10 @@
     "id": "LSP/relative path/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1269,7 +1280,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "src/file.txt"
+      "action": "diagnostics",
+      "path": "src/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1293,10 +1305,10 @@
     "id": "LSP/tilde path/trusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1310,7 +1322,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "~/tmp/{outsideName}/file.txt"
+      "action": "diagnostics",
+      "path": "~/tmp/{outsideName}/file.txt"
     },
     "request": {
       "action": "Read",
@@ -1334,10 +1347,10 @@
     "id": "LSP/tilde path/untrusted",
     "tool": "LSP",
     "input": {
-      "path": "DECOY-MODEL-ADDED/path.txt",
       "filePath": "DECOY-MODEL-ADDED/filePath.txt",
       "filepath": "DECOY-MODEL-ADDED/filepath.txt",
       "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
       "cwd": "DECOY-MODEL-ADDED/cwd",
       "workdir": "DECOY-MODEL-ADDED/workdir",
       "paths": [
@@ -1351,7 +1364,8 @@
       ],
       "url": "https://decoy-model-added.example/",
       "method": "POST",
-      "file_path": "~/tmp/{outsideName}/file.txt"
+      "action": "diagnostics",
+      "path": "~/tmp/{outsideName}/file.txt"
     },
     "request": {
       "action": "Read",
