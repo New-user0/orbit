@@ -23,8 +23,7 @@ import { Config } from "./config.js"
 import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
 import { ShellSandbox } from "./shell/sandbox.js"
-import { which } from "./util/which.js"
-import { release, tmpdir } from "node:os"
+import { tmpdir } from "node:os"
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.NotFoundError", {
   id: Shell.ID,
@@ -287,17 +286,12 @@ const layer = () =>
         const id = Shell.ID.ascending()
         const args = ShellSelect.args(invocation.shell, invocation.command)
         const sandbox = Config.latest(yield* config.entries(), "sandbox")
-        const sandboxTool = ShellSandbox.TOOL[process.platform]
-        const sandboxed = ShellSandbox.wrap({
-          platform: process.platform,
-          release: release(),
-          env: process.env,
+        const sandboxed = ShellSandbox.launch({
           settings: sandbox ?? {},
           shell: invocation.shell,
           args,
           cwd: invocation.cwd,
           writable: [location.project.directory, invocation.cwd, tmpdir()],
-          tool: sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined,
         })
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")

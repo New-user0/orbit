@@ -20,7 +20,6 @@ import { SubagentJob } from "../../session/subagent-job.js"
 import { ShellParse } from "../../shell/parse.js"
 import { ShellSandbox } from "../../shell/sandbox.js"
 import { ShellSelect } from "../../shell/select.js"
-import { which } from "../../util/which.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { ConfigTrust } from "../trust.js"
 import { CommandFile } from "./command-file.js"
@@ -253,8 +252,6 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
     const shell = yield* services.shell.resolve({ priority: "compat" })
     const entries = yield* services.config.entries()
     const sandbox = Config.latest(entries, "sandbox")
-    const sandboxTool = ShellSandbox.TOOL[process.platform]
-    const tool = sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined
     const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
     const cwd = services.location.directory
     const commands = yield* Effect.forEach(sources, (source) =>
@@ -274,19 +271,17 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
         })
         const args = ShellSelect.args(shell, source)
-        // Mirrors the sandbox launch in Shell.create: change the two together until they share one helper.
-        const sandboxed = ShellSandbox.wrap({
-          platform: process.platform,
+        const sandboxed = ShellSandbox.launch({
           settings: sandbox ?? {},
           shell,
           args,
           cwd,
           writable: [services.location.project.directory, cwd, tmpdir()],
-          tool,
         })
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")
           return yield* Effect.fail(new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`))
+        if (sandboxed.type === "unsupported") return yield* Effect.fail(new Error(sandboxed.reason))
         const launch = sandboxed.type === "wrapped" ? sandboxed : { command: shell, args }
         return ChildProcess.make(launch.command, launch.args, { cwd, stdin: "ignore" })
       }).pipe(

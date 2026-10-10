@@ -2,6 +2,8 @@ export * as ShellSandbox from "./sandbox.js"
 
 import type { ConfigSandbox } from "@orbit/schema/config/sandbox"
 import { SandboxPlatform } from "@orbit/util/sandbox-platform"
+import { release } from "node:os"
+import { which } from "../util/which.js"
 
 /**
  * Wraps a shell command in the operating system's sandbox so it can read the whole filesystem but write only where it
@@ -84,3 +86,25 @@ function profile(writable: readonly string[], network: boolean) {
 }
 
 const quote = (value: string) => JSON.stringify(value)
+
+/** The machine commands run on. Mutable only so a test can stand in for another platform, as it does for `TOOL`. */
+export const host: { platform: NodeJS.Platform; release: string; env: Readonly<Record<string, string | undefined>> } = {
+  platform: process.platform,
+  release: release(),
+  env: process.env,
+}
+
+/**
+ * The one sandbox launch both shell entry points (the shell tool and command interpolation spans) go through, so a
+ * platform rule such as the WSL1 refusal cannot be added to one and missed in the other.
+ */
+export function launch(input: Pick<Input, "settings" | "shell" | "args" | "cwd" | "writable">): Result {
+  const tool = TOOL[host.platform]
+  return wrap({
+    ...input,
+    platform: host.platform,
+    release: host.release,
+    env: host.env,
+    tool: input.settings.enabled && tool ? (which(tool) ?? undefined) : undefined,
+  })
+}

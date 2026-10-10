@@ -1816,7 +1816,9 @@ permission request.
 ## WSL1 cannot run sandboxed shell commands
 
 With `sandbox.enabled` set, Orbit now recognises Windows Subsystem for Linux from the kernel release. WSL2 uses the same
-bubblewrap sandbox as Linux, though a sandboxed command that calls a Windows `.exe` file may fail. WSL1 has no support
+bubblewrap sandbox as Linux, but that sandbox does not confine Windows programs: a sandboxed command that runs a Windows
+`.exe` file (`cmd.exe`, `powershell.exe`) through WSL interop runs it on the Windows host, outside the write limits and
+with full network access. Closing that is a follow-up. WSL1 has no support
 for the namespaces bubblewrap needs, so a shell command there fails with a message saying so, the same way a missing
 `bwrap` already does, instead of running unsandboxed.
 
