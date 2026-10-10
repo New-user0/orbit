@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util"
 import { parse, type ParseError } from "jsonc-parser"
 import { Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
 import { Info } from "@orbit/schema/config"
+import { ConfigExperimental } from "@orbit/schema/config/experimental"
 import { ConfigManaged } from "@orbit/schema/config/managed"
 import { FSUtil } from "@orbit/util/fs-util"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
@@ -112,8 +113,17 @@ export const read = Effect.fn("ManagedSettings.read")(function* (directory: stri
         message: "skipped a file that is not named *.json",
       }),
     )
-  const loaded = yield* Effect.forEach([path.join(directory, "managed-settings.json"), ...dropins], (file) =>
-    loadFile(fs, file),
+  // A name the folder lists is there even when its target is not (a broken link), so reading it as absent is a loss.
+  const baseListed = yield* fs.readDirectoryEntries(directory).pipe(
+    Effect.map((entries) => entries.some((entry) => entry.name === "managed-settings.json")),
+    Effect.catch(() => Effect.succeed(false)),
+  )
+  const loaded = yield* Effect.forEach(
+    [
+      { file: path.join(directory, "managed-settings.json"), listed: baseListed },
+      ...dropins.map((file) => ({ file, listed: true })),
+    ],
+    (item) => loadFile(fs, item.file, item.listed),
   )
   const rest = loaded.reduce<unknown>((merged, file) => (file.rest ? merge(merged, file.rest) : merged), {})
   const restrictions = decodeRestrictions(
@@ -132,8 +142,8 @@ export const read = Effect.fn("ManagedSettings.read")(function* (directory: stri
   } satisfies Snapshot
 })
 
-const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, file: string) {
-  const source = file
+const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, source: string, listed: boolean) {
+  const file = source
   const problem = (kind: Diagnostic["kind"], at: string, message: string): Diagnostic => ({
     source,
     path: at,
@@ -144,7 +154,7 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, file: string
   // restrictions are lost.
   const text = yield* fs
     .readFileString(file)
-    .pipe(Effect.catch((error) => Effect.succeed(isNotFound(error) ? undefined : null)))
+    .pipe(Effect.catch((error) => Effect.succeed(isNotFound(error) && !listed ? undefined : null)))
   if (text === undefined) return { source, present: false, diagnostics: [] }
   if (text === null)
     return { source, present: true, diagnostics: [problem("invalid", "$", "skipped a file that cannot be read")] }
@@ -168,13 +178,20 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, file: string
   const { managed, ...others } = input as Record<string, unknown>
   const restrictions = cleanRestrictions(managed)
   const normalized = ConfigNormalize.normalize(others)
-  const normalizedProblems = normalized.diagnostics.map((diagnostic) =>
-    problem(
-      diagnostic.kind === "unsupported" ? "unsupported" : "invalid",
-      `$.${diagnostic.path.join(".")}`,
-      diagnostic.message,
-    ),
-  )
+  const reported: Problem[] = normalized.diagnostics.map((diagnostic) => ({
+    kind: diagnostic.kind === "unsupported" ? "unsupported" : "invalid",
+    path: `$.${diagnostic.path.join(".")}`,
+    message: diagnostic.message,
+  }))
+  // The normalizer ignores a key it does not know, so a typo such as `permisions` would turn an organization's deny
+  // off without a word. A key it already reported is not reported twice.
+  const normalizedProblems = [
+    ...reported,
+    ...[
+      ...unknownKeys(others, topLevel, "$"),
+      ...(isRecord(others.experimental) ? unknownKeys(others.experimental, experimentalKeys, "$.experimental") : []),
+    ].filter((item) => !reported.some((known) => known.path === item.path)),
+  ].map((item) => problem(item.kind, item.path, item.message))
   return {
     source,
     present: true,
@@ -188,6 +205,20 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, file: string
     ],
   } satisfies Loaded & { source: string }
 })
+
+// The keys of a file: every config field, plus the legacy spellings the normalizer migrates.
+const topLevel: readonly string[] = [
+  ...Object.keys(Info.fields),
+  ...["agent", "attachment", "autoshare", "autoupdate", "command", "mode", "permission", "plugin", "provider"],
+  ...["reference", "small_model", "snapshot", "tools", "enabled_providers", "disabled_providers"],
+]
+const experimentalKeys: readonly string[] = Object.keys(ConfigExperimental.Info.fields)
+
+function unknownKeys(value: Record<string, unknown>, known: readonly string[], at: string): Problem[] {
+  return Object.keys(value)
+    .filter((key) => !known.includes(key))
+    .map((key) => ({ kind: "unsupported", path: `${at}.${key}`, message: "ignored an unknown key" }))
+}
 
 type Problem = { readonly kind: Diagnostic["kind"]; readonly path: string; readonly message: string }
 
@@ -249,17 +280,21 @@ function cleanRestrictions(raw: unknown) {
   return { value, problems }
 }
 
-// Objects merge by key, lists concatenate (a list of strings loses its repeats) and any other value takes the later one.
-function merge(base: unknown, next: unknown): unknown {
+// Objects merge by key, lists of independent entries concatenate (a list of strings loses its repeats) and any other
+// value takes the later one. A `command` is one argument list, and so is a tiered `cost`: joining two files' lists
+// would run a command that no file contains.
+const wholeValues = ["command", "cost"]
+
+function merge(base: unknown, next: unknown, key?: string): unknown {
   if (next === undefined) return base
-  if (Array.isArray(base) && Array.isArray(next)) {
+  if (Array.isArray(base) && Array.isArray(next) && !wholeValues.includes(key ?? "")) {
     const all = [...base, ...next]
     return all.every((item) => typeof item === "string") ? [...new Set(all)] : all
   }
   // A model selection is one value: a later file that names a model does not inherit the variant of an earlier one.
   if (isRecord(base) && isRecord(next) && !isSelection(next))
     return Object.fromEntries(
-      [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [key, merge(base[key], next[key])]),
+      [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [key, merge(base[key], next[key], key)]),
     )
   return next
 }

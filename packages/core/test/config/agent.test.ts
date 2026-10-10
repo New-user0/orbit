@@ -259,7 +259,6 @@ permissions:
   it.effect("leaves the permission rules of a managed document out of every agent", () =>
     Effect.gen(function* () {
       const agents = yield* Agent.Service
-      const global = yield* Global.Service
       yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) }))
 
       const entries = [
@@ -298,7 +297,6 @@ permissions:
         expect(agent.permissions).not.toContainEqual({ action: "shell", resource: "rm *", effect: "deny" })
         expect(agent.permissions).not.toContainEqual({ action: "webfetch", resource: "*", effect: "deny" })
       }
-      expect(global).toBeDefined()
     }),
   )
 

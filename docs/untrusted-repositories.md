@@ -111,8 +111,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   with a diagnostic. An empty or relative override is refused with one log line and the per-OS default applies
   (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes
   on its own (class 7): a file or folder that exists but cannot be read or listed, an unknown key in `managed` or its
-  sections, an unresolvable variable and a drop-in not named `*.json` are reported, never dropped silently, and a later
-  file's model replaces an earlier one as a whole. Proof: `core/test/managed-settings.test.ts`,
+  sections, an unknown top-level or `experimental` key, a listed file that is a link to nothing, an unresolvable
+  variable and a drop-in named `*.jsonc` or with `.json` in another case are reported, never dropped silently (other
+  names such as `10.yaml` or `10.json.bak` and sub-folders are ignored), and a later file's model, or its `command` or
+  `cost` list, replaces an earlier one as a whole. A relative `ProgramData` falls back to `C:\ProgramData`. Proof: `core/test/managed-settings.test.ts`,
   `cli/test/doctor-managed.test.ts`, `util/test/managed-path.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.

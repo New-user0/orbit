@@ -448,7 +448,8 @@ describe("managed key outside managed settings", () => {
         "project/.keep": "",
       })
       yield* Effect.gen(function* () {
-        const entries = yield* (yield* Config.Service).entries()
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
         const policy = yield* ManagedPolicy.Service
 
         expect(Config.latest(entries, "shell")).toBe("zsh")
@@ -491,7 +492,8 @@ describe("ManagedSettings service", () => {
         "managed/managed-settings.json": { shell: "managed" },
       })
       yield* Effect.gen(function* () {
-        const entries = yield* (yield* Config.Service).entries()
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
         const documents = entries.filter((entry): entry is Document => entry.type === "document")
 
         expect(documents.map((document) => document.scope)).toEqual(["user", "project", "managed"])
@@ -501,7 +503,8 @@ describe("ManagedSettings service", () => {
 
       yield* fs_rm(path.join(tmp.path, "managed"))
       yield* Effect.gen(function* () {
-        const entries = yield* (yield* Config.Service).entries()
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
         expect(entries.some((entry) => entry.type === "document" && entry.scope === "managed")).toBe(false)
       }).pipe(Effect.provide(layers(tmp.path)))
     }),
@@ -587,9 +590,171 @@ describe("ManagedSettings service", () => {
       yield* write(tmp.path, { "project/.keep": "" })
       yield* Effect.gen(function* () {
         yield* Config.Service
-        const subscriptions = yield* (yield* Watcher.Test).subscriptions()
+        const watcher = yield* Watcher.Test
+        const subscriptions = yield* watcher.subscriptions()
 
         expect(subscriptions.filter((item) => item.path.startsWith(path.join(tmp.path, "managed")))).toEqual([])
+      }).pipe(Effect.provide(layers(tmp.path)))
+    }),
+  )
+})
+
+describe("ManagedSettings.read command lists", () => {
+  // A command is one argument list: a later file replaces it, and never joins the argument lists of two files.
+  const rows = [
+    {
+      name: "formatter.fmt.command",
+      files: [
+        { formatter: { fmt: { command: ["npx", "-y", "fmt-a", "$FILE"] } } },
+        { formatter: { fmt: { command: ["npx", "-y", "fmt-b", "$FILE"] } } },
+      ],
+      pick: (info: any) => info.formatter?.fmt?.command,
+      expected: ["npx", "-y", "fmt-b", "$FILE"],
+    },
+    {
+      name: "lsp.l.command",
+      files: [
+        { lsp: { l: { command: ["npx", "-y", "ls-a"], extensions: [".a"] } } },
+        { lsp: { l: { command: ["npx", "-y", "ls-b"], extensions: [".b"] } } },
+      ],
+      pick: (info: any) => info.lsp?.l?.command,
+      expected: ["npx", "-y", "ls-b"],
+    },
+    {
+      name: "mcp.servers.s.command",
+      files: [
+        { mcp: { servers: { s: { type: "local", command: ["node", "a.js"] } } } },
+        { mcp: { servers: { s: { type: "local", command: ["node", "b.js"] } } } },
+      ],
+      pick: (info: any) => info.mcp?.servers?.s?.command ?? info.mcp?.s?.command,
+      expected: ["node", "b.js"],
+    },
+  ]
+
+  rows.forEach((row) =>
+    it.live(`${row.name} comes from one file`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, {
+          "managed-settings.json": row.files[0],
+          "managed-settings.d/10.json": row.files[1],
+        })
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(row.pick(snapshot.info)).toEqual(row.expected)
+      }),
+    ),
+  )
+
+  it.live("still concatenates lists of independent entries", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { instructions: ["a.md"], sandbox: { write: ["/a"] } },
+        "managed-settings.d/10.json": { instructions: ["b.md"], sandbox: { write: ["/b"] } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.instructions).toEqual(["a.md", "b.md"])
+      expect(snapshot.info.sandbox?.write).toEqual(["/a", "/b"])
+    }),
+  )
+})
+
+describe("ManagedSettings.read unknown keys outside managed", () => {
+  const rows = [
+    { name: "a misspelled permissions", file: { permisions: [rule("deny", "rm *")], shell: "kept" }, at: "$.permisions" },
+    {
+      name: "a misspelled experimental.policies",
+      file: { experimental: { policy: [{ action: "provider.use", resource: "x", effect: "deny" }] } },
+      at: "$.experimental.policy",
+    },
+    { name: "an unknown top-level key", file: { shel: "zsh" }, at: "$.shel" },
+  ]
+
+  rows.forEach((row) =>
+    it.live(`reports ${row.name}`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, { "managed-settings.json": row.file })
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(snapshot.diagnostics).toEqual([
+          expect.objectContaining({ path: row.at, kind: "unsupported", message: "ignored an unknown key" }),
+        ])
+      }),
+    ),
+  )
+
+  it.live("adds no diagnostic for $schema, a migrated legacy key or a known experimental key", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": {
+          $schema: "https://example.invalid/schema.json",
+          autoshare: false,
+          disabled_providers: ["openai"],
+          experimental: { policies: [], subagent_depth: 2 },
+          shell: "zsh",
+        },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.diagnostics).toEqual([])
+      expect(snapshot.info.shell).toBe("zsh")
+    }),
+  )
+})
+
+describe("ManagedSettings.read broken links", () => {
+  const rows = [
+    { name: "a drop-in", link: "managed-settings.d/10-link.json", sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } } },
+    { name: "the base file", link: "managed-settings.json", sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } } },
+  ]
+
+  rows.forEach((row) =>
+    it.live(`reports ${row.name} that is a link to a missing file`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, row.sibling)
+        const created = yield* Effect.promise(() =>
+          fs
+            .symlink(path.join(tmp.path, "missing.json"), path.join(tmp.path, row.link))
+            .then(() => true)
+            // Windows without Developer Mode cannot make links; the row runs on Linux and with Developer Mode.
+            .catch(() => false),
+        )
+        if (!created) return
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(snapshot.diagnostics).toContainEqual(
+          expect.objectContaining({ source: path.join(tmp.path, row.link), path: "$", kind: "invalid" }),
+        )
+        expect(snapshot.info.shell).toBe("ok")
+      }),
+    ),
+  )
+})
+
+describe("ManagedSettings paths in a drop-in", () => {
+  it.live("resolve against the managed folder, not the drop-in folder", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "project/.keep": "",
+        "managed/managed-settings.d/10.json": { shell: "managed" },
+      })
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
+        const document = entries.find((entry): entry is Document => entry.type === "document" && entry.scope === "managed")
+
+        expect(document?.path).toBe(AbsolutePath.make(path.join(tmp.path, "managed", "managed-settings.json")))
       }).pipe(Effect.provide(layers(tmp.path)))
     }),
   )

@@ -10,6 +10,8 @@ describe("ManagedPath.directory", () => {
     ["win32", { ProgramData: "D:\\Data" }, "D:\\Data\\Orbit"],
     ["win32", {}, "C:\\ProgramData\\Orbit"],
     ["win32", { ProgramData: "" }, "C:\\ProgramData\\Orbit"],
+    ["win32", { ProgramData: "." }, "C:\\ProgramData\\Orbit"],
+    ["win32", { ProgramData: "data" }, "C:\\ProgramData\\Orbit"],
   ] as const)("%s %j resolves to %s", (platform, env, expected) => {
     expect(ManagedPath.directory(platform, env)).toBe(expected)
   })

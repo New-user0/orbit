@@ -267,7 +267,9 @@ An organization can now put settings where users cannot override them. Orbit rea
 `managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux, `/Library/Application Support/Orbit`
 on macOS and `%ProgramData%\Orbit` on Windows (`C:\ProgramData\Orbit` when that variable is unset).
 `ORBIT_MANAGED_DIR` points the server at another folder, and `orb debug paths managed` prints the one in use. Objects
-merge by key, arrays concatenate (a list of strings loses its repeats) and any other value takes the later file's. The
+merge by key, lists of independent entries (permissions, policies, instructions, plugins, restriction lists) concatenate
+and lose their repeats, and any other value, including a `command` argument list, takes the later file's. A relative
+path in a drop-in resolves against the managed folder, not `managed-settings.d`. The
 merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
 while the server runs. A `managed` block in these files holds restrictions (`organization`, `mcp`, `plugins`,
 `network` and the hook and permission switches); the key is ignored with a diagnostic in any other config file. Orbit
