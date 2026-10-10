@@ -120,6 +120,17 @@ describe("ConfigNormalize", () => {
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
+  test("keeps webfetch verbatim hosts and reports a malformed value without touching its siblings", () => {
+    expect(decoded({ webfetch: { verbatim_hosts: ["a.example", "*.b.example"] } }).webfetch?.verbatim_hosts).toEqual([
+      "a.example",
+      "*.b.example",
+    ])
+    const invalid = normalized({ webfetch: 7, share: "auto" })
+    expect(invalid.encoded.webfetch).toBeUndefined()
+    expect(invalid.encoded.share).toBe("auto")
+    expect(invalid.diagnostics.map((item) => item.path)).toContainEqual(["webfetch"])
+  })
+
   test("keeps output_token_cap", () => {
     expect(normalized({ output_token_cap: 8000 }).encoded.output_token_cap).toBe(8000)
   })

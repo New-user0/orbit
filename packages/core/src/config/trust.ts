@@ -7,6 +7,7 @@ import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
 import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import type { ConfigWarming } from "@orbit/schema/config/warming"
+import type { ConfigWebFetch } from "@orbit/schema/config/webfetch"
 import type { ConfigWebSearch } from "@orbit/schema/config/websearch"
 import type { Permission } from "@orbit/schema/permission"
 import { Trust } from "@orbit/schema/trust"
@@ -121,6 +122,13 @@ function webSearch(selection: ConfigWebSearch.Selection): Outcome<ConfigWebSearc
   return selection === false ? { value: selection, withheld: [] } : { value: undefined, withheld: ["network"] }
 }
 
+// A listed host's Markdown pages reach the model unanswered, so a repository cannot add one. An empty list only
+// tightens, and is kept.
+function webFetch(value: ConfigWebFetch.Info): Outcome<ConfigWebFetch.Info> {
+  if (!value.verbatim_hosts || value.verbatim_hosts.length === 0) return { value, withheld: [] }
+  return { value: undefined, withheld: ["settings"] }
+}
+
 // Keep-alive requests are generations that are paid for, and nothing bounds how often a repository could ask for one.
 // Only turning them off is kept, for the reason that applies to web search.
 function warming(selection: boolean | ConfigWarming.Info): Outcome<boolean | ConfigWarming.Info> {
@@ -220,6 +228,7 @@ export const classification = {
     instructions: filter(instructionPaths),
     references: withhold("settings"),
     websearch: filter(webSearch),
+    webfetch: filter(webFetch),
     plugins: withhold("plugins"),
     worktree: withhold("settings"),
     warming: filter(warming),

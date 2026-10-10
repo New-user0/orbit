@@ -7,7 +7,11 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { LayerNodePlatform } from "@orbit/util/effect/app-node-platform"
 import { Permission } from "@orbit/core/permission"
+import { Config } from "@orbit/core/config"
+import { Model } from "@orbit/core/model"
 import { Session } from "@orbit/core/session"
+import { SideQuery } from "@orbit/core/side-query"
+import { Document, Info } from "@orbit/schema/config"
 import { Tool } from "@orbit/core/tool"
 import { WebFetchTool } from "@orbit/core/tool/plugin/webfetch"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
@@ -35,24 +39,39 @@ const withLookup = Effect.gen(function* () {
 const webFetchToolNode = makeLocationNode({
   name: "test/webfetch-tool-plugin",
   layer: Layer.effectDiscard(withLookup.pipe(Effect.andThen(registerToolPlugin(WebFetchTool.Plugin)))),
-  deps: [Tool.node, Permission.node, LayerNodePlatform.httpClient],
+  deps: [Tool.node, Permission.node, LayerNodePlatform.httpClient, Config.node, SideQuery.node],
 })
 
-const prompts: string[] = []
-const answeringNode = makeLocationNode({
-  name: "test/webfetch-tool-plugin-answering",
-  layer: Layer.effectDiscard(
-    withLookup.pipe(
-      Effect.andThen(
-        registerToolPlugin(WebFetchTool.Plugin, {
-          generate: {
-            text: (input) => Effect.sync(() => (prompts.push(input.prompt), { text: "The answer is 42." })),
-          },
-        }),
+// The side query is the model boundary: it records what the tool sent and answers with the page itself unless a test
+// sets `reply`, so the tests of the fetch read the page from the result. The request SideQuery builds from this input
+// (small model, no transcript, no tools) is pinned in side-query.test.ts.
+const queries: SideQuery.TextInput[] = []
+type Reply = (input: SideQuery.TextInput) => Effect.Effect<string, SideQuery.Error>
+const pageOf = (input: SideQuery.TextInput) =>
+  input.prompt.slice(input.prompt.indexOf("<page>\n") + 7, input.prompt.indexOf("\n</page>\n"))
+const echo: Reply = (input) => Effect.succeed(pageOf(input))
+let reply: Reply = echo
+const sideQuery = Layer.succeed(
+  SideQuery.Service,
+  SideQuery.Service.of({
+    text: (input) =>
+      Effect.sync(() => queries.push(input)).pipe(
+        Effect.andThen(Effect.suspend(() => reply(input))),
+        Effect.map((text) => ({ text, model: Model.Ref.parse("test/small") })),
       ),
-    ),
-  ),
-  deps: [Tool.node, Permission.node, LayerNodePlatform.httpClient],
+    object: () => Effect.die("WebFetch asks for text"),
+  }),
+)
+// The hosts the configuration lists, read by the tool at each call.
+let verbatimHosts: string[] = []
+const configLayer = Layer.mock(Config.Service)({
+  entries: () =>
+    Effect.sync(() => [
+      new Document({
+        type: "document",
+        info: Schema.decodeUnknownSync(Info)({ webfetch: { verbatim_hosts: verbatimHosts } }),
+      }),
+    ]),
 })
 
 const allowLocal = Effect.gen(function* () {
@@ -106,6 +125,8 @@ const permission = permissionLayer({
 const toolLayer = (replacements: LayerNode.Replacements = []) =>
   AppNodeBuilder.build(LayerNode.group([Tool.node, webFetchToolNode]), [
     Permission.node.replace(permission),
+    Config.node.replace(configLayer),
+    SideQuery.node.replace(sideQuery),
     Image.node.replace(imagePassthrough),
     ...replacements,
   ])
@@ -114,6 +135,9 @@ const live = testEffect(toolLayer())
 
 const reset = () => {
   denyUrl = undefined
+  verbatimHosts = []
+  reply = echo
+  queries.length = 0
   slow = undefined
   requests.length = 0
   assertions.length = 0
@@ -129,17 +153,30 @@ const call = (input: typeof WebFetchTool.Input.Type, id = "call-webfetch") => ({
 })
 
 describe("WebFetchTool helpers", () => {
-  test("defaults format and rejects invalid timeout controls", () => {
+  test("requires a prompt, ignores a stale format and rejects invalid timeout controls", () => {
     const decode = Schema.decodeUnknownSync(WebFetchTool.Input)
-    expect(decode({ url: "https://example.com" })).toEqual({ url: "https://example.com", format: "markdown" })
-    expect(() => decode({ url: "https://example.com", timeout: 0 })).toThrow()
-    expect(() => decode({ url: "https://example.com", timeout: WebFetchTool.MAX_TIMEOUT_SECONDS + 1 })).toThrow()
+    expect(() => decode({ url: "https://example.com" })).toThrow(/prompt/)
+    expect(decode({ url: "https://example.com", prompt: "" })).toEqual({ url: "https://example.com", prompt: "" })
+    // A stale `format` from an older prompt or client is dropped at decode.
+    expect(decode({ url: "https://example.com", prompt: "q", format: "html" })).toEqual({
+      url: "https://example.com",
+      prompt: "q",
+    })
+    expect(() => decode({ url: "https://example.com", prompt: "q", timeout: 0 })).toThrow()
+    expect(() =>
+      decode({ url: "https://example.com", prompt: "q", timeout: WebFetchTool.MAX_TIMEOUT_SECONDS + 1 }),
+    ).toThrow()
   })
 
-  test("ports HTML text and markdown conversions without active content", () => {
+  test("describes a static, vendor-neutral tool that needs a prompt", () => {
+    expect(WebFetchTool.description).toContain("prompt")
+    expect(WebFetchTool.description).toContain("100,000 characters")
+    expect(WebFetchTool.description).not.toMatch(/\bformat\b/i)
+  })
+
+  test("ports HTML markdown conversion without active content", () => {
     const html =
       "<h1>Hello</h1><script>bad()</script><p>world <strong>wide</strong> <product-name>today</product-name></p><style>.bad {}</style>"
-    expect(WebFetchTool.extractTextFromHTML(html)).toBe("Helloworld wide today")
     expect(WebFetchTool.convertHTMLToMarkdown(html)).toBe("# Hello\n\nworld **wide** today")
   })
 
@@ -491,11 +528,11 @@ describe("WebFetchTool registration", () => {
       const upgraded = "https://example.com/public"
 
       expect((yield* toolDefinitions(registry)).map((tool) => tool.name)).toEqual(["WebFetch", "Execute"])
-      expect(yield* executeTool(registry, call({ url, format: "text", timeout: 4 }))).toEqual({
+      expect(yield* executeTool(registry, call({ url, prompt: "q", timeout: 4 }))).toEqual({
         status: "completed",
-        output: { url, contentType: "text/plain", format: "text", output: "hello" },
+        output: { url, contentType: "text/plain", output: "hello" },
         content: [{ type: "text", text: "hello" }],
-        metadata: { contentType: "text/plain" },
+        metadata: { contentType: "text/plain", answered: true, url: upgraded },
       })
       // The URL that is asked about is the one that is fetched.
       expect(assertions).toMatchObject([
@@ -505,7 +542,7 @@ describe("WebFetchTool registration", () => {
           resources: [upgraded],
           aliases: { [upgraded]: ["example.com"] },
           save: ["https://example.com/*"],
-          metadata: { url: upgraded, format: "text", timeout: 4, method: "GET" },
+          metadata: { url: upgraded, prompt: "q", timeout: 4, method: "GET" },
         },
       ])
       expect(requests).toMatchObject([
@@ -513,7 +550,7 @@ describe("WebFetchTool registration", () => {
           url: `https://${publicAddress}/public`,
           headers: {
             host: "example.com",
-            accept: "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1",
+            accept: "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1",
             "accept-language": "en-US,en;q=0.9",
             "user-agent": webFetchUserAgent,
           },
@@ -530,7 +567,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* Tool.Service
       const url = "http://localhost/private"
 
-      expect(yield* executeTool(registry, call({ url, format: "text" }))).toMatchObject({
+      expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toMatchObject({
         status: "completed",
         content: [{ type: "text", text: "hello" }],
       })
@@ -541,7 +578,7 @@ describe("WebFetchTool registration", () => {
           resources: [url],
           aliases: { [url]: ["localhost"] },
           save: ["http://localhost/*"],
-          metadata: { url, format: "text" },
+          metadata: { url, prompt: "q" },
         },
       ])
       // localhost is loopback whatever a resolver says, so it is never looked up and the request goes to the address.
@@ -557,7 +594,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* Tool.Service
       const url = "https://Example.com/a"
 
-      expect(yield* executeTool(registry, call({ url, format: "text" }))).toMatchObject({ status: "completed" })
+      expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toMatchObject({ status: "completed" })
       expect(assertions).toHaveLength(1)
       expect(assertions[0]).toMatchObject({
         sessionID,
@@ -566,7 +603,7 @@ describe("WebFetchTool registration", () => {
         aliases: { "https://example.com/a": ["example.com"] },
         save: ["https://example.com/*"],
         // A client shows the URL the rules matched, not the spelling the model chose.
-        metadata: { url: "https://example.com/a", format: "text", method: "GET" },
+        metadata: { url: "https://example.com/a", prompt: "q", method: "GET" },
       })
       // The request goes to the address that was checked, for the name in the URL.
       expect(requests.map((request) => request.url)).toEqual([`https://${publicAddress}/a`])
@@ -612,7 +649,7 @@ describe("WebFetchTool registration", () => {
         reset()
         yield* allowLocal
         const registry = yield* Tool.Service
-        yield* executeTool(registry, call({ url, format: "text" }))
+        yield* executeTool(registry, call({ url, prompt: "q" }))
 
         expect(assertions).toHaveLength(1)
         expect(assertions[0]).toMatchObject({
@@ -638,7 +675,7 @@ describe("WebFetchTool registration", () => {
         reset()
         const registry = yield* Tool.Service
 
-        expect(yield* executeTool(registry, call({ url, format: "text" }))).toEqual({
+        expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toEqual({
           status: "error",
           error: { type: "unknown", message: "URL host must not contain *" },
         })
@@ -675,7 +712,7 @@ describe("WebFetchTool registration", () => {
           const url = new URL("/redirect", server.url).toString()
           const target = new URL("/target", server.url).toString()
 
-          expect(yield* executeTool(registry, call({ url, format: "text" }))).toMatchObject({
+          expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toMatchObject({
             status: "completed",
             content: [{ type: "text", text: "redirected" }],
           })
@@ -687,7 +724,7 @@ describe("WebFetchTool registration", () => {
               resources: [url],
               aliases: { [url]: [new URL(url).hostname] },
               save: [`${new URL(url).origin}/*`],
-              metadata: { url, format: "text" },
+              metadata: { url, prompt: "q" },
             },
             {
               action: "WebFetch",
@@ -697,7 +734,7 @@ describe("WebFetchTool registration", () => {
           ])
           expect(received).toEqual(
             Array.from({ length: 2 }, () => ({
-              accept: "text/plain;q=1.0, text/markdown;q=0.9, text/html;q=0.8, */*;q=0.1",
+              accept: "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1",
               "accept-language": "en-US,en;q=0.9",
               "sec-fetch-mode": null,
               "user-agent": webFetchUserAgent,
@@ -714,7 +751,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* Tool.Service
 
       // toSessionError unwraps the "Unable to fetch <url>" ToolFailure to its cause message.
-      expect(yield* executeTool(registry, call({ url: "file:///etc/passwd", format: "text" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "file:///etc/passwd", prompt: "q" }))).toEqual({
         status: "error",
         error: { type: "unknown", message: "URL must use http:// or https://" },
       })
@@ -723,7 +760,7 @@ describe("WebFetchTool registration", () => {
     }),
   )
 
-  it.effect("converts HTML to requested markdown and text", () =>
+  it.effect("converts HTML to markdown", () =>
     Effect.gen(function* () {
       reset()
       respond = () =>
@@ -734,13 +771,9 @@ describe("WebFetchTool registration", () => {
         )
       const registry = yield* Tool.Service
 
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "markdown" }))).toMatchObject({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", prompt: "q" }))).toMatchObject({
         status: "completed",
         content: [{ type: "text", text: "# Hello\n\nworld" }],
-      })
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "text" }))).toMatchObject({
-        status: "completed",
-        content: [{ type: "text", text: "Helloworld" }],
       })
     }),
   )
@@ -757,7 +790,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* Tool.Service
       const url = "https://1.1.1.1/deep-html"
 
-      expect(yield* executeTool(registry, call({ url, format: "markdown" }))).toMatchObject({
+      expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toMatchObject({
         status: "completed",
         content: [{ type: "text", text: "content" }],
       })
@@ -774,7 +807,7 @@ describe("WebFetchTool registration", () => {
             headers: { "content-type": "text/plain", "content-length": String(WebFetchTool.MAX_RESPONSE_BYTES + 1) },
           }),
         )
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/declared", format: "text" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/declared", prompt: "q" }))).toEqual({
         status: "error",
         error: {
           type: "unknown",
@@ -786,7 +819,7 @@ describe("WebFetchTool registration", () => {
         Effect.succeed(
           new Response("x".repeat(WebFetchTool.MAX_RESPONSE_BYTES + 1), { headers: { "content-type": "text/plain" } }),
         )
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/streamed", format: "text" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/streamed", prompt: "q" }))).toEqual({
         status: "error",
         error: {
           type: "unknown",
@@ -801,13 +834,13 @@ describe("WebFetchTool registration", () => {
       reset()
       const registry = yield* Tool.Service
       respond = () => Effect.succeed(new Response("png", { headers: { "content-type": "image/png" } }))
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/image", format: "html" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/image", prompt: "q" }))).toEqual({
         status: "error",
         error: { type: "unknown", message: "Unsupported fetched image content type: image/png" },
       })
 
       respond = () => Effect.succeed(new Response("pdf", { headers: { "content-type": "application/pdf" } }))
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/file", format: "html" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1/file", prompt: "q" }))).toEqual({
         status: "error",
         error: { type: "unknown", message: "Unsupported fetched file content type: application/pdf" },
       })
@@ -826,7 +859,7 @@ describe("WebFetchTool registration", () => {
         )
       const registry = yield* Tool.Service
 
-      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", format: "text" }))).toMatchObject({
+      expect(yield* executeTool(registry, call({ url: "https://1.1.1.1", prompt: "q" }))).toMatchObject({
         status: "completed",
         content: [{ type: "text", text: "ok" }],
       })
@@ -843,7 +876,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* Tool.Service
       const url = "https://example.com/forbidden"
 
-      expect(yield* executeTool(registry, call({ url, format: "text" }))).toEqual({
+      expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toEqual({
         status: "error",
         error: { type: "unknown", message: `Request failed with status 403 (GET ${url})` },
       })
@@ -859,7 +892,7 @@ describe("WebFetchTool registration", () => {
       const registry = yield* Tool.Service
       const fiber = yield* executeTool(
         registry,
-        call({ url: "https://1.1.1.1/slow", format: "text", timeout: 1 }),
+        call({ url: "https://1.1.1.1/slow", prompt: "q", timeout: 1 }),
       ).pipe(Effect.forkChild)
       yield* TestClock.adjust(Duration.seconds(1))
 
@@ -867,28 +900,6 @@ describe("WebFetchTool registration", () => {
         status: "error",
         error: { type: "unknown", message: "Request timed out" },
       })
-    }),
-  )
-
-  testEffect(
-    AppNodeBuilder.build(LayerNode.group([Tool.node, answeringNode]), [
-      Permission.node.replace(permission),
-      Image.node.replace(imagePassthrough),
-      LayerNodePlatform.httpClient.replace(http),
-    ]),
-  ).effect("answers a prompt from the page instead of returning the whole page", () =>
-    Effect.gen(function* () {
-      reset()
-      respond = () =>
-        Effect.succeed(new Response("The meaning of life is 42.", { headers: { "content-type": "text/plain" } }))
-      const settled = yield* executeTool(
-        yield* Tool.Service,
-        call({ url: "https://example.com/life", format: "text", prompt: "what is the meaning of life?" }),
-      )
-      expect(settled.content).toEqual([{ type: "text", text: "The answer is 42." }])
-      expect(settled.metadata).toMatchObject({ answered: true })
-      expect(prompts[0]).toContain("what is the meaning of life?")
-      expect(prompts[0]).toContain("<page>\nThe meaning of life is 42.\n</page>")
     }),
   )
 })
@@ -918,7 +929,7 @@ describe("WebFetchTool redirects", () => {
       route({ "example.com/a": () => redirect(301, "/b"), "example.com/b": () => text("page b") })
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/a", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/a", prompt: "q" })).toMatchObject({
         status: "completed",
         content: [{ type: "text", text: "page b" }],
       })
@@ -950,7 +961,7 @@ describe("WebFetchTool redirects", () => {
       })
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/x/y/start", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/x/y/start", prompt: "q" })).toMatchObject({
         content: [{ type: "text", text: "done" }],
       })
       // Against the first URL the last hop would have gone to /x/y/r, so the middle hop pins the base.
@@ -973,7 +984,7 @@ describe("WebFetchTool redirects", () => {
       })
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/a", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/a", prompt: "q" })).toMatchObject({
         content: [{ type: "text", text: "www" }],
       })
       expect(assertions[1]).toMatchObject({ aliases: { "https://www.example.com/a": ["www.example.com"] } })
@@ -981,7 +992,7 @@ describe("WebFetchTool redirects", () => {
 
       reset()
       route({ "www.example.org/a": () => redirect(307, "https://example.org/a"), "example.org/a": () => text("bare") })
-      expect(yield* run(registry, { url: "https://www.example.org/a", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://www.example.org/a", prompt: "q" })).toMatchObject({
         content: [{ type: "text", text: "bare" }],
       })
       expect(lookups).toEqual(["www.example.org", "example.org"])
@@ -1003,14 +1014,14 @@ describe("WebFetchTool redirects", () => {
         )
 
       chain(10, "example.com")
-      expect(yield* run(registry, { url: "https://example.com/0", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/0", prompt: "q" })).toMatchObject({
         content: [{ type: "text", text: "end" }],
       })
       expect(requests).toHaveLength(11)
 
       reset()
       chain(11, "example.org")
-      expect(yield* run(registry, { url: "https://example.org/0", format: "text" })).toEqual(
+      expect(yield* run(registry, { url: "https://example.org/0", prompt: "q" })).toEqual(
         failed("Too many redirects (more than 10)"),
       )
       expect(requests).toHaveLength(11)
@@ -1022,7 +1033,7 @@ describe("WebFetchTool redirects", () => {
       reset()
       route({ "example.com/a": () => redirect(302, "https://other.example/x") })
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/a", format: "text", prompt: "what?" } as const
+      const input = { url: "https://example.com/a", prompt: "what?" } as const
 
       const first = yield* run(registry, input)
       expect(first).toMatchObject({
@@ -1059,7 +1070,7 @@ describe("WebFetchTool redirects", () => {
         route({ [`${from}/a`]: () => redirect(status, location) })
         const registry = yield* Tool.Service
 
-        const settled = yield* run(registry, { url: `https://${from}/a`, format: "text" })
+        const settled = yield* run(registry, { url: `https://${from}/a`, prompt: "q" })
         expect(settled).toMatchObject({ status: "completed", metadata: { redirect: { status } } })
         expect(requests).toHaveLength(1)
         expect(assertions).toHaveLength(1)
@@ -1077,14 +1088,14 @@ describe("WebFetchTool redirects", () => {
       })
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/see", format: "text" })).toEqual(
+      expect(yield* run(registry, { url: "https://example.com/see", prompt: "q" })).toEqual(
         failed("Request failed with status 303 (GET https://example.com/see)"),
       )
       expect(requests).toHaveLength(1)
-      expect(yield* run(registry, { url: "https://example.com/bare", format: "text" })).toEqual(
+      expect(yield* run(registry, { url: "https://example.com/bare", prompt: "q" })).toEqual(
         failed("Redirect response has no Location header"),
       )
-      expect(yield* run(registry, { url: "https://example.com/bad", format: "text" })).toEqual(
+      expect(yield* run(registry, { url: "https://example.com/bad", prompt: "q" })).toEqual(
         failed("Redirect Location is not a valid URL"),
       )
     }),
@@ -1103,7 +1114,7 @@ describe("WebFetchTool redirects", () => {
         )
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/a", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/a", prompt: "q" })).toMatchObject({
         content: [{ type: "text", text: "ok" }],
       })
       expect(requests.map((request) => request.headers["user-agent"])).toEqual([webFetchUserAgent, webFetchUserAgent, "orbit"])
@@ -1134,7 +1145,7 @@ describe("WebFetchTool redirects", () => {
       })
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/a", format: "text", timeout: 5 })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/a", prompt: "q", timeout: 5 })).toMatchObject({
         content: [{ type: "text", text: "b" }],
       })
       expect(pulled).toBe(false)
@@ -1149,7 +1160,7 @@ describe("WebFetchTool address guard and pinning", () => {
       addresses = { "meta.example": ["169.254.169.254"] }
       const registry = yield* Tool.Service
 
-      const settled = yield* run(registry, { url: "https://meta.example/x", format: "text" })
+      const settled = yield* run(registry, { url: "https://meta.example/x", prompt: "q" })
       expect(settled.status).toBe("error")
       expect(settled.error?.message).toContain("cloud metadata address")
       expect(asked()).toEqual(["https://meta.example/x"])
@@ -1164,7 +1175,7 @@ describe("WebFetchTool address guard and pinning", () => {
       route({ "example.com/a": () => redirect(301, "https://www.example.com/a") })
       const registry = yield* Tool.Service
 
-      const settled = yield* run(registry, { url: "https://example.com/a", format: "text" })
+      const settled = yield* run(registry, { url: "https://example.com/a", prompt: "q" })
       expect(settled.status).toBe("error")
       expect(settled.error?.message).toContain("cloud metadata address")
       expect(requests).toHaveLength(1)
@@ -1184,7 +1195,7 @@ describe("WebFetchTool address guard and pinning", () => {
         addresses = { "odd.example": answer }
         const registry = yield* Tool.Service
 
-        expect((yield* run(registry, { url: "https://odd.example/x", format: "text" })).status).toBe("error")
+        expect((yield* run(registry, { url: "https://odd.example/x", prompt: "q" })).status).toBe("error")
         expect(requests).toEqual([])
       }),
     )
@@ -1195,12 +1206,12 @@ describe("WebFetchTool address guard and pinning", () => {
       reset()
       const registry = yield* Tool.Service
       for (const url of ["http://localhost/x", "http://10.0.0.1/x", "http://127.0.0.1:8080/x", "http://[::1]/x"])
-        expect((yield* run(registry, { url, format: "text" })).status).toBe("error")
+        expect((yield* run(registry, { url, prompt: "q" })).status).toBe("error")
       expect(requests).toEqual([])
 
       yield* allowLocal
       for (const url of ["http://localhost/x", "http://10.0.0.1/x", "http://[::1]/x"])
-        expect((yield* run(registry, { url, format: "text" })).status).toBe("completed")
+        expect((yield* run(registry, { url, prompt: "q" })).status).toBe("completed")
       // A local host keeps its scheme.
       expect(requests.map((request) => new URL(request.url).protocol)).toEqual(["http:", "http:", "http:"])
     }),
@@ -1212,7 +1223,7 @@ describe("WebFetchTool address guard and pinning", () => {
       yield* allowLocal
       const registry = yield* Tool.Service
       for (const url of ["http://169.254.169.254/latest", "http://169.254.1.1/x", "http://[fd00:ec2::254]/x"])
-        expect((yield* run(registry, { url, format: "text" })).status).toBe("error")
+        expect((yield* run(registry, { url, prompt: "q" })).status).toBe("error")
       expect(requests).toEqual([])
     }),
   )
@@ -1222,7 +1233,7 @@ describe("WebFetchTool address guard and pinning", () => {
       reset()
       const registry = yield* Tool.Service
 
-      yield* run(registry, { url: "https://example.com:8443/x", format: "text" })
+      yield* run(registry, { url: "https://example.com:8443/x", prompt: "q" })
       expect(requests[0]?.url).toBe(`https://${publicAddress}:8443/x`)
       expect(requests[0]?.headers.host).toBe("example.com:8443")
       expect(requests[0]?.init).toMatchObject({ redirect: "manual", tls: { serverName: "example.com" } })
@@ -1233,7 +1244,7 @@ describe("WebFetchTool address guard and pinning", () => {
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
-      expect((yield* run(registry, { url: "file:///etc/passwd", format: "text" })).status).toBe("error")
+      expect((yield* run(registry, { url: "file:///etc/passwd", prompt: "q" })).status).toBe("error")
       expect(requests).toEqual([])
       expect(lookups).toEqual([])
     }),
@@ -1248,7 +1259,7 @@ describe("WebFetchTool URL checks", () => {
       const registry = yield* Tool.Service
 
       for (const url of ["http://example.com/x", "http://localhost/x", "http://127.0.0.1/x", "http://devbox/x"])
-        yield* run(registry, { url, format: "text" })
+        yield* run(registry, { url, prompt: "q" })
       expect(asked()).toEqual([
         "https://example.com/x",
         "http://localhost/x",
@@ -1263,7 +1274,7 @@ describe("WebFetchTool URL checks", () => {
       Effect.gen(function* () {
         reset()
         const registry = yield* Tool.Service
-        expect(yield* run(registry, { url, format: "text" })).toEqual(
+        expect(yield* run(registry, { url, prompt: "q" })).toEqual(
           failed("URL must not contain a username or password"),
         )
         expect(assertions).toEqual([])
@@ -1277,10 +1288,10 @@ describe("WebFetchTool URL checks", () => {
       const registry = yield* Tool.Service
       const url = (length: number) => "https://example.com/" + "a".repeat(length - "https://example.com/".length)
 
-      expect((yield* run(registry, { url: url(2001), format: "text" })).status).toBe("error")
+      expect((yield* run(registry, { url: url(2001), prompt: "q" })).status).toBe("error")
       expect(assertions).toEqual([])
       expect(requests).toEqual([])
-      expect((yield* run(registry, { url: url(2000), format: "text" })).status).toBe("completed")
+      expect((yield* run(registry, { url: url(2000), prompt: "q" })).status).toBe("completed")
     }),
   )
 })
@@ -1302,10 +1313,10 @@ describe("WebFetchTool size cap", () => {
             { headers: { "content-type": "text/plain", "content-length": String(11 * mib) } },
           ),
         )
-      expect((yield* run(registry, { url: "https://1.1.1.1/big", format: "text" })).status).toBe("error")
+      expect((yield* run(registry, { url: "https://1.1.1.1/big", prompt: "q" })).status).toBe("error")
 
       respond = () => Effect.succeed(text("x".repeat(6 * mib)))
-      expect((yield* run(registry, { url: "https://1.1.1.1/six", format: "text" })).status).toBe("completed")
+      expect((yield* run(registry, { url: "https://1.1.1.1/six", prompt: "q" })).status).toBe("completed")
     }),
   )
 
@@ -1314,9 +1325,9 @@ describe("WebFetchTool size cap", () => {
       reset()
       const registry = yield* Tool.Service
       respond = () => Effect.succeed(text("x".repeat(10 * mib)))
-      expect((yield* run(registry, { url: "https://1.1.1.1/exact", format: "text" })).status).toBe("completed")
+      expect((yield* run(registry, { url: "https://1.1.1.1/exact", prompt: "q" })).status).toBe("completed")
       respond = () => Effect.succeed(text("x".repeat(10 * mib + 1)))
-      expect((yield* run(registry, { url: "https://1.1.1.1/over", format: "text" })).status).toBe("error")
+      expect((yield* run(registry, { url: "https://1.1.1.1/over", prompt: "q" })).status).toBe("error")
     }),
   )
 })
@@ -1327,7 +1338,7 @@ describe("WebFetchTool timeout", () => {
       reset()
       route({ "example.com/a": () => redirect(301, "https://www.example.com/a"), "www.example.com/a": () => text("www") })
       slow = { url: "https://www.example.com/a", by: Duration.seconds(40) }
-      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", format: "text", timeout: 30 }).pipe(
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", prompt: "q", timeout: 30 }).pipe(
         Effect.forkChild,
       )
       yield* TestClock.adjust(Duration.seconds(40))
@@ -1342,7 +1353,7 @@ describe("WebFetchTool timeout", () => {
       reset()
       respond = (request) =>
         new URL(request.url).pathname === "/a" ? Effect.succeed(redirect(301, "/b")) : Effect.never
-      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", format: "text", timeout: 1 }).pipe(
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", prompt: "q", timeout: 1 }).pipe(
         Effect.forkChild,
       )
       yield* TestClock.adjust(Duration.seconds(2))
@@ -1361,7 +1372,7 @@ describe("WebFetchTool timeout", () => {
             headers: { "content-type": "text/plain" },
           }),
         )
-      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", format: "text", timeout: 1 }).pipe(
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", prompt: "q", timeout: 1 }).pipe(
         Effect.forkChild,
       )
       yield* TestClock.adjust(Duration.seconds(2))
@@ -1384,7 +1395,7 @@ describe("WebFetchTool cache", () => {
       let count = 0
       respond = () => (++count === 1 ? Effect.never : Effect.succeed(text("fine")))
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/p", format: "text", timeout: 1 } as const
+      const input = { url: "https://example.com/p", prompt: "q", timeout: 1 } as const
       const fiber = yield* run(registry, input).pipe(Effect.forkChild)
       yield* TestClock.adjust(Duration.seconds(1))
 
@@ -1399,7 +1410,7 @@ describe("WebFetchTool cache", () => {
       reset()
       route({ "example.com/a": () => redirect(301, "/admin"), "example.com/admin": () => text("secret") })
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/a", format: "text" } as const
+      const input = { url: "https://example.com/a", prompt: "q" } as const
 
       expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "secret" }] })
       expect(requests).toHaveLength(2)
@@ -1426,7 +1437,7 @@ describe("WebFetchTool cache", () => {
       let served = 0
       pageCalls(() => ++served)
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/p", format: "text" } as const
+      const input = { url: "https://example.com/p", prompt: "q" } as const
 
       expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "page 1" }] })
       expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "page 1" }] })
@@ -1446,7 +1457,7 @@ describe("WebFetchTool cache", () => {
       let served = 0
       pageCalls(() => ++served)
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/p", format: "text" } as const
+      const input = { url: "https://example.com/p", prompt: "q" } as const
 
       yield* run(registry, input)
       yield* TestClock.adjust(Duration.minutes(10))
@@ -1458,37 +1469,17 @@ describe("WebFetchTool cache", () => {
     }),
   )
 
-  it.effect("keys on the URL and format, not the fragment", () =>
+  it.effect("keys on the URL, not the fragment or the prompt", () =>
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
 
-      yield* run(registry, { url: "https://example.com/p", format: "text" })
-      yield* run(registry, { url: "https://example.com/p#section", format: "text" })
+      yield* run(registry, { url: "https://example.com/p", prompt: "q" })
+      yield* run(registry, { url: "https://example.com/p#section", prompt: "q" })
+      yield* run(registry, { url: "https://example.com/p", prompt: "another question" })
       expect(requests).toHaveLength(1)
-      yield* run(registry, { url: "https://example.com/p", format: "html" })
+      yield* run(registry, { url: "https://example.com/q", prompt: "q" })
       expect(requests).toHaveLength(2)
-    }),
-  )
-
-  testEffect(
-    AppNodeBuilder.build(LayerNode.group([Tool.node, answeringNode]), [
-      Permission.node.replace(permission),
-      Image.node.replace(imagePassthrough),
-      LayerNodePlatform.httpClient.replace(http),
-    ]),
-  ).effect("answers a hit with the prompt of the new call", () =>
-    Effect.gen(function* () {
-      reset()
-      prompts.length = 0
-      const registry = yield* Tool.Service
-
-      yield* run(registry, { url: "https://example.com/p", format: "text", prompt: "first question" })
-      yield* run(registry, { url: "https://example.com/p", format: "text", prompt: "second question" })
-      expect(requests).toHaveLength(1)
-      expect(prompts).toHaveLength(2)
-      expect(prompts[0]).toContain("first question")
-      expect(prompts[1]).toContain("second question")
     }),
   )
 
@@ -1496,7 +1487,7 @@ describe("WebFetchTool cache", () => {
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/p", format: "text" } as const
+      const input = { url: "https://example.com/p", prompt: "q" } as const
       yield* run(registry, input)
       denying = true
       // A decline is a defect, which the registry does not turn into a result.
@@ -1513,7 +1504,7 @@ describe("WebFetchTool cache", () => {
       let count = 0
       respond = () => Effect.succeed(++count === 1 ? new Response("no", { status: 500 }) : text("fine"))
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/p", format: "text" } as const
+      const input = { url: "https://example.com/p", prompt: "q" } as const
 
       expect((yield* run(registry, input)).status).toBe("error")
       expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "fine" }] })
@@ -1526,11 +1517,315 @@ describe("WebFetchTool cache", () => {
       reset()
       route({ "example.com/a": () => redirect(301, "/b"), "example.com/b": () => text("b") })
       const registry = yield* Tool.Service
-      const input = { url: "https://example.com/a", format: "text" } as const
+      const input = { url: "https://example.com/a", prompt: "q" } as const
 
       yield* run(registry, input)
       yield* run(registry, input)
       expect(requests).toHaveLength(2)
+    }),
+  )
+})
+
+const markdown = (body: string, type = "text/markdown; charset=utf-8") =>
+  new Response(body, { headers: { "content-type": type } })
+const html = (body: string) => new Response(body, { headers: { "content-type": "text/html" } })
+const textOf = (settled: { readonly content?: ReadonlyArray<unknown> }) =>
+  (settled.content?.[0] as { text: string } | undefined)?.text
+const lastQuery = () => queries[queries.length - 1]!
+
+describe("WebFetchTool answers", () => {
+  it.effect("asks the small model for an answer with the page and the question, and returns only the answer", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/doc": () => html("<h1>Title</h1><p>The meaning of life is forty-two</p>") })
+      reply = () => Effect.succeed("It is 42.")
+      const settled = yield* run(yield* Tool.Service, { url: "https://example.com/doc", prompt: "what is it?" })
+
+      expect(textOf(settled)).toBe("It is 42.")
+      expect(settled.output).toEqual({ url: "https://example.com/doc", contentType: "text/html", output: "It is 42." })
+      expect(settled.metadata).toEqual({ contentType: "text/html", answered: true, url: "https://example.com/doc" })
+      expect(queries).toHaveLength(1)
+      // The page converted to Markdown, then the question; the small model and no transcript are what SideQuery is asked for.
+      expect(lastQuery()).toMatchObject({
+        sessionID,
+        purpose: "webfetch.summarize",
+        model: "small",
+        history: false,
+        timeout: Duration.seconds(WebFetchTool.MAX_TIMEOUT_SECONDS),
+      })
+      expect(lastQuery().prompt).toBe(
+        "<page>\n# Title\n\nThe meaning of life is forty-two\n</page>\n\nQuestion: what is it?",
+      )
+    }),
+  )
+
+  it.effect("answers a cache hit again, because the cache holds pages and not answers", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/p": () => text("the page") })
+      const registry = yield* Tool.Service
+      yield* run(registry, { url: "https://example.com/p", prompt: "first question" })
+      yield* run(registry, { url: "https://example.com/p", prompt: "second question" })
+
+      expect(requests).toHaveLength(1)
+      expect(queries.map((query) => query.prompt.split("Question: ")[1])).toEqual(["first question", "second question"])
+    }),
+  )
+
+  it.effect("ignores a stale format and never lets it reach the model", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/p": () => html("<p>hi</p>") })
+      const registry = yield* Tool.Service
+      const decoded = Schema.decodeUnknownSync(WebFetchTool.Input)({
+        url: "https://example.com/p",
+        prompt: "q",
+        format: "html",
+      })
+      yield* run(registry, decoded)
+      expect(lastQuery().prompt).toBe("<page>\nhi\n</page>\n\nQuestion: q")
+    }),
+  )
+
+  it.effect("cuts a long page for the small model and says so, and leaves an exact fit alone", () =>
+    Effect.gen(function* () {
+      reset()
+      route({
+        "example.com/exact": () => text("a".repeat(100_000)),
+        "example.com/over": () => text("a".repeat(100_000) + "TAIL"),
+      })
+      const registry = yield* Tool.Service
+      yield* run(registry, { url: "https://example.com/exact", prompt: "q" })
+      expect(lastQuery().prompt).toBe(`<page>\n${"a".repeat(100_000)}\n</page>\n\nQuestion: q`)
+
+      yield* run(registry, { url: "https://example.com/over", prompt: "q" })
+      const sent = lastQuery().prompt
+      expect(sent).not.toContain("TAIL")
+      expect(sent).toContain(`${"a".repeat(100_000)}\n[The page was cut here because it is too long.]\n</page>`)
+    }),
+  )
+
+  it.effect("keeps the redirect note out of the model and says to repeat the prompt", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/a": () => redirect(302, "https://other.example/x") })
+      const settled = yield* run(yield* Tool.Service, { url: "https://example.com/a", prompt: "what?" })
+      expect(queries).toHaveLength(0)
+      expect(textOf(settled)).toContain("and the same prompt.")
+    }),
+  )
+
+  it.effect("returns a note and not the page when the model cannot answer, and does not echo the provider", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/p": () => text("PAGETEXT") })
+      const registry = yield* Tool.Service
+      for (const error of [
+        new SideQuery.UnavailableError({ message: "The side query could not run", cause: "SECRETBODY overloaded" }),
+        new SideQuery.InvalidOutputError({ message: "Model did not answer with text", cause: "SECRETBODY" }),
+        new SideQuery.TimeoutError({ message: "Side query webfetch.summarize timed out after 2 minutes" }),
+      ]) {
+        reply = () => Effect.fail(error)
+        const settled = yield* run(registry, { url: "https://example.com/p", prompt: "q" })
+        expect(settled.status).toBe("completed")
+        const note = textOf(settled)!
+        expect(note).toContain(error.message)
+        expect(note).toContain("cached")
+        expect(note).not.toContain("PAGETEXT")
+        expect(note).not.toContain("SECRETBODY")
+        expect(settled.metadata).toEqual({ contentType: "text/plain", answered: false, error: error._tag })
+      }
+      // The page stayed cached, so a retry costs only the answer.
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("is interrupted, and does not become a failure note, while the model is answering", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/p": () => text("page") })
+      reply = () => Effect.never
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/p", prompt: "q" }).pipe(
+        Effect.forkChild,
+      )
+      for (let turn = 0; turn < 100 && queries.length === 0; turn++) yield* Effect.yieldNow
+      expect(queries).toHaveLength(1)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  )
+})
+
+describe("WebFetchTool verbatim hosts", () => {
+  const page = (length: number) => "x".repeat(length)
+
+  it.effect("returns a small Markdown page from a listed host whole, with no model call", () =>
+    Effect.gen(function* () {
+      reset()
+      verbatimHosts = ["docs.example.com"]
+      route({ "docs.example.com/guide": () => markdown(page(99_999)) })
+      const settled = yield* run(yield* Tool.Service, { url: "https://docs.example.com/guide", prompt: "ignored" })
+
+      expect(queries).toHaveLength(0)
+      expect(textOf(settled)).toBe(page(99_999))
+      expect(settled.metadata).toEqual({
+        contentType: "text/markdown; charset=utf-8",
+        answered: false,
+        verbatim: true,
+      })
+      expect(settled.output).toMatchObject({ output: page(99_999) })
+    }),
+  )
+
+  it.effect("answers a page of 100,000 characters, and sends it uncut", () =>
+    Effect.gen(function* () {
+      reset()
+      verbatimHosts = ["docs.example.com"]
+      route({ "docs.example.com/guide": () => markdown(page(100_000)) })
+      yield* run(yield* Tool.Service, { url: "https://docs.example.com/guide", prompt: "q" })
+      expect(queries).toHaveLength(1)
+      expect(lastQuery().prompt).toBe(`<page>\n${page(100_000)}\n</page>\n\nQuestion: q`)
+    }),
+  )
+
+  for (const [label, response] of [
+    ["HTML", () => html("<p>hi</p>")],
+    ["plain text at a .md path", () => text("# hi")],
+    ["x-markdown", () => markdown("# hi", "text/x-markdown")],
+  ] as const) {
+    it.effect(`answers ${label} from a listed host`, () =>
+      Effect.gen(function* () {
+        reset()
+        verbatimHosts = ["docs.example.com"]
+        route({ "docs.example.com/guide.md": response })
+        const settled = yield* run(yield* Tool.Service, { url: "https://docs.example.com/guide.md", prompt: "q" })
+        expect(queries).toHaveLength(1)
+        expect(settled.metadata).toMatchObject({ answered: true })
+      }),
+    )
+  }
+
+  it.effect("answers small Markdown from a host that is not listed", () =>
+    Effect.gen(function* () {
+      reset()
+      verbatimHosts = ["docs.example.com"]
+      route({ "other.example/guide": () => markdown("# hi") })
+      yield* run(yield* Tool.Service, { url: "https://other.example/guide", prompt: "q" })
+      expect(queries).toHaveLength(1)
+    }),
+  )
+
+  for (const [label, hosts, url, listed] of [
+    ["a wildcard covers a subdomain", ["*.example.com"], "https://a.example.com/p", true],
+    ["a wildcard covers a deeper subdomain", ["*.example.com"], "https://a.b.example.com/p", true],
+    ["a wildcard does not cover the bare domain", ["*.example.com"], "https://example.com/p", false],
+    ["an entry in capitals matches on every platform", ["Docs.Example.com"], "https://docs.example.com/p", true],
+    ["a trailing dot in the URL", ["docs.example.com"], "https://docs.example.com./p", true],
+    ["a trailing dot in the entry", ["docs.example.com."], "https://docs.example.com/p", true],
+    ["a path prefix covers the path itself", ["example.com/org"], "https://example.com/org", true],
+    ["a path prefix covers below it", ["example.com/org"], "https://example.com/org/page", true],
+    ["a path prefix stops at a segment boundary", ["example.com/org"], "https://example.com/org-evil/page", false],
+    ["a path prefix with a trailing slash", ["example.com/org/"], "https://example.com/org/page", true],
+    ["a path prefix does not cover another path", ["example.com/org"], "https://example.com/other", false],
+    ["an empty list matches nothing", [], "https://example.com/p", false],
+    ["a blank entry matches nothing", ["", " "], "https://example.com/p", false],
+    ["a similar host is not covered", ["example.com"], "https://example.com.evil.example/p", false],
+  ] as const) {
+    it.effect(`matches hosts: ${label}`, () =>
+      Effect.gen(function* () {
+        reset()
+        verbatimHosts = [...hosts]
+        respond = () => Effect.succeed(markdown("# small"))
+        const settled = yield* run(yield* Tool.Service, { url, prompt: "q" })
+        expect(settled.metadata?.verbatim === true).toBe(listed)
+        expect(queries).toHaveLength(listed ? 0 : 1)
+      }),
+    )
+  }
+
+  it.effect("reads the list at each call, so a change applies to a cached page", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "docs.example.com/guide": () => markdown("# small") })
+      const registry = yield* Tool.Service
+      const input = { url: "https://docs.example.com/guide", prompt: "q" }
+      yield* run(registry, input)
+      expect(queries).toHaveLength(1)
+
+      verbatimHosts = ["docs.example.com"]
+      const settled = yield* run(registry, input)
+      expect(requests).toHaveLength(1)
+      expect(queries).toHaveLength(1)
+      expect(textOf(settled)).toBe("# small")
+    }),
+  )
+
+  it.effect("needs both hosts of a same-site redirect to be listed", () =>
+    Effect.gen(function* () {
+      reset()
+      const routes = {
+        "docs.example.com/a": () => redirect(301, "https://www.docs.example.com/a"),
+        "www.docs.example.com/a": () => markdown("# small"),
+      }
+      route(routes)
+      const registry = yield* Tool.Service
+      verbatimHosts = ["docs.example.com"]
+      yield* run(registry, { url: "https://docs.example.com/a", prompt: "q" })
+      expect(queries).toHaveLength(1)
+
+      reset()
+      route(routes)
+      verbatimHosts = ["docs.example.com", "www.docs.example.com"]
+      const settled = yield* run(registry, { url: "https://docs.example.com/a", prompt: "q" })
+      expect(queries).toHaveLength(0)
+      expect(textOf(settled)).toBe("# small")
+    }),
+  )
+
+  it.effect("grants no permission: a denied listed host is refused before any request", () =>
+    Effect.gen(function* () {
+      reset()
+      verbatimHosts = ["docs.example.com"]
+      denyUrl = "https://docs.example.com/guide"
+      route({ "docs.example.com/guide": () => markdown("# small") })
+      const exit = yield* Effect.exit(run(yield* Tool.Service, { url: "https://docs.example.com/guide", prompt: "q" }))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests).toHaveLength(0)
+      expect(queries).toHaveLength(0)
+      expect(assertions).toHaveLength(1)
+    }),
+  )
+
+  it.effect("asks for permission on a listed host as on any other", () =>
+    Effect.gen(function* () {
+      reset()
+      verbatimHosts = ["docs.example.com"]
+      route({ "docs.example.com/guide": () => markdown("# small") })
+      yield* run(yield* Tool.Service, { url: "https://docs.example.com/guide", prompt: "q" })
+      expect(asked()).toEqual(["https://docs.example.com/guide"])
+    }),
+  )
+
+  it.effect("tells the model it may include detail for a listed host and to keep quotes short otherwise", () =>
+    Effect.gen(function* () {
+      reset()
+      verbatimHosts = ["docs.example.com"]
+      route({
+        "docs.example.com/long": () => markdown(page(100_001)),
+        "other.example/long": () => markdown(page(100_001)),
+      })
+      const registry = yield* Tool.Service
+      yield* run(registry, { url: "https://docs.example.com/long", prompt: "q" })
+      const listed = lastQuery().system
+      yield* run(registry, { url: "https://other.example/long", prompt: "q" })
+      const unlisted = lastQuery().system
+
+      expect(listed).toContain("code examples")
+      expect(listed).not.toContain("125 characters")
+      expect(unlisted).toContain("125 characters")
+      expect(unlisted).not.toContain("code examples")
+      expect(unlisted).toContain("legality")
     }),
   )
 })

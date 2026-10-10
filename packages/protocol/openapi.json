@@ -14306,6 +14306,18 @@
               }
             ]
           },
+          "webfetch": {
+            "type": "object",
+            "properties": {
+              "verbatim_hosts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
           "plugins": {
             "type": "array",
             "items": {

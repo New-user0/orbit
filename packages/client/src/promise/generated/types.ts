@@ -2347,6 +2347,7 @@ export type ConfigEntry =
             | { path: string; description?: string; hidden?: boolean }
         }
         websearch?: false | { provider: "random" | (string & {}) }
+        webfetch?: { verbatim_hosts?: Array<string> }
         plugins?: Array<string | { package: string; options?: { [x: string]: JsonValue } }>
         worktree?: ConfigWorktree
         warming?: boolean | { prompt?: string; interval?: string; duration?: string }

@@ -19,6 +19,7 @@ import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigProvider } from "./config/provider.js"
 import { ConfigReference } from "./config/reference.js"
 import { ConfigSandbox } from "./config/sandbox.js"
+import { ConfigWebFetch } from "./config/webfetch.js"
 import { ConfigWebSearch } from "./config/websearch.js"
 import { ConfigToolExecution } from "./config/tool-execution.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
@@ -124,6 +125,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   websearch: ConfigWebSearch.Selection.pipe(optional).annotate({
     description: "Web search provider selection",
+  }),
+  webfetch: ConfigWebFetch.Info.pipe(optional).annotate({
+    description: "WebFetch behavior",
   }),
   plugins: ConfigPlugin.Plugins.pipe(optional).annotate({
     description: "Ordered plugin enablement directives and external package declarations",
