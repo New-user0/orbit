@@ -19,6 +19,9 @@ const input = JSON.parse(await Bun.stdin.text())
 appendFileSync(${JSON.stringify(counter)}, "x")
 const n = readFileSync(${JSON.stringify(counter)}, "utf8").length
 console.log("n=" + n + " " + JSON.stringify({
+  style: input.output_style,
+  status: input.status,
+  vim: input.vim_mode,
   agent: input.agent,
   variant: input.model?.variant,
   model: input.model?.id,
@@ -26,13 +29,10 @@ console.log("n=" + n + " " + JSON.stringify({
   used: input.context?.used,
   limit: input.context?.limit,
   percent: input.context?.percent,
-  style: input.output_style,
-  status: input.status,
-  vim: input.vim_mode,
   title: input.session?.title,
   usd: input.cost?.usd,
-  p: input.project_dir,
-  c: input.cwd,
+  p: input.project_dir?.endsWith("/session-project") ? "session-project" : input.project_dir,
+  c: input.cwd === input.project_dir,
 }))
 `,
   )
@@ -58,6 +58,7 @@ console.log("n=" + n + " " + JSON.stringify({
     width: 300,
     config: {
       animations: false,
+      prompt: { vim: true },
       keybinds: { "model.list": "f8", "agent.cycle": "f7", "variant.cycle": "f9" },
       status_line: {
         interval: 60_000,
@@ -68,6 +69,8 @@ console.log("n=" + n + " " + JSON.stringify({
     fetch: async (url) => {
       const forSession = url.searchParams.get("location[directory]") === projectDirectory
       const here = forSession ? sessionLocation : location
+      // The output style is the last config document that sets one.
+      if (url.pathname === "/api/config") return json([{ type: "document", info: { output_style: "concise" } }])
       // The session's location arrives late: only the watch on it can bring the project directory into the line.
       if (url.pathname === "/api/location") {
         if (forSession) await Bun.sleep(1_500)
@@ -153,15 +156,12 @@ console.log("n=" + n + " " + JSON.stringify({
   expect(early).toContain('"p":null')
   expect(early).toContain('"agent":"build"')
   expect(early).toContain('"variant":null')
-  expect(early).toContain('"style":"default"')
-  expect(early).toContain('"status":"idle"')
-  expect(early).toContain('"vim":null')
   expect(early).toContain('"title":"Status line fixture"')
   expect(early).toContain('"usd":0.25')
 
   // The interval is a minute and nothing else happens, so only the watch on the location can put it in the line.
-  const located = await line((row) => row.includes(`"p":"${projectDirectory}"`))
-  expect(located).toContain(`"c":"${projectDirectory}"`)
+  const located = await line((row) => row.includes(`"p":"session-project"`))
+  expect(located).toContain(`"c":true`)
   expect(runs(located)).toBeGreaterThan(runs(early))
   // The model list belongs to the same location, so the name and the context numbers come with it.
   const ready = await line((row) => row.includes('"name":"first model"'))
@@ -210,6 +210,20 @@ console.log("n=" + n + " " + JSON.stringify({
     data: { sessionID: session.id },
   } as never)
   await line((row) => row.includes(`n=${settled + 1} `))
+
+  // The configured output style, the prompt's vim mode (a new prompt starts in insert) and the session's status each
+  // differ from the payload's default, so a Prompt that leaves one out fails here.
+  const full = await line((row) => row.includes('"style":"concise"'))
+  expect(full).toContain('"vim":"insert"')
+  expect(full).toContain('"status":"idle"')
+  // The execution start sets the session running and triggers the line.
+  setup.events.emit({
+    id: "evt_running",
+    created: 2,
+    type: "session.execution.started",
+    data: { sessionID: session.id },
+  } as never)
+  await line((row) => row.includes('"status":"running"'))
 }, 40_000)
 
 // With no model list the location is the only thing the line waits for, so only the watch on it can bring the project
