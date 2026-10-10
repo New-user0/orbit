@@ -4,6 +4,7 @@ import { define } from "@orbit/plugin/effect/plugin"
 import { isRecord } from "@orbit/ai/utils/record"
 import { Effect } from "effect"
 import path from "path"
+import { FileAccess } from "../file-access.js"
 import { Location } from "../location.js"
 import type { PluginInternal } from "../plugin/internal.js"
 import { Lsp } from "./index.js"
@@ -26,9 +27,18 @@ export const Plugin = define({
     yield* ctx.tool.hook("execute.after", (event) =>
       Effect.gen(function* () {
         if (event.status !== "completed" || !EDITING_TOOLS.has(event.tool)) return
-        const files = changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
+        // Write returns no file list, so its target comes from its own input, resolved as the tool resolves it. The
+        // other tools report the files they changed, already resolved by the tool.
+        const written =
+          event.tool === "Write" && isRecord(event.input) ? (event.input.file_path ?? event.input.path) : undefined
+        const files =
+          event.tool === "Write"
+            ? typeof written === "string"
+              ? [FileAccess.resolvePath(location.directory, written)]
+              : []
+            : changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
         if (files.length === 0) return
-        const found = yield* lsp.diagnostics(files)
+        const found = yield* lsp.diagnostics(files, { save: true })
         const errors = Object.entries(found).flatMap(([file, items]) => {
           const list = items.filter((item) => item.severity === ERROR)
           return list.length === 0 ? [] : [[file, list] as const]

@@ -1,5 +1,6 @@
 export * as LspClient from "./client.js"
 
+import { isRecord } from "@orbit/ai/utils/record"
 import spawn from "cross-spawn"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -30,8 +31,11 @@ export interface Diagnostic {
 
 export interface Client {
   readonly id: string
-  /** Sends the file's current text and waits briefly for the diagnostics the server publishes for it. */
-  readonly diagnostics: (file: string, text: string) => Promise<Diagnostic[]>
+  /**
+   * Sends the file's current text and waits briefly for the diagnostics the server publishes for it. With `save`, the
+   * server is then told the file was saved, which some servers wait for before running their deeper checks.
+   */
+  readonly diagnostics: (file: string, text: string, options?: { readonly save?: boolean }) => Promise<Diagnostic[]>
   /** Opens or refreshes the file, then sends a request about it. */
   readonly request: (method: string, file: string, text: string, params: Record<string, unknown>) => Promise<unknown>
   readonly shutdown: () => Promise<void>
@@ -81,7 +85,7 @@ export async function start(input: {
   connection.listen()
 
   const root = pathToFileURL(input.root).href
-  await Promise.race([
+  const initialized = await Promise.race([
     failed,
     timeout(INITIALIZE_TIMEOUT_MS, `Language server ${input.id} did not start`),
     connection.sendRequest("initialize", {
@@ -102,6 +106,8 @@ export async function start(input: {
       },
     }),
   ])
+  // The one place the server's unknown answer is checked: a save carries the text only when the server asked for it.
+  const saveText = saveIncludesText(initialized)
   await connection.sendNotification("initialized", {})
 
   const sync = async (file: string, text: string) => {
@@ -122,7 +128,7 @@ export async function start(input: {
 
   return {
     id: input.id,
-    diagnostics: async (file, text) => {
+    diagnostics: async (file, text, options) => {
       const uri = pathToFileURL(file).href
       const settled = new Promise<void>((resolve) => {
         const timer = { current: undefined as ReturnType<typeof setTimeout> | undefined }
@@ -142,6 +148,11 @@ export async function start(input: {
         }
       })
       await sync(file, text)
+      // A lost save notice must not lose the diagnostics of the change, so its failure is ignored.
+      if (options?.save)
+        await connection
+          .sendNotification("textDocument/didSave", { textDocument: { uri }, ...(saveText ? { text } : {}) })
+          .catch(() => undefined)
       await settled
       return published.get(uri) ?? []
     },
@@ -159,6 +170,12 @@ export async function start(input: {
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 1_000))])
     },
   }
+}
+
+function saveIncludesText(initialized: unknown) {
+  if (!isRecord(initialized) || !isRecord(initialized.capabilities)) return false
+  const sync = initialized.capabilities.textDocumentSync
+  return isRecord(sync) && isRecord(sync.save) && sync.save.includeText === true
 }
 
 function timeout(ms: number, message: string) {

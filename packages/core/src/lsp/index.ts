@@ -42,8 +42,14 @@ export const BUILT_IN: readonly Server[] = [
 ]
 
 export interface Interface {
-  /** Diagnostics for each file that has a language server, keyed by absolute path. */
-  readonly diagnostics: (files: readonly string[]) => Effect.Effect<Record<string, Diagnostic[]>>
+  /**
+   * Diagnostics for each file that has a language server, keyed by absolute path. With `save`, each server is also told
+   * its file was saved; only edits that reached the disk say so, so a read-only query never does.
+   */
+  readonly diagnostics: (
+    files: readonly string[],
+    options?: { readonly save?: boolean },
+  ) => Effect.Effect<Record<string, Diagnostic[]>>
   /** Sends a request about a file to its language server. */
   readonly request: (method: string, file: string, params: Record<string, unknown>) => Effect.Effect<unknown, Error>
 }
@@ -103,7 +109,7 @@ const layer = Layer.effect(
 
     return Service.of({
       diagnostics: Effect.fn("Lsp.diagnostics")(
-        function* (files) {
+        function* (files, options) {
           if (!(yield* trust.trusted())) return {}
           const found = yield* Effect.forEach(
             files,
@@ -114,7 +120,7 @@ const layer = Layer.effect(
                   ? yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
                   : undefined
                 if (!target || text === undefined) return []
-                const items = yield* Effect.promise(() => target.diagnostics(file, text).catch(() => []))
+                const items = yield* Effect.promise(() => target.diagnostics(file, text, options).catch(() => []))
                 return [[file, items] as const]
               }),
             { concurrency: "unbounded" },

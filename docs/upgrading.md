@@ -2054,3 +2054,15 @@ those version-control folders.
 
 **What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
 truncation note for more results.
+
+### Language servers hear about every write, and about each save
+
+A file created or overwritten with Write now goes to its language server, so the tool result carries the same inline
+errors that Edit already reported; before, a Write got none. After every edit (Write, Edit, Patch and NotebookEdit),
+the server is also sent `textDocument/didSave` once the new text is synced, with the text only when the server asked
+for it. Servers that run extra checks on save, such as rust-analyzer with `cargo check`, may now do so after each edit.
+The `LSP` tool never saves.
+
+**Affects:** people with a language server configured or on `PATH`, mostly Rust users.
+
+**What to do:** Nothing. Set `lsp` to `false` to turn language servers off.

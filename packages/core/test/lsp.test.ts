@@ -19,8 +19,9 @@ import { FileAccess } from "@orbit/core/file-access"
 import { Permission } from "@orbit/core/permission"
 import { LspTool } from "@orbit/core/tool/plugin/lsp"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { permissionLayer } from "./lib/permission"
-import { registerToolPlugin, toolTraits } from "./lib/tool"
+import { allowAllPermission, permissionLayer } from "./lib/permission"
+import { Session } from "@orbit/core/session"
+import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const server = path.join(import.meta.dir, "fixtures", "lsp", "fake-server.ts")
 const configured = (lsp: unknown) =>
@@ -102,6 +103,71 @@ describe("Lsp", () => {
     }),
   )
 
+  it.live("a save brings the save-only diagnostic and carries the text only when the server asks for it", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      const file = path.join(directory, "main.fake")
+      yield* Effect.promise(() => Bun.write(file, "here is an ERROR\n"))
+      const messages = (found: Record<string, Lsp.Diagnostic[]>) => found[file]!.map((item) => item.message)
+      yield* withLsp(directory, { fake: { command: [process.execPath, server], extensions: [".fake"] } }, (lsp) =>
+        Effect.gen(function* () {
+          // The very first call opens the file before it saves; the fake reports a save that came first.
+          expect(messages(yield* lsp.diagnostics([file], { save: true }))).toEqual([
+            "found ERROR",
+            "checked on save (with text)",
+          ])
+          expect(messages(yield* lsp.diagnostics([file]))).toEqual(["found ERROR"])
+          yield* Effect.promise(() => Bun.write(file, "again an ERROR\n"))
+          expect(messages(yield* lsp.diagnostics([file], { save: true }))).toEqual([
+            "found ERROR",
+            "checked on save (with text)",
+          ])
+        }),
+      )
+      yield* withLsp(
+        directory,
+        { fake: { command: [process.execPath, server, "--plain-save"], extensions: [".fake"] } },
+        (lsp) =>
+          lsp
+            .diagnostics([file], { save: true })
+            .pipe(Effect.map((found) => expect(messages(found)).toEqual(["found ERROR", "checked on save (no text)"]))),
+      )
+    }),
+  )
+
+  it.live("the lsp tool's diagnostics action never saves", () =>
+    Effect.gen(function* () {
+      const directory = (yield* tmpdirScoped()).path
+      const file = path.join(directory, "main.fake")
+      yield* Effect.promise(() => Bun.write(file, "here is an ERROR\n"))
+      yield* Effect.gen(function* () {
+        const registry = yield* Tool.Service
+        const settled = yield* executeTool(registry, {
+          sessionID: Session.ID.make("ses_lsp_tool"),
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-lsp", name: "LSP", input: { action: "diagnostics", path: file } },
+        })
+        expect(settled.status).toBe("completed")
+        const text = JSON.stringify(settled.content)
+        expect(text).toContain("found ERROR")
+        expect(text).not.toContain("checked on save")
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(LayerNode.group([Tool.node, lspToolNode]), [
+            Config.node.replace(configured({ fake: { command: [process.execPath, server], extensions: [".fake"] } })),
+            Permission.node.replace(allowAllPermission),
+            Location.node.replace(
+              Layer.succeed(
+                Location.Service,
+                Location.Service.of(location({ directory: AbsolutePath.make(directory) })),
+              ),
+            ),
+          ]),
+        ),
+      )
+    }),
+  )
+
   it.live("starts no server while the project is untrusted, and starts one once it is trusted", () =>
     Effect.gen(function* () {
       const directory = (yield* tmpdirScoped()).path
@@ -114,14 +180,20 @@ describe("Lsp", () => {
 
         // The server is in config that trust never touches, so only the folder's decision keeps it from starting.
         expect(yield* lsp.diagnostics([file])).toEqual({})
+        expect(yield* lsp.diagnostics([file], { save: true })).toEqual({})
         expect((yield* hover.pipe(Effect.flip)).message).toBe("Language servers stay off until this folder is trusted.")
 
         yield* trust.grant(directory, { persist: false, via: "test" })
         expect(Object.keys(yield* lsp.diagnostics([file]))).toEqual([file])
+        expect((yield* lsp.diagnostics([file], { save: true }))[file]?.map((item) => item.message)).toEqual([
+          "found ERROR",
+          "checked on save (with text)",
+        ])
         expect(yield* hover).toEqual({ contents: { kind: "markdown", value: "a fake symbol" } })
 
         yield* trust.revoke(directory)
         expect(yield* lsp.diagnostics([file])).toEqual({})
+        expect(yield* lsp.diagnostics([file], { save: true })).toEqual({})
         expect((yield* hover.pipe(Effect.flip)).message).toBe("Language servers stay off until this folder is trusted.")
       }).pipe(
         Effect.provide(
