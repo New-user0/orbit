@@ -25,7 +25,7 @@ test.each([40, 120])("a waiting shell notice reads as waiting, never finished, a
     {
       id: "notice-0",
       type: "synthetic",
-      text: `<shell id="sh_1" state="waiting" command="x">\nLast output:\n${tail}\n</shell>`,
+      text: `<shell id="sh_1" state="waiting" command="x">\nThe output ends with:\n${tail}\n</shell>`,
       description: "npm init \u001b]0;title\u0007\u001b[2K\rbad",
       metadata: { source: "shell", state: "waiting", shellID: "sh_1" },
       time: { created: 1 },

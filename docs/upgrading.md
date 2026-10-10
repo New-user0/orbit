@@ -353,7 +353,7 @@ Orbit now watches every shell command that runs in the background (asked for, mo
 client). It looks at the size of the command's output every 5 seconds. After 45 to 50 seconds without new output, it reads
 the last 1024 bytes. If the last line looks like a question the model could answer (`(y/n)`, `[Y/n]`, `(yes/no)`, "Do you
 ...?", "Are you sure ...?", "Press any key", "Press Enter", "Continue?", "Overwrite?"), the session gets one notice with
-state `waiting`, the last output, and advice to stop the command with `TaskStop` and run it again with the answer supplied.
+state `waiting`, the end of its output, and advice to stop the command with `TaskStop` and run it again with the answer supplied.
 Password, passphrase and token prompts are not matched. A command that is only slow or quiet gets no notice. There is at
 most one notice per command, it does not end the job, and the completion notice still follows. Commands still run with no
 input, and a foreground command is not watched until its deadline moves it to the background.

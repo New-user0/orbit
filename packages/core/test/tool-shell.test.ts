@@ -196,7 +196,7 @@ const permissionIt = testEffect(
 
 // The real job registry, with `block` and `cancel` held back for a set time, so a test can land the deadline in the window
 // between a job settling and the call looking at it.
-const slow = { block: 0, cancel: 0 }
+const slow = { block: 0, cancel: 0, stale: false }
 const slowJobs = makeGlobalNode({
   service: Job.Service,
   layer: Layer.effect(
@@ -205,6 +205,11 @@ const slowJobs = makeGlobalNode({
       Effect.map((jobs) =>
         Job.Service.of({
           ...jobs,
+          // With `stale` set, a running job reads as already settled, as when it ends just as a notice is due.
+          get: (id) =>
+            jobs.get(id).pipe(
+              Effect.map((info) => (slow.stale && info?.status === "running" ? { ...info, status: "completed" as const } : info)),
+            ),
           block: (input) => jobs.block(input).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.block)))),
           cancel: (id) => jobs.cancel(id).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.cancel)))),
         }),
@@ -2898,6 +2903,27 @@ describe("ShellTool timeouts", () => {
         if (seen.length < count) return yield* Effect.fail(new Error("Timed out waiting for the notification"))
       })
 
+    // Waits in real time, without moving the clock, until the notification has been admitted.
+    const settle = (seen: ReadonlyArray<unknown>, count: number): Effect.Effect<void, Error> =>
+      Effect.gen(function* () {
+        for (let attempt = 0; attempt < 150 && seen.length < count; attempt++) yield* realWait(20)
+        if (seen.length < count) return yield* Effect.fail(new Error("Timed out waiting for the notification"))
+      })
+
+    /** The ID of the one running shell, once it has printed. */
+    const runningShell = Effect.gen(function* () {
+      const shell = yield* Shell.Service
+      for (let attempt = 0; attempt < 500; attempt++) {
+        const id = (yield* shell.list())[0]?.id
+        if (id) {
+          yield* untilPrinted(id)
+          return id
+        }
+        yield* realWait(20)
+      }
+      return yield* Effect.fail(new Error("No shell started"))
+    })
+
     const start = (registry: Tool.Interface, command: string, id: string) =>
       Effect.gen(function* () {
         const settled = yield* executeTool(registry, call({ command, run_in_background: true }, id))
@@ -2918,7 +2944,8 @@ describe("ShellTool timeouts", () => {
             const shellID = yield* start(registry, promptThenIdle, "call-stall")
             yield* advance(45)
             expect(seen).toEqual([])
-            yield* advance(5)
+            yield* TestClock.adjust("5 seconds")
+            yield* settle(seen, 1)
             expect(seen).toHaveLength(1)
             expect(seen[0]?.metadata).toMatchObject({ source: "shell", shellID, state: "waiting" })
             expect(seen[0]?.metadata).not.toHaveProperty("exit")
@@ -2935,7 +2962,7 @@ describe("ShellTool timeouts", () => {
             yield* advance(600)
             expect(seen).toHaveLength(1)
 
-            yield* (yield* Shell.Service).kill(ID.make(shellID))
+            yield* shell.kill(ID.make(shellID))
             yield* untilCount(seen, 2)
             expect(seen.map((entry) => entry.metadata.state)).toEqual(["waiting", "completed"])
             expect(yield* jobs.pendingBackground).toEqual([])
@@ -2950,10 +2977,11 @@ describe("ShellTool timeouts", () => {
         inFolder(undefined, ({ registry }) =>
           Effect.gen(function* () {
             const seen = yield* collect
+            const shell = yield* Shell.Service
             const shellID = yield* start(registry, `${isWindows ? "[Console]::Out.Write('Compiling...'); " : "printf 'Compiling...'; "}${quietAndIdle}`, "call-quiet")
             yield* advance(300)
             expect(seen).toEqual([])
-            yield* (yield* Shell.Service).kill(ID.make(shellID))
+            yield* shell.kill(ID.make(shellID))
             yield* untilCount(seen, 1)
             expect(seen.map((entry) => entry.metadata.state)).toEqual(["completed"])
           }),
@@ -2977,25 +3005,96 @@ describe("ShellTool timeouts", () => {
     )
 
     it.effect(
-      "watches a foreground command only after its deadline moves it to the background",
+      "does not watch a foreground call that is still waiting, and watches it once the deadline moves it",
       () =>
         inFolder(undefined, ({ registry }) =>
           Effect.gen(function* () {
             const seen = yield* collect
+            const shell = yield* Shell.Service
             const fiber = yield* Effect.forkChild(
-              executeTool(registry, call({ command: promptThenIdle, timeout: 1000 }, "call-fg")),
+              executeTool(registry, call({ command: promptThenIdle, timeout: 120_000 }, "call-fg")),
               { startImmediately: true },
             )
-            yield* realWait(1000)
-            yield* advance(5)
+            const shellID = yield* runningShell
+            yield* advance(100)
+            expect(seen).toEqual([])
+            yield* advance(25)
             const settled = yield* Fiber.join(fiber)
-            const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : ""
             expect(settled.metadata).toMatchObject({ status: "running" })
             expect(seen).toEqual([])
             yield* advance(50)
+            yield* settle(seen, 1)
             expect(seen.map((entry) => entry.metadata.state)).toEqual(["waiting"])
-            yield* (yield* Shell.Service).kill(ID.make(shellID))
+            yield* shell.kill(ID.make(shellID))
           }),
+        ),
+      { timeout: 30_000 },
+    )
+
+    it.effect(
+      "watches a foreground command that a client moves to the background",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            const shell = yield* Shell.Service
+            const jobs = yield* Job.Service
+            const fiber = yield* Effect.forkChild(
+              executeTool(registry, call({ command: promptThenIdle, timeout: 120_000 }, "call-moved")),
+              { startImmediately: true },
+            )
+            const shellID = yield* runningShell
+            yield* jobs.background(shellID)
+            const settled = yield* Fiber.join(fiber)
+            expect(settled.metadata).toMatchObject({ status: "running" })
+            expect(seen).toEqual([])
+            yield* advance(50)
+            yield* settle(seen, 1)
+            expect(seen.map((entry) => entry.metadata.state)).toEqual(["waiting"])
+            yield* shell.kill(ID.make(shellID))
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+
+    it.effect(
+      "reads the end of a long output, not the start",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            const shell = yield* Shell.Service
+            const shellID = yield* start(
+              registry,
+              isWindows
+                ? "[Console]::Out.Write('HEAD' + 'MARKER' + ('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
+                : "printf HEAD; printf MARKER; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
+              "call-long",
+            )
+            yield* advance(50)
+            yield* settle(seen, 1)
+            expect(seen[0]?.text).toContain("Continue? [y/N]")
+            expect(seen[0]?.text).not.toContain("HEADMARKER")
+            yield* shell.kill(ID.make(shellID))
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+
+    slowIt.effect(
+      "posts no waiting notice when the job has already settled by the time one is due",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            const shell = yield* Shell.Service
+            const shellID = yield* start(registry, promptThenIdle, "call-stale")
+            slow.stale = true
+            yield* advance(60)
+            expect(seen).toEqual([])
+            slow.stale = false
+            yield* shell.kill(ID.make(shellID))
+          }).pipe(Effect.ensuring(Effect.sync(() => void (slow.stale = false)))),
         ),
       { timeout: 30_000 },
     )

@@ -44,7 +44,7 @@ export function deadlineNotice(budget: number) {
 export function stallNotice(input: { shellID: string; tail: string }) {
   return [
     `The command has printed nothing new for ${Duration.toSeconds(ShellStall.QUIET)} seconds and its last line looks like a question. Commands run with no input, so it cannot be answered.`,
-    `Last output:\n${input.tail}`,
+    `The output ends with:\n${input.tail}`,
     `It is probably blocked on that prompt. Stop it with TaskStop and shell ID ${input.shellID}, then run it again with the answer supplied in the command (for example piped in) or with its non-interactive option.`,
   ].join("\n\n")
 }

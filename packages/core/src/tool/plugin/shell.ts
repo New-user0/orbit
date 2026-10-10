@@ -231,8 +231,7 @@ export const Plugin = {
         command: string,
         settled: Deferred.Deferred<Output>,
       ) {
-        // Watched until the command ends, and stopped before the completion notice is admitted, so "waiting" never
-        // follows "completed".
+        // Watched until the command ends.
         const watcher = yield* ShellStall.watch({
           size: shell.output(Shell.ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER }).pipe(
             Effect.map((out) => out.size),

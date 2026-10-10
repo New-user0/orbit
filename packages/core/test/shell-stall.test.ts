@@ -37,6 +37,7 @@ describe("ShellStall.looksLikePrompt", () => {
     "cp: overwrite 'b'? ",
     "Enter passphrase for key '/home/u/.ssh/id_ed25519': ",
     "Password:",
+    "Paste your access token: ",
     "package name: (demo) ",
     "Is this OK? (yes) ",
     "Waiting for you to finish signing in in the browser...",
@@ -160,13 +161,26 @@ describe("ShellStall.watch", () => {
     }),
   )
 
+  it.effect("gives no second notice when new output ends on another prompt", () =>
+    Effect.gen(function* () {
+      const { state, watcher } = harness("Continue? [y/N] ")
+      const fiber = yield* Effect.forkChild(watcher, { startImmediately: true })
+      yield* advance(50)
+      expect(state.stalls).toHaveLength(1)
+      state.text += "\nOverwrite? "
+      yield* advance(600)
+      expect(state.stalls).toHaveLength(1)
+      yield* Fiber.interrupt(fiber)
+    }),
+  )
+
   it.effect("hands over the last 1024 bytes and finds a prompt on the last line of a large output", () =>
     Effect.gen(function* () {
       const { state, watcher } = harness(`${"line of output\n".repeat(400)}Do you want to continue? [Y/n] \n`)
       const fiber = yield* Effect.forkChild(watcher, { startImmediately: true })
       yield* advance(50)
       expect(state.stalls).toHaveLength(1)
-      expect(Buffer.byteLength(state.stalls[0] ?? "")).toBeLessThanOrEqual(ShellStall.TAIL_BYTES)
+      expect(Buffer.byteLength(state.stalls[0] ?? "")).toBeLessThanOrEqual(1024)
       expect(state.stalls[0]).toEndWith("Do you want to continue? [Y/n]")
       yield* Fiber.interrupt(fiber)
     }),
