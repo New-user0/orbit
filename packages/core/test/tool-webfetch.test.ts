@@ -1117,12 +1117,13 @@ describe("WebFetchTool redirects", () => {
       route({
         "example.com/a": () =>
           new Response(
-            // Nothing is pulled until a reader asks, and the body never ends: reading it in full would hang the call.
+            // Nothing is pulled until a reader asks; the body is finite so a mutation fails instead of hanging.
             new ReadableStream(
               {
                 pull(controller) {
                   pulled = true
                   controller.enqueue(new Uint8Array(1024))
+                  controller.close()
                 },
               },
               { highWaterMark: 0 },
@@ -1348,6 +1349,25 @@ describe("WebFetchTool timeout", () => {
 
       expect(yield* Fiber.join(fiber)).toEqual(failed("Request timed out"))
       expect(requests).toHaveLength(2)
+    }),
+  )
+
+  it.effect("times out a stalled body", () =>
+    Effect.gen(function* () {
+      reset()
+      respond = () =>
+        Effect.succeed(
+          new Response(new ReadableStream({ pull: () => new Promise<void>(() => {}) }), {
+            headers: { "content-type": "text/plain" },
+          }),
+        )
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", format: "text", timeout: 1 }).pipe(
+        Effect.forkChild,
+      )
+      yield* TestClock.adjust(Duration.seconds(2))
+
+      expect(yield* Fiber.join(fiber)).toEqual(failed("Request timed out"))
+      expect(requests).toHaveLength(1)
     }),
   )
 })
