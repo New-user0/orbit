@@ -270,8 +270,10 @@ variable is unset). Windows does not use `%ProgramData%`, because a standard use
 `ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it), and
 `orb debug paths managed` prints the one in use. Objects merge by key, lists of independent entries (permissions,
 policies, instructions, plugins, restriction lists) concatenate and lose their repeats, and any other value takes the
-later file's: a `command` argument list, a tiered `cost`, a model, and a whole `mcp.servers.<name>` definition, so a
-later file's `url` never keeps an earlier file's `headers` or `oauth`. A relative `plugins` path in a drop-in
+later file's: a `command` argument list, a tiered `cost`, a model, and a whole entry of `mcp.servers`, `lsp`,
+`formatter`, `references` and `commands` (each entry is one definition, so a later `url` never keeps an earlier
+`headers` or `oauth`, an LSP `env` never reaches another server, and a `disabled` entry is replaced, not kept). `providers`
+and `agents` merge by key, as across documents, except that a later agent entry that leaves out `disabled` is enabled again. A relative `plugins` path in a drop-in
 resolves against the managed folder, not `managed-settings.d`; a `{file:}` variable resolves against the file that
 holds it. The merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
 while the server runs. A `managed` block in these files holds restrictions (`organization`, `mcp`, `plugins`,
@@ -279,7 +281,9 @@ while the server runs. A `managed` block in these files holds restrictions (`org
 never creates the folder, and a folder created after the server starts is read on the next start.
 
 A file or an entry that does not decode is skipped on its own and never drops what its siblings say, and a key that
-Orbit does not know, at any depth (`sandbox.enabeld`, a server's `disable`), is reported instead of ignored. `orb doctor` lists
+Orbit does not know, at any depth of the native settings (`sandbox.enabeld`, a server's `disable`, an agent's `permisions`), is
+reported instead of ignored. The legacy top-level spellings (`agent`, `provider`, `permission` and the rest) are not
+checked, and neither is a key that another variant of the same value knows (`headers` on a local server). `orb doctor` lists
 the managed files by name and each problem it found. This release loads and merges the settings and hands the
 permission rules and restrictions to the policy service; enforcing them follows separately.
 

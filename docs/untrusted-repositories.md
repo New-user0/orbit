@@ -115,12 +115,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes
   on its own (class 7): a file or folder that exists but cannot be read or listed, an unknown key in `managed` or its
   sections, an unknown key at any depth of the other settings (one walk of the config schema: struct fields, record
-  values, union members and list items; the legacy top-level spellings are not walked), a listed file that is a link
+  values, union members and list items; the legacy top-level spellings are not walked, and a key that a sibling union
+  member knows is not reported), a listed file that is a link
   to nothing (the base file in any case on Windows and macOS), an unresolvable variable and a drop-in named `*.jsonc`
   or with `.json` in another case are reported, never dropped silently (other names such as `10.yaml` or
   `10.json.bak` and sub-folders are ignored), and a later file's model, its `command` or `cost` list, or its
-  `mcp.servers.<name>` replaces an earlier one as a whole, so a later `url` never keeps an earlier `headers` or
-  `oauth`. A relative `ProgramFiles` falls back to `C:\Program Files`. Proof: `core/test/managed-settings.test.ts`,
+  entry of `mcp.servers`, `lsp`, `formatter`, `references` or `commands` replaces an earlier one as a whole, so a later
+  `url` never keeps an earlier `headers` or `oauth` and an LSP `env` never reaches another server (`providers` and
+  `agents` merge by key; a later agent entry without `disabled` is enabled again). A relative `ProgramFiles` falls back to `C:\Program Files`. Proof: `core/test/managed-settings.test.ts`,
   `cli/test/doctor-managed.test.ts`, `util/test/managed-path.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.

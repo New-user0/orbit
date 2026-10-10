@@ -709,8 +709,8 @@ describe("ManagedSettings.read mcp servers", () => {
       expected: { type: "remote", url: "https://b.example/mcp", oauth: { client_id: "b" } },
     },
     {
-      name: "a local server over a remote one",
-      first: { type: "remote", url: "https://a.example/mcp", headers: { Authorization: "Bearer A" } },
+      name: "a local server without the env of the one before",
+      first: { type: "local", command: ["node", "a.js"], environment: { TOKEN: "secret-a" } },
       second: { type: "local", command: ["node", "b.js"] },
       expected: { type: "local", command: ["node", "b.js"] },
     },
@@ -736,6 +736,104 @@ describe("ManagedSettings.read mcp servers", () => {
   )
 })
 
+describe("ManagedSettings.read records of whole definitions", () => {
+  // Each entry is one definition across documents, so an entry never inherits a key of the one before it. Every row
+  // fails under a key-by-key merge.
+  const rows = [
+    {
+      name: "lsp env",
+      key: "lsp",
+      first: { "ls-a": { command: ["a"], env: { TOKEN: "secret-a" }, initialization: { endpoint: "https://a.example" } } },
+      second: { "ls-a": { command: ["b"] } },
+      expected: { command: ["b"] },
+    },
+    {
+      name: "a disabled lsp server",
+      key: "lsp",
+      first: { "ls-a": { disabled: true } },
+      second: { "ls-a": { command: ["b"] } },
+      expected: { command: ["b"] },
+    },
+    {
+      name: "formatter environment",
+      key: "formatter",
+      first: { fmt: { command: ["a"], environment: { TOKEN: "secret-a" } } },
+      second: { fmt: { command: ["b"] } },
+      expected: { command: ["b"] },
+    },
+    {
+      name: "a disabled formatter",
+      key: "formatter",
+      first: { fmt: { disabled: true } },
+      second: { fmt: { command: ["b"] } },
+      expected: { command: ["b"] },
+    },
+    {
+      name: "a reference branch",
+      key: "references",
+      first: { lib: { repository: "https://a.example/repo.git", branch: "secret-branch" } },
+      second: { lib: { repository: "https://b.example/repo.git" } },
+      expected: { repository: "https://b.example/repo.git" },
+    },
+    {
+      name: "a command agent",
+      key: "commands",
+      first: { fix: { template: "a", agent: "build", description: "from a" } },
+      second: { fix: { template: "b" } },
+      expected: { template: "b" },
+    },
+  ]
+
+  rows.forEach((row) =>
+    it.live(`${row.name} comes from one file`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, {
+          "managed-settings.json": { [row.key]: row.first },
+          "managed-settings.d/10.json": { [row.key]: row.second },
+        })
+
+        const snapshot = yield* read(tmp.path)
+        const name = Object.keys(row.second)[0]
+
+        expect(JSON.parse(JSON.stringify(field(snapshot.info, row.key, name)))).toEqual(row.expected)
+        expect(snapshot.diagnostics).toEqual([])
+      }),
+    ),
+  )
+
+  it.live("an agent that leaves out disabled comes back, and keeps the keys it did not change", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { agents: { build: { disabled: true, steps: 2 } } },
+        "managed-settings.d/10.json": { agents: { build: { description: "back" } } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(field(snapshot.info, "agents", "build", "disabled")).toBeUndefined()
+      expect(field(snapshot.info, "agents", "build", "steps")).toBe(2)
+      expect(field(snapshot.info, "agents", "build", "description")).toBe("back")
+    }),
+  )
+
+  it.live("an agent that sets disabled stays disabled", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { agents: { build: { steps: 2 } } },
+        "managed-settings.d/10.json": { agents: { build: { disabled: true } } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(field(snapshot.info, "agents", "build", "disabled")).toBe(true)
+      expect(field(snapshot.info, "agents", "build", "steps")).toBe(2)
+    }),
+  )
+})
+
 describe("ManagedSettings.read unknown keys at every depth", () => {
   const rows = [
     { name: "sandbox.enabeld", file: { sandbox: { enabeld: true, network: false } }, at: "$.sandbox.enabeld" },
@@ -756,6 +854,12 @@ describe("ManagedSettings.read unknown keys at every depth", () => {
       at: "$.permissions.0.efect",
     },
     {
+      name: "a misspelled key of a local server, next to the skip",
+      file: { mcp: { servers: { s: { type: "local", comand: ["x"] } } } },
+      at: "$.mcp.servers.s.comand",
+      also: "$.mcp.servers.s",
+    },
+    {
       name: "a nested key of a remote server",
       file: { mcp: { servers: { s: { type: "remote", url: "https://a.example", oauth: { client_secrett: "x" } } } } },
       at: "$.mcp.servers.s.oauth.client_secrett",
@@ -770,9 +874,11 @@ describe("ManagedSettings.read unknown keys at every depth", () => {
 
         const snapshot = yield* read(tmp.path)
 
-        expect(snapshot.diagnostics).toEqual([
+        expect(snapshot.diagnostics).toContainEqual(
           expect.objectContaining({ path: row.at, kind: "unsupported", message: "ignored an unknown key" }),
-        ])
+        )
+        // Only the row that the normalizer also skips has a second diagnostic; the others have exactly one.
+        expect(snapshot.diagnostics).toHaveLength("also" in row ? 2 : 1)
       }),
     ),
   )
@@ -868,6 +974,8 @@ describe("ManagedSettings.read unknown keys outside managed", () => {
         "managed-settings.json": {
           $schema: "https://example.invalid/schema.json",
           autoshare: false,
+          mcp: { legacy: { type: "local", command: ["x"] } },
+          compaction: { preserve_recent_tokens: 10, reserved: 5 },
           disabled_providers: ["openai"],
           experimental: { policies: [], subagent_depth: 2, mcp_timeout: 5000 },
           shell: "zsh",

@@ -187,11 +187,11 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, source: stri
     message: diagnostic.message,
   }))
   // The normalizer ignores a key it does not know, so a typo such as `permisions` or `sandbox.enabeld` would turn an
-  // organization's setting off without a word. A path it already reported (or one inside it) is not reported twice.
+  // organization's setting off without a word. A path it already reported is not reported twice.
   const normalizedProblems = [
     ...reported,
     ...unknownKeys(others).filter(
-      (item) => !reported.some((known) => item.path === known.path || item.path.startsWith(`${known.path}.`)),
+      (item) => !reported.some((known) => item.path === known.path),
     ),
   ].map((item) => problem(item.kind, item.path, item.message))
   return {
@@ -215,14 +215,28 @@ const legacyKeys: readonly string[] = [
   ...["reference", "small_model", "snapshot", "tools", "enabled_providers", "disabled_providers"],
 ]
 // Migrated by the normalizer, so it works although the schema has no such field.
-const legacyPaths: readonly string[] = ["$.experimental.mcp_timeout"]
+const legacyPaths: readonly string[] = [
+  "$.experimental.mcp_timeout",
+  "$.compaction.preserve_recent_tokens",
+  "$.compaction.reserved",
+]
+// Under `mcp` the normalizer reads `servers` and `timeout`; any other key is a legacy server it migrates, or reports
+// itself when it does not decode.
+const mcpKeys: readonly string[] = ["servers", "timeout"]
 const encodedInfo = Schema.toEncoded(Info).ast
 
 /** Every key the schema does not know, at any depth: struct fields, record values, union members and list items. */
 function unknownKeys(others: Record<string, unknown>): Problem[] {
   const native = Object.fromEntries(Object.entries(others).filter(([key]) => !legacyKeys.includes(key)))
-  const found = walk(encodedInfo, native, "$").filter((item) => !legacyPaths.includes(item.path))
+  const found = walk(encodedInfo, native, "$").filter(
+    (item) => !legacyPaths.includes(item.path) && !isLegacyMcp(item.path),
+  )
   return found.filter((item, index) => found.findIndex((other) => other.path === item.path) === index)
+}
+
+function isLegacyMcp(at: string) {
+  const [root, section, name] = at.split(".")
+  return root === "$" && section === "mcp" && name !== undefined && !mcpKeys.includes(name)
 }
 
 function walk(ast: SchemaAST.AST, value: unknown, at: string): Problem[] {
@@ -318,13 +332,21 @@ function cleanRestrictions(raw: unknown) {
 
 // Objects merge by key, lists of independent entries concatenate (a list of strings loses its repeats) and any other
 // value takes the later one. A `command` is one argument list, and so is a tiered `cost`: joining two files' lists
-// would run a command that no file contains. An MCP server is one definition, as it is across documents: a later
-// file's `url` must not keep an earlier file's `headers` or `oauth` client secret and send them to another host.
+// would run a command that no file contains. An entry of these records is one definition, as it is across documents
+// (`Config.latest` for lsp and formatter, per-name adds for references and commands): a later file's `url` must not
+// keep an earlier file's `headers` or `oauth` client secret, an LSP `env` must not reach another server, and a
+// `disabled` must not outlive the definition that replaced it. `providers` and `agents` overlay across documents,
+// so they merge by key.
 const wholeValues = ["command", "cost"]
+const wholeEntries = ["lsp", "formatter", "references", "commands"]
 
 function merge(base: unknown, next: unknown, at: readonly string[] = []): unknown {
   if (next === undefined) return base
   if (at.length === 3 && at[0] === "mcp" && at[1] === "servers") return next
+  if (at.length === 2 && wholeEntries.includes(at[0])) return next
+  // A later agent entry that leaves out `disabled` brings the agent back.
+  if (at.length === 2 && at[0] === "agents" && isRecord(base) && isRecord(next) && !("disabled" in next))
+    return merge(Object.fromEntries(Object.entries(base).filter(([key]) => key !== "disabled")), next, [...at, ""])
   if (Array.isArray(base) && Array.isArray(next) && !wholeValues.includes(at.at(-1) ?? "")) {
     const all = [...base, ...next]
     return all.every((item) => typeof item === "string") ? [...new Set(all)] : all
