@@ -368,7 +368,7 @@ export const layer = (options?: Options) =>
         // that follows fails the same way and is skipped, so nothing loads twice and nothing dies here.
         const identity = (file: string) =>
           fs.resolve(file).pipe(
-            Effect.catch(() => Effect.succeed(path.resolve(file))),
+            Effect.catchDefect(() => Effect.succeed(path.resolve(file))),
             Effect.map((real) => (process.platform === "win32" ? FSUtil.normalizePath(real).toLowerCase() : real)),
           )
         const explicit = sources.explicit
