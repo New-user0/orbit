@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect } from "bun:test"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { Effect, Exit, Layer, Result } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
+import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
+import { LayerNodePlatform } from "@orbit/util/effect/app-node-platform"
 import { Config } from "@orbit/core/config"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -13,6 +18,7 @@ import { Permission } from "@orbit/core/permission"
 import { Session } from "@orbit/core/session"
 import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Global } from "@orbit/util/global"
+import { Token } from "@orbit/core/util/token"
 import { FileAccess } from "@orbit/core/file-access"
 import { location } from "./fixture/location"
 import { Tool } from "@orbit/core/tool"
@@ -237,6 +243,162 @@ describe("ReadTool", () => {
       ])
     }),
   )
+  it.effect("refuses a device with its own message, asks nothing and opens nothing", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const device = process.platform === "win32" ? "NUL" : "/dev/stdin"
+
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-read-device", name: "Read", input: { file_path: device } },
+      })
+
+      expect(result).toMatchObject({
+        status: "error",
+        error: { message: expect.stringContaining("is a device or stream, not a file") },
+      })
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("reads a notebook from its first line when offset and limit are 0", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const execution = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-read-notebook-zero",
+          name: "Read",
+          input: { file_path: "test/fixtures/notebook/sample.ipynb", offset: 0, limit: 0 },
+        },
+      })
+      expect(execution.status).toBe("completed")
+      if (execution.status !== "completed") return
+      expect(execution.output).toMatchObject({ type: "text-page", offset: 1 })
+    }),
+  )
+
+  it.effect("pages a notebook with huge outputs within the budget", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const directory = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "orbit-notebook-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })))
+      const file = path.join(directory, "big.ipynb")
+      const outputLines = Array.from({ length: 1_500 }, (_, index) => `${index} ${"o".repeat(80)}`)
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          file,
+          JSON.stringify({
+            cells: [
+              {
+                cell_type: "code",
+                id: "big",
+                metadata: {},
+                source: ["print('x')"],
+                outputs: [
+                  { output_type: "stream", name: "stdout", text: outputLines.map((line) => `${line}\n`) },
+                  { output_type: "stream", name: "stdout", text: ["z".repeat(500_000)] },
+                ],
+              },
+            ],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          }),
+        ),
+      )
+      // The real reader, so that the paging of the raw JSON (a few lines) and of the rendering (thousands) are both real.
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
+      readOverride = (input, resource, page) => ReadToolFileSystem.read(environment, input, resource, page)
+
+      // Page to the end: each page stays within the budget and starts where the one before said to continue.
+      const starts: number[] = []
+      let offset: number | undefined
+      let finished = false
+      for (let index = 0; index < 20 && !finished; index++) {
+        const page = yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: {
+            type: "tool-call",
+            id: `call-big-notebook-${index}`,
+            name: "Read",
+            input: offset === undefined ? { file_path: file } : { file_path: file, offset },
+          },
+        })
+        if (page.status !== "completed" || page.output.type !== "text-page") throw new Error("expected a page")
+        const text = page.content?.[0]?.type === "text" ? page.content?.[0].text : ""
+        expect(Token.estimate(text)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS + 100)
+        starts.push(page.output.offset)
+        if (page.output.next === undefined) finished = true
+        else {
+          expect(page.output.next).toBeGreaterThan(page.output.offset)
+          expect(text).toContain(`Continue reading with offset: ${page.output.next}`)
+          offset = page.output.next
+        }
+      }
+      // More than one page, chained to the last: the offsets are lines of the rendering, not of the JSON.
+      expect(starts.length).toBeGreaterThan(1)
+      expect(starts[0]).toBe(1)
+      expect(finished).toBe(true)
+    }).pipe(
+      Effect.provide(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem]))),
+      Effect.scoped,
+    ),
+  )
+
+  it.effect("fails a notebook read past the end like a text file, and pages a folder named like a notebook", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const directory = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "orbit-notebook-edge-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })))
+      const notebook = path.join(directory, "small.ipynb")
+      const folder = path.join(directory, "nb.ipynb")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(
+          notebook,
+          JSON.stringify({
+            cells: [{ cell_type: "code", id: "a", metadata: {}, source: ["print(1)"], outputs: [] }],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          }),
+        )
+        await fs.mkdir(folder)
+        await Promise.all(Array.from({ length: 5 }, (_, index) => fs.writeFile(path.join(folder, `f${index}.txt`), "x")))
+      })
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
+      readOverride = (input, resource, page) => ReadToolFileSystem.read(environment, input, resource, page)
+
+      const past = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-nb-past", name: "Read", input: { file_path: notebook, offset: 500 } },
+      })
+      expect(past).toMatchObject({
+        status: "error",
+        error: { message: expect.stringContaining("out of range") },
+      })
+
+      const listed = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-nb-folder", name: "Read", input: { file_path: folder, offset: 3, limit: 2 } },
+      })
+      if (listed.status !== "completed" || listed.output.type !== "list-page") throw new Error("expected a list page")
+      expect(listed.output.entries).toHaveLength(2)
+    }).pipe(
+      Effect.provide(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem]))),
+      Effect.scoped,
+    ),
+  )
+
   it.effect("asks for external_directory approval before reading an external absolute path", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
@@ -968,7 +1130,7 @@ describe("ReadTool", () => {
       expect(result.content).toEqual([
         {
           type: "text",
-          text: "Read file large.txt, lines 2-2\n2: hello\n[Output truncated. Continue reading with offset: 3]",
+          text: "Read file large.txt, lines 2-2\n2: hello\n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 3, or use Grep to find specific content.]",
         },
       ])
       expect(readCalls).toEqual([

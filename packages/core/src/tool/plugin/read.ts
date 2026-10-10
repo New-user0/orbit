@@ -49,16 +49,15 @@ export const Plugin = {
           options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel", maxResultChars: Infinity },
           description:
-            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Prefer one larger read over many small slices, and use Grep to find specific content in large files.",
+            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. A read returns at most 2000 lines or about 25000 tokens of rendered text, and a truncated one ends with the offset to continue from. Prefer one larger read over many small slices, and use Grep to find specific content in large files. Device paths such as /dev/zero or NUL are refused.",
           input: Input,
           output: Output,
           execute: (input, context) => {
             return Effect.gen(function* () {
-              const read = (target: FileAccess.Target) =>
-                reader.read(target.absolute, target.resource, {
-                  offset: input.offset,
-                  limit: input.limit,
-                })
+              // A notebook is paged by its rendered cells, so its raw JSON is read whole: the offset of a page is a line
+              // of the rendering, which the JSON may not have.
+              const read = (target: FileAccess.Target, paged = !Notebook.isNotebook(target.absolute)) =>
+                reader.read(target.absolute, target.resource, paged ? { offset: input.offset, limit: input.limit } : {})
 
               const requested = yield* access.authorizeRead(input.file_path, context)
               const result = yield* read(requested).pipe(
@@ -119,10 +118,15 @@ export const Plugin = {
                 !ReadToolFileSystem.MEDIA_MIMES.has(result.content.mime)
               )
                 return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource: result.target.resource }))
+              // A folder named like a notebook was read whole above; page it as any folder.
+              if (result.content.type === "list-page" && Notebook.isNotebook(result.target.absolute))
+                return { output: yield* read(result.target, true), path: result.path }
               if (result.content.type !== "list-page") yield* ledger.record(context.sessionID, result.target.absolute)
               if (result.content.type !== "list-page" && Notebook.isNotebook(result.target.absolute)) {
                 const notebook = yield* readNotebook(result.target.absolute, input.offset, input.limit)
                 if (notebook) return { output: notebook, path: result.path }
+                // Not a notebook after all: read it as the text it is, from the offset asked for.
+                return { output: yield* read(result.target, true), path: result.path }
               }
               return { output: result.content, path: result.path }
             }).pipe(
@@ -134,6 +138,7 @@ export const Plugin = {
               Effect.mapError((error) => {
                 if (error instanceof ToolFailure) return error
                 const message =
+                  error instanceof FileAccess.DeviceError ||
                   error instanceof ReadToolFileSystem.BinaryFileError ||
                   error instanceof ReadToolFileSystem.MediaIngestLimitError ||
                   error instanceof ReadToolFileSystem.OffsetOutOfRangeError ||
@@ -157,12 +162,24 @@ export const Plugin = {
       const notebook = Notebook.parse((yield* FileMutation.readText(environment.files, absolute)).text)
       if (!notebook) return
       const lines = Notebook.render(notebook).split("\n")
-      const start = offset ?? 1
-      const count = Math.min(limit ?? ReadToolFileSystem.MAX_READ_LINES, ReadToolFileSystem.MAX_READ_LINES)
-      const next = start + count
+      const start = offset || 1
+      if (start > lines.length && start !== 1)
+        return yield* new ReadToolFileSystem.OffsetOutOfRangeError({ offset: start, lines: lines.length })
+      const count = Math.min(limit || ReadToolFileSystem.MAX_READ_LINES, ReadToolFileSystem.MAX_READ_LINES)
+      // The same budget as a text file: lines are clamped, and the page ends before the line that would pass it.
+      const page: string[] = []
+      let size = 0
+      for (const line of lines.slice(start - 1, start - 1 + count)) {
+        const text = ReadToolFileSystem.clampLine(line)
+        const length = ReadToolFileSystem.renderedLength(start + page.length, text)
+        if (page.length > 0 && !ReadToolFileSystem.withinBudget(size + length)) break
+        page.push(text)
+        size += length
+      }
+      const next = start + page.length
       return new ReadToolFileSystem.TextPage({
         type: "text-page",
-        content: lines.slice(start - 1, next - 1).join("\n"),
+        content: page.join("\n"),
         mime: "application/x-ipynb+json",
         offset: PositiveInt.make(start),
         truncated: next <= lines.length,
@@ -241,6 +258,8 @@ export const toModelContent = (path: string, offset: number | undefined, output:
   ]
   lines.forEach((line, index) => content.push(`${start + index}: ${line}`))
   if (output.type === "text-page" && output.truncated && output.next !== undefined)
-    content.push(`[Output truncated. Continue reading with offset: ${output.next}]`)
+    content.push(
+      `[Output truncated: one read returns at most ${ReadToolFileSystem.MAX_READ_LINES} lines or about ${ReadToolFileSystem.MAX_READ_TOKENS} tokens. Continue reading with offset: ${output.next}, or use Grep to find specific content.]`,
+    )
   return content.join("\n")
 }
