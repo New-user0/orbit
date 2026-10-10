@@ -1834,15 +1834,19 @@ The status line command (`status_line.command`) used to run only on its interval
 now also runs when a step ends or an execution starts or ends in the session, and when the selected agent, model or
 model variant changes. Runs start at least 300 ms apart (the interval aside), and a trigger that arrives while a run is
 in flight causes exactly one more run, 300 ms after the first started or when it ends, whichever is later. A command
-that runs longer than 2 s is stopped together with the programs it started, and the last good line stays. On Windows
+that runs longer than 2 s, or that is still running 2 s after it closed its output, is stopped together with the
+programs it started, and the last good line stays. On macOS and Linux the command runs in its own session, so it has
+no controlling terminal: a script that reads the terminal size from `/dev/tty` (`stty size`) fails, and the command is
+given no terminal size. On Windows
 that covers what the shell is still running when it is stopped; a program that the shell started detached
 (`start /b`) and then left is not stopped. Its stdin JSON gains `version`, `session` (`id`, `title`), `cwd`,
 `project_dir`, `model` (`provider`, `id`, `name`, `variant`, the model selected for the next prompt), `agent`,
 `output_style`, `context` (`used`, `limit`, `percent`, all three for the selected model), `cost` (`usd`, `duration_ms`,
 `lines_added`, `lines_removed`), `status` (`idle` or `running`) and `vim_mode`; `session_id` stays. The `model` object
-now names its provider `provider` (it was `providerID`) and `cost` is an object, where it was a number. `lines_added`
-and `lines_removed` are `null` until Orbit tracks them. The new `status_line.colors` key (default `false`) renders the
-command's colors, bold, dim, italic and underline instead of removing them. Every other escape sequence, such as a
+now names its provider `provider` (it was `providerID`), `cost` is an object, where it was a number, and `context`
+holds `used`, `limit` and `percent`, where it held `tokens` and `percent`. `session_id` and `model` are `null` on the
+home screen, where they used to be absent. `lines_added` and `lines_removed` are `null` until Orbit tracks them. The new
+`status_line.colors` key (default `false`) renders the command's colors, bold, dim, italic and underline instead of removing them. Every other escape sequence, such as a
 title change or a clipboard write, is dropped in both modes, control characters are shown as their control pictures,
 and format characters such as a right-to-left override or a zero-width space are written out (`\u{202e}`). Private Use
 Area glyphs (Powerline, Nerd Font) and the zero-width joiner of an emoji sequence are drawn as they are. On Windows the
@@ -1854,5 +1858,6 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 
 **Affects:** people with a `status_line` command, in particular scripts that read `model` or `cost` from stdin.
 
-**What to do:** Update a script that read `cost` as a number to read `cost.usd`, and one that read `model.providerID` to read
-`model.provider`. Set `status_line.colors` to `true` to see your script's colors.
+**What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
+read `model.provider`, and one that read `context.tokens` to read `context.used`.
+Set `status_line.colors` to `true` to see your script's colors.

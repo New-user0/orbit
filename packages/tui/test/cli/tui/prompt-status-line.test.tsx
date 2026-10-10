@@ -111,10 +111,10 @@ test("unmounting removes the event subscriptions", async () => {
 
 // The Private Use Area (Powerline, Nerd Font) and the zero-width joiner are the status line's usual glyphs and are drawn.
 test.each([
-  ["U+E0A0 Powerline branch", ""],
-  ["U+E0B0 Powerline arrow", ""],
+  ["U+E0A0 Powerline branch", "\u{e0a0}"],
+  ["U+E0B0 Powerline arrow", "\u{e0b0}"],
   ["U+F0001 supplementary Private Use Area", "\u{f0001}"],
-  ["emoji sequence with U+200D", "\u{1f468}‍\u{1f4bb}"],
+  ["emoji sequence with U+200D", "\u{1f468}\u{200d}\u{1f4bb}"],
 ])("%s is drawn unchanged, with colors on and off", async (_name, glyph) => {
   for (const colors of [true, false]) {
     const test = setup({ colors, outputs: [`main ${glyph} ok\n`] })
@@ -154,9 +154,9 @@ test("colors are drawn only when status_line.colors is on", async () => {
 
 // Class 9: what a repository can put in a branch name or session title reaches the script and comes back to the frame.
 test.each([
-  ["U+202E right-to-left override", "‮", "\\u{202e}"],
-  ["U+200B zero-width space", "​", "\\u{200b}"],
-  ["U+2066 isolate", "⁦", "\\u{2066}"],
+  ["U+202E right-to-left override", "\u{202e}", "\\u{202e}"],
+  ["U+200B zero-width space", "\u{200b}", "\\u{200b}"],
+  ["U+2066 isolate", "\u{2066}", "\\u{2066}"],
   ["escape sequence (title change)", "\u001b]0;pwned\u0007", ""],
   ["ordinary text (control)", "", ""],
 ])("%s is not drawn raw, with colors on and off", async (_name, char, written) => {

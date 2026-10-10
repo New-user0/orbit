@@ -114,9 +114,10 @@ async function spawn(command: string, stdin: string, cwd: string | undefined) {
   )
   const timeout = Symbol("timeout")
   const timer = { id: undefined as ReturnType<typeof setTimeout> | undefined }
-  const output = await Promise.race([
-    new Response(child.stdout).text().catch(() => ""),
-    // A grandchild can hold stdout open after the shell is gone, so the run stops waiting for it.
+  // Output and exit are both inside the limit: a command can close its stdout and keep running, and a grandchild can
+  // hold stdout open after the shell is gone. Either way the run gives up and the whole group is stopped.
+  const result = await Promise.race([
+    Promise.all([new Response(child.stdout).text().catch(() => ""), child.exited]),
     new Promise<typeof timeout>((resolve) => {
       timer.id = setTimeout(() => {
         killTree(child)
@@ -125,9 +126,8 @@ async function spawn(command: string, stdin: string, cwd: string | undefined) {
     }),
   ])
   clearTimeout(timer.id)
-  if (output === timeout) return
-  if ((await child.exited) !== 0) return
-  return output
+  if (result === timeout) return
+  return result[1] === 0 ? result[0] : undefined
 }
 
 function killTree(child: { readonly pid: number; readonly exitCode: number | null }) {
@@ -150,7 +150,8 @@ function killTree(child: { readonly pid: number; readonly exitCode: number | nul
 
 /**
  * The first line of the output. With `colors` the SGR sequences stay in it for `ansiSpans`; without, they go too.
- * Every other escape sequence and control character is dropped or written out either way.
+ * Every other escape sequence and control character is dropped or written out; with `colors` the SGR sequences
+ * are left to `ansiSpans`, which drops the rest.
  */
 export function firstLine(output: string, colors = false) {
   const first = output.split(/\r?\n/)[0]

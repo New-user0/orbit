@@ -963,7 +963,7 @@ repository text.
   it, with a trusted control row.
 - The output of the status line command passes `printable` (`@orbit/util/plain`, used by `ansiSpans` in
   `packages/tui/src/util/ansi-spans.ts`). It writes out control characters as control pictures, lone surrogates and
-  every format character, and keeps two things that `plain` would write out: the Private Use Area (Cn and Co glyphs,
+  every format character, and keeps two things that `plain` would write out: the Private Use Area (Co glyphs,
   where Powerline and Nerd Font put theirs) and U+200D (an emoji sequence). Neither reorders or hides text, and the
   command is the person's own setting. `ansi-spans.test.ts` and `prompt-status-line.test.tsx` pin both exceptions, next
   to the U+202E, U+200B and U+2066 rows.
@@ -1129,7 +1129,8 @@ kind in turn.
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
 - One member of the class is still open: a relative `PATH` entry. Three more rest on `ProgramLookup.install()` alone,
-  with no test of their own: the language server client, the bare `git` fallback and the terminal UI's external editor. Known gaps lists each with its task. A change must not widen one.
+  with no test of their own: the language server client, the bare `git` fallback and the terminal UI's external editor.
+  Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.

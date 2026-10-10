@@ -183,17 +183,42 @@ test("a command that outlives the timeout is stopped together with what it start
     // The control is the same command with a delay that ends before the timeout, so it is known to write its marker.
     const control = path.join(dir, "control.txt")
     createRoot((dispose) => {
-      createStatusLine({ command: () => command(4, marker), interval: () => 60_000, payload: () => ({}) })
+      createStatusLine({ command: () => command(8, marker), interval: () => 60_000, payload: () => ({}) })
       createStatusLine({ command: () => command(1, control), interval: () => 60_000, payload: () => ({}) })
-      setTimeout(dispose, 4_800)
+      setTimeout(dispose, 9_000)
     })
-    await wait(5_000)
+    await wait(9_500)
     expect(await Bun.file(control).exists()).toBe(true)
     expect(await Bun.file(marker).exists()).toBe(false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 }, 15_000)
+
+// Windows is not affected: cmd.exe keeps its own stdout handle, so closing it in the command does not close the pipe.
+test.skipIf(process.platform === "win32")(
+  "a command that closes its stdout and keeps running is stopped, and the next trigger starts a new run",
+  async () => {
+    const commands = ["echo good", "echo bad; exec >/dev/null; sleep 29.37", "echo after"]
+    const state = { index: 0 }
+    const status = createRoot(() =>
+      createStatusLine({ command: () => commands[state.index++], interval: () => 60_000, payload: () => ({}) }),
+    )
+    await wait(700)
+    expect(status.line()).toBe("good")
+    status.trigger()
+    await wait(2_800)
+    expect(state.index).toBe(2)
+    expect(status.line()).toBe("good")
+    status.trigger()
+    await wait(900)
+    expect(state.index).toBe(3)
+    expect(status.line()).toBe("after")
+    const left = await new Response(Bun.spawn(["ps", "-eo", "args"], { stdout: "pipe" }).stdout).text()
+    expect(left.split("\n").filter((row) => row.includes("sleep 29.37"))).toEqual([])
+  },
+  15_000,
+)
 
 test.skipIf(process.platform === "win32")("the status line command reads the session from stdin", async () => {
   const line = await new Promise<string | undefined>((resolve) =>
