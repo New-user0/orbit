@@ -23,6 +23,7 @@ import { FileAccess } from "@orbit/core/file-access"
 import { location } from "./fixture/location"
 import { Tool } from "@orbit/core/tool"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
+import { Pdf } from "@orbit/core/tool/pdf"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { SessionInstructions } from "@orbit/core/session/instructions"
@@ -755,10 +756,157 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "PDF read successfully" },
+          { type: "text", text: "Read PDF document.pdf" },
           { type: "file", uri: `data:application/pdf;base64,${pdf}`, mime: "application/pdf", name: "document.pdf" },
         ],
       })
+    }),
+  )
+
+  const pdfPart = {
+    type: "file",
+    uri: "file:///document.pdf",
+    name: "document.pdf",
+    content: "JVBERi0xLjcK",
+    encoding: "base64",
+    mime: "application/pdf",
+  } as const
+  const pdfCall = (id: string, input: Record<string, unknown>) => ({
+    sessionID,
+    ...toolIdentity,
+    call: { type: "tool-call" as const, id, name: "Read", input: { file_path: "document.pdf", ...input } },
+  })
+
+  it.effect("names the pages of a PDF range and the total, and passes the parsed range to the reader", () =>
+    Effect.gen(function* () {
+      readResult = { ...pdfPart, pages: { first: 3, last: 7, total: 15 } as never }
+      const registry = yield* Tool.Service
+
+      for (const pages of ["3-7", " 3-7 "]) {
+        readCalls.length = 0
+        expect(yield* executeTool(registry, pdfCall(`call-${pages}`, { pages }))).toMatchObject({
+          status: "completed",
+          content: [
+            { type: "text", text: "Read document.pdf, PDF pages 3-7 of 15" },
+            { type: "file", mime: "application/pdf" },
+          ],
+        })
+        expect(readCalls).toEqual([
+          {
+            input: AbsolutePath.make(path.join(process.cwd(), "document.pdf")),
+            page: { offset: undefined, limit: undefined, pages: { first: 3, last: 7 } },
+          },
+        ])
+      }
+    }),
+  )
+
+  it.effect("refuses a bad pages value before any permission request or read, whatever the file", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const cases = [
+        { pages: "0", message: 'Invalid pages value "0"' },
+        { pages: "5-3", message: 'Invalid pages value "5-3"' },
+        { pages: "-5", message: 'Invalid pages value "-5"' },
+        { pages: "", message: 'Invalid pages value ""' },
+        { pages: "1-25", message: 'The pages value "1-25" asks for more than 20 pages' },
+        { pages: "3-", message: 'The pages value "3-" asks for more than 20 pages' },
+      ]
+      for (const item of cases) {
+        for (const file_path of ["document.pdf", "README.md", "missing-file.xyz"]) {
+          const result = yield* executeTool(registry, {
+            ...pdfCall(`call-${item.pages}`, { pages: item.pages }),
+            call: { type: "tool-call", id: "c", name: "Read", input: { file_path, pages: item.pages } },
+          })
+          expect(result).toMatchObject({ status: "error", error: { message: expect.stringContaining(item.message) } })
+        }
+      }
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("rejects a pages value that is not a number or a range at the schema", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+
+      for (const pages of ["abc", "3abc", "1.5", "1-5x"]) {
+        expect(yield* executeTool(registry, pdfCall(`call-${pages}`, { pages }))).toMatchObject({
+          status: "error",
+          error: { type: "tool.input-invalid" },
+        })
+      }
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("accepts a pages value for a text file and reads it as usual", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "c", name: "Read", input: { file_path: "README.md", pages: "2" } },
+        }),
+      ).toMatchObject({
+        status: "completed",
+        content: [{ type: "text", text: "Read file README.md, lines 1-1\n1: hello" }],
+      })
+    }),
+  )
+
+  it.effect("answers a repeated identical PDF read with the PDF again, never the unchanged stub", () =>
+    Effect.gen(function* () {
+      readResult = { ...pdfPart, pages: { first: 1, last: 2, total: 4 } as never }
+      const registry = yield* Tool.Service
+
+      for (const id of ["first", "second"]) {
+        expect(yield* executeTool(registry, pdfCall(id, { pages: "1-2" }))).toMatchObject({
+          status: "completed",
+          content: [{ type: "text", text: "Read document.pdf, PDF pages 1-2 of 4" }, { type: "file" }],
+        })
+      }
+    }),
+  )
+
+  it.effect("ignores offset and limit for the reader result of a PDF", () =>
+    Effect.gen(function* () {
+      readResult = pdfPart
+      const registry = yield* Tool.Service
+
+      expect(yield* executeTool(registry, pdfCall("c", { offset: 3, limit: 2 }))).toMatchObject({
+        content: [{ type: "text", text: "Read PDF document.pdf" }, { type: "file" }],
+      })
+    }),
+  )
+
+  it.effect("returns each PDF failure to the model as its own message", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const cases = [
+        [new ReadToolFileSystem.PdfPagesRequiredError({ resource: "document.pdf", pages: 15 }), "15 pages"],
+        [new ReadToolFileSystem.PdfPageRangeError({ resource: "document.pdf", first: 40, total: 15 }), "Page 40"],
+        [new ReadToolFileSystem.PdfSourceError({ resource: "document.pdf" }), "could not be read in full"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "corrupt" }), "corrupted or invalid"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "encrypted" }), "password-protected"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "unavailable" }), "unavailable in this build"],
+        [
+          new ReadToolFileSystem.MediaIngestLimitError({
+            resource: "document.pdf",
+            maximumBytes: ReadToolFileSystem.MAX_PDF_SOURCE_BYTES,
+          }),
+          `${ReadToolFileSystem.MAX_PDF_SOURCE_BYTES} byte`,
+        ],
+      ] as const
+      for (const [error, text] of cases) {
+        readFailure = error
+        const result = yield* executeTool(registry, pdfCall(`call-${error._tag}`, {}))
+        expect(result).toMatchObject({ status: "error", error: { message: expect.stringContaining(text) } })
+        expect(JSON.stringify(result)).not.toContain("Unable to read")
+      }
     }),
   )
 

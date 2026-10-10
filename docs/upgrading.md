@@ -2334,3 +2334,11 @@ always shown, and a folder that is not a repository hides nothing.
 git-ignored folders such as `node_modules`.
 
 **What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.
+
+### Read returns a PDF by page range
+
+Read takes a new optional `pages` argument for PDFs: a page such as `3` or a range such as `1-5`, counted from 1, at most 20 pages per call. It copies those pages into a new PDF, so the text stays selectable. A PDF of more than 10 pages can no longer be read whole: Read fails and tells the model to pass `pages`, where it used to send the file whole up to 20 MiB. A last page past the end is clamped to the last page; a first page past the end fails. A PDF that cannot be parsed, or is password-protected, is refused with a message instead of being sent. A PDF above 32 MiB is refused, and one between 20 and 32 MiB can still be read through `pages`. `pages` on any other file is ignored; a malformed value, or one wider than 20 pages, fails before anything is read. No program is installed or run: the pages are cut in process.
+
+**Affects:** models, scripts and plugins that read PDFs of more than 10 pages, or PDFs that are not valid, with Read.
+
+**What to do:** Pass `pages`, for example `"1-5"`, for a long PDF. A model that cannot take PDF input still receives the usual unsupported-media text.

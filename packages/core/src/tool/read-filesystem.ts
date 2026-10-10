@@ -12,11 +12,14 @@ import { FileSystem } from "../filesystem.js"
 import { Mime } from "../mime.js"
 import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath } from "../schema.js"
 import { Token } from "../util/token.js"
+import { Pdf } from "./pdf.js"
 
 export const MAX_READ_LINES = 2_000
 /** What one read may render for the model, estimated as `Token.estimate` does, line numbers included. */
 export const MAX_READ_TOKENS = 25_000
 export const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024
+/** A PDF is read whole to count and cut its pages, so its source stays below the process driver's 64 MiB read cap. */
+export const MAX_PDF_SOURCE_BYTES = 32 * 1024 * 1024
 const FIRST_CHUNK = 256 * 1024
 const MAX_LINE_LENGTH = 2_000
 const TREE_BASE = 6
@@ -40,10 +43,38 @@ export class MediaIngestLimitError extends Schema.TaggedError<MediaIngestLimitEr
   {
     resource: Schema.String,
     maximumBytes: Schema.Number,
+    advice: Schema.optionalKey(Schema.String),
   },
 ) {
   override get message() {
-    return `Media exceeds ${this.maximumBytes} byte ingestion limit: ${this.resource}`
+    return `Media exceeds ${this.maximumBytes} byte ingestion limit: ${this.resource}${this.advice === undefined ? "" : `. ${this.advice}`}`
+  }
+}
+
+export class PdfPagesRequiredError extends Schema.TaggedError<PdfPagesRequiredError>()(
+  "ReadTool.PdfPagesRequiredError",
+  { resource: Schema.String, pages: Schema.Number },
+) {
+  override get message() {
+    return `This PDF has ${this.pages} pages, too many to read at once (more than ${Pdf.MAX_WHOLE_PAGES}): ${this.resource}. Read it in parts with the pages argument, for example pages: "1-5". One call returns at most ${Pdf.MAX_PAGES_PER_CALL} pages.`
+  }
+}
+
+export class PdfPageRangeError extends Schema.TaggedError<PdfPageRangeError>()("ReadTool.PdfPageRangeError", {
+  resource: Schema.String,
+  first: Schema.Number,
+  total: Schema.Number,
+}) {
+  override get message() {
+    return `Page ${this.first} is past the end of this PDF, which has ${this.total} ${this.total === 1 ? "page" : "pages"}: ${this.resource}`
+  }
+}
+
+export class PdfSourceError extends Schema.TaggedError<PdfSourceError>()("ReadTool.PdfSourceError", {
+  resource: Schema.String,
+}) {
+  override get message() {
+    return `The PDF could not be read in full: ${this.resource}`
   }
 }
 
@@ -70,18 +101,26 @@ export type ReadError =
   | Environment.Failed
   | BinaryFileError
   | MediaIngestLimitError
+  | PdfPagesRequiredError
+  | PdfPageRangeError
+  | PdfSourceError
+  | Pdf.Error
   | OffsetOutOfRangeError
   | PathKindError
 
 export const PageInput = Schema.Struct({
   offset: Schema.optionalKey(NonNegativeInt),
   limit: Schema.optionalKey(NonNegativeInt),
+  // Applies to PDFs only and is parsed by the caller; other files ignore it.
+  pages: Schema.optionalKey(Schema.Struct({ first: PositiveInt, last: PositiveInt })),
 })
 export type PageInput = typeof PageInput.Type
 
 export const FileContent = Schema.Struct({
   type: Schema.Literal("file"),
   ...FileSystem.Content.fields,
+  /** For a PDF read by range: the pages returned and how many the source has. */
+  pages: Schema.optionalKey(Schema.Struct({ first: PositiveInt, last: PositiveInt, total: PositiveInt })),
 }).annotate({ identifier: "ReadTool.FileContent" })
 export type FileContent = typeof FileContent.Type
 
@@ -143,6 +182,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
   if (first instanceof ListPage) return { content: first } satisfies ReadResult
 
   const media = Mime.detect(first.bytes)
+  if (media === "application/pdf") return yield* readPdf(files, first.info.size, input, resource, page)
   if (MEDIA_MIMES.has(media)) {
     if (first.info.size > MAX_MEDIA_INGEST_BYTES)
       return yield* new MediaIngestLimitError({ resource, maximumBytes: MAX_MEDIA_INGEST_BYTES })
@@ -170,6 +210,57 @@ export const read = Effect.fn("ReadTool.read")(function* (
       ...(first.bytes.length >= first.info.size ? { digest: FileLedger.digest(first.bytes) } : {}),
     },
   } satisfies ReadResult
+})
+
+// A PDF is read whole to count its pages (the count decides whether a whole read is allowed) and to cut a range from it.
+const readPdf = Effect.fn("ReadTool.readPdf")(function* (
+  files: Files,
+  size: number,
+  input: AbsolutePath,
+  resource: string,
+  page: PageInput,
+) {
+  if (size > MAX_PDF_SOURCE_BYTES)
+    return yield* new MediaIngestLimitError({ resource, maximumBytes: MAX_PDF_SOURCE_BYTES })
+  const whole = yield* readFile(files, input, resource).pipe(
+    Effect.catchTag("Environment.Failed", () => Effect.fail(new PdfSourceError({ resource }))),
+  )
+  const total = yield* Pdf.pageCount(whole.bytes, resource)
+  const seen = { mtimeMs: whole.info.mtimeMs, digest: FileLedger.digest(whole.bytes) }
+  const result = (bytes: Uint8Array, pages?: { first: number; last: number }) =>
+    ({
+      content: {
+        type: "file" as const,
+        uri: pathToFileURL(input).href,
+        name: path.basename(input),
+        content: Buffer.from(bytes).toString("base64"),
+        encoding: "base64" as const,
+        mime: "application/pdf",
+        ...(pages ? { pages: { first: pages.first, last: pages.last, total } } : {}),
+      },
+      seen,
+    }) satisfies ReadResult
+
+  if (page.pages === undefined) {
+    if (total > Pdf.MAX_WHOLE_PAGES) return yield* new PdfPagesRequiredError({ resource, pages: total })
+    if (whole.bytes.length > MAX_MEDIA_INGEST_BYTES)
+      return yield* new MediaIngestLimitError({
+        resource,
+        maximumBytes: MAX_MEDIA_INGEST_BYTES,
+        advice: "Read part of it with the pages argument",
+      })
+    return result(whole.bytes)
+  }
+  if (page.pages.first > total) return yield* new PdfPageRangeError({ resource, first: page.pages.first, total })
+  const last = Math.min(page.pages.last, total)
+  const bytes = yield* Pdf.extract(whole.bytes, resource, page.pages.first, last)
+  if (bytes.length > MAX_MEDIA_INGEST_BYTES)
+    return yield* new MediaIngestLimitError({
+      resource,
+      maximumBytes: MAX_MEDIA_INGEST_BYTES,
+      advice: "Ask for fewer pages",
+    })
+  return result(bytes, { first: page.pages.first, last })
 })
 
 const readText = Effect.fn("ReadTool.readText")(function* (

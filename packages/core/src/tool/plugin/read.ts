@@ -15,6 +15,7 @@ import { FileLedger } from "../../file-ledger.js"
 import { FileMutation } from "../../file-mutation.js"
 import { Notebook } from "../notebook.js"
 import { AbsolutePath, PositiveInt } from "../../schema.js"
+import { Pdf } from "../pdf.js"
 import { ReadToolFileSystem } from "../read-filesystem.js"
 import { Environment } from "../../environment/index.js"
 
@@ -26,6 +27,9 @@ const LocationInput = Schema.Struct({
   }),
   limit: ReadToolFileSystem.PageInput.fields.limit.annotate({
     description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)",
+  }),
+  pages: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[\s\d-]*$/))).annotate({
+    description: `Page range for a PDF, 1-based, such as "3" or "1-5" (at most ${Pdf.MAX_PAGES_PER_CALL} pages per call). Required for a PDF of more than ${Pdf.MAX_WHOLE_PAGES} pages. Other files ignore it.`,
   }),
 })
 export const Input = LocationInput
@@ -50,15 +54,21 @@ export const Plugin = {
           options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel", maxResultChars: Infinity },
           description:
-            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. A read returns at most 2000 lines or about 25000 tokens of rendered text, and a truncated one ends with the offset to continue from. Prefer one larger read over many small slices, and use Grep to find specific content in large files. Device paths such as /dev/zero or NUL are refused.",
+            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. A PDF of more than 10 pages must be read with pages, and one call returns at most 20 pages. A read returns at most 2000 lines or about 25000 tokens of rendered text, and a truncated one ends with the offset to continue from. Prefer one larger read over many small slices, and use Grep to find specific content in large files. Device paths such as /dev/zero or NUL are refused.",
           input: Input,
           output: Output,
           execute: (input, context) => {
             return Effect.gen(function* () {
+              // Checked first, whatever the file: a bad value never prompts and never touches the disk.
+              const pages = yield* parsePages(input.pages)
               // A notebook is paged by its rendered cells, so its raw JSON is read whole: the offset of a page is a line
               // of the rendering, which the JSON may not have.
               const read = (target: FileAccess.Target, paged = !Notebook.isNotebook(target.absolute)) =>
-                reader.read(target.absolute, target.resource, paged ? { offset: input.offset, limit: input.limit } : {})
+                reader.read(
+                  target.absolute,
+                  target.resource,
+                  paged ? { offset: input.offset, limit: input.limit, ...(pages ? { pages } : {}) } : {},
+                )
 
               const requested = yield* access.authorizeRead(input.file_path, context)
               const result = yield* read(requested).pipe(
@@ -168,6 +178,10 @@ export const Plugin = {
                   error instanceof FileAccess.DeviceError ||
                   error instanceof ReadToolFileSystem.BinaryFileError ||
                   error instanceof ReadToolFileSystem.MediaIngestLimitError ||
+                  error instanceof ReadToolFileSystem.PdfPagesRequiredError ||
+                  error instanceof ReadToolFileSystem.PdfPageRangeError ||
+                  error instanceof ReadToolFileSystem.PdfSourceError ||
+                  error instanceof Pdf.Error ||
                   error instanceof ReadToolFileSystem.OffsetOutOfRangeError ||
                   error instanceof ReadToolFileSystem.PathKindError
                     ? error.message
@@ -251,6 +265,25 @@ export const Plugin = {
   }),
 }
 
+const parsePages = (value: string | undefined) => {
+  if (value === undefined) return Effect.succeed(undefined)
+  const range = Pdf.parseRange(value)
+  if (!range)
+    return Effect.fail(
+      new ToolFailure({
+        message: `Invalid pages value "${value}". Use a single page such as "3" or a range such as "1-5"; pages count from 1.`,
+      }),
+    )
+  // The width comes from the numbers alone, before the PDF's page count is known; an open range is always too wide.
+  if (range.last - range.first + 1 > Pdf.MAX_PAGES_PER_CALL)
+    return Effect.fail(
+      new ToolFailure({
+        message: `The pages value "${value}" asks for more than ${Pdf.MAX_PAGES_PER_CALL} pages. One call returns at most ${Pdf.MAX_PAGES_PER_CALL}; ask for a smaller range.`,
+      }),
+    )
+  return Effect.succeed({ first: PositiveInt.make(range.first), last: PositiveInt.make(range.last) })
+}
+
 /** The model text for a repeat read of a range whose text is the same as the one the model already holds. */
 export const unchangedStub = (path: string) =>
   `Read file ${path}: unchanged since your last read of this range. The text you were given then is still current, so use it instead of reading again.`
@@ -258,7 +291,15 @@ export const unchangedStub = (path: string) =>
 export const toModelContent = (path: string, offset: number | undefined, output: typeof Output.Type) => {
   if (output.type === "file" && output.encoding === "base64")
     return [
-      { type: "text", text: output.mime === "application/pdf" ? "PDF read successfully" : "Image read successfully" },
+      {
+        type: "text",
+        text:
+          output.mime !== "application/pdf"
+            ? "Image read successfully"
+            : output.pages
+              ? `Read ${path}, PDF pages ${output.pages.first}-${output.pages.last} of ${output.pages.total}`
+              : `Read PDF ${path}`,
+      },
       {
         type: "file",
         uri: `data:${output.mime};base64,${output.content}`,

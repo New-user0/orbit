@@ -13,6 +13,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect, FileSystem } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { testEffect } from "./lib/effect"
+import { makePdf } from "./lib/pdf"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem])))
 const fixture = Effect.gen(function* () {
@@ -486,13 +487,14 @@ describe("ReadToolFileSystem", () => {
     Effect.gen(function* () {
       const { environment, files, directory } = yield* fixture
       const file = path.join(directory, "document.pdf")
-      yield* files.writeFileString(file, "%PDF-1.7\ncontent")
+      const bytes = yield* Effect.promise(() => makePdf(2))
+      yield* files.writeFile(file, bytes)
 
       const result = yield* readContent(environment, absolute(file), "document.pdf")
 
       expect(result).toMatchObject({
         type: "file",
-        content: Buffer.from("%PDF-1.7\ncontent").toString("base64"),
+        content: Buffer.from(bytes).toString("base64"),
         encoding: "base64",
         mime: "application/pdf",
       })
@@ -506,7 +508,8 @@ describe("ReadToolFileSystem", () => {
       const pdf = path.join(directory, "document.pdf")
       const large = path.join(directory, "large.txt")
       yield* files.writeFileString(small, "one\ntwo\n")
-      yield* files.writeFileString(pdf, "%PDF-1.7\ncontent")
+      const pdfBytes = yield* Effect.promise(() => makePdf(1))
+      yield* files.writeFile(pdf, pdfBytes)
       // Longer than the first chunk, so paging reads it piece by piece and never holds all of it at once.
       yield* files.writeFileString(large, "line\n".repeat(80_000))
       const digest = (text: string) => FileLedger.digest(new TextEncoder().encode(text))
@@ -520,7 +523,7 @@ describe("ReadToolFileSystem", () => {
       expect(whole.seen?.digest).toBe(digest("one\ntwo\n"))
       expect(whole.seen?.mtimeMs).toBeGreaterThan(0)
       expect(paged.seen?.digest).toBe(digest("one\ntwo\n"))
-      expect(media.seen?.digest).toBe(digest("%PDF-1.7\ncontent"))
+      expect(media.seen?.digest).toBe(FileLedger.digest(pdfBytes))
       expect(big.seen?.mtimeMs).toBeGreaterThan(0)
       expect(big.seen).not.toHaveProperty("digest")
       expect(folder.seen).toBeUndefined()

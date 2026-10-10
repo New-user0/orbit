@@ -1682,15 +1682,23 @@ fixes it or asks.
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
   check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
-- **Build checks.** `verifyArtifact` does not fail the build on an import or a `require` of a `#` name or of a stray
-  bare name, and `packages/core/test/provider-compiled.test.ts` copies the autoload options instead of importing them.
-  Two names are not replaced in `packages/cli/script/runtime-requires.ts`, because nothing loads code through either
+- **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name
+  (`packages/cli/test/verify-artifact.test.ts`), and `provider-compiled.test.ts` and `pdf-compiled.test.ts` import the
+  autoload options instead of copying them. It still does not fail the build on a stray bare name: a text scan of the
+  compiled binary finds hundreds of candidates, most of them guarded optional requires in dependencies (`ajv/dist/...`,
+  `node-fetch`, `@aws-sdk/signature-v4-crt`) and bytecode noise, so a reliable check needs the bundler's own list of
+  unresolved imports. Two names are not replaced in `packages/cli/script/runtime-requires.ts`, because nothing loads code through either
   today. `bufferutil` is not in the bundle: the server uses the `ws` that Bun carries, and Bun carries `utf-8-validate`
   but not `bufferutil`, so nothing asks for it. The npm `ws` package asks for it when it loads, so if a change ever
   bundled that package, `bufferutil` would be left to the runtime, resolve from the working folder's `node_modules` and
   run from there. `node-gyp/bin/node-gyp.js`, which the bundle does leave to the runtime, is only a path that npm looks
   up with `require.resolve` and does not load, and Orbit installs with scripts off. Replace the first before the binary
   imports the npm `ws`, and re-check the second before Orbit installs with scripts on.
+- **PDF parsing runs in the server process.** Read counts and cuts the pages of a PDF in process (`Pdf` in
+  `packages/core/src/tool/pdf.ts`), after the person approved reading that file. A 32 MiB source cap bounds the input
+  but not the time or memory a hostile PDF can take, so a crafted file can stall the Location. Parsing in a worker with
+  a time and memory limit needs the owner's buy-in. The parser evaluates nothing (`tool-read-pdf.test.ts` plants a
+  script action and a marker).
 - **A rejection with feedback inside Code Mode, and ACP.** The step stops its tool queue when a direct tool call fails
   with a permission correction (`session-runner.test.ts`, `mcp.test.ts`). A Code Mode program turns the same rejection
   into an error result, so the calls queued behind its `execute` call still start and can ask (task `tool-runtime-6`
