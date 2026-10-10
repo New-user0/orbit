@@ -45,6 +45,18 @@ describe("orb doctor managed settings", () => {
     expect(result.exitCode).toBe(1)
   })
 
+  test("reports a drop-in folder that cannot be listed instead of saying there are no managed settings", async () => {
+    const managed = path.join(root, "not-a-folder")
+    await fs.mkdir(managed, { recursive: true })
+    await Bun.write(path.join(managed, "managed-settings.d"), "a file where the folder belongs")
+
+    const result = await doctor(managed)
+
+    expect(result.stdout).toContain(`no managed settings in ${managed}`)
+    expect(result.stdout).toContain("managed-settings.d $: skipped a folder that cannot be listed")
+    expect(result.exitCode).toBe(1)
+  })
+
   test("writes control characters from a file out instead of sending them to the terminal", async () => {
     const managed = path.join(root, "control")
     await fs.mkdir(managed, { recursive: true })

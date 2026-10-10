@@ -77,41 +77,57 @@ interface Loaded {
  */
 export const read = Effect.fn("ManagedSettings.read")(function* (directory: string) {
   const fs = yield* FSUtil.Service
-  const dropins = yield* fs.readDirectoryEntries(path.join(directory, "managed-settings.d")).pipe(
-    Effect.map((entries) =>
-      entries
-        .filter((entry) => entry.type !== "directory" && entry.name.endsWith(".json"))
-        .map((entry) => path.join(directory, "managed-settings.d", entry.name))
-        .toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+  const folder = path.join(directory, "managed-settings.d")
+  // Only a folder that is not there is empty. One that cannot be listed (permissions, a file in its place) is reported.
+  const listing = yield* fs.readDirectoryEntries(folder).pipe(
+    Effect.map((entries) => ({ entries, problem: undefined })),
+    Effect.catch((error) =>
+      Effect.succeed({
+        entries: [] as FSUtil.DirEntry[],
+        problem: isNotFound(error)
+          ? undefined
+          : ({
+              source: folder,
+              path: "$",
+              kind: "invalid",
+              message: "skipped a folder that cannot be listed",
+            } satisfies Diagnostic),
+      }),
     ),
-    Effect.orElseSucceed((): string[] => []),
   )
+  // File names are case-insensitive on Windows and macOS, so `10-a.JSON` is a drop-in there; elsewhere it is reported.
+  const caseInsensitive = process.platform === "win32" || process.platform === "darwin"
+  const files = listing.entries.filter((entry) => entry.type !== "directory")
+  const dropins = files
+    .filter((entry) => (caseInsensitive ? /\.json$/i : /\.json$/).test(entry.name))
+    .map((entry) => path.join(folder, entry.name))
+    .toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  const skipped = files
+    .filter((entry) => /\.jsonc?$/i.test(entry.name) && !dropins.includes(path.join(folder, entry.name)))
+    .map(
+      (entry): Diagnostic => ({
+        source: path.join(folder, entry.name),
+        path: "$",
+        kind: "unsupported",
+        message: "skipped a file that is not named *.json",
+      }),
+    )
   const loaded = yield* Effect.forEach([path.join(directory, "managed-settings.json"), ...dropins], (file) =>
     loadFile(fs, file),
   )
-  const diagnostics = loaded.flatMap((file) => file.diagnostics)
   const rest = loaded.reduce<unknown>((merged, file) => (file.rest ? merge(merged, file.rest) : merged), {})
-  const info = decodeInfo(rest)
   const restrictions = decodeRestrictions(
     loaded.reduce<unknown>((merged, file) => merge(merged, file.restrictions), {}),
   )
   return {
     directory,
     sources: loaded.filter((file) => file.present).map((file) => file.source),
-    info: Option.getOrElse(info, () => new Info({})),
+    info: Option.getOrElse(decodeInfo(rest), () => new Info({})),
     restrictions: Option.getOrElse(restrictions, (): ConfigManaged.Restrictions => ({})),
     diagnostics: [
-      ...diagnostics,
-      ...(Option.isNone(info)
-        ? [
-            {
-              source: directory,
-              path: "$",
-              kind: "invalid" as const,
-              message: "ignored the merged settings, which no longer validate",
-            },
-          ]
-        : []),
+      ...(listing.problem ? [listing.problem] : []),
+      ...skipped,
+      ...loaded.flatMap((file) => file.diagnostics),
     ],
   } satisfies Snapshot
 })
@@ -124,7 +140,11 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, file: string
     kind,
     message,
   })
-  const text = yield* fs.readFileStringSafe(file).pipe(Effect.catch(() => Effect.succeed(null)))
+  // Only a file that is not there is absent. One that is there and cannot be read is reported, because its
+  // restrictions are lost.
+  const text = yield* fs
+    .readFileString(file)
+    .pipe(Effect.catch((error) => Effect.succeed(isNotFound(error) ? undefined : null)))
   if (text === undefined) return { source, present: false, diagnostics: [] }
   if (text === null)
     return { source, present: true, diagnostics: [problem("invalid", "$", "skipped a file that cannot be read")] }
@@ -155,19 +175,16 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, file: string
       diagnostic.message,
     ),
   )
-  const encoded =
-    normalized.type === "normalized" && Option.isSome(decodeInfo(normalized.encoded)) ? normalized.encoded : undefined
   return {
     source,
     present: true,
-    rest: encoded as Record<string, unknown> | undefined,
+    // The normalizer decodes entry by entry, so what it encodes validates; it rejects only a root that is not an
+    // object, which is excluded above.
+    rest: normalized.type === "normalized" ? (normalized.encoded as Record<string, unknown>) : undefined,
     restrictions: restrictions.value,
     diagnostics: [
       ...restrictions.problems.map((item) => problem(item.kind, item.path, item.message)),
       ...normalizedProblems,
-      ...(normalized.type === "rejected" || encoded
-        ? []
-        : [problem("invalid", "$", "ignored the settings of a file that do not validate")]),
     ],
   } satisfies Loaded & { source: string }
 })
@@ -210,6 +227,19 @@ function cleanRestrictions(raw: unknown) {
     })
     value[group] = kept
   })
+  const unknown = (at: string) =>
+    problems.push({ kind: "unsupported", path: `$.managed.${at}`, message: "ignored an unknown key" })
+  const known: readonly string[] = ["organization", "env", ...flags, ...Object.keys(lists)]
+  Object.keys(raw)
+    .filter((key) => !known.includes(key))
+    .forEach(unknown)
+  Object.entries(lists).forEach(([group, keys]) => {
+    const section = raw[group]
+    if (!isRecord(section)) return
+    Object.keys(section)
+      .filter((key) => !(keys as readonly string[]).includes(key))
+      .forEach((key) => unknown(`${group}.${key}`))
+  })
   if (raw.env !== undefined)
     problems.push({
       kind: "unsupported",
@@ -226,16 +256,41 @@ function merge(base: unknown, next: unknown): unknown {
     const all = [...base, ...next]
     return all.every((item) => typeof item === "string") ? [...new Set(all)] : all
   }
-  if (isRecord(base) && isRecord(next))
+  // A model selection is one value: a later file that names a model does not inherit the variant of an earlier one.
+  if (isRecord(base) && isRecord(next) && !isSelection(next))
     return Object.fromEntries(
       [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [key, merge(base[key], next[key])]),
     )
   return next
 }
 
+function isSelection(value: Record<string, unknown>) {
+  return typeof value.providerID === "string" && typeof value.model === "string"
+}
+
+function isNotFound(error: FSUtil.Error) {
+  if (error._tag === "FileSystemError")
+    return (
+      typeof error.cause === "object" && error.cause !== null && "code" in error.cause && error.cause.code === "ENOENT"
+    )
+  return error.reason._tag === "NotFound"
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
+
+// The override is the server's own option or environment. An empty or relative one would read the working folder,
+// which a repository supplies, so it is refused with one log line and the per-OS default applies.
+const resolveDirectory = Effect.fnUntraced(function* (override: string | undefined) {
+  const requested = override ?? process.env.ORBIT_MANAGED_DIR
+  if (requested && path.isAbsolute(requested)) return requested
+  if (override !== undefined || requested)
+    yield* Effect.logWarning("ignored a managed settings folder that is not an absolute path", {
+      directory: requested,
+    })
+  return ManagedPath.directory(process.platform, process.env)
+})
 
 export const layer = (options?: Options) =>
   Layer.effect(
@@ -244,7 +299,7 @@ export const layer = (options?: Options) =>
       const fs = yield* FSUtil.Service
       const watcher = yield* Watcher.Service
       const policy = yield* ManagedPolicy.Service
-      const directory = options?.directory ?? ManagedPath.directory(process.platform, process.env)
+      const directory = yield* resolveDirectory(options?.directory)
       const changes = yield* PubSub.unbounded<Snapshot>()
       const reloads = yield* PubSub.sliding<void>(1)
 

@@ -108,7 +108,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `ManagedSettings.read` reads a fixed folder the machine's administrator owns, never one a repository supplies, so it
   has no trust gate, and nothing in a project can name its location (the override is the server's environment or
   `ServerOptions.managed.directory`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
-  with a diagnostic. Each file and each entry decodes on its own (class 7). Proof: `core/test/managed-settings.test.ts`.
+  with a diagnostic. An empty or relative override is refused with one log line and the per-OS default applies
+  (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes
+  on its own (class 7): a file or folder that exists but cannot be read or listed, an unknown key in `managed` or its
+  sections, an unresolvable variable and a drop-in not named `*.json` are reported, never dropped silently, and a later
+  file's model replaces an earlier one as a whole. Proof: `core/test/managed-settings.test.ts`,
+  `cli/test/doctor-managed.test.ts`, `util/test/managed-path.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:

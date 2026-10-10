@@ -26,10 +26,10 @@ const it = testEffect(Layer.empty)
 
 // The managed folder, the project and the global config folder live in one temp folder; the real /etc/orbit and
 // %ProgramData%\Orbit are never read because the directory is always given.
-const layers = (root: string) =>
+const layers = (root: string, directory = path.join(root, "managed")) =>
   Layer.mergeAll(
     AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, ManagedPolicy.node, ManagedSettings.node]), [
-      ManagedSettings.node.replace(ManagedSettings.configured({ directory: path.join(root, "managed") })),
+      ManagedSettings.node.replace(ManagedSettings.configured({ directory })),
       Location.node.replace(
         Layer.succeed(
           Location.Service,
@@ -165,21 +165,6 @@ describe("ManagedSettings.read", () => {
     }),
   )
 
-  it.live("keeps a file's restrictions when its config fields do not validate", () =>
-    Effect.gen(function* () {
-      const tmp = yield* tmpdirScoped()
-      yield* write(tmp.path, {
-        "managed-settings.json": { share: "nobody", managed: { mcp: { deny: ["kept"] } } },
-      })
-
-      const snapshot = yield* read(tmp.path)
-
-      expect(snapshot.restrictions.mcp?.deny).toEqual(["kept"])
-      expect(snapshot.info.share).toBeUndefined()
-      expect(snapshot.diagnostics.length).toBeGreaterThan(0)
-    }),
-  )
-
   it.live("yields an empty snapshot for a missing directory and does not create it", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
@@ -230,6 +215,216 @@ describe("ManagedSettings.read", () => {
 
       expect((yield* read(tmp.path)).restrictions.organization).toBe("Acme")
     }),
+  )
+})
+
+const secured = process.platform !== "win32" && process.getuid?.() !== 0
+const base = { managed: { mcp: { deny: ["x"] } } }
+
+describe("ManagedSettings.read unreadable input", () => {
+  const rows = [
+    {
+      name: "a file that cannot be read",
+      skip: !secured,
+      setup: (directory: string) =>
+        write(directory, { "managed-settings.json": base }).pipe(
+          Effect.andThen(Effect.promise(() => fs.chmod(path.join(directory, "managed-settings.json"), 0o000))),
+        ),
+      at: (directory: string) => path.join(directory, "managed-settings.json"),
+      listed: true,
+    },
+    {
+      name: "a drop-in that cannot be read",
+      skip: !secured,
+      setup: (directory: string) =>
+        write(directory, { "managed-settings.d/10.json": base }).pipe(
+          Effect.andThen(Effect.promise(() => fs.chmod(path.join(directory, "managed-settings.d", "10.json"), 0o000))),
+        ),
+      at: (directory: string) => path.join(directory, "managed-settings.d", "10.json"),
+      listed: true,
+    },
+    {
+      name: "a drop-in folder that cannot be listed",
+      skip: !secured,
+      setup: (directory: string) =>
+        write(directory, { "managed-settings.d/10.json": base }).pipe(
+          Effect.andThen(Effect.promise(() => fs.chmod(path.join(directory, "managed-settings.d"), 0o000))),
+        ),
+      at: (directory: string) => path.join(directory, "managed-settings.d"),
+      listed: false,
+    },
+    {
+      name: "a file that an access list denies",
+      skip: process.platform !== "win32",
+      setup: (directory: string) =>
+        write(directory, { "managed-settings.json": base }).pipe(
+          Effect.andThen(
+            Effect.acquireRelease(
+              Effect.sync(() =>
+                Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)"]),
+              ),
+              () =>
+                Effect.sync(() =>
+                  Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0"]),
+                ),
+            ),
+          ),
+        ),
+      at: (directory: string) => path.join(directory, "managed-settings.json"),
+      listed: true,
+    },
+    {
+      name: "managed-settings.d that is a file",
+      skip: false,
+      setup: (directory: string) => write(directory, { "managed-settings.d": "not a folder" }),
+      at: (directory: string) => path.join(directory, "managed-settings.d"),
+      listed: false,
+    },
+  ]
+
+  rows
+    .filter((row) => !row.skip)
+    .forEach((row) =>
+      it.live(`reports ${row.name} instead of treating it as missing`, () =>
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          yield* row.setup(tmp.path)
+          // Give the folder back its permissions so the temporary folder can be removed.
+          yield* Effect.addFinalizer(() =>
+            Effect.promise(() =>
+              Promise.all(
+                ["managed-settings.json", "managed-settings.d", "managed-settings.d/10.json"].map((name) =>
+                  fs.chmod(path.join(tmp.path, name), 0o700).catch(() => undefined),
+                ),
+              ),
+            ),
+          )
+
+          const snapshot = yield* read(tmp.path)
+
+          expect(snapshot.diagnostics).toContainEqual(
+            expect.objectContaining({ source: row.at(tmp.path), path: "$", kind: "invalid" }),
+          )
+          expect(snapshot.sources.includes(row.at(tmp.path))).toBe(row.listed)
+        }),
+      ),
+    )
+
+  it.live("treats a missing drop-in folder as absent", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, { "managed-settings.json": { shell: "x" } })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.sources).toHaveLength(1)
+      expect(snapshot.diagnostics).toEqual([])
+    }),
+  )
+})
+
+describe("ManagedSettings.read unknown input", () => {
+  it.live("reports a variable that cannot be resolved and skips only that file", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": '{ "managed": { "organization": "{file:missing.txt}" } }',
+        "managed-settings.d/10.json": { managed: { mcp: { deny: ["kept"] } } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.restrictions.mcp?.deny).toEqual(["kept"])
+      expect(snapshot.diagnostics).toEqual([expect.objectContaining({ path: "$", kind: "invalid" })])
+    }),
+  )
+
+  const unknownKeys: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
+    ["a misspelled flag", { disable_bypass_permision: true }, "$.managed.disable_bypass_permision"],
+    ["a misspelled section", { networks: {} }, "$.managed.networks"],
+    ["a misspelled mcp list", { mcp: { denied: ["x"] } }, "$.managed.mcp.denied"],
+    ["a misspelled plugins list", { plugins: { blocked: ["x"] } }, "$.managed.plugins.blocked"],
+    ["a misspelled network list", { network: { denied_domain: ["x"] } }, "$.managed.network.denied_domain"],
+  ]
+  unknownKeys.forEach(([name, managed, at]) =>
+    it.live(`reports ${name}`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, { "managed-settings.json": { managed } })
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(snapshot.diagnostics.map((item) => [item.path, item.kind])).toEqual([[at, "unsupported"]])
+      }),
+    ),
+  )
+})
+
+describe("ManagedSettings.read merge and names", () => {
+  it.live("replaces a model selection as one value, so a later file keeps no variant of an earlier one", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { model: "alpha/big#high", agents: { review: { model: "alpha/big#high" } } },
+        "managed-settings.d/10.json": { model: "beta/small", agents: { review: { model: "beta/small" } } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.model as unknown).toEqual({ providerID: "beta", model: "small" })
+      expect(snapshot.info.agents?.review?.model as unknown).toEqual({ providerID: "beta", model: "small" })
+    }),
+  )
+
+  it.live("handles drop-in extensions that differ in case by what the file system does", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.d/10-a.JSON": { shell: "upper" },
+        "managed-settings.d/20-b.jsonc": { shell: "jsonc" },
+      })
+
+      const snapshot = yield* read(tmp.path)
+      const insensitive = process.platform === "win32" || process.platform === "darwin"
+
+      expect(snapshot.info.shell).toBe(insensitive ? "upper" : undefined)
+      expect(snapshot.diagnostics.map((item) => [path.basename(item.source), item.kind]).toSorted()).toEqual(
+        insensitive
+          ? [["20-b.jsonc", "unsupported"]]
+          : [
+              ["10-a.JSON", "unsupported"],
+              ["20-b.jsonc", "unsupported"],
+            ],
+      )
+    }),
+  )
+})
+
+describe("managed settings folder override", () => {
+  const overrides: ReadonlyArray<readonly [string, string]> = [
+    ["an empty one", ""],
+    ["a dot", "."],
+    ["a relative one", "managed"],
+  ]
+  overrides.forEach(([name, directory]) =>
+    it.live(`ignores ${name} and never reads the working folder`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, {
+          "project/managed-settings.json": { permissions: [rule("allow", "*")] },
+          "project/managed/managed-settings.json": { permissions: [rule("allow", "*")] },
+        })
+        const previous = process.cwd()
+        yield* Effect.acquireRelease(
+          Effect.sync(() => process.chdir(path.join(tmp.path, "project"))),
+          () => Effect.sync(() => process.chdir(previous)),
+        )
+        yield* Effect.gen(function* () {
+          yield* Config.Service
+          expect((yield* ManagedPolicy.Service).current().rules).toEqual([])
+        }).pipe(Effect.provide(layers(tmp.path, directory)))
+      }),
+    ),
   )
 })
 

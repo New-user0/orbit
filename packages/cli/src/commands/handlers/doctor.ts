@@ -97,14 +97,14 @@ function managedChecks(managed: {
   readonly sources: readonly string[]
   readonly diagnostics: readonly { readonly source: string; readonly path: string; readonly message: string }[]
 }): Check[] {
-  if (managed.sources.length === 0)
-    return [{ ok: undefined, label: "managed", detail: `no managed settings in ${managed.directory}` }]
   return [
-    {
-      ok: undefined,
-      label: "managed",
-      detail: plain(managed.sources.map((source) => path.relative(managed.directory, source)).join(", ")),
-    },
+    managed.sources.length === 0
+      ? { ok: undefined, label: "managed", detail: `no managed settings in ${managed.directory}` }
+      : {
+          ok: undefined,
+          label: "managed",
+          detail: plain(managed.sources.map((source) => path.relative(managed.directory, source)).join(", ")),
+        },
     ...managed.diagnostics.map(
       (diagnostic): Check => ({
         ok: false,

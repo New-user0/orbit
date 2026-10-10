@@ -24,6 +24,19 @@ describe("ManagedPath.directory", () => {
     expect(ManagedPath.directory("linux", { ORBIT_MANAGED_DIR: "" })).toBe("/etc/orbit")
   })
 
+  test.each(["linux", "darwin"] as const)("a relative override is ignored on %s", (platform) => {
+    expect(ManagedPath.directory(platform, { ORBIT_MANAGED_DIR: "." })).toBe(
+      platform === "linux" ? "/etc/orbit" : "/Library/Application Support/Orbit",
+    )
+    expect(ManagedPath.directory(platform, { ORBIT_MANAGED_DIR: "managed" })).not.toBe("managed")
+  })
+
+  test("a relative override is ignored on win32", () => {
+    expect(ManagedPath.directory("win32", { ORBIT_MANAGED_DIR: "managed", ProgramData: "D:\\Data" })).toBe(
+      "D:\\Data\\Orbit",
+    )
+  })
+
   test("asking for a missing folder does not create it", () => {
     const missing = "/definitely/not/here/orbit-managed"
     expect(ManagedPath.directory("linux", { ORBIT_MANAGED_DIR: missing })).toBe(missing)
