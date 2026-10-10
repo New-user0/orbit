@@ -345,6 +345,28 @@ describe("search tools", () => {
     )
   }
 
+  for (const name of ["Glob", "Grep"] as const) {
+    it.live(`${name} tells the model that a device path is a device`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          withTools(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const result = yield* executeTool(
+                registry,
+                call(name, { path: process.platform === "win32" ? "NUL" : "/dev/zero", pattern: "x" }),
+              )
+              expect(result).toMatchObject({
+                status: "error",
+                error: { type: "tool.execution", message: expect.stringContaining("is a device or stream") },
+              })
+            }),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ),
+    )
+  }
+
   it.live("reports a file used as the glob search path", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

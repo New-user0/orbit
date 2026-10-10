@@ -5,6 +5,7 @@ import { Environment } from "@orbit/core/environment/index"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ReadTool } from "@orbit/core/tool/plugin/read"
 import { ReadToolFileSystem } from "@orbit/core/tool/read-filesystem"
+import { Token } from "@orbit/core/util/token"
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { LayerNodePlatform } from "@orbit/util/effect/app-node-platform"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -20,6 +21,14 @@ const fixture = Effect.gen(function* () {
   return { environment: Environment.makeFiles(Environment.makeLocalDriver(spawner)), files, directory }
 })
 const absolute = (value: string) => AbsolutePath.make(value)
+// The estimate of the text a page becomes in the model's message, with its `N: ` prefixes.
+const renderedTokens = (content: string, first: number) =>
+  Token.estimate(
+    content
+      .split("\n")
+      .map((line, index) => `${first + index}: ${line}`)
+      .join("\n"),
+  )
 
 describe("ReadTool text serialization", () => {
   const cases = [
@@ -28,14 +37,16 @@ describe("ReadTool text serialization", () => {
       content: "alpha\n\nomega\n",
       page: { offset: 1, limit: 2 },
       output: { type: "text-page", content: "alpha\n", offset: 1, truncated: true, next: 3 },
-      model: "Read file lines.txt, lines 1-2\n1: alpha\n2: \n[Output truncated. Continue reading with offset: 3]",
+      model:
+        "Read file lines.txt, lines 1-2\n1: alpha\n2: \n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 3, or use Grep to find specific content.]",
     },
     {
       name: "preserves multiple selected trailing blank lines at a noninitial offset",
       content: "before\nalpha\n\n\nomega\n",
       page: { offset: 2, limit: 3 },
       output: { type: "text-page", content: "alpha\n\n", offset: 2, truncated: true, next: 5 },
-      model: "Read file lines.txt, lines 2-4\n2: alpha\n3: \n4: \n[Output truncated. Continue reading with offset: 5]",
+      model:
+        "Read file lines.txt, lines 2-4\n2: alpha\n3: \n4: \n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 5, or use Grep to find specific content.]",
     },
     {
       name: "preserves a selected trailing blank line at EOF",
@@ -56,7 +67,8 @@ describe("ReadTool text serialization", () => {
       content: "alpha\n\nomega\n",
       page: { limit: 1 },
       output: { type: "text-page", content: "alpha", offset: 1, truncated: true, next: 2 },
-      model: "Read file lines.txt, lines 1-1\n1: alpha\n[Output truncated. Continue reading with offset: 2]",
+      model:
+        "Read file lines.txt, lines 1-1\n1: alpha\n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 2, or use Grep to find specific content.]",
     },
     {
       name: "strips only the terminal file newline in a whole-file read",
@@ -277,11 +289,101 @@ describe("ReadToolFileSystem", () => {
 
       expect(lines).toMatchObject({ type: "text-page", truncated: true, next: 2_001 })
       expect(lines.type === "text-page" ? lines.content.split("\n") : []).toHaveLength(2_000)
-      expect(bytes).toMatchObject({ type: "text-page", truncated: true, next: 26 })
-      expect(bytes.type === "text-page" ? Buffer.byteLength(bytes.content) : Infinity).toBeLessThanOrEqual(
-        ReadToolFileSystem.MAX_READ_BYTES,
+      expect(bytes).toMatchObject({ type: "text-page", truncated: true, next: 50 })
+      expect(bytes.type === "text-page" ? renderedTokens(bytes.content, 1) : Infinity).toBeLessThanOrEqual(
+        ReadToolFileSystem.MAX_READ_TOKENS,
       )
       expect(ranges).toEqual([{ offset: 0, length: 256 * 1024 }])
+    }),
+  )
+
+  it.effect("returns a file of 80-character lines whole when its rendered text fits the budget", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "wide.txt")
+      // About 90 KB, which the former 50 KB cap paged.
+      yield* files.writeFileString(file, Array.from({ length: 1_100 }, () => "w".repeat(80)).join("\n"))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "wide.txt")
+
+      expect(result.type).toBe("file")
+      expect(result.type === "file" ? result.content.split("\n") : []).toHaveLength(1_100)
+    }),
+  )
+
+  it.effect("pages a file of more than 2,000 lines even when it fits the token budget", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "tiny.txt")
+      // About 5 KB: far under the budget, over the line limit.
+      yield* files.writeFileString(file, Array.from({ length: 2_500 }, () => "x").join("\n"))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "tiny.txt")
+
+      expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true, next: 2_001 })
+    }),
+  )
+
+  it.effect("pages a 95 KB file of short lines at 2,000 lines", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "short.txt")
+      yield* files.writeFileString(
+        file,
+        Array.from({ length: 9_500 }, (_, index) => String(index).padStart(9, "0")).join("\n"),
+      )
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "short.txt")
+
+      expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true, next: 2_001 })
+      expect(result.type === "text-page" ? result.content.split("\n") : []).toHaveLength(2_000)
+    }),
+  )
+
+  it.effect("pages a file whose rendered text passes the budget even under the line limit", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "dense.txt")
+      // 1,300 lines of 80 characters render to about 29,000 tokens: fewer than 2,000 lines, over the budget.
+      yield* files.writeFileString(file, Array.from({ length: 1_300 }, () => "d".repeat(80)).join("\n"))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "dense.txt")
+
+      expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true })
+      if (result.type !== "text-page" || result.next === undefined) throw new Error("expected a truncated page")
+      expect(result.next).toBeLessThan(1_300)
+      expect(renderedTokens(result.content, 1)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS)
+      expect(result.content.split("\n")).toHaveLength(result.next - 1)
+    }),
+  )
+
+  it.effect("pages a 300 KB file with every rendered page under the budget and chained next offsets", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "big.txt")
+      // Longer than the 256 KB first chunk, so pages after the first start in the middle of the file.
+      yield* files.writeFileString(
+        file,
+        Array.from({ length: 3_000 }, (_, index) => `${index}${"x".repeat(97)}`).join("\n"),
+      )
+
+      const seen: string[] = []
+      let offset: number | undefined
+      for (let guard = 0; guard < 20; guard++) {
+        const page: ReadToolFileSystem.PageInput = offset === undefined ? {} : { offset }
+        const result = yield* ReadToolFileSystem.read(environment, absolute(file), "big.txt", page)
+        if (result.type !== "text-page") throw new Error("expected a page")
+        expect(result.offset).toBe(offset ?? 1)
+        expect(renderedTokens(result.content, result.offset)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS)
+        const lines = result.content.split("\n")
+        seen.push(...lines)
+        if (result.next === undefined) break
+        expect(result.next).toBe(result.offset + lines.length)
+        offset = result.next
+      }
+
+      expect(seen).toHaveLength(3_000)
+      expect(seen[2_999]).toStartWith("2999")
     }),
   )
 

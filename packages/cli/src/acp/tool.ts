@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from "node:path"
 import type { ToolCall, ToolCallContent, ToolCallLocation, ToolCallUpdate, ToolKind } from "@agentclientprotocol/sdk"
+import { ToolNames } from "@orbit/schema/tool-names"
 import { readDisplayText } from "@orbit/tui/mini/tool"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
@@ -7,6 +8,58 @@ import { Patch } from "@orbit/util/patch"
 import { Result } from "effect"
 
 export type ToolInput = Record<string, unknown>
+
+// The input fields each built-in tool declares, by its current name, with the old names a recorded call may carry. A
+// recorded call keeps the extra keys its schema drops at decode, so a model can add any key to its own input; only a
+// declared one describes what the person is asked to approve. A tool with no row, such as an MCP tool, keeps its
+// arguments: the prompt shows them only as the raw input.
+const shell = ["command", "description", "workdir", "timeout", "run_in_background", "background"]
+const declared: Record<string, readonly string[]> = {
+  Read: ["file_path", "offset", "limit", "path", "filePath"],
+  Edit: [
+    "file_path",
+    "old_string",
+    "new_string",
+    "replace_all",
+    "path",
+    "filePath",
+    "oldString",
+    "newString",
+    "replaceAll",
+  ],
+  Write: ["file_path", "content", "path", "filePath"],
+  NotebookEdit: ["notebook_path", "mode", "cellId", "index", "source", "cellType", "path"],
+  LSP: ["action", "path", "line", "character"],
+  Glob: ["pattern", "path", "hidden", "limit"],
+  Grep: [
+    "pattern",
+    "path",
+    "include",
+    "literal",
+    "caseSensitive",
+    "limit",
+    "offset",
+    "outputMode",
+    "type",
+    "multiline",
+    "context",
+    "before",
+    "after",
+  ],
+  Bash: shell,
+  PowerShell: shell,
+  WebFetch: ["url", "format", "timeout", "prompt"],
+  WebSearch: ["query", "allowedDomains", "blockedDomains"],
+  Agent: ["agent", "description", "prompt", "model", "sessionID", "background"],
+  Patch: ["patchText"],
+  Skill: ["id"],
+}
+
+export function declaredFields(tool: string, input: ToolInput): ToolInput {
+  const fields = declared[ToolNames.canonical(tool)]
+  if (!fields) return input
+  return Object.fromEntries(fields.flatMap((key) => (key in input ? [[key, input[key]]] : [])))
+}
 export type ToolContent = ReadonlyArray<
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "file"; readonly uri: string; readonly mime: string; readonly name?: string | null }
@@ -42,7 +95,20 @@ export function toToolKind(toolName: string): ToolKind {
   }
 }
 
-export function toLocations(toolName: string, input: ToolInput, cwd: string): ToolCallLocation[] {
+/**
+ * Where a tool call acts. The places the server named on its permission request (`served`) are the ones the tool acts on,
+ * and they win; before any is served the places come from the declared fields of the call's input, because a recorded call
+ * keeps the keys a model added.
+ */
+export function toLocations(
+  toolName: string,
+  rawInput: ToolInput,
+  cwd: string,
+  served?: ReadonlyArray<string>,
+): ToolCallLocation[] {
+  if (served !== undefined)
+    return Array.from(new Set(served.map((item) => resourcePath(item, cwd))), (path) => ({ path }))
+  const input = declaredFields(toolName, rawInput)
   switch (toolName.toLocaleLowerCase()) {
     case "bash":
     case "powershell":
@@ -50,12 +116,17 @@ export function toLocations(toolName: string, input: ToolInput, cwd: string): To
       // The shell tools declare `workdir`; a `cwd` key the model adds to its input does not move the command, and an
       // empty one runs it in the session's folder.
       const workdir = stringValue(input.workdir)
-      return workdir ? locationFrom(cwd, workdir) : [{ path: cwd }]
+      if (workdir) return locationFrom(cwd, workdir)
+      // The pending call has no input yet, so it names no place.
+      return Object.keys(input).length === 0 ? [] : [{ path: cwd }]
     }
     case "read":
     case "edit":
     case "write":
       return locationFrom(cwd, filePath(input))
+    case "notebookedit":
+    case "notebook_edit":
+      return locationFrom(cwd, stringValue(input.notebook_path) ?? stringValue(input.path))
     case "patch":
     case "apply_patch":
       return locationFrom(
@@ -85,13 +156,15 @@ export function pendingToolCall(input: {
   readonly toolName: string
   readonly state: { readonly input: ToolInput; readonly title?: string }
   readonly cwd: string
+  /** The places the server named on the call's permission request. */
+  readonly places?: ReadonlyArray<string>
 }): ToolCall {
   return {
     toolCallId: input.toolCallId,
     title: toolTitle(input.toolName, input.state.input, input.state.title),
     kind: toToolKind(input.toolName),
     status: "pending",
-    locations: toLocations(input.toolName, input.state.input, input.cwd),
+    locations: toLocations(input.toolName, input.state.input, input.cwd, input.places),
     rawInput: rawInput(input.toolName, input.state.input, input.cwd),
   }
 }
@@ -102,13 +175,15 @@ export function runningToolUpdate(input: {
   readonly state: { readonly input: ToolInput; readonly title?: string }
   readonly content?: ToolContent
   readonly cwd: string
+  /** The places the server named on the call's permission request. */
+  readonly places?: ReadonlyArray<string>
 }): ToolCallUpdate {
   return {
     toolCallId: input.toolCallId,
     status: "in_progress",
     kind: toToolKind(input.toolName),
     title: toolTitle(input.toolName, input.state.input, input.state.title),
-    locations: toLocations(input.toolName, input.state.input, input.cwd),
+    locations: toLocations(input.toolName, input.state.input, input.cwd, input.places),
     rawInput: rawInput(input.toolName, input.state.input, input.cwd),
     ...(input.content?.length ? { content: toolContent(input.content) } : {}),
   }
@@ -121,6 +196,8 @@ export function completedToolUpdate(input: {
   readonly content: ToolContent
   readonly metadata?: Readonly<Record<string, unknown>>
   readonly cwd: string
+  /** The places the server named on the call's permission request. */
+  readonly places?: ReadonlyArray<string>
 }): ToolCallUpdate {
   const normalized = toolContent(input.content)
   // Read's model content is a JSON page envelope; show the clean text instead.
@@ -131,17 +208,29 @@ export function completedToolUpdate(input: {
     read === undefined
       ? normalized.filter((part) => !images.includes(part))
       : [{ type: "content" as const, content: { type: "text" as const, text: read } }]
-  const oldText = stringValue(input.input.old_string) ?? stringValue(input.input.oldString)
-  const newText = stringValue(input.input.new_string) ?? stringValue(input.input.newString)
-  const path = filePath(input.input)
+  // Only a tool that declares the fields (Edit) has an old and a new text; a key the model adds to another tool's input
+  // draws no diff.
+  const declaredInput = declaredFields(input.toolName, input.input)
+  const oldText = stringValue(declaredInput.old_string) ?? stringValue(declaredInput.oldString)
+  const newText = stringValue(declaredInput.new_string) ?? stringValue(declaredInput.newString)
+  // The place the server named, else the declared fields of the input: not a key the model added.
+  // A call that has places but none to name draws no diff either: the input's spelling can be a link.
+  const path = input.places ? input.places[0] : filePath(declaredFields(input.toolName, input.input))
   const diff: ToolCallContent[] =
     oldText === undefined || newText === undefined || path === undefined
       ? []
-      : [{ type: "diff", path: absolutePath(path, input.cwd), oldText, newText }]
+      : [
+          {
+            type: "diff",
+            path: input.places ? resourcePath(path, input.cwd) : absolutePath(path, input.cwd),
+            oldText,
+            newText,
+          },
+        ]
   return {
     toolCallId: input.toolCallId,
     status: "completed",
-    locations: toLocations(input.toolName, input.input, input.cwd),
+    locations: toLocations(input.toolName, input.input, input.cwd, input.places),
     content: [...primary, ...diff, ...images],
     rawOutput: {
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
@@ -157,13 +246,15 @@ export function errorToolUpdate(input: {
   readonly metadata?: Readonly<Record<string, unknown>>
   readonly error: string
   readonly cwd: string
+  /** The places the server named on the call's permission request. */
+  readonly places?: ReadonlyArray<string>
 }): ToolCallUpdate {
   return {
     toolCallId: input.toolCallId,
     status: "failed",
     kind: toToolKind(input.toolName),
     title: toolTitle(input.toolName, input.input, undefined),
-    locations: toLocations(input.toolName, input.input, input.cwd),
+    locations: toLocations(input.toolName, input.input, input.cwd, input.places),
     rawInput: rawInput(input.toolName, input.input, input.cwd),
     content: [...toolContent(input.content ?? []), { type: "content", content: { type: "text", text: input.error } }],
     rawOutput: {
@@ -191,7 +282,7 @@ function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {
   if (!isShell(toolName)) return input
   // The command runs in its workdir or in the session's folder, never in a `cwd` the model added to its input.
   const declared = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "cwd"))
-  return input.workdir ? declared : { ...declared, cwd }
+  return input.workdir || Object.keys(declared).length === 0 ? declared : { ...declared, cwd }
 }
 
 function isShell(toolName: string) {
@@ -208,12 +299,7 @@ function locationFrom(cwd: string, ...values: unknown[]): ToolCallLocation[] {
 
 // Sessions migrated from V1 keep their original `filePath` tool inputs, and sessions recorded before the tool rename keep `path`.
 export function filePath(input: ToolInput) {
-  return (
-    stringValue(input.file_path) ??
-    stringValue(input.notebook_path) ??
-    stringValue(input.path) ??
-    stringValue(input.filePath)
-  )
+  return stringValue(input.file_path) ?? stringValue(input.path) ?? stringValue(input.filePath)
 }
 
 export function patchHunks(input: ToolInput) {

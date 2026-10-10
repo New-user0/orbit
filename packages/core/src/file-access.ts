@@ -7,6 +7,7 @@ import { Global } from "@orbit/util/global"
 import { Array, Context, Effect, Layer, Schema } from "effect"
 import { lstat } from "fs/promises"
 import path from "path"
+import { DevicePath } from "./device-path.js"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
@@ -14,6 +15,19 @@ import { ProjectTrust } from "./project-trust.js"
 import { AbsolutePath } from "./schema.js"
 import type { SessionErrors } from "./session/error.js"
 import { Tool } from "./tool.js"
+
+/** A read named a device or stream that never ends, such as `/dev/zero` or `NUL`. Nothing is asked or opened. */
+export class DeviceError extends Schema.TaggedError<DeviceError>()("FileAccess.DeviceError", {
+  resource: Schema.String,
+}) {
+  override get message() {
+    return `${this.resource} is a device or stream, not a file, and reading it can block or never finish. Name a regular file instead.${
+      process.platform === "win32"
+        ? " NUL, CON, PRN, AUX, COM1 to COM9 and LPT1 to LPT9 are reserved Windows device names, with or without an extension."
+        : ""
+    }`
+  }
+}
 
 export const Kind = Schema.Literals(["file", "directory"])
 export type Kind = typeof Kind.Type
@@ -53,7 +67,8 @@ export interface Target {
   readonly externalDirectory?: ExternalDirectoryAuthorization
 }
 
-export type Invocation = Pick<Tool.Context, "sessionID" | "agent" | "messageID" | "id">
+export type Invocation = Pick<Tool.Context, "sessionID" | "agent" | "messageID" | "id"> &
+  Partial<Pick<Tool.Context, "progress">>
 
 export interface ReadOptions {
   /** A target already authorized by this invocation, used for filename recovery. */
@@ -80,7 +95,7 @@ export interface Interface {
     file: string,
     context: Invocation,
     options?: ReadOptions,
-  ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | Error | SessionErrors.NotFoundError>
+  ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | DeviceError | Error | SessionErrors.NotFoundError>
   /**
    * The targets among absolute `files` that are in the project, by name or by another spelling of its folder, and that a
    * link in it leads out of while it is not trusted, each with its real place and an `escaped` external directory. Nothing else about the files is refused
@@ -289,21 +304,44 @@ const layer = Layer.effect(
       })
     })
 
+    // Whether the place exists and, followed through links, is neither a file nor a folder. A stat opens nothing.
+    const isSpecial = (place: string) =>
+      fs.stat(place).pipe(
+        Effect.map((info) => info.type !== "File" && info.type !== "Directory"),
+        Effect.orElseSucceed(() => false),
+      )
+
     const authorizeRead = Effect.fn("FileAccess.authorizeRead")(function* (
       file: string,
       context: Invocation,
       options?: ReadOptions,
     ) {
+      // Before any disk is read: resolving a path stats every part of it, and a stat of a device can block.
+      if (DevicePath.blocked(resolvePath(location.directory, file))) return yield* new DeviceError({ resource: file })
       const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
+      // Before anything is asked or opened: a device is no place for a question. The listed names are the Windows rule;
+      // elsewhere what the place really is decides, so a spelling the list lacks, a link to a device or a pipe is
+      // refused too.
+      if (
+        DevicePath.blocked(target.absolute) ||
+        DevicePath.blocked(target.place) ||
+        (process.platform !== "win32" && (yield* isSpecial(target.place)))
+      )
+        return yield* new DeviceError({ resource: file })
       const sibling =
         options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
 
       // Filename recovery shares the directory approval, but checks the recovered file's own read rules.
+      // The place as resolved, before anything is asked, so a client names what the tool reads even when no rule asks.
+      if (context.progress) yield* context.progress({ places: [target.place] })
       if (!sibling) yield* authorizeExternal([target], context)
       yield* permission.assert({
         action: "Read",
         resources: [target.resource],
         save: ["*"],
+        // The place as resolved here, absolute, so a client shows it rather than the input's spelling, and the real place
+        // when a link in an untrusted project leads there.
+        metadata: { paths: [target.place] },
         ...invocation(context),
       })
       return target

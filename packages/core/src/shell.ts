@@ -23,7 +23,6 @@ import { Config } from "./config.js"
 import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
 import { ShellSandbox } from "./shell/sandbox.js"
-import { which } from "./util/which.js"
 import { tmpdir } from "node:os"
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.NotFoundError", {
@@ -287,21 +286,23 @@ const layer = () =>
         const id = Shell.ID.ascending()
         const args = ShellSelect.args(invocation.shell, invocation.command)
         const sandbox = Config.latest(yield* config.entries(), "sandbox")
-        const sandboxTool = ShellSandbox.TOOL[process.platform]
-        const sandboxed = ShellSandbox.wrap({
-          platform: process.platform,
+        const sandboxed = ShellSandbox.launch({
           settings: sandbox ?? {},
           shell: invocation.shell,
           args,
           cwd: invocation.cwd,
           writable: [location.project.directory, invocation.cwd, tmpdir()],
-          tool: sandbox?.enabled && sandboxTool ? (which(sandboxTool) ?? undefined) : undefined,
         })
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")
           return yield* new AppProcess.AppProcessError({
             command: invocation.command,
             cause: new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`),
+          })
+        if (sandboxed.type === "unsupported")
+          return yield* new AppProcess.AppProcessError({
+            command: invocation.command,
+            cause: new Error(sandboxed.reason),
           })
         const file = path.join(outputDir, `${id}.out`)
 

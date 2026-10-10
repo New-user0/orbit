@@ -261,6 +261,37 @@ trust prompt, which lists the `providers` kind.
 **What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in
 your user config.
 
+### Managed settings files
+
+An organization can now put settings in a folder that only an administrator can write. Orbit reads
+`managed-settings.json`, then the `managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux,
+`/Library/Application Support/Orbit` on macOS and `%ProgramFiles%\Orbit` on Windows (`C:\Program Files\Orbit` when that
+variable is unset). Windows does not use `%ProgramData%`, because a standard user can create and write under it.
+`ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it), and
+`orb debug paths managed` prints the one in use. Objects merge by key, lists of independent entries (permissions,
+policies, instructions, plugins, restriction lists) concatenate and lose their repeats, and any other value takes the
+later file's: a `command` argument list, a tiered `cost`, a model, and a whole entry of `mcp.servers`, `lsp`,
+`formatter`, `references` and `commands` (each entry is one definition, so a later `url` never keeps an earlier
+`headers` or `oauth`, an LSP `env` never reaches another server, and a `disabled` entry is replaced, not kept). `providers`
+and `agents` merge by key, as across documents, except that a later agent entry that leaves out `disabled` is enabled again. A relative `plugins` path in a drop-in
+resolves against the managed folder, not `managed-settings.d`; a `{file:}` variable resolves against the file that
+holds it. The merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
+while the server runs. A `managed` block in these files holds restrictions (`organization`, `mcp`, `plugins`,
+`network` and the hook and permission switches); the key is ignored with a diagnostic in any other config file. Orbit
+never creates the folder, and a folder created after the server starts is read on the next start.
+
+A file or an entry that does not decode is skipped on its own and never drops what its siblings say, and a key that
+Orbit does not know, at any depth of the native settings (`sandbox.enabeld`, a server's `disable`, an agent's `permisions`), is
+reported instead of ignored. The legacy top-level spellings (`agent`, `provider`, `permission` and the rest) are not
+checked, and neither is a key that another variant of the same value knows (`headers` on a local server). `orb doctor` lists
+the managed files by name and each problem it found. This release loads and merges the settings and hands the
+permission rules and restrictions to the policy service; enforcing them follows separately.
+
+**Affects:** machines that already have a file at one of those paths, and people who run a server with
+`ORBIT_MANAGED_DIR` set.
+
+**What to do:** Nothing unless your organization manages Orbit.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -1023,14 +1054,32 @@ which the server deletes when it has read it, and `orb` removes the variable and
 `ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
 the run stops, before the interface starts, when the background service reports that session as running, or when a service is registered and alive
 but cannot be asked, because two servers would run it at once; `--fork` is not checked, since a fork never runs the
-session it copies, and an `orb` that opens the session list cannot tell, and does not check. A value that starts, after whitespace, with `{` or a `//` or `/*` comment is read as inline JSONC and anything else is a file name; the disk never decides, so a folder that ships a file named after the text you typed cannot replace it (a file whose name starts with `{` is reached as `./{...}`). A relative file name is
-taken from the folder you typed it in, also with `orb <directory>`; a relative `{file:...}` inside the value is taken from the folder of the file that holds it, or the folder you typed an inline value in. With `--continue --session <id>` the session named is the one opened, also without these flags. Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
+session it copies, and an `orb` that opens the session list cannot tell, and does not check. A value that starts, after whitespace, with `{`, a `/*` comment, or a `//` comment followed by another line is read as inline JSONC and anything else is a file name (so a one-line `//server/share/mcp.json` is a path); the disk never decides, so a folder that ships a file named after the text you typed cannot replace it (a file whose name starts with `{` is reached as `./{...}`). This replaces the earlier rule that a value was a file whenever a file of that name existed. A relative file name is
+taken from the folder you typed it in, also with `orb <directory>`; a relative `{file:...}` inside the value is taken from the folder of the file that holds it, or the folder you typed an inline value in, also when it holds an `{env:NAME}` (a reference that starts with `{env:NAME}` is anchored when NAME holds a relative path, and left to Orbit when it holds an absolute one). Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
 the same agent already has from `ORBIT_CONFIG_CONTENT`. A `ORBIT_CONFIG_CONTENT_FILE` that you set yourself is ignored (a server logs one line)
 and never deleted.
 
 **Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
 
 **What to do:** Nothing.
+
+### Terminal bell, idle reminder and a status in the window title
+
+`attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the
+terminal is blurred or its focus is unknown, between frames (right after the next frame while an animation keeps the
+renderer running). A subagent's permission or form rings it too, since a person must answer; a subagent finishing does
+not. `attention.idle_reminder` is a number of seconds (default 60, larger values are capped at 86400, 0 turns it off): once a top-level
+session has finished, the reminder "Orbit is waiting for your input" comes after that many seconds with no key
+pressed, no new run started and no permission or form pending. It is sent only while the terminal reports that it is
+blurred (never for a terminal whose focus is unknown), only when notifications, sound or the bell are on, and once per
+idle period. The window title was
+`OC | <title>`; it is now `Orbit · <title>`, with ` · working` while a session runs and ` · needs input` while a
+permission or form waits, including those of its subagents (in Mini, on Linux, as before).
+
+**Affects:** people who match the window title in a terminal multiplexer, window manager rule or script, and people who
+have notifications, sound or the bell on, who get the reminder.
+
+**What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
 
 ## Permissions
 
@@ -1249,6 +1298,44 @@ about the path as well as about the pattern, and an agent whose rules allow Grep
 search.
 
 **What to do:** answer the question, or allow the path for Read in your own rules or the agent's.
+
+### Every approval is drawn from the request, and names the folder, the method and the arguments
+
+The terminal interface, Mini, ACP and the VS Code card used to work out parts of an approval from the model's own tool
+input. They now draw only what the server put on the permission request. The request carries the absolute place of every
+file a Read, Edit, Write, NotebookEdit, LSP or Patch asks about (a moved file's source too), the folder a shell command
+runs in and a Grep or Glob searches, the method and URL of a fetch, the diff of each file with the place it is written to,
+and the arguments of an MCP tool. So the terminal interface, Mini and VS Code now say which folder a shell, Grep or Glob
+approval is for; an MCP call made through Code Mode shows its arguments, where it used to be approved by name alone; VS
+Code and ACP take a NotebookEdit's file from the request; and an ACP approval and the updates of the call after it show the
+place the tool acts on, where an ordinary tool call showed the path as the model spelled it, a link's own path included. A
+key the model adds to its input, such as a `cwd`, a `files` array or an old field name, changes nothing that is shown.
+An approval over ACP shows the server's diffs only. The finished call's own update of an Edit still builds its diff from the `old_string`
+and `new_string` of the input, now at the place the tool reported. A file tool, a shell command, a Glob or a Grep reports the place
+it resolved before it asks or acts (a `places` entry in its progress), so over ACP the updates of a call name the real place
+even when no rule asks about it. An ACP tool call's `rawInput` is still the call's input, as before. The argument text of an MCP
+call is shown whole, where it was cut at 2000 characters: in the terminal interface the prompt scrolls as a whole and the fullscreen view shows more, and the VS Code card writes out control characters, in the changed lines of a diff too, and keeps the command of a shell approval beside its folder. A fetch approval shows the URL the rules matched and the fetch connects to, without credentials and with an ASCII host, where it showed the spelling the model chose. The terminal interface and Mini list the resource of an MCP resource call and the id of a skill. The live pending call over ACP is sent with an empty input and names no place; when a session is loaded, each replayed call carries its recorded input (so its title and `rawInput` are as before) and names the places its record holds (a completed or failed call records them) and none for a call recorded without them. A shell call's `rawInput` keeps its declared `workdir` and gets a `cwd` only when it declared none.
+
+**Affects:** people who approve calls in the terminal interface, Mini, VS Code or an ACP client, ACP clients that read the
+locations, title or content of a tool call or an approval, and plugins or SDK callers that read the metadata of a
+permission request. The request gains `metadata.paths` (and, per file, `place` and `from`) on file requests,
+`metadata.method` on a WebFetch request and `metadata.arguments` on an MCP request, and `metadata.url` of a WebFetch request is
+now the normalized URL; the metadata of a completed or failed tool call gains `places`. Nothing is removed.
+
+**What to do:** nothing.
+
+### Shell strings written as $'...' are read the way bash reads them
+
+The command scanner decoded some `$'...'` escapes differently from bash, so a command could hide behind one. It now
+ends `$'\c'` at its quote, keeps the character after `\c\` (`$'\c\/'` is 0x1c then `/`), keeps one byte of an octal
+escape (`\456` is `.`), and refuses a heredoc delimiter written with an escape it cannot decode (`\x{..}`, a NUL, a
+byte or code point of 0x80 or more written with `\x`, `\u`, `\U` or octal, a `\c` before a non-ASCII character, a
+code point above U+10FFFF). Bash writes a raw byte for the `\x`, octal and `\c` forms, and bytes that depend on the locale for `\u` and `\U`, so
+the scanner treats the word as dynamic. Such a command is now seen as two commands, or is refused.
+
+**Affects:** people whose shell commands use these escapes; an approval may ask where it did not before.
+
+**What to do:** Nothing; write the character itself instead of the escape if a command is refused.
 
 ## Plugins and SDK
 
@@ -1837,3 +1924,81 @@ edits in the terminal interface or Mini, and plugins or SDK callers that read `m
 permission request.
 
 **What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.
+
+## Shell sandbox
+
+### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
+
+With `sandbox.enabled` set, Orbit now recognises Windows Subsystem for Linux from the kernel release. WSL2 uses the same
+bubblewrap sandbox as Linux, and Orbit hides the WSL interop sockets (`/run/WSL`) from the sandboxed command, so a
+sandboxed command on WSL2 cannot start Windows programs such as `cmd.exe` or `powershell.exe`. WSL1 has no support for
+the namespaces bubblewrap needs, so a shell command there fails with a message saying so, instead of failing with
+bubblewrap's own namespace error.
+
+**Affects:** people who enable the shell sandbox inside a WSL1 or WSL2 distribution. On WSL2, commands that start a
+Windows program now fail.
+
+**What to do:** convert the distribution with `wsl --set-version <name> 2`, or turn the sandbox off.
+
+### The status line refreshes on events, gets more fields and can keep colors
+
+The status line command (`status_line.command`) used to run only on its interval and received a short JSON object. It
+now also runs when a step ends or an execution starts or ends in the session, and when the selected agent, model or
+model variant changes. Runs start at least 300 ms apart (the interval aside), and a trigger that arrives while a run is
+in flight causes exactly one more run, 300 ms after the first started or when it ends, whichever is later. A command
+that has not closed its output and exited within 2 s of starting is stopped together with the programs it
+started, and the last good line stays. On macOS and Linux the command runs in its own session, so it has
+no controlling terminal: a script that reads the terminal size from `/dev/tty` (`stty size`) fails, and the command is
+given no terminal size. On Windows
+that covers what the shell is still running when it is stopped; a program that the shell started detached
+(`start /b`) and then left is not stopped. Its stdin JSON gains `version`, `session` (`id`, `title`), `cwd`,
+`project_dir`, `model` (`provider`, `id`, `name`, `variant`, the model selected for the next prompt), `agent`,
+`output_style`, `context` (`used`, `limit`, `percent`, all three for the selected model), `cost` (`usd`, `duration_ms`,
+`lines_added`, `lines_removed`), `status` (`idle` or `running`) and `vim_mode`; `session_id` stays. The `model` object
+now names its provider `provider` (it was `providerID`), `cost` is an object, where it was a number, and `context`
+holds `used`, `limit` and `percent`, where it held `tokens` and `percent`. `session_id` and `model` are `null` on the
+home screen, where they used to be absent. `lines_added` and `lines_removed` are `null` until Orbit tracks them. The new
+`status_line.colors` key (default `false`) renders the command's colors, bold, dim, italic and underline instead of
+removing them. Every other escape sequence, such as a
+title change or a clipboard write, is dropped in both modes, control characters are shown as their control pictures,
+and format characters such as a right-to-left override or a zero-width space are written out (`\u{202e}`). Private Use
+Area glyphs (Powerline, Nerd Font) and the zero-width joiner of an emoji sequence are drawn as they are. On Windows the
+command runs through `cmd.exe` by its full path and no longer finds a program of the same name in the working folder
+first.
+
+Known gap: the prompt, and with it the status line, is replaced by the permission prompt while a permission is
+pending, so the line is not drawn then, and `status` has no `waiting` value.
+
+**Affects:** people with a `status_line` command, in particular scripts that read `model` or `cost` from stdin.
+
+**What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
+read `model.provider`, and one that read `context.tokens` to read `context.used`.
+Set `status_line.colors` to `true` to see your script's colors.
+
+## Tools
+
+### Web search results start with a Sources reminder
+
+Before, the `WebSearch` tool returned only the results and its description did not mention how to cite them. Its
+description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown
+links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page
+also begin with a one-line reminder of that rule, ahead of the first result so that a result the session bounds (it
+keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
+unchanged.
+
+**Affects:** people who read `WebSearch` tool output in logs, ACP editor users and VS Code users who expand a WebSearch card, who see the reminder,
+and plugin or SDK code that compares the result text exactly.
+
+**What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.
+
+## Files and web tools
+
+Changes to the file tools and the web tools.
+
+### Read refuses devices and budgets its output by tokens
+
+The Read, Grep and Glob tools now refuse a device or stream path with a message that says it is a device or stream (the failure reaches a client as an ordinary tool error, with no dedicated error type), before anything is asked or opened: `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/ptmx`, `/dev/tty*`, `/dev/cu.*`, `/dev/pts/*`, `/dev/fd/*` and `/proc/<self, thread-self or pid>/[task/<tid>/]fd/*` on Linux and macOS, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` (also `COM¹`, `COM²`, `COM³` and the `LPT` forms), `CONIN$`, `CONOUT$` (with or without an extension) and the `\\.\` forms and the `\\?\` forms of these names on Windows (a `\\?\` drive path such as `\\?\C:\Windows\win.ini` is read as the plain drive path and goes through the usual approval). On Linux and macOS a path whose target, followed through links, exists and is neither a file nor a folder (a pipe, a socket, a device the list lacks, or a link of the repository to one) is refused the same way. The Windows names are refused on every Windows version, though Windows 11 itself opens `nul.txt` or `aux.c` as an ordinary file; rename such a file to read it. Files such as `console.log` still read. A read also returns at most about 25,000 tokens of rendered text (line numbers included) instead of 50 KB: a file of ordinary lines up to that size comes back whole where it was paged before, a file of more than 2,000 lines pages whatever its size, and a truncated read ends with the offset to continue from and a hint to use Grep. Notebooks page by the same budget.
+
+**Affects:** people and scripts that read very large files or device paths through the Read tool.
+
+**What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.

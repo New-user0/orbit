@@ -69,8 +69,9 @@ export const Plugin = define({
     )
     loaded.documents = yield* load()
     yield* ctx.agent.transform((editor) => {
+      // Managed rules are enforced from ManagedPolicy, not by copying them into agents, so a managed document adds none.
       const permissions = expandPermissions(
-        loaded.documents.flatMap((document) => document.info.permissions ?? []),
+        loaded.documents.flatMap((document) => (document.scope === "managed" ? [] : (document.info.permissions ?? []))),
         global.home,
       )
       const configuredDefault = Config.latest(loaded.documents, "default_agent")
@@ -106,7 +107,7 @@ export const Plugin = define({
             if (item.hidden !== undefined) agent.hidden = item.hidden
             if (item.color !== undefined) agent.color = item.color
             if (item.steps !== undefined) agent.steps = item.steps
-            if (item.permissions !== undefined) {
+            if (item.permissions !== undefined && document.scope !== "managed") {
               agent.permissions.push(...expandPermissions(item.permissions, global.home))
             }
           })

@@ -101,6 +101,14 @@ export const Info = Schema.Struct({
     Schema.Struct({
       notifications: Schema.optional(Schema.Boolean).annotate({ description: "Show system notifications" }),
       sound: Schema.optional(Schema.Boolean).annotate({ description: "Play attention sounds" }),
+      bell: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Ring the terminal bell for attention events while the terminal is blurred or its focus is unknown",
+      }),
+      idle_reminder: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+        description:
+          "Seconds (capped at 86400) after a session finishes, with no keypress, before reminding you that Orbit is waiting; 0 turns the reminder off",
+      }),
       volume: Schema.optional(
         Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(1)),
       ).annotate({ description: "Attention sound volume from 0 to 1" }),
@@ -160,7 +168,12 @@ export const Info = Schema.Struct({
           "Shell command whose first line of output is shown under the prompt. It receives the session as JSON on stdin.",
       }),
       interval: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))).annotate({
-        description: "Milliseconds between refreshes (default 5000)",
+        description:
+          "Milliseconds between refreshes (default 5000). The line also refreshes, at most every 300 ms, when a step ends, an execution starts or ends, or the agent or model changes.",
+      }),
+      colors: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Render the colors and text styles (bold, dim, italic, underline) of the command output instead of removing them (default false). Other escape sequences are always removed.",
       }),
     }),
   ).annotate({ description: "A custom status line from your own command" }),
@@ -272,6 +285,8 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
   attention: {
     notifications: boolean
     sound: boolean
+    bell: boolean
+    idle_reminder: number
     volume: number
     sound_pack: string
     sounds: AttentionSoundPaths
@@ -331,6 +346,8 @@ export function resolve(
     attention: {
       notifications: input.attention?.notifications ?? false,
       sound: input.attention?.sound ?? false,
+      bell: input.attention?.bell ?? false,
+      idle_reminder: Math.min(input.attention?.idle_reminder ?? 60, 86400),
       volume: input.attention?.volume ?? 0.4,
       sound_pack: input.attention?.sound_pack ?? "orbit.default",
       sounds: input.attention?.sounds ?? {},

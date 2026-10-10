@@ -315,6 +315,7 @@
   "dependencies": {
     "@orbit/client": "workspace:*",
     "@orbit/flow": "workspace:*",
+    "@orbit/schema": "workspace:*",
     "diff": "catalog:"
   },
   "devDependencies": {

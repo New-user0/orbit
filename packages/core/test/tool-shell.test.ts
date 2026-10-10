@@ -45,6 +45,7 @@ import { Tool } from "@orbit/core/tool"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
+import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { offlineModels } from "./fixture/models"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -1869,8 +1870,10 @@ describe("ShellTool", () => {
                 ...call({ command: helloCommand }, "call-shell-id-progress"),
                 progress: (update) => Effect.sync(() => updates.push(update)),
               })
-              expect(updates).toHaveLength(1)
-              expect(updates[0]?.shellID).toMatch(/^sh_/)
+              expect(updates.filter((update) => typeof update.shellID === "string")).toHaveLength(1)
+              expect(updates.find((update) => typeof update.shellID === "string")?.shellID).toMatch(/^sh_/)
+              // The folder the command runs in is reported first, before anything is asked, for a client to name.
+              expect(updates[0]?.places).toEqual([FSUtil.resolve(tmp.path)])
             }),
           )
         },
@@ -2280,6 +2283,28 @@ describe("ShellTool", () => {
           }).pipe(Effect.scoped),
         )
       },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  // Both sandbox launch sites (this tool and command spans) go through ShellSandbox.launch; the span site is pinned in
+  // config/command-shell.test.ts.
+  it.live("refuses to run a command when the sandbox is enabled on WSL1", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          yield* Effect.promise(() =>
+            Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ sandbox: { enabled: true } })),
+          )
+          const previous = { ...ShellSandbox.host }
+          Object.assign(ShellSandbox.host, { platform: "linux", release: "4.4.0-19041-Microsoft", env: {} })
+          const settled = yield* withSession(tmp.path, (registry) =>
+            executeTool(registry, call({ command: helloCommand }, "call-wsl1")),
+          ).pipe(Effect.ensuring(Effect.sync(() => Object.assign(ShellSandbox.host, previous))))
+          expect(settled).toMatchObject({ status: "error", error: { message: expect.stringContaining("WSL1") } })
+        }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )

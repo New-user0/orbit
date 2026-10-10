@@ -11,12 +11,13 @@ const written = "rm x\\x1b]52;c;QQ==\\x07\\x1b[2K end"
 const requests = [
   { action: "shell", resources: [], input: { command: hostile } },
   { action: "shell", resources: [hostile], input: {} },
-  { action: "read", resources: [], input: { path: hostile } },
-  { action: "grep", resources: [], input: { pattern: hostile } },
-  { action: "webfetch", resources: [], input: { url: hostile } },
+  { action: "read", resources: [], metadata: { paths: [hostile] } },
+  { action: "grep", resources: [hostile], metadata: { path: hostile } },
+  { action: "shell", resources: ["ls"], input: { command: "ls" }, metadata: { workdir: hostile } },
+  { action: "webfetch", resources: [], metadata: { url: hostile } },
   { action: "websearch", resources: [], input: { query: hostile } },
   { action: "subagent", resources: [], input: { description: hostile } },
-  { action: "edit", resources: [], input: { path: "a.ts" }, metadata: { diff: hostile } },
+  { action: "edit", resources: [], metadata: { paths: ["a.ts"], files: [{ file: "a.ts", patch: hostile }] } },
   { action: hostile, resources: [], input: {} },
 ]
 

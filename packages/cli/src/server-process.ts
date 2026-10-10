@@ -127,6 +127,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             file: process.env.ORBIT_CONFIG,
             content: overlay ?? process.env.ORBIT_CONFIG_CONTENT,
           },
+          managed: { directory: process.env.ORBIT_MANAGED_DIR || undefined },
           trust: trustOptions(options.mode, process.env),
           windows: {
             gitbash: process.env.ORBIT_GIT_BASH_PATH,

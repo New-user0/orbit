@@ -86,8 +86,12 @@ export function activate(context: vscode.ExtensionContext) {
   chat.onDiff = async (item) => {
     const root = directory(editor)
     for (const change of item.files) {
-      const file = path.isAbsolute(change.file) ? change.file : path.join(root, change.file)
-      const original = vscode.Uri.file(file)
+      // The place is the one the server resolved, else the name it gave the file. A moved file is read from where it came
+      // from, as its destination does not exist yet, and proposed at the destination.
+      const named = change.place ?? change.file
+      const file = path.isAbsolute(named) ? named : path.join(root, named)
+      const source = change.from ?? named
+      const original = vscode.Uri.file(path.isAbsolute(source) ? source : path.join(root, source))
       const before = await vscode.workspace.fs.readFile(original).then(
         (bytes) => new TextDecoder().decode(bytes),
         () => "",

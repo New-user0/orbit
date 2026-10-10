@@ -292,7 +292,7 @@ describe("acp turn events over the wire", () => {
           id,
           toolStarted(sessionID, "call_ok", "shell"),
           toolCalled(sessionID, "call_ok", { command: "printf done", workdir: "sub" }),
-          toolProgress(sessionID, "call_ok", { phase: 1 }),
+          toolProgress(sessionID, "call_ok", { phase: 1, places: [resolve("/workspace", "sub")] }),
           toolSucceeded(sessionID, "call_ok", { exit: 0 }, "done"),
           toolStarted(sessionID, "call_fail", "read"),
           toolCalled(sessionID, "call_fail", { path: "/workspace/missing.ts" }),
@@ -322,9 +322,11 @@ describe("acp turn events over the wire", () => {
     expect(updates[1]?.update).toMatchObject({
       title: "printf done",
       kind: "execute",
-      locations: [{ path: resolve("/workspace", "sub") }],
+      // Nothing is named until the tool reports the place it resolved, which is the next update.
+      locations: [],
       rawInput: { command: "printf done", workdir: "sub" },
     })
+    expect(updates[2]?.update).toMatchObject({ locations: [{ path: resolve("/workspace", "sub") }] })
     expect(updates[2]?.update).not.toHaveProperty("content")
     expect(updates[3]?.update).toMatchObject({
       content: [{ type: "content", content: { type: "text", text: "done" } }],
@@ -383,12 +385,15 @@ describe("acp turn events over the wire", () => {
           id,
           toolStarted(sessionID, "call_edit", "edit"),
           toolCalled(sessionID, "call_edit", { path: "/workspace/src/a.ts", oldString: "a", newString: "b" }),
+          toolProgress(sessionID, "call_edit", { places: [resolve("/workspace/src/a.ts")] }),
           toolSucceeded(sessionID, "call_edit", {}, "edited"),
           toolStarted(sessionID, "call_write", "write"),
           toolCalled(sessionID, "call_write", { path: "/workspace/src/b.ts", content: "b" }),
+          toolProgress(sessionID, "call_write", { places: [resolve("/workspace/src/b.ts")] }),
           toolSucceeded(sessionID, "call_write", {}, "written"),
           toolStarted(sessionID, "call_patch", "patch"),
           toolCalled(sessionID, "call_patch", { patchText }),
+          toolProgress(sessionID, "call_patch", { places: [resolve("/workspace/src/c.ts")] }),
           toolSucceeded(sessionID, "call_patch", {}, "patched"),
         ),
     })
@@ -402,11 +407,15 @@ describe("acp turn events over the wire", () => {
         toolStatus(item),
         "locations" in item.update ? item.update.locations : undefined,
       ])
+    // A call names no place until the tool reports the one it resolved (its progress), and every update after that names it.
     expect(locations).toEqual([
+      ["call_edit", "in_progress", []],
       ["call_edit", "in_progress", [{ path: resolve("/workspace/src/a.ts") }]],
       ["call_edit", "completed", [{ path: resolve("/workspace/src/a.ts") }]],
+      ["call_write", "in_progress", []],
       ["call_write", "in_progress", [{ path: resolve("/workspace/src/b.ts") }]],
       ["call_write", "completed", [{ path: resolve("/workspace/src/b.ts") }]],
+      ["call_patch", "in_progress", []],
       ["call_patch", "in_progress", [{ path: resolve("/workspace/src/c.ts") }]],
       ["call_patch", "completed", [{ path: resolve("/workspace/src/c.ts") }]],
     ])

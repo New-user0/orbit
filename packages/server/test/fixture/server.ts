@@ -1,3 +1,4 @@
+import path from "node:path"
 import { Effect } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import type { ServerOptions } from "../../src/options"
@@ -18,6 +19,7 @@ export const startServer = Effect.fnUntraced(function* (
     app: { version: "test-version" },
     database: { path: ":memory:" },
     config: { directory },
+    managed: { directory: path.join(directory, "managed-missing") },
     fs: { filewatcher: false },
     models: { fetch: false },
     trust: options.trust ?? { implicit: true },

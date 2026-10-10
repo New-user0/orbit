@@ -1,6 +1,7 @@
 import { EOL } from "os"
 import { Effect, Option } from "effect"
 import { Global } from "@orbit/util/global"
+import { ManagedPath } from "@orbit/util/managed-path"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
 import { databasePath } from "../../../database-path"
@@ -9,7 +10,11 @@ export default Runtime.handler(
   Commands.commands.debug.commands.paths,
   Effect.fn("cli.debug.paths")(function* (input) {
     const global = yield* Global.Service
-    const paths = { ...global, db: databasePath(global.data) }
+    const paths = {
+      ...global,
+      db: databasePath(global.data),
+      managed: ManagedPath.directory(process.platform, process.env),
+    }
     if (Option.isSome(input.name)) {
       process.stdout.write(paths[input.name.value] + EOL)
       return

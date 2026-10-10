@@ -23,6 +23,7 @@ import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigDiscovery } from "./config/discovery.js"
 import { ConfigWatch } from "./config/watch.js"
 import { ConfigTrust } from "./config/trust.js"
+import { ManagedSettings } from "./managed-settings.js"
 import { WellKnown } from "./wellknown.js"
 import { WorkspaceTrust } from "./workspace-trust.js"
 
@@ -147,6 +148,7 @@ export const layer = (options?: Options) =>
       const globalService = yield* Global.Service
       const wellknown = yield* WellKnown.Service
       const trust = yield* WorkspaceTrust.Service
+      const managedSettings = yield* ManagedSettings.Service
       // How each folder was decided in the load that is running or ran last: the project's, and the ones that hold the
       // config found above it. A trust change that moves none of them leaves the config as it is.
       const decisions = new Map<string, boolean>()
@@ -382,6 +384,19 @@ export const layer = (options?: Options) =>
         const user = [globalEntries, homeEntries].flatMap((entries) =>
           entries ? [...entries.base, ...entries.local] : [],
         )
+        // The managed document exists only when a managed settings file was read.
+        const managedSnapshot = managedSettings.current()
+        const organization =
+          managedSnapshot.sources.length > 0
+            ? [
+                new Document({
+                  type: "document",
+                  path: AbsolutePath.make(path.join(managedSnapshot.directory, "managed-settings.json")),
+                  scope: "managed",
+                  info: managedSnapshot.info,
+                }),
+              ]
+            : []
         // Other products' files load only while compatibility is on, and only the native documents decide that, so
         // the switch is read before any of them is.
         const compat = compatOn([
@@ -391,14 +406,15 @@ export const layer = (options?: Options) =>
           ...projectEntries.local,
           ...explicit,
           ...content,
+          ...organization,
         ])
           ? yield* loadCompat(sources)
           : { user: [], project: [], local: [] }
 
-        // Scopes rank remote < user < project < local < flag; the managed scope is reserved to load after all of
-        // them. Within a scope, outer sources come first, base documents before their local counterparts, and
-        // ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The documents of other products' files open their scope,
-        // so a native document of the same scope outranks them.
+        // Scopes rank remote < user < project < local < flag < managed. Within a scope, outer sources come first, base
+        // documents before their local counterparts, and ORBIT_CONFIG_CONTENT after the ORBIT_CONFIG file. The
+        // documents of other products' files open their scope, so a native document of the same scope outranks them.
+        // The managed document is the merge of the managed settings files, and comes last.
         return yield* Effect.forEach(
           [
             ...remote,
@@ -410,6 +426,7 @@ export const layer = (options?: Options) =>
             ...projectEntries.local,
             ...explicit,
             ...content,
+            ...organization,
           ],
           stampEntry,
         )
@@ -417,6 +434,7 @@ export const layer = (options?: Options) =>
 
       const initial = yield* ConfigDiscovery.discover(options)
       let sources = initial
+      let restrictions = managedSettings.current().restrictions
       let configs = yield* load(initial)
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const reloads = yield* PubSub.sliding<void>(1)
@@ -449,15 +467,19 @@ export const layer = (options?: Options) =>
       const reload = Effect.fn("Config.reload")(
         function* () {
           const discovered = yield* ConfigDiscovery.discover(options)
+          const nextRestrictions = managedSettings.current().restrictions
           const next = yield* load(discovered)
           yield* reconcile(discovered, next)
           const compatibilityChanged = !isDeepStrictEqual(
             applicable(sources, configs).compat,
             applicable(discovered, next).compat,
           )
-          if (isDeepStrictEqual(configs, next) && !compatibilityChanged) return
+          // Restrictions never enter a document, so an edit that changes only them still has to be announced.
+          const restrictionsChanged = !isDeepStrictEqual(restrictions, nextRestrictions)
+          if (isDeepStrictEqual(configs, next) && !compatibilityChanged && !restrictionsChanged) return
           sources = discovered
           configs = next
+          restrictions = nextRestrictions
           yield* bus.publish(Event.Updated, {})
         },
         (effect) => reloadLock.withPermit(effect),
@@ -482,6 +504,10 @@ export const layer = (options?: Options) =>
         Stream.runForEach(() =>
           reload().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload wellknown config", { cause }))),
         ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      yield* managedSettings.changes().pipe(
+        Stream.runForEach(() => requestReload),
         Effect.forkScoped({ startImmediately: true }),
       )
       yield* bus.subscribe(WellKnown.Event.Updated).pipe(
@@ -579,6 +605,7 @@ export function configured(options?: Options) {
       Global.node,
       Location.node,
       Credential.node,
+      ManagedSettings.node,
       WellKnown.node,
       WorkspaceTrust.node,
     ],

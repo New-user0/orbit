@@ -119,7 +119,7 @@ for (const row of home)
             expect(run.permissions).toHaveLength(1)
             expect(shown(run.permissions[0]?.toolCall.locations)).toEqual([place])
             // The ordinary updates once the call's input is known: running and completed.
-            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update" && item.locations)
+            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update" && item.locations?.length)
             expect(updates.map((item) => item.status)).toContain("completed")
             for (const update of updates) expect(shown(update.locations)).toEqual([place])
             expect(await row.acted(run.root, run.bodies)).toBe(true)
@@ -315,6 +315,65 @@ for (const row of linkRows)
             setup: linkSetup(mode.link),
           },
           linkCheck(row, mode),
+        ),
+      90_000,
+    )
+
+// Under the default rules (no rule of the person's) nothing but the folder question asks about a call through a link, and
+// that question does not carry the tool's place. Each tool reports the place it resolved as its first act, so every update
+// of the call still names the real place: the folder the link leads to in an untrusted project, the link itself in a
+// trusted one (the control). No update names the link's own path (class 4, class 8, class 12).
+const defaultRows = [
+  {
+    name: "Read",
+    tool: "Read",
+    args: { file_path: "cfg/orbit.json" },
+    place: (root: string, trusted: boolean) =>
+      path.join(root, trusted ? path.join("workspace", "cfg") : "config", "orbit.json"),
+  },
+  {
+    name: "Write",
+    tool: "Write",
+    args: { file_path: "cfg/notes.md", content: "notes\n" },
+    place: (root: string, trusted: boolean) =>
+      path.join(root, trusted ? path.join("workspace", "cfg") : "config", "notes.md"),
+  },
+  {
+    name: "Edit",
+    tool: "Edit",
+    args: { file_path: "cfg/AGENTS.md", old_string: "own", new_string: "OWN" },
+    place: (root: string, trusted: boolean) =>
+      path.join(root, trusted ? path.join("workspace", "cfg") : "config", "AGENTS.md"),
+  },
+  {
+    name: "Bash workdir",
+    tool: "Bash",
+    args: { command: "echo ran", workdir: "cfg" },
+    place: (root: string, trusted: boolean) => path.join(root, trusted ? path.join("workspace", "cfg") : "config"),
+  },
+]
+for (const row of defaultRows)
+  for (const trusted of [false, true])
+    test(
+      `${trusted ? "a trusted" : "an untrusted"} ${row.name} through a junction under the default rules names the place in every update`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            permissions: [],
+            trusted,
+            reply: "once",
+            args: () => row.args,
+            setup: linkSetup("junction"),
+          },
+          async (run) => {
+            const place = row.place(run.root, trusted)
+            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update")
+            const located = updates.filter((item) => (item.locations ?? []).length > 0)
+            // Untrusted, the call's running update and its last one both name the place (a trusted Edit is refused in validation).
+            expect(located.length).toBeGreaterThanOrEqual(trusted ? 1 : 2)
+            for (const update of located) expect(shownAt(update.locations)).toEqual([place])
+          },
         ),
       90_000,
     )
@@ -911,9 +970,9 @@ for (const row of linkRows)
           },
           (run) => {
             expect(toolResult(run)).not.toContain("file.spelling")
-            expect(run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))).toEqual(
-              [],
-            )
+            expect(
+              run.permissions.filter((item) => String(item.toolCall.title).includes("external directory")),
+            ).toEqual([])
           },
         ),
       90_000,
@@ -928,6 +987,64 @@ type Run = {
   readonly bodies: string[]
 }
 
+// The matrix row of `clients-ux-61` over a real `orb acp` process: a NotebookEdit asks as an Edit, and its approval and
+// its later updates name the notebook its request resolved, whatever keys the model adds beside `notebook_path`. Each row
+// runs in an untrusted folder and again in a trusted one as the control. The notebook is read first, as the tool requires.
+const notebook = JSON.stringify({
+  cells: [{ cell_type: "code", execution_count: null, id: "calc", metadata: {}, outputs: [], source: ["print(1)"] }],
+  metadata: {},
+  nbformat: 4,
+  nbformat_minor: 5,
+})
+for (const trusted of [false, true])
+  test(
+    `${trusted ? "a trusted" : "an untrusted"} NotebookEdit is shown at the notebook its request resolved, whatever keys the model adds`,
+    () =>
+      approval(
+        {
+          tool: "Read",
+          args: () => ({ file_path: "nb.ipynb" }),
+          then: {
+            tool: "NotebookEdit",
+            args: () => ({
+              notebook_path: "nb.ipynb",
+              mode: "replace",
+              cellId: "calc",
+              source: "print(2)",
+              file_path: "DECOY/elsewhere.ipynb",
+              filePath: "DECOY/other.ipynb",
+              path: "DECOY/dir",
+            }),
+          },
+          permissions: [{ action: "Edit", resource: "*", effect: "ask" }],
+          trusted,
+          reply: "once",
+          setup: (root) => Bun.write(path.join(root, "workspace", "nb.ipynb"), notebook),
+        },
+        async (run) => {
+          const place = path.join(run.workspace, "nb.ipynb")
+          const asked = run.permissions.filter((item) => item.toolCall.toolCallId === "call_2")
+          expect(asked).toHaveLength(1)
+          const call = asked[0].toolCall
+          // The raw input is the one place the model's own keys appear, labelled as such.
+          expect(JSON.stringify({ ...call, rawInput: undefined })).not.toContain("DECOY")
+          expect((call.locations as { path: string }[]).map((item) => path.resolve(item.path))).toEqual([place])
+          for (const item of call.content ?? []) if (item.type === "diff") expect(path.resolve(item.path)).toBe(place)
+          const later = run.updates.filter(
+            (item) => item.sessionUpdate === "tool_call_update" && item.toolCallId === "call_2" && item.locations?.length,
+          )
+          expect(later.map((item) => item.status)).toContain("completed")
+          for (const item of later) {
+            expect(JSON.stringify({ ...item, rawInput: undefined })).not.toContain("DECOY")
+            expect(item.locations.map((entry: { path: string }) => path.resolve(entry.path))).toEqual([place])
+          }
+          // The runner acted where the approval said.
+          expect(await Bun.file(place).text()).toContain("print(2)")
+        },
+      ),
+    120_000,
+  )
+
 async function approval(
   input: {
     tool: string
@@ -941,6 +1058,8 @@ async function approval(
     trusted?: boolean
     reply?: "once" | "reject"
     setup?: (root: string) => Promise<unknown>
+    // A second tool call, made once the first one has been answered: a file is read before it is edited.
+    then?: { tool: string; args: (root: string) => Record<string, unknown> }
   },
   check: (run: Run) => unknown,
 ) {
@@ -961,15 +1080,19 @@ async function approval(
       const body: any = JSON.parse(text || "null")
       if (body?.tools) bodies.push(text)
       primary += body?.tools ? 1 : 0
-      const call = Boolean(body?.tools) && primary === 1
+      const next = input.then && primary === 2 ? input.then : undefined
+      const call = Boolean(body?.tools) && (primary === 1 || next !== undefined)
       const delta = call
         ? {
             tool_calls: [
               {
                 index: 0,
-                id: "call_1",
+                id: `call_${primary}`,
                 type: "function",
-                function: { name: input.tool, arguments: JSON.stringify(input.args(root)) },
+                function: {
+                  name: next ? next.tool : input.tool,
+                  arguments: JSON.stringify((next ? next.args : input.args)(root)),
+                },
               },
             ],
           }

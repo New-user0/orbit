@@ -71,6 +71,8 @@ export const Plugin = {
                 id: context.id,
               }
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
+              // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
+              yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
               yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
               const current = yield* FileMutation.readText(environment.files, target.absolute).pipe(
@@ -82,7 +84,8 @@ export const Plugin = {
                 action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
-                metadata: { files: [preview] },
+                // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show.
+                metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source,

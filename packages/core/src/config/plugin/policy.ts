@@ -27,7 +27,8 @@ export const Plugin = define({
       const organization = managed.current()
       return [
         ...loaded.entries
-          .filter((entry): entry is Document => entry.type === "document")
+          // A managed document's statements arrive through ManagedPolicy, so ranking it here would count them twice.
+          .filter((entry): entry is Document => entry.type === "document" && entry.scope !== "managed")
           .toReversed()
           .toSorted((a, b) => rank[a.scope ?? "user"] - rank[b.scope ?? "user"])
           .flatMap((entry) => entry.info.experimental?.policies ?? [])

@@ -17,7 +17,15 @@ const httpErrors = new Map([
   [401, "Web search authentication failed (HTTP 401)"],
 ])
 
+// Placed before the first result: the session runner keeps the head of an oversized result, so a trailing line is lost.
+export const SOURCES_REMINDER =
+  'Reminder: when your reply uses these results, end it with a "Sources:" section listing each page you used as a markdown link, like [Title](URL).'
+
 export const description = `Search the web using the user's selected search integration. Use this for current information beyond knowledge cutoff.
+
+When your reply draws on search results, end it with a "Sources:" section that lists the pages you used as markdown links, like [Title](URL).
+
+Use allowedDomains to restrict results to certain sites (subdomains included) and blockedDomains to exclude sites. Both are optional and are applied to the results after the search.
 
 The current year is ${new Date().getFullYear()}. Use this year when searching for recent information or current events.`
 
@@ -169,17 +177,14 @@ export const Plugin = {
                 provider: result.providerID,
                 results: result.results.filter((item) => allowed(item.url, input)),
               }
-              const content = output.results.length
-                ? output.results
-                    .map((result) => {
-                      const title = result.title ?? result.url
-                      const published = result.time.published
-                        ? `\nPublished: ${new Date(result.time.published).toISOString()}`
-                        : ""
-                      return `## [${title}](${result.url})${published}${result.content ? `\n\n${result.content}` : ""}`
-                    })
-                    .join("\n\n")
-                : NO_RESULTS
+              const sections = output.results.map((result) => {
+                const title = result.title ?? result.url
+                const published = result.time.published
+                  ? `\nPublished: ${new Date(result.time.published).toISOString()}`
+                  : ""
+                return `## [${title}](${result.url})${published}${result.content ? `\n\n${result.content}` : ""}`
+              })
+              const content = sections.length ? [SOURCES_REMINDER, ...sections].join("\n\n") : NO_RESULTS
               return { output, content, metadata: { provider: output.provider } }
             }).pipe(
               Effect.mapError((error) => {

@@ -75,9 +75,8 @@ export default Runtime.handler(Commands, (input) =>
     // the session list with the value typed into its search.
     const resumeID = resume !== undefined && /^ses\S*$/.test(resume) ? resume : undefined
     const named = Option.getOrUndefined(input.session) ?? resumeID
-    // The session that --continue would open is settled once, in the folder the interface opens (process.cwd(), after
-    // the change of directory above, which also settles a link or a trailing separator), and the interface takes that
-    // ID as its target, so the session that was checked is the session that opens.
+    // The session that --continue would open is asked about in the folder the interface opens (process.cwd(), after
+    // the change of directory above, which also settles a link or a trailing separator).
     const checked = overlay
       ? yield* ConfigOverlay.refuseActive({
           client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),

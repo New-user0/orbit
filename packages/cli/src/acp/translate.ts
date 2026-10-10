@@ -7,7 +7,9 @@ import type {
   TokenUsageInfo,
 } from "@orbit/client/promise"
 import { Event } from "@orbit/schema/event"
+import { PermissionView } from "@orbit/schema/permission-view"
 import { SessionMessage } from "@orbit/schema/session-message"
+import { ToolNames } from "@orbit/schema/tool-names"
 import { TokenUsage } from "@orbit/schema/token-usage"
 import { partsToContentChunks, type ReplayPart } from "./content"
 import { ACPError } from "./error"
@@ -38,6 +40,8 @@ type Tool = {
   readonly name: string
   readonly input: ToolInput
   readonly metadata: Record<string, unknown>
+  /** The places the server named on this call's permission request: where the tool acts. */
+  readonly places?: ReadonlyArray<string>
 }
 
 type RetryStatus = {
@@ -159,7 +163,15 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
     const tool = event.data.source?.id
       ? state.tools.get(toolKey(event.data.sessionID, event.data.source.id))
       : undefined
-    return { state, outputs: [{ _tag: "PermissionAsk", event, tool, child }] }
+    // The places the server resolved are where the tool acts: the call's later updates name them, not the input's spelling.
+    const view = PermissionView.of(event.data)
+    const served = view.places.length > 0 ? view.places : view.folder ? [view.folder] : undefined
+    // A Patch asks as an Edit, for every file it changes.
+    const next =
+      tool && served && (ToolNames.owns(event.data.action, tool.name) || PermissionView.action(tool.name) === "patch")
+        ? new Map(state.tools).set(toolKey(tool.sessionID, tool.id), { ...tool, places: served })
+        : state.tools
+    return { state: { ...state, tools: next }, outputs: [{ _tag: "PermissionAsk", event, tool, child }] }
   }
   if (event.type === "form.created" && (event.data.form.sessionID === ctx.sessionID || child)) {
     return {
@@ -285,6 +297,9 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             toolName: tool.name,
             state: { input: tool.input },
             cwd: ctx.cwd,
+            // The tools report the places they resolved as their first act, so until they do no place is named: the
+            // input's spelling of a path can be a link that the tool leads somewhere else.
+            places: tool.places ?? [],
           }),
         }),
       }
@@ -293,8 +308,18 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
       const key = toolKey(event.data.sessionID, event.data.id)
       const current = state.tools.get(key)
       if (!current) return { state, outputs: [] }
+      // The tool reports the places it resolved before it asks or acts, so they are known even when no rule asks about
+      // the call (the permission request carries them only when it is asked).
+      const reported = event.data.metadata?.places
+      const places =
+        Array.isArray(reported) && reported.length > 0 && reported.every((item) => typeof item === "string")
+          ? (reported as string[])
+          : current.places
       return {
-        state: { ...state, tools: new Map(state.tools).set(key, { ...current, metadata: event.data.metadata }) },
+        state: {
+          ...state,
+          tools: new Map(state.tools).set(key, { ...current, metadata: event.data.metadata, places }),
+        },
         outputs: send({
           sessionUpdate: "tool_call_update",
           ...runningToolUpdate({
@@ -302,6 +327,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             toolName: current.name,
             state: { input: current.input },
             cwd: ctx.cwd,
+            places,
           }),
         }),
       }
@@ -320,6 +346,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             metadata: event.data.metadata,
             content: event.data.content,
             cwd: ctx.cwd,
+            places: tool.places,
           }),
         }),
       }
@@ -339,6 +366,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             content: event.data.content ?? [],
             error: event.data.error.message,
             cwd: ctx.cwd,
+            places: tool.places,
           }),
         }),
       }
@@ -421,6 +449,7 @@ export function abandonTools(state: TurnState, ctx: Context): Step {
           content: [],
           error: "Cancelled",
           cwd: ctx.cwd,
+          places: tool.places,
         }),
       }),
     ),
@@ -467,6 +496,10 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
       }
       continue
     }
+    // The pending call carries the recorded input, so a loaded session still shows which command ran or which URL was
+    // fetched, and the recorded places, so no place comes from the input's spelling of a path (it can be a link that
+    // leads somewhere else). A call recorded without places names none.
+    const places = part.state.status === "streaming" ? [] : recordedPlaces(part.state.metadata)
     yield {
       sessionUpdate: "tool_call",
       ...pendingToolCall({
@@ -474,6 +507,7 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
         toolName: part.name,
         state: { input: part.state.status === "streaming" ? {} : part.state.input },
         cwd,
+        places,
       }),
     }
     switch (part.state.status) {
@@ -487,13 +521,14 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
             metadata: part.state.metadata,
             content: part.state.content,
             cwd,
+            places,
           }),
         }
         break
       case "running":
         yield {
           sessionUpdate: "tool_call_update",
-          ...runningToolUpdate({ toolCallId: part.id, toolName: part.name, state: { input: part.state.input }, cwd }),
+          ...runningToolUpdate({ toolCallId: part.id, toolName: part.name, state: { input: part.state.input }, cwd, places }),
         }
         break
       case "error":
@@ -507,6 +542,7 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
             content: part.state.content,
             error: part.state.error.message,
             cwd,
+            places,
           }),
         }
         break
@@ -514,6 +550,11 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
         break
     }
   }
+}
+
+function recordedPlaces(metadata: Readonly<Record<string, unknown>> | undefined) {
+  const recorded = metadata?.places
+  return Array.isArray(recorded) && recorded.every((item) => typeof item === "string") ? (recorded as string[]) : []
 }
 
 function newTool(sessionID: string, id: string, name = "tool"): Tool {
