@@ -1633,8 +1633,8 @@ fixes it or asks.
   upgrade note for Code Mode `fetch` says that a rule written for a URL, an origin or a host never allows a write, which
   holds only without a leading wildcard. The review of #3 left it to the owner: change what such a pattern matches, or
   say so in the note.
-- **The `webfetch` tool.** It still follows redirects through `HttpClient` with no per-hop ask and no address guard, and
-  a proxy sees the address and not the name (task `file-web-tools-19`, M3).
+- **The `webfetch` tool and a proxy.** `webfetch` now asks per hop, passes `AddressGuard.check` and connects to the checked
+  address, as Code Mode `fetch` does. A user-configured proxy still sees that address and not the name; the owner has yet to decide.
 - **A terminal UI plugin that first appears above the folder** while the UI runs is imported with no `config.updated` or
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,

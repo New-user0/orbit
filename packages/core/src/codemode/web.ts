@@ -1,8 +1,8 @@
 export * as CodeModeWeb from "./web.js"
 
 import { Extension } from "@orbit/codemode"
-import { checkServerIdentity, type PeerCertificate } from "node:tls"
 import { PermissionWeb } from "../permission/web.js"
+import { WebPin } from "../tool/web-pin.js"
 
 /** The extension a call to `fetch` names. */
 export const name = "web"
@@ -14,8 +14,6 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const CREDENTIAL_HEADERS = ["authorization", "cookie", "proxy-authorization", "host"]
 // The headers that describe a body, which go with it when a redirect turns a request into a GET.
 const BODY_HEADERS = ["content-encoding", "content-language", "content-location", "content-type"]
-// What fetch fails with when it could not connect to an address, so that nothing was sent to it.
-const NOT_CONNECTED = new Set(["ConnectionRefused", "FailedToOpenSocket"])
 
 type Init = {
   readonly method?: string
@@ -99,38 +97,20 @@ async function send(
 // certificate, so a server and a certificate see the request as they would see one that went to the name. A name with
 // several addresses is tried one after the other, as fetch does itself, moving on only when no connection could be made.
 async function connect(gate: Gate, url: URL, init: BunFetchRequestInit) {
-  const addresses = await gate.resolve(url.hostname)
-  if (addresses.length === 0) return globalThis.fetch(url, init)
-  const name = url.hostname.replace(/\.+$/, "")
+  const places = WebPin.targets(url, await gate.resolve(url.hostname))
   const headers = new Headers(init.headers)
-  if (!headers.has("host")) headers.set("host", url.host)
+  if (places[0].host !== undefined && !headers.has("host")) headers.set("host", places[0].host)
   const attempt = (index: number): Promise<Response> => {
-    const pinned = new URL(url)
-    pinned.hostname = addresses[index]
+    const place = places[index]
     return globalThis
-      .fetch(pinned, {
-        ...init,
-        headers,
-        ...(url.protocol === "https:"
-          ? {
-              tls: {
-                serverName: name,
-                checkServerIdentity: (_: string, certificate: PeerCertificate) =>
-                  checkServerIdentity(name, certificate),
-              },
-            }
-          : {}),
-      })
+      .fetch(place.url, { ...init, headers, ...(place.tls ? { tls: place.tls } : {}) })
       .catch((error: unknown) => {
-        if (index === addresses.length - 1 || !notConnected(error)) throw error
+        if (index === places.length - 1 || !WebPin.notConnected(error)) throw error
         return attempt(index + 1)
       })
   }
   return attempt(0)
 }
-
-const notConnected = (error: unknown) =>
-  error instanceof TypeError && "code" in error && typeof error.code === "string" && NOT_CONNECTED.has(error.code)
 
 // `url` is the one the request is for. The response's own is where it was sent, which is an address and not the name.
 async function reply(response: Response, redirected: boolean, url: URL) {
