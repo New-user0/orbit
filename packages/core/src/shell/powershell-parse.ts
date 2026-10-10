@@ -1,3 +1,5 @@
+export * as PowerShellParse from "./powershell-parse.js"
+
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Context, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect"
@@ -23,6 +25,8 @@ export type Redirect = {
   operator: string
   // Source text of the target. A merge has none.
   target?: string
+  // File redirect only: the target is the variable $null (or ${null}), which discards the output.
+  nullSink?: boolean
   text: string
 }
 export type Argument = {
@@ -74,7 +78,9 @@ export type Variable = { name: string; scope: string; splatted: boolean }
 export type Using = { kind: string; name?: string }
 export type Summary = {
   statements: Statement[]
-  // Every command node at any depth, nested ones included.
+  // Every command node at any depth, nested ones included. Placeholders (a statement or pipeline element that is not a
+  // command, such as [IO.File]::Delete('x')) are not here: they live only in statements[].elements[].command, so an
+  // allowlist check must walk the statements' elements, not only this list.
   commands: Command[]
   variables: Variable[]
   types: string[]
@@ -101,17 +107,16 @@ $ProgressPreference = 'SilentlyContinue'
 $source = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('__TEXT__'))
 $tokens = $null
 $errors = $null
-$L = 'System.Management.Automation.Language.'
 $root = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 function K($n) { $n.GetType().Name }
-function T($n, $name) { $n.GetType().Name -eq $name }
 function Under($n) { @($n.FindAll({ param($x) $true }, $true)) }
 function Is($n, $names) { $names -contains $n.GetType().Name }
 function Value($n) { if ($n -is [System.Management.Automation.Language.ConstantExpressionAst]) { return [string]$n.Value }; return $null }
 function Redirect($n) {
   if ($n -is [System.Management.Automation.Language.FileRedirectionAst]) {
     $s = @{ Output = ''; All = '*'; Error = '2'; Warning = '3'; Verbose = '4'; Debug = '5'; Information = '6' }[[string]$n.FromStream]
-    [ordered]@{ kind = 'file'; operator = $(if ($n.Append) { $s + '>>' } else { $s + '>' }); target = $n.Location.Extent.Text; text = $n.Extent.Text }
+    $null_ = ($n.Location -is [System.Management.Automation.Language.VariableExpressionAst]) -and ($n.Location.VariablePath.UserPath -eq 'null')
+    [ordered]@{ kind = 'file'; operator = $(if ($n.Append) { $s + '>>' } else { $s + '>' }); target = $n.Location.Extent.Text; nullSink = [bool]$null_; text = $n.Extent.Text }
   } else {
     [ordered]@{ kind = 'merge'; operator = [string]$n.FromStream + '>&' + [string]$n.ToStream; text = $n.Extent.Text }
   }
@@ -234,13 +239,33 @@ export function isLauncher(file: string, platform: NodeJS.Platform = process.pla
   return platform === "linux" && file.startsWith("/snap/")
 }
 
+function realPath(file: string) {
+  try {
+    return fs.realpathSync(file)
+  } catch {
+    return file
+  }
+}
+
+// A link such as /usr/bin/pwsh that points at the snap shim is the shim, so the test is made on the real path.
+export function usableHost(
+  first: string | null,
+  options: { platform?: NodeJS.Platform; real?: (file: string) => string; exists?: (file: string) => boolean } = {},
+) {
+  const platform = options.platform ?? process.platform
+  const real = options.real ?? realPath
+  if (first && !isLauncher(real(first), platform)) return first
+  if (platform !== "linux") return first
+  const exists = options.exists ?? fs.existsSync
+  return REAL_LINUX_HOSTS.find((candidate) => exists(candidate) && !isLauncher(real(candidate), platform)) ?? null
+}
+
 let found: string | null | undefined
 // PATH only, never the working folder: which() skips it (class 10). Cached for the life of the process.
 export function findHost() {
   if (found !== undefined) return found ?? undefined
   const first = which("pwsh") ?? (process.platform === "win32" ? which("powershell") : null)
-  found =
-    first && isLauncher(first) ? (REAL_LINUX_HOSTS.find((candidate) => fs.existsSync(candidate)) ?? null) : first
+  found = usableHost(first)
   return found ?? undefined
 }
 
@@ -292,7 +317,8 @@ export function layerWith(options: Options = {}) {
           Effect.timeout(timeout),
           Effect.map((done): Result => interpret(done.code, done.output)),
           Effect.catchTag("TimeoutError", () => Effect.succeed<Result>({ valid: false, reason: "timeout" })),
-          Effect.catch(() => Effect.succeed<Result>({ valid: false, reason: "spawn" })),
+          // Any failure, a defect such as a synchronous throw while starting the process included, is a failed run.
+          Effect.catchCause(() => Effect.succeed<Result>({ valid: false, reason: "spawn" })),
         )
 
       const run = (text: string): Effect.Effect<Result> =>
@@ -319,6 +345,7 @@ export function layerWith(options: Options = {}) {
           if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!)
           // Detached, so a caller that stops waiting does not strand the others that share this process.
           yield* run(text).pipe(
+            Effect.catchCause(() => Effect.succeed<Result>({ valid: false, reason: "spawn" })),
             Effect.tap((result) =>
               Effect.sync(() => {
                 if (!result.valid && TRANSIENT.has(result.reason) && cache.get(text) === pending) cache.delete(text)
@@ -358,6 +385,7 @@ const RawRedirect = Schema.Struct({
   kind: Schema.Literals(["file", "merge"]),
   operator: Schema.String,
   target: optional(Schema.String),
+  nullSink: optional(Schema.Boolean),
   text: Schema.String,
 })
 const RawValue = Schema.Struct({ kind: Schema.String, text: Schema.String, value: optional(Schema.String) })
@@ -458,6 +486,7 @@ function redirect(raw: RawRedirectType): Redirect {
     kind: raw.kind,
     operator: raw.operator,
     ...(raw.target ? { target: raw.target } : {}),
+    ...(raw.nullSink ? { nullSink: true } : {}),
     text: raw.text,
   }
 }
@@ -504,7 +533,7 @@ const ALIASES = new Map(
     "Remove-Item": "rm del erase rd ri rmdir",
     "Copy-Item": "cp copy cpi",
     "Move-Item": "mv move mi",
-    "New-Item": "ni",
+    "New-Item": "ni md mkdir",
     "Clear-Host": "cls clear",
     "Get-Member": "gm",
     "Select-Object": "select",
@@ -552,23 +581,35 @@ const ALIASES = new Map(
     "Resolve-Path": "rvpa",
     "Select-String": "sls",
     "Get-ItemPropertyValue": "gpv",
+    "Import-Module": "ipmo",
+    "Start-Job": "sajb",
+    "New-PSSession": "nsn",
+    "Enter-PSSession": "etsn",
+    "Exit-PSSession": "exsn",
+    "Get-PSSession": "gsn",
+    "Remove-PSSession": "rsn",
+    "Out-GridView": "ogv",
+    "Export-Csv": "epcsv",
+    "Remove-ItemProperty": "rp",
+    "Clear-Item": "cli",
   }).flatMap(([cmdlet, names]) => names.split(" ").map((alias) => [alias, cmdlet.toLowerCase()] as const)),
 )
 
 const EXTENSIONS = /\.(exe|cmd|bat|com)$/i
-// Modules that ship with PowerShell. Any other module name could be a folder of the project, so Foo\Get-Item stays a
-// name that matches nothing.
-const BUILT_IN_MODULE = /^(Microsoft\.PowerShell\.[A-Za-z]+|Microsoft\.WSMan\.Management)\\(?=[A-Za-z]+-[A-Za-z0-9]+$)/i
+// A module qualifier (Module\Name) makes the command a path, so the class is decided on the name as written. For the name
+// only, the qualifier of a module that PowerShell ships is dropped, so a deny rule on remove-item still matches
+// Microsoft.PowerShell.Management\Remove-Item. The class stays application: PowerShell 5.1 runs a script file of that
+// path in the working folder before it looks for the cmdlet.
+const QUALIFIER = /^(?:Microsoft\.PowerShell\.[A-Za-z]+|Microsoft\.WSMan\.Management)\\(?=[A-Za-z]+-[A-Za-z0-9]+$)/i
 const CMDLET = /^[A-Za-z]+-[A-Za-z][A-Za-z0-9]*$/
 
 function classify(name: string | undefined, written: string): Pick<Command, "name" | "written" | "class"> {
   // GetCommandName is null for a computed name such as & $x; the source text is then the best description.
   const given = (name ?? written).replace(/^(["'])(.*)\1$/s, "$2")
-  const unqualified = given.replace(BUILT_IN_MODULE, "")
   // A dot, a path separator or a character outside ASCII (a look-alike letter) means a program, never a cmdlet.
-  const program = /[./\\]|[^\x00-\x7f]/.test(unqualified)
+  const program = /[./\\]|[^\x00-\x7f]/.test(given)
   // An extension comes off a bare name only: C:\tools\git.exe stays as written.
-  const lower = (/[\\/]/.test(unqualified) ? unqualified : unqualified.replace(EXTENSIONS, "")).toLowerCase()
+  const lower = (/[\\/]/.test(given) ? given.replace(QUALIFIER, "") : given.replace(EXTENSIONS, "")).toLowerCase()
   if (program) return { name: lower, written, class: "application" }
   if (name === undefined) return { name: lower, written, class: "unknown" }
   return {
@@ -577,5 +618,3 @@ function classify(name: string | undefined, written: string): Pick<Command, "nam
     class: ALIASES.has(lower) || CMDLET.test(lower) ? "cmdlet" : "unknown",
   }
 }
-
-export * as PowerShellParse from "./powershell-parse.js"

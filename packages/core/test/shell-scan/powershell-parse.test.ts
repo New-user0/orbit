@@ -112,7 +112,38 @@ const hiddenWrite: Array<[string, string, string, string]> = [
   ["a pipeline end", "Get-Content a.txt | Select-Object -First 1 > out.txt", ">", "out.txt"],
 ]
 
+// Spellings from the earlier reviews of #74 that the parser has to resolve: the command or write is in the summary.
+const moreHiddenCommand: Array<[string, string]> = [
+  ["a comma element with a comment", "Write-Output a,<# c #>(Remove-Item b)"],
+  ["a comment after -name:", "Write-Output -name:<# c #>(Remove-Item b)"],
+  ["a comment after a leading ]", "Write-Output ([int]<# c #>(Remove-Item a))"],
+  ["a glued backtick before CR LF", "Write-Output a;`\r\nRemove-Item b"],
+  ["a backtick before ; in a parameter name", "Write-Output -a`;b; Remove-Item c"],
+  ["a form feed before the break", "Write-Output a\f\nRemove-Item b"],
+]
+const moreHiddenMember: Array<[string, string]> = [
+  ["a member in an argument after a backtick", "Write-Output $x.`\nLength"],
+  ["a form feed before the break", "$w.\f\nWrite('payload')"],
+]
+const moreHiddenWrite: Array<[string, string, string, string]> = [
+  ["a > glued to its target", "Write-Output a >f.txt", ">", "f.txt"],
+  ["a >> glued to its target", "Write-Output a >>f.txt", ">>", "f.txt"],
+  ["a 2> glued to its target", "Write-Output a 2>f.txt", "2>", "f.txt"],
+  ["a target ending in a dot", "'x' > f.", ">", "f."],
+  ["a target holding [", "'x' > f[1].txt", ">", "f[1].txt"],
+]
+
 const everything = [
+  ...moreHiddenCommand.map((row) => row[1]),
+  ...moreHiddenMember.map((row) => row[1]),
+  ...moreHiddenWrite.map((row) => row[1]),
+  "Microsoft.PowerShell.Foo\\Get-ChildItem",
+  "Microsoft.PowerShell.Utility\\Get-ChildItem",
+  "Write-Output a>f.txt",
+  "'x' > $null",
+  "'x' > ${null}",
+  "'x' > $global:null",
+  "[IO.File]::Delete('x')",
   ...hiddenCommand.map((row) => row[1]),
   ...hiddenMember.map((row) => row[1]),
   ...hiddenWrite.map((row) => row[1]),
@@ -200,6 +231,61 @@ describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHo
 
   test.each(hiddenWrite)("reports the write behind %s", (_label, text, operator, target) => {
     expect(redirects(text)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "file", operator, target })]))
+  })
+
+  test.each(moreHiddenCommand)("shows the command behind %s", (_label, text) => {
+    expect(commandNames(text)).toContain("remove-item")
+  })
+
+  test.each(moreHiddenMember)("flags member access for %s", (_label, text) => {
+    expect(summary(text).statements.some((statement) => statement.memberAccess)).toBe(true)
+  })
+
+  test.each(moreHiddenWrite)("reports the write behind %s", (_label, text, operator, target) => {
+    expect(redirects(text)).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "file", operator, target })]))
+  })
+
+  test("a module-qualified name is an application through the real parser, whatever the module", () => {
+    for (const text of ["Microsoft.PowerShell.Foo\\Get-ChildItem", "Microsoft.PowerShell.Utility\\Get-ChildItem"]) {
+      expect(summary(text).commands[0]).toMatchObject({ name: "get-childitem", class: "application" })
+    }
+    expect(summary("Get-ChildItem").commands[0]).toMatchObject({ class: "cmdlet" })
+  })
+
+  test("control: a > inside a bareword is part of the argument, as PowerShell reads it", () => {
+    expect(redirects("Write-Output a>f.txt")).toEqual([])
+    expect(summary("Write-Output a>f.txt").commands[0].arguments.map((argument) => argument.text)).toEqual(["a>f.txt"])
+  })
+
+  // Why the qualified name must be an application: Windows PowerShell 5.1 runs the working folder's script of that path.
+  test.skipIf(process.platform !== "win32" || !which("powershell"))(
+    "control: Windows PowerShell runs a planted script for a module-qualified name",
+    async () => {
+      await using dir = await tmpdir()
+      await fs.mkdir(path.join(dir.path, "Microsoft.PowerShell.Foo"))
+      await fs.writeFile(path.join(dir.path, "Microsoft.PowerShell.Foo", "Get-ChildItem.ps1"), "'planted-script-ran'")
+      const run = Bun.spawn(
+        [which("powershell")!, "-NoProfile", "-NonInteractive", "-Command", "Microsoft.PowerShell.Foo\\Get-ChildItem"],
+        { cwd: dir.path, stdout: "pipe", stderr: "ignore" },
+      )
+      expect(await new Response(run.stdout).text()).toContain("planted-script-ran")
+    },
+    30_000,
+  )
+
+  test("only a $null target is marked as a null sink", () => {
+    const sink = (text: string) => redirects(text)[0].nullSink
+    expect(sink("'x' > $null")).toBe(true)
+    expect(sink("'x' > ${null}")).toBe(true)
+    expect(sink("'x' > $global:null")).toBeUndefined()
+    expect(sink("Write-Output a > $null")).toBe(true)
+    expect(redirects("'x' > f.txt")[0].nullSink).toBeUndefined()
+  })
+
+  test("a call on a type is a placeholder in the statement's elements and not in commands", () => {
+    const result = summary("[IO.File]::Delete('x')")
+    expect(result.commands).toEqual([])
+    expect(result.statements[0].elements[0].command).toMatchObject({ placeholder: true })
   })
 
   test("a backtick before CR LF continues the command and the argument is plain", () => {
@@ -405,7 +491,24 @@ describe("PowerShellParse normalisation", () => {
     ["rm", "remove-item", "cmdlet"],
     ["%", "foreach-object", "cmdlet"],
     ["?", "where-object", "cmdlet"],
-    ["Microsoft.PowerShell.Management\\Get-ChildItem", "get-childitem", "cmdlet"],
+    ["Microsoft.PowerShell.Management\\Get-ChildItem", "get-childitem", "application"],
+    ["Microsoft.PowerShell.Utility\\Get-ChildItem", "get-childitem", "application"],
+    ["Microsoft.PowerShell.Foo\\Get-ChildItem", "get-childitem", "application"],
+    ["Microsoft.PowerShell.Management\\ls", "microsoft.powershell.management\\ls", "application"],
+    ["md", "new-item", "cmdlet"],
+    ["mkdir", "new-item", "cmdlet"],
+    ["ipmo", "import-module", "cmdlet"],
+    ["sajb", "start-job", "cmdlet"],
+    ["nsn", "new-pssession", "cmdlet"],
+    ["etsn", "enter-pssession", "cmdlet"],
+    ["exsn", "exit-pssession", "cmdlet"],
+    ["gsn", "get-pssession", "cmdlet"],
+    ["rsn", "remove-pssession", "cmdlet"],
+    ["ogv", "out-gridview", "cmdlet"],
+    ["epcsv", "export-csv", "cmdlet"],
+    ["rp", "remove-itemproperty", "cmdlet"],
+    ["cli", "clear-item", "cmdlet"],
+    ["ci", "ci", "unknown"],
     ["git", "git", "unknown"],
     ["git.exe", "git", "application"],
     ["GIT.EXE", "git", "application"],
@@ -588,6 +691,13 @@ describe("PowerShellParse fails closed", () => {
     expect(PowerShellParse.encodedLength(widest + 1)).toBeGreaterThan(32_767 - 400)
   })
 
+  test("the size is measured in UTF-8 bytes, not characters", () => {
+    expect(PowerShellParse.fits("\u754c".repeat(2_000), "win32")).toBe(false)
+    expect(PowerShellParse.fits("a".repeat(2_000), "win32")).toBe(true)
+    expect(PowerShellParse.fits("\u754c".repeat(2_000), "linux")).toBe(false)
+    expect(PowerShellParse.fits("a".repeat(2_000), "linux")).toBe(true)
+  })
+
   test("the encoded command has the length that the cap assumes and carries the text as data", async () => {
     const host = fake(() => ({ out: ok }))
     const text = "Write-Output 'x'; Remove-Item \"y\" # \u00e9"
@@ -712,6 +822,21 @@ describe("PowerShellParse cache", () => {
     expect(results[1].valid).toBe(true)
   }, 15_000)
 
+  test("a cache hit refreshes the entry, so the one just used outlives the oldest", async () => {
+    const host = fake(() => ({ out: ok }))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const parser = yield* PowerShellParse.Service
+        for (let index = 0; index < 256; index++) yield* parser.parse(`Write-Output ${index}`)
+        yield* parser.parse("Write-Output 0")
+        yield* parser.parse("Write-Output 256")
+        // 1 was the oldest and is gone; 0 was used last and is held.
+        yield* parser.parse("Write-Output 0")
+      }).pipe(Effect.provide(host.layer())),
+    )
+    expect(host.calls).toHaveLength(257)
+  })
+
   test("a missing host is not kept", async () => {
     let present: string | undefined
     const host = fake(() => ({ out: ok }))
@@ -742,7 +867,43 @@ describe("PowerShellParse cache", () => {
   })
 })
 
+describe("PowerShellParse failures that are not typed", () => {
+  test("a spawner that dies is spawn, not a call that never ends, and is not kept", async () => {
+    const calls: string[] = []
+    const dying = make(() => {
+      calls.push("spawn")
+      return Effect.die(new Error("launch threw"))
+    })
+    const layer = Layer.provide(
+      PowerShellParse.layerWith({ host: () => "/fake/pwsh", timeout: Duration.millis(100) }),
+      Layer.succeed(ChildProcessSpawner, dying),
+    )
+    const results = await Effect.runPromise(
+      Effect.gen(function* () {
+        const parser = yield* PowerShellParse.Service
+        return [yield* parser.parse("Get-Date"), yield* parser.parse("Get-Date")]
+      }).pipe(Effect.provide(layer), Effect.timeout(Duration.seconds(3))),
+    )
+    expect(results).toEqual([
+      { valid: false, reason: "spawn" },
+      { valid: false, reason: "spawn" },
+    ])
+    expect(calls).toHaveLength(2)
+  })
+})
+
 describe("PowerShellParse host lookup", () => {
+  test("a link that points at the snap shim is the shim, a plain path is kept, and the real binary is the fallback", () => {
+    const real = (file: string) => (file === "/usr/bin/pwsh" ? "/snap/bin/pwsh" : file)
+    const exists = (file: string) => file === "/opt/microsoft/powershell/7/pwsh"
+    expect(PowerShellParse.usableHost("/usr/bin/pwsh", { platform: "linux", real, exists })).toBe("/opt/microsoft/powershell/7/pwsh")
+    expect(PowerShellParse.usableHost("/usr/bin/pwsh", { platform: "linux", real, exists: () => false })).toBeNull()
+    expect(PowerShellParse.usableHost("/usr/local/bin/pwsh", { platform: "linux", real, exists })).toBe("/usr/local/bin/pwsh")
+    expect(PowerShellParse.usableHost("/snap/bin/pwsh", { platform: "linux", exists })).toBe("/opt/microsoft/powershell/7/pwsh")
+    expect(PowerShellParse.usableHost(null, { platform: "linux", real, exists })).toBe("/opt/microsoft/powershell/7/pwsh")
+    expect(PowerShellParse.usableHost("C:\\pwsh.exe", { platform: "win32" })).toBe("C:\\pwsh.exe")
+  })
+
   test("a snap launcher is not a usable host", () => {
     expect(PowerShellParse.isLauncher("/snap/bin/pwsh", "linux")).toBe(true)
     expect(PowerShellParse.isLauncher("/usr/bin/pwsh", "linux")).toBe(false)

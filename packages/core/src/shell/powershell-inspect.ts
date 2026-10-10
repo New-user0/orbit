@@ -1,3 +1,5 @@
+export * as PowerShellInspect from "./powershell-inspect.js"
+
 import { Effect } from "effect"
 import { PowerShellParse } from "./powershell-parse.js"
 
@@ -16,4 +18,3 @@ export const inspect = Effect.fn("PowerShellInspect.inspect")(function* (text: s
   return { kind: "scanned", summary: result.summary } satisfies Inspection
 })
 
-export * as PowerShellInspect from "./powershell-inspect.js"
