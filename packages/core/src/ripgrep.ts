@@ -18,6 +18,12 @@ import { RipgrepBinary } from "./ripgrep/binary.js"
 
 const ERROR_BYTES = 8 * 1024
 const MAX_SUBMATCHES = 100
+/** Longest line text returned for a row; longer lines are cut to a window around the first match. */
+export const MAX_LINE_COLUMNS = 500
+const LINE_LEAD_COLUMNS = 100
+/** Version-control folders that no search or listing reaches into. */
+export const VCS_DIRECTORIES = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const
+const vcsGlobs = VCS_DIRECTORIES.map((dir) => `--glob=!**/${dir}/**`)
 
 const RawMatch = Schema.Struct({
   type: Schema.Literals(["match", "context"]),
@@ -104,6 +110,47 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Ripgrep") {}
 
+/**
+ * ripgrep ignores `--max-columns` with `--json`, so long lines are cut here. The window starts shortly before the first
+ * submatch. ripgrep reports submatch offsets in UTF-8 bytes; they are converted to characters of the returned text, and
+ * those outside the window are dropped.
+ */
+export const clipLine = (
+  text: string,
+  submatches: readonly { readonly match: { readonly text: string }; readonly start: number; readonly end: number }[],
+) => {
+  const bytes = Buffer.from(text)
+  const characters = (offset: number) => (bytes.length === text.length ? offset : bytes.subarray(0, offset).toString().length)
+  const converted = submatches.map((submatch) => ({
+    text: submatch.match.text,
+    start: characters(submatch.start),
+    end: characters(submatch.end),
+  }))
+  const newline = /\r?\n$/u.exec(text)?.[0] ?? ""
+  const body = text.slice(0, text.length - newline.length)
+  if (body.length <= MAX_LINE_COLUMNS) return { text, submatches: converted }
+  const isLowSurrogate = (index: number) => {
+    const code = body.charCodeAt(index)
+    return code >= 0xdc00 && code <= 0xdfff
+  }
+  const first = Math.max(0, (converted[0]?.start ?? 0) - LINE_LEAD_COLUMNS)
+  // Never start or end inside a surrogate pair.
+  const start = first > 0 && isLowSurrogate(first) ? first - 1 : first
+  const limit = Math.min(body.length, start + MAX_LINE_COLUMNS)
+  const end = limit < body.length && isLowSurrogate(limit) ? limit - 1 : limit
+  const lead = start > 0 ? "…" : ""
+  return {
+    text: `${lead}${body.slice(start, end)}${end < body.length ? "…" : ""} [line truncated: ${body.length} chars]${newline}`,
+    submatches: converted
+      .filter((submatch) => submatch.start >= start && submatch.end <= end)
+      .map((submatch) => ({
+        ...submatch,
+        start: submatch.start - start + lead.length,
+        end: submatch.end - start + lead.length,
+      })),
+  }
+}
+
 const failure = (message: string, cause?: unknown) => new Error({ message, cause })
 
 const normalizePath = (value: string) =>
@@ -186,7 +233,7 @@ const layer = Layer.effect(
       ...(input.multiline ? ["--multiline", "--multiline-dotall"] : []),
       ...(input.type ? [`--type=${input.type}`] : []),
       ...(input.include ? [`--glob=${input.include}`] : []),
-      "--glob=!**/.git/**",
+      ...vcsGlobs,
     ]
 
     return Service.of({
@@ -205,7 +252,7 @@ const layer = Layer.effect(
             `--glob=${input.pattern}`,
             // Positive globs override rg's hidden-file filter; exclude before applying the result limit.
             ...(input.hidden ? [] : ["--glob=!**/.*"]),
-            "--glob=!**/.git/**",
+            ...vcsGlobs,
             ".",
           ],
           parse: (line) => Effect.succeed(normalizePath(line)),
@@ -232,7 +279,7 @@ const layer = Layer.effect(
             ...(input.follow ? ["--follow"] : []),
             ...(input.pattern === "*" ? [] : [`--glob=${input.pattern}`]),
             ...(input.exclude ?? []).map((pattern) => `--glob=!${pattern}`),
-            "--glob=!**/.git/**",
+            ...vcsGlobs,
             ".",
           ],
           parse: (line) => {
@@ -291,12 +338,7 @@ const layer = Layer.effect(
                 }),
                 line: match.line_number,
                 offset: match.absolute_offset,
-                text: match.lines.text.length > 2_000 ? match.lines.text.slice(0, 2_000) + "..." : match.lines.text,
-                submatches: match.submatches.map((submatch) => ({
-                  text: submatch.match.text,
-                  start: submatch.start,
-                  end: submatch.end,
-                })),
+                ...clipLine(match.lines.text, match.submatches),
               }),
             ),
           ),

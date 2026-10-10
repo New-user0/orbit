@@ -178,11 +178,54 @@ describe("Ripgrep", () => {
 
           expect(matches).toHaveLength(1)
           expect(matches[0]?.entry.path).toBe(RelativePath.make("generated.ts"))
-          expect(matches[0]?.text).toHaveLength(2_003)
-          expect(matches[0]?.text.endsWith("...")).toBe(true)
+          expect(matches[0]?.text).toBe(
+            `Cloudflare${"x".repeat(Ripgrep.MAX_LINE_COLUMNS - 10)}… [line truncated: ${10 + 70 * 1024} chars]\n`,
+          )
           expect(matches[0]?.submatches).toEqual([{ text: "Cloudflare", start: 0, end: 10 }])
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+  )
+
+  it.live("excludes every version-control folder from grep, glob and find", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Promise.all(
+          ["ok.ts", ...Ripgrep.VCS_DIRECTORIES.map((dir) => `${dir}/deep/inner.ts`)].map((file) =>
+            Bun.write(path.join(tmp.path, file), "needle\n"),
+          ),
+        ),
+      )
+      const ripgrep = yield* Ripgrep.Service
+      expect((yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 20 })).map((row) => row.entry.path)).toEqual([
+        RelativePath.make("ok.ts"),
+      ])
+      expect((yield* ripgrep.glob({ cwd: tmp.path, pattern: "**/*.ts", hidden: true, limit: 20 })).map((e) => e.path)).toEqual([
+        RelativePath.make("ok.ts"),
+      ])
+      expect((yield* ripgrep.find({ cwd: tmp.path, pattern: "*", hidden: true, limit: 20 })).map((e) => e.path)).toEqual([
+        RelativePath.make("ok.ts"),
+      ])
+    }),
+  )
+
+  it.live("clips long lines to a window and shifts submatches, converting bytes to characters", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const line = "é".repeat(1_000) + "needle" + "z".repeat(1_000) + "needle"
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, "long.txt"), `short needle\n${line}\n`))
+      const ripgrep = yield* Ripgrep.Service
+      const [short, long] = yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 10 })
+      // Not clipped: text intact, offsets in characters.
+      expect(short!.text).toBe("short needle\n")
+      expect(short!.submatches).toEqual([{ text: "needle", start: 6, end: 12 }])
+      expect(long!.text.length).toBeLessThan(Ripgrep.MAX_LINE_COLUMNS + 60)
+      expect(long!.text).toStartWith("…")
+      expect(long!.text).toContain(`[line truncated: ${line.length} chars]`)
+      // The second match is outside the window and dropped.
+      expect(long!.submatches).toHaveLength(1)
+      expect(long!.text.slice(long!.submatches[0]!.start, long!.submatches[0]!.end)).toBe("needle")
+    }),
   )
 })

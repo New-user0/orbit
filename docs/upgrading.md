@@ -1931,3 +1931,23 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 **What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
+
+## Search tools
+
+Changes to what the Grep and Glob tools return.
+
+### Grep returns up to 250 matches in a token-bounded page, and clips long lines
+
+Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
+a page in `content` mode also stops before its text passes about 25,000 tokens, so a call with a lot of `context` holds
+fewer. A truncated result says which matches it shows and the exact `offset` that continues it; paging from that
+offset skips nothing and repeats nothing. A line longer than 500 characters is cut to a window that starts about 100
+characters before its first match, with ellipsis markers and a `[line truncated: N chars]` note, and the submatch offsets
+in the result index into the clipped text. Grep and Glob also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders, as
+they already skipped `.git`. Glob still returns at most 100 files.
+
+**Affects:** people who read Grep results in scripts or plugins, and anyone who relied on a search entering one of
+those version-control folders.
+
+**What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
+truncation note for more results.

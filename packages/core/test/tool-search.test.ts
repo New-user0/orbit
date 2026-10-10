@@ -142,7 +142,7 @@ describe("search tools", () => {
         Effect.gen(function* () {
           yield* Effect.promise(() =>
             Promise.all(
-              Array.from({ length: FileSystem.DEFAULT_SEARCH_LIMIT + 1 }, (_, index) =>
+              Array.from({ length: FileSystem.DEFAULT_GREP_LIMIT + 10 }, (_, index) =>
                 fs.writeFile(path.join(tmp.path, `${index}.txt`), "needle\n"),
               ),
             ),
@@ -153,7 +153,7 @@ describe("search tools", () => {
               const grep = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
 
               expect(glob.metadata).toEqual({ count: FileSystem.DEFAULT_SEARCH_LIMIT, truncated: true })
-              expect(grep.metadata).toEqual({ matches: FileSystem.DEFAULT_SEARCH_LIMIT, truncated: true })
+              expect(grep.metadata).toEqual({ matches: FileSystem.DEFAULT_GREP_LIMIT, truncated: true })
               expect(glob.content).toHaveLength(1)
               expect(grep.content).toHaveLength(1)
               const globText = glob.content?.[0]?.type === "text" ? glob.content[0].text : ""
@@ -162,16 +162,100 @@ describe("search tools", () => {
               expect(globText).toEndWith(
                 `(Results are truncated: showing first ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Consider using a more specific path or pattern.)`,
               )
-              expect(grepText).toStartWith(`Found ${FileSystem.DEFAULT_SEARCH_LIMIT} matches\n`)
-              expect(grepText).toEndWith(
-                `(Results are truncated: showing first ${FileSystem.DEFAULT_SEARCH_LIMIT} results. Consider using a more specific path or pattern.)`,
-              )
+              expect(FileSystem.DEFAULT_GREP_LIMIT).toBe(250)
+              expect(grepText).toStartWith("Found 250 matches\n")
+              expect(grepText).toContain("showing matches 1-250. Use `offset: 250`")
             }),
           )
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
+
+  it.live("pages context-heavy grep results by token budget with no gaps or repeats", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const filler = "x".repeat(300)
+      const lines = Array.from({ length: 60 * 60 }, (_, index) => (index % 60 === 0 ? `needle ${index}` : filler))
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, "big.txt"), lines.join("\n") + "\n"))
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const seen: number[] = []
+          let offset = 0
+          let pages = 0
+          while (true) {
+            const result = yield* executeTool(registry, call("Grep", { pattern: "needle", context: 20, offset }))
+            const text = result.content?.[0]?.type === "text" ? result.content[0].text : ""
+            const found = (result.output as { line: number; submatches: unknown[] }[])
+              .filter((row) => row.submatches.length > 0)
+              .map((row) => row.line)
+            expect(found.length).toBeGreaterThan(0)
+            expect(found.length).toBeLessThan(FileSystem.DEFAULT_GREP_LIMIT)
+            expect(text.length).toBeLessThan(100_000 + 1_000)
+            seen.push(...found)
+            pages++
+            if (!(result.metadata as { truncated: boolean }).truncated) break
+            offset += found.length
+            expect(text).toContain(`showing matches ${offset - found.length + 1}-${offset}`)
+            expect(text).toContain(`offset: ${offset}`)
+          }
+          expect(pages).toBeGreaterThan(1)
+          expect(seen).toEqual(Array.from({ length: 60 }, (_, index) => index * 60 + 1))
+        }),
+      )
+    }),
+  )
+
+  it.live("excludes version-control folders from grep and from glob with hidden", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const dirs = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"]
+      yield* Effect.promise(() =>
+        Promise.all(
+          ["src/visible.ts", ...dirs.map((dir) => `${dir}/nested/inner.ts`)].map((file) =>
+            Bun.write(path.join(tmp.path, file), "needle\n"),
+          ),
+        ),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const grep = yield* executeTool(registry, call("Grep", { pattern: "needle", outputMode: "files_with_matches" }))
+          expect(grep.output).toEqual({ files: [path.normalize("src/visible.ts")] })
+          const glob = yield* executeTool(registry, call("Glob", { pattern: "**/*.ts", hidden: true }))
+          expect(glob.output).toEqual([{ path: path.normalize("src/visible.ts"), type: "file" }])
+        }),
+      )
+    }),
+  )
+
+  for (const [name, prefix] of [
+    ["ASCII", "a"],
+    ["two-byte", "é"],
+    ["astral", "\u{1F600}"],
+  ] as const) {
+    it.live(`clips a long ${name} line around the first match with offsets into the clipped text`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const line = prefix.repeat(3_000) + "needle" + prefix.repeat(2_000)
+        yield* Effect.promise(() => Bun.write(path.join(tmp.path, "long.txt"), line + "\n"))
+        yield* withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const result = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
+            const rows = result.output as { text: string; submatches: { text: string; start: number; end: number }[] }[]
+            expect(rows).toHaveLength(1)
+            const row = rows[0]!
+            expect(row.text.length).toBeGreaterThan(500)
+            expect(row.text.length).toBeLessThan(560)
+            expect(row.text).toContain("[line truncated: ")
+            expect(row.text).toContain(`${line.length} chars]`)
+            expect(row.submatches).toHaveLength(1)
+            expect(row.text.slice(row.submatches[0]!.start, row.submatches[0]!.end)).toBe("needle")
+            expect(row.text.includes("�")).toBe(false)
+          }),
+        )
+      }),
+    )
+  }
 
   it.live("rejects an empty grep pattern", () =>
     Effect.acquireUseRelease(
