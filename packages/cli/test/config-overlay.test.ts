@@ -14,6 +14,9 @@ const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-ov
 
 afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
 
+// Where the CLI keeps its overlays: per user, and not the temporary folder that every agent may write to.
+const overlays = path.join(Global.Path.state, "overlays")
+
 const server = (extra: object = {}) => ({ type: "local", command: ["fx"], ...extra })
 
 async function built(input: Partial<Parameters<typeof ConfigOverlay.build>[0]>) {
@@ -148,7 +151,7 @@ test("the envelope is versioned, only its file is removed when read, and the ser
   const written = await ConfigOverlay.write('{"agents":{}}')
   expect(JSON.parse(await Bun.file(written.file).text())).toEqual({ version: 1, content: '{"agents":{}}' })
   if (process.platform !== "win32") expect((await fs.stat(written.file)).mode & 0o777).toBe(0o600)
-  expect(path.dirname(path.dirname(written.file))).toBe(Global.Path.tmp)
+  expect(path.dirname(path.dirname(written.file))).toBe(overlays)
 
   expect(await ConfigOverlay.consume(written.file)).toBe('{"agents":{}}')
   expect(await Bun.file(written.file).exists()).toBe(false)
@@ -165,16 +168,16 @@ test("the envelope is versioned, only its file is removed when read, and the ser
 
 // ORBIT_CONFIG_CONTENT_FILE can be inherited from anywhere, so a file the CLI did not write is never read for its
 // content or deleted: not a person's own config, not a valid envelope kept elsewhere, not one that sits deeper or
-// shallower in the temporary folder than the CLI writes.
+// shallower in the overlays folder than the CLI writes.
 test("the server leaves alone every file it was pointed at that the CLI did not write", async () => {
-  await fs.mkdir(Global.Path.tmp, { recursive: true })
-  const folder = await fs.mkdtemp(path.join(Global.Path.tmp, "overlay-"))
+  await fs.mkdir(overlays, { recursive: true })
+  const folder = await fs.mkdtemp(path.join(overlays, "overlay-"))
   const envelope = JSON.stringify({ version: 1, content: "{}" })
   const survivors = [
     ["a config of the person's in the project folder", path.join(root, "my-config.json"), '{"model":"a/b"}'],
-    ["a valid envelope outside the temporary folder", path.join(root, "envelope.json"), envelope],
+    ["a valid envelope outside the overlays folder", path.join(root, "envelope.json"), envelope],
     ["a file in the overlay folder that is not an envelope", path.join(folder, "mine.json"), '{"model":"a/b"}'],
-    ["a valid envelope straight in the temporary folder", path.join(Global.Path.tmp, "loose.json"), envelope],
+    ["a valid envelope straight in the overlays folder", path.join(overlays, "loose.json"), envelope],
     ["a valid envelope in a folder with another name", path.join(root, "overlay-x", "e.json"), envelope],
     ["a file that is not a json file", path.join(folder, "e.txt"), envelope],
   ] as const
@@ -186,14 +189,14 @@ test("the server leaves alone every file it was pointed at that the CLI did not 
     }
   } finally {
     await fs.rm(folder, { recursive: true, force: true })
-    await fs.rm(path.join(Global.Path.tmp, "loose.json"), { force: true })
+    await fs.rm(path.join(overlays, "loose.json"), { force: true })
   }
 })
 
 test("a folder left by a run that died is swept, a fresh one is not", async () => {
-  await fs.mkdir(Global.Path.tmp, { recursive: true })
-  const stale = await fs.mkdtemp(path.join(Global.Path.tmp, "overlay-"))
-  const fresh = await fs.mkdtemp(path.join(Global.Path.tmp, "overlay-"))
+  await fs.mkdir(overlays, { recursive: true })
+  const stale = await fs.mkdtemp(path.join(overlays, "overlay-"))
+  const fresh = await fs.mkdtemp(path.join(overlays, "overlay-"))
   const old = new Date(Date.now() - 2 * 60 * 60 * 1000)
   await fs.utimes(stale, old, old)
 
@@ -242,7 +245,12 @@ async function guarded(input: {
       await fs.mkdir(path.join(state, "state"), { recursive: true })
       await Bun.write(
         path.join(state, "state", ServiceConfig.filename()),
-        JSON.stringify({ id: "overlay-guard", version: ORBIT_VERSION, url: service.url.toString(), pid: input.registered === "dead" ? await deadPid() : process.pid }),
+        JSON.stringify({
+          id: "overlay-guard",
+          version: ORBIT_VERSION,
+          url: service.url.toString(),
+          pid: input.registered === "dead" ? await deadPid() : process.pid,
+        }),
       )
     }
     const layer = Global.layerWith({ config: path.join(state, "config"), state: path.join(state, "state") })
@@ -354,7 +362,9 @@ test("a file over the cap is refused from its size, before it is read", async ()
   const message = await refused({ agents: big })
 
   expect(message).toContain("--agents: ")
-  expect(message).toContain(`is ${ConfigOverlay.MAX_BYTES + 1} bytes; the most one run takes is ${ConfigOverlay.MAX_BYTES}`)
+  expect(message).toContain(
+    `is ${ConfigOverlay.MAX_BYTES + 1} bytes; the most one run takes is ${ConfigOverlay.MAX_BYTES}`,
+  )
 })
 
 // Errors echo what the value said: the value itself, and keys from inside it. Neither may reach a terminal raw.
@@ -385,10 +395,80 @@ test("a run with no flag drops an inherited ORBIT_CONFIG_CONTENT_FILE, and a run
       ),
     )
     expect(inside).not.toBe(path.join(root, "someones-own.json"))
-    expect(path.dirname(path.dirname(inside!))).toBe(Global.Path.tmp)
+    expect(path.dirname(path.dirname(inside!))).toBe(overlays)
     expect(process.env.ORBIT_CONFIG_CONTENT_FILE).toBeUndefined()
   } finally {
     if (before === undefined) delete process.env.ORBIT_CONFIG_CONTENT_FILE
     else process.env.ORBIT_CONFIG_CONTENT_FILE = before
+  }
+})
+
+// Core resolves a relative {file:} against the folder it opens, which may be a clone. Every value the person wrote
+// means the folder of the file that holds it, or the start folder for an inline value; ~/ and absolute stay as typed.
+test.each([
+  ["an agent's system, from a file", "agents", "file"],
+  ["an agent's system, inline", "agents", "inline"],
+  ["an MCP server's environment, from a file", "mcp", "file"],
+  ["an MCP server's environment, inline", "mcp", "inline"],
+])("a relative {file:} in %s is taken from the folder the person's value is in", async (_, flag, form) => {
+  const where = path.join(root, `anchor-${flag}-${form}`, "home", "sub")
+  await fs.mkdir(where, { recursive: true })
+  const document =
+    flag === "agents"
+      ? JSON.stringify({ a: { system: "{file:./prompt.md}", description: "{file:~/x.md}" } })
+      : JSON.stringify({
+          servers: {
+            s: { type: "local", command: ["fx"], environment: { K: "{file:../prompt.md}", L: "{file:/abs/p.md}" } },
+          },
+        })
+  const value = form === "file" ? path.join(where, "v.json") : document
+  if (form === "file") await Bun.write(value, document)
+
+  const content = await ConfigOverlay.build({
+    mcpConfig: flag === "mcp" ? [value] : [],
+    agents: flag === "agents" ? value : undefined,
+    cwd: form === "file" ? path.join(root, "elsewhere") : where,
+  })
+
+  const parsed = JSON.parse(content!)
+  const resolved =
+    flag === "agents"
+      ? [parsed.agents.a.system, parsed.agents.a.description]
+      : [parsed.mcp.servers.s.environment.K, parsed.mcp.servers.s.environment.L]
+  const expected = flag === "agents" ? path.join(where, "prompt.md") : path.join(path.dirname(where), "prompt.md")
+  expect(path.normalize(resolved[0].replace(/^\{file:|\}$/g, ""))).toBe(path.normalize(expected))
+  expect(resolved[1]).toBe(flag === "agents" ? "{file:~/x.md}" : "{file:/abs/p.md}")
+})
+
+test("release removes the variable and the run's folder, and leaves a file that is not the CLI's", async () => {
+  const before = process.env.ORBIT_CONFIG_CONTENT_FILE
+  try {
+    const written = await ConfigOverlay.write("{}")
+    process.env.ORBIT_CONFIG_CONTENT_FILE = written.file
+    await ConfigOverlay.release()
+    expect(process.env.ORBIT_CONFIG_CONTENT_FILE).toBeUndefined()
+    expect(await fs.stat(path.dirname(written.file)).catch(() => undefined)).toBeUndefined()
+
+    const own = path.join(root, "release-own", "mine.json")
+    await Bun.write(own, "{}")
+    process.env.ORBIT_CONFIG_CONTENT_FILE = own
+    await ConfigOverlay.release()
+    expect(process.env.ORBIT_CONFIG_CONTENT_FILE).toBeUndefined()
+    expect(await Bun.file(own).exists()).toBe(true)
+  } finally {
+    if (before === undefined) delete process.env.ORBIT_CONFIG_CONTENT_FILE
+    else process.env.ORBIT_CONFIG_CONTENT_FILE = before
+  }
+})
+
+test("the overlay folder is in no folder that agents may write without asking", async () => {
+  const written = await ConfigOverlay.write("{}")
+  try {
+    for (const allowed of [Global.Path.tmp, Global.Path.data, Global.Path.config]) {
+      const relative = path.relative(allowed, written.file)
+      expect(relative.startsWith("..") || path.isAbsolute(relative)).toBe(true)
+    }
+  } finally {
+    await written.remove()
   }
 })

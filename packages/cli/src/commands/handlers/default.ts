@@ -69,25 +69,26 @@ export default Runtime.handler(Commands, (input) =>
         )
       },
     })
+    // The private server has read its file by now; nothing the interface starts should inherit the variable.
+    yield* Effect.promise(() => ConfigOverlay.release())
     // A --resume value that is the ID of a session opens it, as --session does; anything else, including nothing, opens
     // the session list with the value typed into its search.
     const resumeID = resume !== undefined && /^ses\S*$/.test(resume) ? resume : undefined
-    const session = Option.getOrUndefined(input.session) ?? resumeID
-    if (overlay) {
-      const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-      // The folder is the one the interface will open, which is what the private server reports for itself.
-      const folder = yield* Effect.tryPromise({
-        try: () => client.location.get(),
-        catch: (cause) => new Error(errorMessage(cause)),
-      })
-      yield* ConfigOverlay.refuseActive({
-        client,
-        session,
-        continue: input.continue,
-        fork: input.fork,
-        directory: folder.directory,
-      })
-    }
+    const named = Option.getOrUndefined(input.session) ?? resumeID
+    // The session that --continue would open is settled once, in the folder the interface opens (process.cwd(), after
+    // the change of directory above, which also settles a link or a trailing separator), and the interface takes that
+    // ID as its target, so the session that was checked is the session that opens.
+    const checked = overlay
+      ? yield* ConfigOverlay.refuseActive({
+          client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+          session: named,
+          continue: input.continue,
+          fork: input.fork,
+          directory: process.cwd(),
+        })
+      : named
+    const session = checked ?? named
+    const continues = input.continue && session === undefined
     // A missing --session ID becomes the ID of the session the first prompt creates.
     const sessionExists =
       session !== undefined &&
@@ -126,7 +127,7 @@ export default Runtime.handler(Commands, (input) =>
           : undefined,
       },
       args: {
-        continue: input.continue,
+        continue: continues,
         sessionID: sessionExists ? session : undefined,
         newSessionID: sessionExists ? undefined : Option.getOrUndefined(input.session),
         model: Option.getOrUndefined(input.model),

@@ -85,10 +85,16 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       // The CLI hands a private server its run-scoped config as a file, because the environment is size limited; the
       // file wins over ORBIT_CONFIG_CONTENT, which the CLI has already merged into it. The shared service never reads
       // one: a variable that happened to be set when it started must not shape every client's config.
+      // A value this server did not get from the CLI (inherited, or left by a run that is over) costs one log line
+      // and is not used, so it cannot stop a server that has nothing to do with it from starting.
       const overlay = yield* Effect.tryPromise({
         try: () => takeOverlay(options.mode, process.env),
         catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
-      })
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("ignoring ORBIT_CONFIG_CONTENT_FILE", { reason: error.message }).pipe(Effect.as(undefined)),
+        ),
+      )
       const server = yield* start(
         {
           app: {

@@ -23,7 +23,12 @@ const STALE_MS = 60 * 60 * 1000
 
 const FOLDER = /^overlay-/
 
-// A file `write` makes: one level below the temporary folder, in an overlay folder.
+// The overlays live in Orbit's state folder, not its temporary folder: every agent may read and write the temporary
+// folder without asking (`folders` in core/src/agent.ts), and on Linux it is shared between users. The state folder is
+// per user and is in no agent's allowed folders.
+const base = () => path.join(Global.Path.state, "overlays")
+
+// A file `write` makes: one level below the overlays folder, in an overlay folder.
 const OWN_FILE = /^overlay-[^\\/]+[\\/][^\\/]+\.json$/
 
 const Envelope = Schema.Struct({ version: Schema.Literal(1), content: Schema.String })
@@ -31,7 +36,7 @@ const Envelope = Schema.Struct({ version: Schema.Literal(1), content: Schema.Str
 const decodeMcp = Schema.decodeUnknownResult(ConfigMCP.Info)
 const decodeAgents = Schema.decodeUnknownResult(Schema.Record(Schema.String, ConfigAgent.Info))
 const decodeRegistration = Schema.decodeUnknownResult(Schema.fromJsonString(Service.Info))
-const decodeEnvelope =Schema.decodeUnknownResult(Schema.fromJsonString(Envelope))
+const decodeEnvelope = Schema.decodeUnknownResult(Schema.fromJsonString(Envelope))
 
 type Json = { [key: string]: unknown }
 
@@ -89,9 +94,9 @@ export async function build(input: Input) {
  */
 export async function write(content: string) {
   await sweep()
-  await fs.mkdir(Global.Path.tmp, { recursive: true })
+  await fs.mkdir(base(), { recursive: true, mode: 0o700 })
   // mkdtemp creates the folder mode 0700 and fails when the name exists, so no other user can have made it first.
-  const folder = await fs.mkdtemp(path.join(Global.Path.tmp, "overlay-"))
+  const folder = await fs.mkdtemp(path.join(base(), "overlay-"))
   const file = path.join(folder, `${randomUUID()}.json`)
   await fs.writeFile(file, JSON.stringify({ version: 1, content }), { mode: 0o600, flag: "wx" })
   return { file, remove: () => fs.rm(folder, { recursive: true, force: true }) }
@@ -104,7 +109,7 @@ export async function write(content: string) {
  */
 export async function consume(file: string) {
   const refusal = new Error("ORBIT_CONFIG_CONTENT_FILE does not hold a version 1 overlay")
-  if (!OWN_FILE.test(path.relative(Global.Path.tmp, file))) throw refusal
+  if (!OWN_FILE.test(path.relative(base(), file))) throw refusal
   const envelope = decodeEnvelope(await Bun.file(file).text())
   if (envelope._tag === "Failure") throw refusal
   // Only the file: the folder around it is the CLI's to remove.
@@ -144,6 +149,17 @@ export const apply = Effect.fn("cli.config-overlay.apply")(function* (
   )
   return true
 })
+
+/**
+ * Called once the private server is up and has read its file: removes the variable, so nothing the interface or a
+ * command starts afterwards inherits it, and the run's folder, which only the file lived in.
+ */
+export async function release() {
+  const file = process.env.ORBIT_CONFIG_CONTENT_FILE
+  delete process.env.ORBIT_CONFIG_CONTENT_FILE
+  if (file === undefined || !OWN_FILE.test(path.relative(base(), file))) return
+  await fs.rm(path.dirname(file), { recursive: true, force: true }).catch(() => undefined)
+}
 
 /** How long the background service has to say which sessions it is running. */
 const ACTIVE_TIMEOUT_MS = 5_000
@@ -212,12 +228,12 @@ async function registeredAndAlive(file: string) {
 }
 
 async function sweep() {
-  const entries = await fs.readdir(Global.Path.tmp, { withFileTypes: true }).catch(() => [])
+  const entries = await fs.readdir(base(), { withFileTypes: true }).catch(() => [])
   await Promise.all(
     entries
       .filter((entry) => entry.isDirectory() && FOLDER.test(entry.name))
       .map(async (entry) => {
-        const folder = path.join(Global.Path.tmp, entry.name)
+        const folder = path.join(base(), entry.name)
         const stat = await fs.stat(folder).catch(() => undefined)
         if (stat && Date.now() - stat.mtimeMs > STALE_MS) await fs.rm(folder, { recursive: true, force: true })
       }),
@@ -235,15 +251,19 @@ async function mcpLayer(value: string, cwd: string) {
   const decoded = decodeMcp(document, { onExcessProperty: "error", errors: "all" })
   if (decoded._tag === "Failure") throw new Error(describe(flag, decoded.failure.issue))
   const servers = decoded.success.servers
-  if (servers === undefined) return { mcp: document }
+  if (servers === undefined) return { mcp: anchorFiles(flag, document, source.directory) }
   const raw = document.servers as Record<string, Json>
   return {
-    mcp: {
-      ...document,
-      servers: Object.fromEntries(
-        Object.entries(raw).map(([name, server]) => [name, anchor(server, source.directory)]),
-      ),
-    },
+    mcp: anchorFiles(
+      flag,
+      {
+        ...document,
+        servers: Object.fromEntries(
+          Object.entries(raw).map(([name, server]) => [name, anchor(server, source.directory)]),
+        ),
+      },
+      source.directory,
+    ),
   }
 }
 
@@ -253,7 +273,24 @@ async function agentsLayer(value: string, cwd: string) {
   const document = object(flag, parseJsonc(flag, source.text))
   const decoded = decodeAgents(document, { onExcessProperty: "error", errors: "all" })
   if (decoded._tag === "Failure") throw new Error(describe(flag, decoded.failure.issue))
-  return { agents: document }
+  return { agents: anchorFiles(flag, document, source.directory) }
+}
+
+// Core resolves a relative {file:...} in the merged document against the folder it opens, which may be a clone that
+// ships a file of that name. A reference the person wrote means the folder of the file that holds it (or the folder
+// they typed an inline value in), so it is made absolute here. `~/` and absolute references stay as they are.
+function anchorFiles<T extends Json>(flag: string, layer: T, directory: string): T {
+  const text = JSON.stringify(layer)
+  if (!text.includes("{file:")) return layer
+  return JSON.parse(
+    text.replace(/\{file:([^}]+)\}/g, (token, reference: string) => {
+      if (reference.startsWith("~/") || path.isAbsolute(reference)) return token
+      const resolved = path.resolve(directory, reference).replaceAll("\\", "/")
+      // The token has no way to quote these, so a folder that holds them cannot be named.
+      if (/["}]/.test(resolved)) throw new Error(`${flag}: cannot resolve ${shown(token)} from ${shown(directory)}`)
+      return `{file:${resolved}}`
+    }),
+  )
 }
 
 // A local server's program and working folder, when they are relative paths, mean the folder of the file that names
@@ -307,9 +344,8 @@ function object(flag: string, value: unknown): Json {
 
 function describe(flag: string, issue: SchemaIssue.Issue) {
   return SchemaIssue.makeFormatterStandardSchemaV1()(issue)
-    .issues.map(
-      (item) =>
-        plain(`${flag}: ${item.message} at ${item.path?.length ? item.path.map(String).join(".") : "the top level"}`),
+    .issues.map((item) =>
+      plain(`${flag}: ${item.message} at ${item.path?.length ? item.path.map(String).join(".") : "the top level"}`),
     )
     .join("\n")
 }

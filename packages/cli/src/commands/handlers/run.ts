@@ -75,6 +75,8 @@ export function headlessInput(input: HeadlessInput) {
       standalone: input.standalone || input.bare || overlay,
       trust: input.trust,
     })
+    // The private server has read its file by now; nothing the run starts should inherit the variable.
+    yield* Effect.promise(() => ConfigOverlay.release())
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
     // --resume names a session that must exist. It is resolved once, before the trust check, so the folder that is
     // checked and the folder the run happens in are the folder of that one session.
