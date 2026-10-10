@@ -91,6 +91,12 @@ export const platform = ["ps e", "sleep 60", "Start-Sleep 60", "sleep 5; npm run
 // Network and array rows (class 6 and 10): a path in an array, a share in any position, and a colon-bound flag on a
 // native program that names a remote system.
 export const arrayAndNetwork = [
+  "Get-Content ab:\\x",
+  "Get-Content -Path:ab:\\x",
+  "Get-Process -Name env:x",
+  "Get-Date -Format:env:x",
+  "Get-Date -Format \\\\evil\\share",
+
   "Get-Content README.md,C:\\Users\\u\\.ssh\\id_rsa",
   "Get-Content a,env:GITHUB_TOKEN",
   "Get-Content a,\\\\evil\\share\\x",
@@ -118,7 +124,7 @@ export const arrayAndNetwork = [
   "Get-Process -Name:\\??\\UNC\\evil\\s",
 ]
 
-export const arrayAndNetworkOk = ["Get-Process -Name a,b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
+export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
 
 // Texts that only pwsh 7 can parse: `&&` and `||` chains. powershell-7.json is recorded with pwsh 7 in Docker, the rest
 // with Windows PowerShell 5.1.

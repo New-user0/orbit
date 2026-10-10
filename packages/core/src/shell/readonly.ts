@@ -125,6 +125,12 @@ const BASH: Record<string, Spec> = {
       "-b --brief -i --mime --mime-type --mime-encoding --apple -c --check-encoding --exclude= --exclude-quiet= -0 --print0 -f=path -F= --separator= --help -v --version -h --no-dereference -L --dereference -m=path --magic-file=path -k --keep-going -l --list -n --no-buffer -p --preserve-date -r --raw -s --special-files -z --uncompress",
     ),
     operands: reading,
+    // -m and --magic-file take a colon-separated list and each element is opened, so `x.mgc://host/share/m` reaches a
+    // share and `x.mgc:/etc/y` a file outside the folder.
+    check: (args) =>
+      args.some((arg, index) =>
+        arg === "-m" || arg === "--magic-file" ? args[index + 1]?.includes(":") === true : arg.startsWith("--magic-file=") && arg.includes(":", 13),
+      ),
   },
   sort: {
     // Never -o or --output, -T, --compress-program (runs a program) or --files0-from.
@@ -439,13 +445,34 @@ export function expandHome(value: string, ctx: ShellAnalysis.Context) {
 }
 
 // Anywhere in the word, so `--from-file=//host/share/x` counts. `scheme://` does not: a colon before the slashes.
-// `\??\UNC\host\share` is the NT spelling of the same share, and Windows opens it as one.
-const UNC = /(?<!:)(?:\\\\|\/\/|\/\\|\\\/)[^\\/]|\\\?\?\\/
+// `\??\UNC\host\share` is the NT spelling of the same share, in either separator. A host starts with a non-space, so
+// the jq operator in `.a // "x"` is not one.
+const UNC = /(?<!:)(?:\\\\|\/\/|\/\\|\\\/)[^\s\\/]|[\\/]\?\?[\\/]/
 const WEBDAV = /@SSL@\d+|@\d+@SSL|DavWWWRoot/i
 
 /** A word that names a network share on Windows, or a WebDAV marker. */
 export function networkPath(value: string) {
   return UNC.test(value) || WEBDAV.test(value)
+}
+
+/**
+ * Git Bash maps /proc/sys onto the NT namespace, so /proc/sys/Device/Mup/host/share opens the same share. Separators
+ * fold, `.` and empty components drop and `..` pops, so `/proc/./sys`, `/proc//sys`, `/proc/self/root/proc/sys` and a
+ * relative climb to the root all land here.
+ */
+function procSys(value: string) {
+  const parts: string[] = []
+  for (const part of value.replaceAll("\\", "/").split("/")) {
+    if (part === "" || part === ".") continue
+    if (part === "..") parts.pop()
+    else parts.push(part.toLowerCase())
+  }
+  return parts.some((part, index) => part === "proc" && parts[index + 1] === "sys")
+}
+
+/** A word that opens the network on Windows by any spelling: a share, a WebDAV marker, or the /proc/sys view of the NT namespace. */
+export function windowsShare(value: string) {
+  return networkPath(value) || procSys(value)
 }
 
 /** Files that are not files: another process's environment, and the network through bash's /dev/tcp and /dev/udp. */
@@ -477,7 +504,7 @@ export function bash(command: ShellAnalysis.Command, ctx: ShellAnalysis.Context)
   if (/[\\/]/.test(head)) return refuse("head:path")
   if (command.argv.some((word) => !word.literal || word.glob || word.arithmetic)) return refuse("word:expansion")
   if (command.argv.some((word) => special(word.value))) return refuse("special")
-  if (ctx.platform === "win32" && command.argv.some((word) => networkPath(word.value))) return refuse("unc")
+  if (ctx.platform === "win32" && command.argv.some((word) => windowsShare(word.value))) return refuse("unc")
   if (projectLocal(head, ctx)) return refuse("head:local")
   const args = command.argv.slice(1).map((word) => word.value)
   const redirected = redirects(command, ctx)
@@ -513,7 +540,7 @@ function redirects(command: ShellAnalysis.Command, ctx: ShellAnalysis.Context): 
     if (item.write && !item.nullSink) return refuse("redirect:write")
     if (item.target !== undefined && (!item.literal || item.glob)) return refuse("redirect:word")
     if (item.target !== undefined && special(item.target)) return refuse("special")
-    if (item.target !== undefined && ctx.platform === "win32" && networkPath(item.target)) return refuse("unc")
+    if (item.target !== undefined && ctx.platform === "win32" && windowsShare(item.target)) return refuse("unc")
     if (item.read && item.target !== undefined) reads.push(expandHome(item.target, ctx))
   }
   return { ok: true, reads }
@@ -523,11 +550,24 @@ export function nullSink(target: string) {
   return NULL_SINK.test(target)
 }
 
-// Provider paths (env:, HKLM:, function:, registry::) and UNC paths in a PowerShell argument. A drive letter is one letter.
-function provider(text: string) {
-  const plain = text.replaceAll("`", "").replace(/^["']|["']$/g, "")
-  const stripped = plain.replace(/^[\w.]+\\(?=[\w.]+:)/, "")
-  return /^[A-Za-z][A-Za-z0-9_.]+:/.test(stripped) || /^(?:\\\\|\/\/)/.test(plain) || networkPath(plain)
+function unquote(text: string) {
+  return text.replaceAll("`", "").replace(/^["']|["']$/g, "")
+}
+
+// The named providers, also module-qualified (`Microsoft.PowerShell.Core\Registry::HKLM`). Checked on every argument.
+function namedProvider(text: string) {
+  return /^(?:env|hklm|hkcu|function|alias|variable|cert|wsman|registry):/i.test(unquote(text).replace(/^[\w.]+\\(?=[\w.]+:)/, ""))
+}
+
+// A UNC path or WebDAV marker, and on Windows the /proc/sys spelling. Checked on every argument.
+function share(text: string, ctx: ShellAnalysis.Context) {
+  const plain = unquote(text)
+  return /^(?:\\\\|\/\/)/.test(plain) || (ctx.platform === "win32" ? windowsShare(plain) : networkPath(plain))
+}
+
+// A drive of two or more characters (`ab:\x`) is a provider, but only a path position reads it so: `-Format HH:mm` is a format.
+function drive(text: string) {
+  return /^[A-Za-z][A-Za-z0-9_.]+:/.test(unquote(text).replace(/^[\w.]+\\(?=[\w.]+:)/, ""))
 }
 
 const CONSTANT = new Set(["StringConstantExpressionAst", "ConstantExpressionAst"])
@@ -554,7 +594,7 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       if (bound && !(CONSTANT.has(bound.kind) && bound.value !== undefined)) return refuse("bound")
       const name = (arg.parameter ?? "").toLowerCase()
       // The value of any colon-bound parameter is an argument like the rest: a share or provider path is refused here.
-      if (bound?.value !== undefined && provider(bound.value)) return refuse("provider")
+      if (bound?.value !== undefined && (namedProvider(bound.value) || share(bound.value, ctx))) return refuse("provider")
       if (spec.native) {
         // `-s:host` is the flag `-s` with a value (tasklist and getmac take a remote system that way), so the name is
         // checked bound or not.
@@ -566,6 +606,7 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       if (spec.flags !== "any" && !spec.flags.has(name) && !COMMON.has(name)) return refuse("flag")
       if (spec.paths?.has(name)) {
         if (bound?.value === undefined) pending = "path"
+        else if (drive(bound.value)) return refuse("provider")
         else reads.push(bound.value)
       } else if (!bound && (spec.other?.has(name) || COMMON_VALUED.has(name))) pending = "other"
       continue
@@ -574,10 +615,11 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       if (/[$(@{[]/.test(arg.text)) return refuse("argument")
       // The reads of an array in a path position cannot be told apart from one relative path, so they are not validated.
       if (pending === "path" || (pending === undefined && spec.reads)) return refuse("array:path")
-      if (arg.text.split(",").some(provider)) return refuse("provider")
+      if (arg.text.split(",").some((item) => namedProvider(item) || share(item, ctx))) return refuse("provider")
     } else if (!CONSTANT.has(arg.kind) || arg.value === undefined) return refuse("argument")
     const text = arg.value ?? arg.text
-    if (provider(text)) return refuse("provider")
+    if (namedProvider(text) || share(text, ctx)) return refuse("provider")
+    if ((pending === "path" || (pending === undefined && spec.reads)) && drive(text)) return refuse("provider")
     if (spec.native && (text.startsWith("-") || (ctx.platform === "win32" && text.startsWith("/")))) {
       // `/s:host` is `/s` with a value: the flag is what comes before the colon.
       if (spec.flags !== "any" && (spec.flags === "none" || !spec.flags.has(text.toLowerCase().split(":")[0]))) return refuse("flag")
