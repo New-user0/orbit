@@ -62,8 +62,8 @@ test(
 
 // Web search sends the query to a third-party provider, so only a person can agree to it. Headless runs cancel the
 // consent form, whatever the permission flag says, and an untrusted folder cannot select a provider for itself.
-// The search providers' HTTP client does not follow the proxy variables, so the trap cannot see their traffic. These
-// rows rest on the refusal the model receives (the provider never ran) and on the stored consent staying empty.
+// The controls below select a provider in a trusted folder and must reach the trap, so a quiet trap in the other rows
+// means the provider did not run.
 const searchFlags = [[], ["--auto"], ["--dangerously-skip-permissions"]]
 searchFlags.forEach((flags) => {
   test(
@@ -77,7 +77,23 @@ searchFlags.forEach((flags) => {
       expect(requests.some((request) => offersSearch(request))).toBe(true)
       expect(requests.some((request) => JSON.stringify(request).includes("Web search is not enabled"))).toBe(true)
       expect(attempts).toEqual([])
-      expect(consent()).toBeUndefined()
+      expect(consent({ databaseExists: true })).toBeUndefined()
+    },
+    120_000,
+  )
+})
+
+const controls = [
+  ["firecrawl", "mcp.firecrawl.dev:443"],
+  ["parallel", "search.parallel.ai:443"],
+]
+controls.forEach(([provider, host]) => {
+  test(
+    `control: a trusted folder that selects ${provider} reaches ${host}`,
+    async () => {
+      const workspace = await fresh(`control-${provider}`, { websearch: { provider } })
+      await run(workspace, [], { ORBIT_TRUST_PROJECT: "1" })
+      expect(attempts.some((attempt) => attempt.includes(host))).toBe(true)
     },
     120_000,
   )
@@ -94,7 +110,8 @@ test(
     expect(result.stderr).toContain("network")
     expect(requests).toEqual([])
     expect(attempts).toEqual([])
-    expect(consent()).toBeUndefined()
+    // The run stops at requireTrust, so the file may not exist yet, or may hold an earlier row's data.
+    expect(consent({ databaseExists: false })).toBeUndefined()
   },
   120_000,
 )
@@ -144,14 +161,14 @@ function toolNames(request: unknown) {
 }
 
 // The consent value, read straight from the database the run used.
-function consent() {
+// A query error fails the test. A missing file is accepted only where the run may stop before it opens the database.
+function consent(options: { databaseExists: boolean }) {
   const file = path.join(root, "orbit.db")
+  if (options.databaseExists) expect(existsSync(file)).toBe(true)
   if (!existsSync(file)) return undefined
   const db = new Database(file, { readonly: true })
   try {
     return (db.query("select value from kv where key = 'websearch:provider'").get() as { value: string } | null)?.value
-  } catch {
-    return undefined
   } finally {
     db.close()
   }
@@ -180,13 +197,14 @@ function spawn(args: string[], overrides: Record<string, string | undefined> = {
       ORBIT_DISABLE_AUTOUPDATE: undefined,
       HTTP_PROXY: proxy,
       HTTPS_PROXY: proxy,
-      http_proxy: proxy,
-      https_proxy: proxy,
       ALL_PROXY: proxy,
-      all_proxy: proxy,
       // Loopback covers the configured model and the CLI's own local server; everything else is trapped.
       NO_PROXY: "127.0.0.1,localhost,::1",
-      no_proxy: "127.0.0.1,localhost,::1",
+      // On Windows, passing both spellings of a variable drops them from the CLI's environment, and the server it
+      // starts then connects directly. One spelling per variable there keeps the trap in the path.
+      ...(process.platform === "win32"
+        ? {}
+        : { http_proxy: proxy, https_proxy: proxy, all_proxy: proxy, no_proxy: "127.0.0.1,localhost,::1" }),
       ...overrides,
     }),
     stdin: "ignore",

@@ -650,6 +650,12 @@ describe("WebSearchTool consent stays a user decision", () => {
       expect(progress).toEqual([])
     })
   const expectNotEnabled = (error: Tool.Error) => {
+    // The raw failure must already be the coded one: mapError may not wrap it as a generic execution failure.
+    expect({ message: error.message, code: error.code, error: error.error }).toEqual({
+      message: WebSearchTool.NOT_ENABLED,
+      code: Tool.ErrorCode.WebSearchNotEnabled,
+      error: undefined,
+    })
     expect(toSessionError(error)).toEqual({ type: "websearch.not-enabled", message: WebSearchTool.NOT_ENABLED })
     expect(WebSearchTool.NOT_ENABLED).toContain("websearch")
   }
@@ -683,14 +689,18 @@ describe("WebSearchTool consent stays a user decision", () => {
     Effect.gen(function* () {
       const fixture = yield* setupReal
       const started = yield* start(fixture, "call-timeout")
-      yield* TestClock.adjust("1 minute")
-      expectNotEnabled(yield* Fiber.join(started.fiber))
-      expect(yield* fixture.forms.state(started.form.id)).toMatchObject({ status: "cancelled" })
-      expect(yield* fixture.forms.list({ sessionID })).toEqual([])
-      const late = yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "allow" } }).pipe(Effect.flip)
-      expect(late).toBeInstanceOf(Form.AlreadySettledError)
-      yield* expectNothingHappened(fixture)
+      yield* Effect.gen(function* () {
+        yield* TestClock.adjust("1 minute")
+        expectNotEnabled(yield* Fiber.join(started.fiber))
+        expect(yield* fixture.forms.state(started.form.id)).toMatchObject({ status: "cancelled" })
+        expect(yield* fixture.forms.list({ sessionID })).toEqual([])
+        const late = yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "allow" } }).pipe(Effect.flip)
+        expect(late).toBeInstanceOf(Form.AlreadySettledError)
+        yield* expectNothingHappened(fixture)
+        // A broken timeout must not leave this fiber holding the provider lock for the tests after it.
+      }).pipe(Effect.ensuring(Fiber.interrupt(started.fiber)))
     }),
+    1_000,
   )
 
   it.effect("fails not-enabled when the minute runs out during the provider form", () =>
@@ -699,11 +709,14 @@ describe("WebSearchTool consent stays a user decision", () => {
       const started = yield* start(fixture, "call-timeout-2")
       yield* fixture.forms.reply({ id: started.form.id, answer: { choice: "choose" } })
       const second = yield* pending(fixture, [started.form.id])
-      yield* TestClock.adjust("1 minute")
-      expectNotEnabled(yield* Fiber.join(started.fiber))
-      expect(yield* fixture.forms.state(second.id)).toMatchObject({ status: "cancelled" })
-      yield* expectNothingHappened(fixture)
+      yield* Effect.gen(function* () {
+        yield* TestClock.adjust("1 minute")
+        expectNotEnabled(yield* Fiber.join(started.fiber))
+        expect(yield* fixture.forms.state(second.id)).toMatchObject({ status: "cancelled" })
+        yield* expectNothingHappened(fixture)
+      }).pipe(Effect.ensuring(Fiber.interrupt(started.fiber)))
     }),
+    1_000,
   )
 
   it.effect("fails not-enabled when the form service closes while the form is pending", () =>

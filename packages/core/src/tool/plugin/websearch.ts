@@ -20,7 +20,7 @@ const httpErrors = new Map([
 
 // Fixed text: it never repeats the model's query, and it tells the model to stop rather than work around the missing consent.
 export const NOT_ENABLED =
-  'Web search is not enabled: the user has not agreed to it, so nothing was searched. The user can turn it on by answering the web search prompt in an interactive client, or by setting `websearch` in their own Orbit config (for example { "provider": "random" }, or a provider ID). Do not call WebSearch again in this run; carry on without it, or tell the user how to turn it on.'
+  'Web search is not enabled: the user has not agreed to it, so nothing was searched. The user can turn it on by answering the web search prompt in an interactive client, or by setting `websearch` in their own Orbit config (for example { "provider": "random" } or { "provider": "<provider ID>" }). Do not call WebSearch again in this run; carry on without it, or tell the user how to turn it on.'
 
 const notEnabled = () => new ToolFailure({ message: NOT_ENABLED, code: Tool.ErrorCode.WebSearchNotEnabled })
 
