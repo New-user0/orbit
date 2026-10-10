@@ -140,9 +140,15 @@ export const arrayAndNetwork = [
   "Get-Module -ListAvailable -Name a, 'FileSystem:://evil/share/m'",
   "Get-Module -ListAvailable a, FileSystem:://evil/share/m",
   "Get-Module -ListAvailable -FullyQualifiedName a, FileSystem:://evil/share/m",
-  "Get-Module -ListAvailable -Name a, Microsoft.PowerShell.Core\FileSystem:://evil/share/m",
-  "Get-Module -ListAvailable -Name a, FileSystem::\\evil\share\m",
+  "Get-Module -ListAvailable -Name a, Microsoft.PowerShell.Core\\FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a, FileSystem::\\\\evil\\share\\m",
   "Get-Process -Name a, env:X",
+  // An element that is not a constant is refused: its value is not known before it runs (class 6).
+  "Get-Process -Name a, $x",
+  "Get-Process -Name a, (1)",
+  'Get-Process -Name a, "$x"',
+  "Get-Process -Name a, $(1)",
+  "Get-Process -Name a, @(1)",
 ]
 
 export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "Get-Process -Name a, b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]

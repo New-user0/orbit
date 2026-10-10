@@ -70,6 +70,9 @@ describe("a network share anywhere in a word is never read-only (win32)", () => 
     "cat a@SSL@443/x",
     "cat '\\\\10.0.0.1\\x'",
     "cat a'\\\\evil\\s'",
+    // Backslashes after a colon: the `\\` branch of the pattern has no colon lookbehind.
+    "cat 'a:\\\\evil\\share\\x'",
+    "cat 'C:\\\\x'",
   ])("%s", (text) => {
     expect(bash(text, windows()).readOnly).toBe(false)
   })
