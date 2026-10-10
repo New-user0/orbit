@@ -12,6 +12,7 @@ import { CommandFile } from "./config/plugin/command-file.js"
 import { ConfigTrust } from "./config/trust.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
+import { Project } from "./project.js"
 import { AbsolutePath } from "./schema.js"
 import { WorkspaceTrust } from "./workspace-trust.js"
 
@@ -38,6 +39,16 @@ export interface Interface {
   readonly grant: (input: { readonly persist: boolean; readonly via: string }) => Effect.Effect<Trust.Status>
   /** Ends the grants for this Location's project; see `WorkspaceTrust.revoke`. */
   readonly revoke: () => Effect.Effect<Trust.Status>
+  /**
+   * Whether code that reads the folder around a file, such as a language server or a formatter, may run for that file.
+   * Both must hold: this Location's project is trusted, and the file's real path is inside the project's folders or the
+   * folder that owns it is trusted in its own right. The owner is found as `Project.root` finds one, from the folder the
+   * file really lives in (the nearest folder above it that holds `.git` or `.hg`, else its own folder). A link in the
+   * project that leads out is decided by where it leads, and a link that points nowhere by where a write through it
+   * would land. A link on the spelling that is not on that real path's walk must lead inside the project or to a
+   * folder with a trusted owner too, since a program walking up the spelling reads config there. A linked worktree of a trusted repository, reached as an outside file, needs a grant of its own.
+   */
+  readonly trustedAt: (file: string) => Effect.Effect<boolean>
   /**
    * Whether a file may run the code it carries, such as the hooks in a skill's or an agent's front matter, or any other
    * file that something would execute. Callers must ask this before running any such code; see `ConfigTrust.allows`.
@@ -246,6 +257,32 @@ const layer = Layer.effect(
         if ((yield* trust.status(root)).trusted) return undefined
         const leads = yield* lead(file)
         return [...folders, ...real].some((folder) => FSUtil.contains(folder, leads)) ? undefined : leads
+      }),
+      // The stricter answer wins: a tool and a spawned program act on the spelling they were given, and a link can
+      // lead somewhere else. The real path needs a trusted owner. A program also walks up the spelling looking for
+      // config, so each folder on the spelling that is a link, and is not on the real path's own walk, must lead to
+      // a folder inside the project or to one with a trusted owner: a link in a folder with no marker, which owns
+      // itself, cannot lend it a trusted folder's `.git`.
+      trustedAt: Effect.fn("ProjectTrust.trustedAt")(function* (file) {
+        if (!(yield* trust.status(root)).trusted) return false
+        const spelled = path.resolve(file)
+        const leads = yield* lead(file)
+        // The owner is the nearest folder above that holds `.git` or `.hg`, else the folder itself.
+        const ownerTrusted = Effect.fnUntraced(function* (folder: string) {
+          if ([...folders, ...real].some((item) => FSUtil.contains(item, folder))) return true
+          const owner = yield* Project.root(fs, AbsolutePath.make(folder))
+          return (yield* trust.status(owner ?? folder)).trusted
+        })
+        const walk = path.dirname(leads)
+        if (!(yield* ownerTrusted(walk))) return false
+        if (FSUtil.contains(spelled, leads) && FSUtil.contains(leads, spelled)) return true
+        for (let folder = path.dirname(spelled); ; folder = path.dirname(folder)) {
+          const led = yield* lead(folder)
+          // Folders above the project are reached by the real walk as well; they do not own what is below.
+          const above = [...folders, ...real].some((item) => FSUtil.contains(led, item))
+          if (!above && !FSUtil.contains(led, walk) && !(yield* ownerTrusted(led))) return false
+          if (path.dirname(folder) === folder) return true
+        }
       }),
       supplies,
     })

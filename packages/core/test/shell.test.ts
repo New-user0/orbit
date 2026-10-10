@@ -46,6 +46,8 @@ describe("shell", () => {
   test("falls back for terminal-only shells when compatibility is required", () => {
     expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "fish"))).not.toBe("fish")
     expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "nu"))).not.toBe("nu")
+    expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "tcsh"))).not.toBe("tcsh")
+    expect(ShellSelect.name(ShellSelect.resolve({ priority: "compat" }, "csh"))).not.toBe("csh")
   })
 
   test("builds command args per shell family", () => {
