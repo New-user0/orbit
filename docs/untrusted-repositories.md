@@ -138,7 +138,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
   `test/file-access.test.ts`, `test/tool-edit.test.ts` (that link, with a trusted project as the control),
   `test/tool-write.test.ts`.
-- Language servers and formatters: `ProjectTrust.trustedAt(file)` per file in `Lsp.diagnostics`, `Lsp.request` and
+- Language servers and formatters: `ProjectTrust.trustedAt(file)` per file in `Lsp.diagnostics`, `Lsp.request`, `Lsp.send` and
   `Formatter.file`. It needs the Location's project trusted, and a file outside the project's folders also needs the
   folder that owns it (found as `Project.root` finds one, from the real folder of the file) to be trusted. It decides the
   spelling the tool and the spawned program act on and the real path, and the real path needs a trusted owner, and so does the
@@ -146,7 +146,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   link in an untrusted folder, with or without a marker, that leads into a trusted one is refused, as are a link that leads out,
   a dangling link, `..` and the Windows case of a name. A refused file is skipped. Proof: `test/lsp.test.ts`, `test/lsp-trust.test.ts`,
   `test/plugin/lsp-diagnostics.test.ts` (a Write by `~`, Git Bash, Cygwin, WSL, trailing dot and space and case
-  spellings), `test/formatter.test.ts`.
+  spellings), `test/formatter.test.ts`, and `test/tool-lsp.test.ts` (the `LSP` tool's new actions refused while the folder
+  is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
+  this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
@@ -209,14 +211,19 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
-- The run-scoped config of `--mcp-config` and `--agents` (`packages/cli/src/config-overlay.ts`), which reads a file by
-  name, hands its content to a private server, and can start programs through `--mcp-config`. The values are the
+- The run-scoped config of `--settings`, `--mcp-config` and `--agents` (`packages/cli/src/config-overlay.ts`), which
+  reads a file by name, hands its content (or, for a `--settings` file, its real path) to a private server, and can
+  start programs through `--mcp-config`. `--settings` decides file or inline by the value's shape alone, `stat`s a file
+  before opening it (a device, pipe or directory is refused unopened), reads it the way core does (UTF-8, not UTF-16),
+  and passes the real path in a version 2 envelope, never in `ORBIT_CONFIG`, which the private server's tools inherit.
+  A flag document is the person's own and is never trust-stamped; core loads a file once, by real path (a link, case and a Windows 8.3 short name included), so naming the project's own
+  `orbit.json` does not load it a second time, unstamped, in the flag scope (`Config.load`). The values are the
   person's own, so they are read and checked in the folder the person typed them in, before `orb <directory>` changes
   folder (a clone at that directory may ship a file of the same name) and before any server starts. The overlay does not
   trust the folder: the private server keeps `ORBIT_TRUST_PROJECT` as it was, and `orb -p` still stops in an untrusted
   folder. The file that carries the content to the server is read only when it is a file the CLI wrote
   (`overlays/overlay-*/<id>.json` in Orbit's per-user state folder, which is in no folder an agent may write without
-  asking) and holds a version 1 envelope; any other path in `ORBIT_CONFIG_CONTENT_FILE` is left untouched with one log
+  asking) and holds a version 2 envelope; any other path in `ORBIT_CONFIG_CONTENT_FILE` is left untouched with one log
   line, and the background service never reads it. A relative `{file:}` reference in a value is made absolute against
   the folder of the file that holds it (the start folder for an inline value) before it is merged, because core would
   otherwise read it in the opened folder. Errors that echo the value or keys from inside it go through `plain`, and a

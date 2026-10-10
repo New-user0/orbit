@@ -22,13 +22,13 @@ test("the background service never takes its trust from the environment, which b
 // The CLI hands a private server its run-scoped config in a file. The shared service must never take it, and no server
 // leaves the variable in the environment of the processes it starts.
 test("a private server reads the overlay file once, deletes it, and removes the variable from its environment", async () => {
-  const written = await ConfigOverlay.write('{"agents":{}}')
+  const written = await ConfigOverlay.write({ content: '{"agents":{}}' })
   try {
     for (const mode of ["default", "stdio"] as const) {
-      const again = await ConfigOverlay.write('{"agents":{}}')
+      const again = await ConfigOverlay.write({ content: '{"agents":{}}' })
       const env: Record<string, string | undefined> = { ORBIT_CONFIG_CONTENT_FILE: again.file }
 
-      expect(await ServerProcess.takeOverlay(mode, env)).toBe('{"agents":{}}')
+      expect(await ServerProcess.takeOverlay(mode, env)).toEqual({ content: '{"agents":{}}', file: undefined })
       expect(env).toEqual({})
       expect(await Bun.file(again.file).exists()).toBe(false)
       await again.remove()
@@ -39,7 +39,7 @@ test("a private server reads the overlay file once, deletes it, and removes the 
 })
 
 test("the background service ignores the overlay file, leaves it alone, and does not keep the variable", async () => {
-  const written = await ConfigOverlay.write('{"agents":{"leaked":{"system":"x"}}}')
+  const written = await ConfigOverlay.write({ content: '{"agents":{"leaked":{"system":"x"}}}' })
   try {
     const env: Record<string, string | undefined> = { ORBIT_CONFIG_CONTENT_FILE: written.file }
 

@@ -114,8 +114,20 @@ const PrintParams = {
   ),
 }
 
+// A config file for this run only. Every command that starts or reads a server takes it, and starts a private server.
+// Up to twenty values are read, like --mcp-config, so that a repeat always reaches the handler and gets its one-line refusal.
+const SettingsParams = {
+  settings: Flag.string("settings").pipe(
+    Flag.withDescription(
+      "A config file, or the JSON itself, in the orbit.json shape, for this run only. It ranks above project and local config and below managed settings. A relative file name is taken from the folder you typed the command in. Starts a private server for the run, separate from the background service, which takes a moment to start; cannot be combined with --server",
+    ),
+    Flag.atMost(20),
+  ),
+}
+
 // Config for this run only, which the interface takes as well as `orb -p` and `orb run`. They start a private server.
 const OverlayParams = {
+  ...SettingsParams,
   mcpConfig: Flag.string("mcp-config").pipe(
     Flag.withDescription(
       'MCP servers for this run only: a JSON file, or the JSON itself, shaped {"servers": {"<name>": {"type": "local", "command": ["<program>"]}}}. Repeat the flag to add more. Relative program and cwd paths in a file are taken from that file\'s folder. Runs on a private server and cannot be combined with --server',
@@ -232,7 +244,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Debugging and troubleshooting tools",
       commands: [
         Spec.make("agents", { description: "List all agents" }),
-        Spec.make("config", { description: "List configuration sources" }),
+        Spec.make("config", { description: "List configuration sources", params: { ...SettingsParams } }),
         Spec.make("paths", {
           description: "Show global paths (data, config, cache, state)",
           params: {
@@ -635,6 +647,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Start the minimal interactive interface",
       params: {
         ...ServerParams,
+        ...SettingsParams,
         continue: Flag.boolean("continue").pipe(
           Flag.withAlias("c"),
           Flag.withDescription("Continue the last session"),
@@ -672,6 +685,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       params: {
         ...ServerParams,
         ...TrustParams,
+        ...SettingsParams,
         interval: Argument.string("interval").pipe(
           Argument.withDescription('Time between runs, such as "30s", "10m" or "1h" (at least 10s)'),
         ),
@@ -933,6 +947,7 @@ export const RootValueFlags = {
     "prompt",
     "model",
     "agent",
+    "settings",
     "mcp-config",
     "agents",
     "output-format",

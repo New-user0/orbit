@@ -193,7 +193,7 @@ export type Scope = typeof Scope.Type
 export const Scope = Schema.Literals(["remote", "user", "project", "local", "flag", "managed"]).annotate({
   identifier: "Config.Scope",
   description:
-    "Where a configuration entry came from, listed from lowest to highest precedence: remote (well-known), user (global config directory and home directory), project (orbit.json files and .orbit directories up the tree), local (orbit.local.json files), flag (ORBIT_CONFIG and ORBIT_CONFIG_CONTENT), managed (organization-managed settings).",
+    "Where a configuration entry came from, listed from lowest to highest precedence: remote (well-known), user (global config directory and home directory), project (orbit.json files and .orbit directories up the tree), local (orbit.local.json files), flag (ORBIT_CONFIG, ORBIT_CONFIG_CONTENT and the run's --settings, --mcp-config and --agents), managed (organization-managed settings).",
 })
 
 const trusted = Schema.Boolean.pipe(optional).annotate({

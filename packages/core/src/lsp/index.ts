@@ -1,15 +1,18 @@
 export * as Lsp from "./index.js"
 
+import { isRecord } from "@orbit/ai/utils/record"
 import { ConfigLSP } from "@orbit/schema/config/lsp"
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Schedule, Schema } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import path from "path"
 import { Config } from "../config.js"
+import { Git } from "../git.js"
 import { Location } from "../location.js"
 import { ProjectTrust } from "../project-trust.js"
+import { RelativePath } from "../schema.js"
 import { which } from "../util/which.js"
 import { LspClient } from "./client.js"
 
@@ -23,7 +26,18 @@ import { LspClient } from "./client.js"
 
 export type Diagnostic = LspClient.Diagnostic
 
-export class Error extends Schema.TaggedError<Error>()("Lsp.Error", { message: Schema.String }) {}
+/** `code` is the JSON-RPC error code when the server itself answered with an error. */
+export class Error extends Schema.TaggedError<Error>()("Lsp.Error", {
+  message: Schema.String,
+  code: Schema.optionalKey(Schema.Number),
+}) {}
+
+// The server is still working out its project and asks the client to try again.
+const CONTENT_MODIFIED = -32801
+// Up to three silent retries, 0.5 s, 1 s and 2 s apart.
+const retrySchedule = Schedule.max([Schedule.exponential("500 millis"), Schedule.recurs(3)])
+// A server is only sent files up to this size.
+const MAX_FILE_BYTES = 10_000_000
 
 export interface Server {
   readonly id: string
@@ -53,8 +67,18 @@ export interface Interface {
     files: readonly string[],
     options?: { readonly save?: boolean },
   ) => Effect.Effect<Record<string, Diagnostic[]>>
-  /** Sends a request about a file to its language server. */
+  /** Sends a request about a file to its language server. The document is added to the params. */
   readonly request: (method: string, file: string, params: Record<string, unknown>) => Effect.Effect<unknown, Error>
+  /**
+   * Sends a request that names no document, such as a workspace symbol search. The file is opened first, so a
+   * project-aware server loads the project it belongs to, and it chooses the server; the params go out as given.
+   */
+  readonly send: (method: string, file: string, params: Record<string, unknown>) => Effect.Effect<unknown, Error>
+  /**
+   * The files among these absolute paths that git ignores in the Location's repository. A tracked file is never
+   * ignored. A Location outside a repository, and any failure, ignore nothing.
+   */
+  readonly ignored: (files: readonly string[]) => Effect.Effect<ReadonlySet<string>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Lsp") {}
@@ -67,6 +91,7 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const trust = yield* ProjectTrust.Service
     const spawner = yield* ChildProcessSpawner
+    const git = yield* Git.Service
     // One start attempt per server; a server that fails to start stays off until the Location reloads.
     const clients = new Map<string, Promise<LspClient.Client | undefined>>()
     yield* Effect.addFinalizer(() =>
@@ -123,6 +148,42 @@ const layer = Layer.effect(
       return false
     })
 
+    // The one path every request takes, so `send` cannot drift from `request` on trust, size or retry.
+    const ask = Effect.fnUntraced(function* (
+      method: string,
+      file: string,
+      params: Record<string, unknown>,
+      document: boolean,
+    ) {
+      if (!(yield* trust.trusted()))
+        return yield* new Error({ message: "Language servers stay off until this folder is trusted." })
+      if (!(yield* allowed(file)))
+        return yield* new Error({ message: "Language servers stay off for a file whose folder is not trusted." })
+      const target = yield* client(file)
+      if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
+      const size = yield* fs.stat(file).pipe(
+        Effect.map((info) => Number(info.size)),
+        Effect.orElseSucceed(() => 0),
+      )
+      if (size > MAX_FILE_BYTES)
+        return yield* new Error({
+          message: `${path.basename(file)} is ${Math.ceil(size / 1_000_000)} MB; language servers are only sent files up to 10 MB.`,
+        })
+      const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
+      if (text === undefined) return yield* new Error({ message: `Cannot read ${file}.` })
+      return yield* Effect.tryPromise({
+        try: () =>
+          document
+            ? target.request(method, file, text, params)
+            : target.open(file, text).then(() => target.send(method, params)),
+        catch: (cause) =>
+          new Error({
+            message: `${target.id} could not answer: ${String(cause)}`,
+            ...(isRecord(cause) && typeof cause.code === "number" ? { code: cause.code } : {}),
+          }),
+      }).pipe(Effect.retry({ schedule: retrySchedule, while: (error) => error.code === CONTENT_MODIFIED }))
+    })
+
     return Service.of({
       diagnostics: Effect.fn("Lsp.diagnostics")(
         function* (files, options) {
@@ -147,25 +208,55 @@ const layer = Layer.effect(
         Effect.orElseSucceed(() => ({})),
       ),
       request: Effect.fn("Lsp.request")(function* (method, file, params) {
-        if (!(yield* trust.trusted()))
-          return yield* new Error({ message: "Language servers stay off until this folder is trusted." })
-        if (!(yield* allowed(file)))
-          return yield* new Error({ message: "Language servers stay off for a file whose folder is not trusted." })
-        const target = yield* client(file)
-        if (!target) return yield* new Error({ message: `No language server is available for ${path.basename(file)}.` })
-        const text = yield* fs.readFileStringSafe(file).pipe(Effect.orElseSucceed(() => undefined))
-        if (text === undefined) return yield* new Error({ message: `Cannot read ${file}.` })
-        return yield* Effect.tryPromise({
-          try: () => target.request(method, file, text, params),
-          catch: (cause) => new Error({ message: `${target.id} could not answer: ${String(cause)}` }),
-        })
+        return yield* ask(method, file, params, true)
       }),
+      send: Effect.fn("Lsp.send")(function* (method, file, params) {
+        return yield* ask(method, file, params, false)
+      }),
+      ignored: Effect.fn("Lsp.ignored")(
+        function* (files) {
+          // git runs in this folder's repository, so the folder has to be trusted first.
+          if (!(yield* trust.trusted())) return new Set<string>()
+          const repository = yield* git.repo.discover(location.directory)
+          if (!repository || files.length === 0) return new Set<string>()
+          // git reports the real worktree, while results use the Location's own spelling (a junction, a link or a
+          // subst drive). The worktree is re-spelled the way the Location spells it, so a path anywhere in the
+          // repository, not only under the Location, is compared in its own spelling.
+          const real = yield* fs.resolve(location.directory)
+          const spelled = path.resolve(location.directory, path.relative(real, repository.worktree))
+          // A path outside the worktree is not asked about: git would refuse the whole batch.
+          const inside = files.flatMap((file) => {
+            const within = path.relative(spelled, file)
+            const relative = outside(within) ? path.relative(repository.worktree, file) : within
+            return relative === "" || outside(relative)
+              ? []
+              : [{ file, relative: RelativePath.make(relative.split(path.sep).join("/")) }]
+          })
+          const hidden = yield* git.index.ignored({
+            repository,
+            paths: inside.map((item) => item.relative),
+            tracked: "keep",
+          })
+          return new Set(inside.filter((item) => hidden.has(item.relative)).map((item) => item.file))
+        },
+        Effect.timeout("5 seconds"),
+        // A check that fails shows every result. Defects and interruption still surface.
+        Effect.catch((error) =>
+          Effect.logDebug("git ignore check failed; showing every result", error).pipe(
+            Effect.as(new Set<string>() as ReadonlySet<string>),
+          ),
+        ),
+      ),
     })
   }),
 )
 
+// A relative path that leaves its base: `..` itself, `../x`, or another drive. A folder named `..cache` stays inside.
+const outside = (relative: string) =>
+  relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)
+
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, FSUtil.node, Location.node, ProjectTrust.node, CrossSpawnSpawner.node],
+  deps: [Config.node, FSUtil.node, Git.node, Location.node, ProjectTrust.node, CrossSpawnSpawner.node],
 })

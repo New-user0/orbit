@@ -359,6 +359,22 @@ The `mcp`, `plugins` and `network` lists of a managed `managed` block now take e
 
 **What to do:** nothing unless your organization manages Orbit.
 
+### A background shell command that stops at a prompt is reported once
+
+Orbit now watches every shell command that runs in the background (asked for, moved at its deadline, or moved by a
+client). It looks at the size of the command's output every 5 seconds. After 45 to 50 seconds without new output, it reads
+the last 1024 bytes. If the last line looks like a question the model could answer (`(y/n)`, `[Y/n]`, `(yes/no)`, "Do you
+...?", "Are you sure ...?", "Press any key", "Press Enter", "Continue?", "Overwrite?"), the session gets one notice with
+state `waiting`, the end of its output, and advice to stop the command with `TaskStop` and run it again with the answer supplied.
+Password, passphrase and token prompts are not matched. A command that is only slow or quiet gets no notice. There is at
+most one notice per command, it does not end the job, and the completion notice still follows. Commands still run with no
+input, and a foreground command is not watched until its deadline moves it to the background.
+
+**Affects:** clients and scripts that read the synthetic shell notices of a session: `metadata.state` can now be
+`waiting`, which is not an end of the job.
+
+**What to do:** Treat `waiting` as progress. Take the end of a job from the job and shell events.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -1129,6 +1145,36 @@ and never deleted.
 **Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
 
 **What to do:** Nothing.
+
+### `--settings` loads a config file or inline JSON for one run
+
+`orb`, `orb -p`, `orb run`, `orb mini`, `orb loop` and `orb debug config` take `--settings <file-or-json>`: a config in
+the `orbit.json` shape (comments and trailing commas allowed) that applies to this run only. It ranks in the flag scope,
+above project and local config and below managed settings. Within that scope an `ORBIT_CONFIG` file or a `--settings`
+file comes first (a `--settings` file takes the place of `ORBIT_CONFIG` for the run), then `ORBIT_CONFIG_CONTENT`, then an
+inline `--settings`, then `--mcp-config` and `--agents`. The value is inline JSON when it starts, after whitespace, with
+`{` or a comment, and a file name otherwise; the disk never decides. A relative file name is taken from the folder you
+typed the command in, and a relative `{file:...}` inside a file is taken from beside that file. The value is checked before
+anything starts: a missing file, a folder, a device, a file over 4 MiB, JSON that does not parse, an empty value and a
+repeated flag are each refused before anything starts; `-p` and `run` print one line, and the interface, `loop`, `mini`
+and `debug config` print the error with a stack trace. A file saved as UTF-16 (Windows PowerShell 5.1 does this for `>`) is refused
+with a request to save it as UTF-8; an empty file is accepted, and an inherited `ORBIT_CONFIG` then still applies. Fields that do not fit the config schema are judged by the
+server, which logs them and leaves them out (the whole document is dropped only when final validation fails); `orb debug config --settings ...` shows whether it arrived.
+
+A run with `--settings` uses a private server, like `--mcp-config`, so it starts a little slower, runs nothing on the
+background service, and cannot be combined with `--server`. With `--continue`, `--session` or `--resume` it stops when the
+background service is running that session (pinned for `orb`, `-p` and `loop`). The settings never trust the folder: `--trust` is still what grants that.
+
+A config file that discovery already loaded (the project's own `orbit.json`, a local file or your user config) now loads
+once, at its own scope and under its own trust, by real path (a link, a different case and, on Windows, an 8.3 short name count as the same
+file), including through `ORBIT_CONFIG` or a `--settings`
+that names it. Before, `ORBIT_CONFIG` pointing at a project's file loaded it a second time in the flag scope without the
+trust restrictions of an untrusted folder.
+
+**Affects:** people who want settings for a single run, and anyone who set `ORBIT_CONFIG` to a file inside a project.
+
+**What to do:** Nothing. Pass a file or JSON to `--settings`; to give an untrusted project's file full effect, trust the
+folder rather than naming its file.
 
 ### Terminal bell, idle reminder and a status in the window title
 
@@ -2237,3 +2283,25 @@ A new key, `webfetch.verbatim_hosts`, lists hosts (`docs.example.com`, `*.exampl
 **Affects:** prompts, scripts and plugins that called WebFetch without a `prompt`, or relied on it returning the raw page or HTML.
 
 **What to do:** Ask for what you need in `prompt`. To read a documentation site whole, list its host in `webfetch.verbatim_hosts` in your own configuration.
+
+### The LSP tool finds implementations, searches workspace symbols and walks call hierarchies
+
+The `LSP` tool has five new actions: `implementation`, `workspace_symbols` (with a new `query` input, sent as an empty
+string when left out; `path` only chooses the language server), `prepare_call_hierarchy`, `incoming_calls` and
+`outgoing_calls`. The call actions take the position of a function's name and use the first item the server finds there.
+The language server client also declares link, implementation, call hierarchy and workspace symbol support when it
+starts, retries a request up to three times (after 0.5 s, 1 s and 2 s) when a server answers that its content changed
+while it was indexing, and refuses a file larger than 10 MB with a message instead of sending it.
+
+The existing actions print differently: `definition` and `references` give a headline with a count, references are grouped
+by file, a link falls back to its whole target when it has no selection range, hover shows a list as separate paragraphs
+and starts with the range's position when the server sends one, and `symbols` shows each symbol's kind, detail and the line
+where its range starts. Paths are relative to the session's folder only when that is shorter and does not climb two folders, use
+forward slashes, and a result that is not a file path (for example a `jdt:` address) is printed as given. Results in
+git-ignored files are left out of `definition`, `implementation`, `references` and `workspace_symbols`; a file git tracks is
+always shown, and a folder that is not a repository hides nothing.
+
+**Affects:** models and scripts that parse the text of an `LSP` result, and anyone who relied on seeing results inside
+git-ignored folders such as `node_modules`.
+
+**What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.

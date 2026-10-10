@@ -39,10 +39,11 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--fork requires --continue, --session or --resume"))
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
-    // A private server holds this run's --mcp-config and --agents; the file that carries them is removed on exit. They
+    // A private server holds this run's --settings, --mcp-config and --agents; the file that carries them is removed on exit. They
     // are read before the change of directory below: a relative file name means the folder the person typed it in, and
     // the folder they start Orbit in may be a clone that ships a file of the same name.
     const overlay = yield* ConfigOverlay.apply({
+      settings: input.settings,
       mcpConfig: input.mcpConfig,
       agents: Option.getOrUndefined(input.agents),
       server: requestedServer,

@@ -40,6 +40,10 @@ export interface Client {
    * server is then told the file was saved, which some servers wait for before running their deeper checks.
    */
   readonly diagnostics: (file: string, text: string, options?: { readonly save?: boolean }) => Promise<Diagnostic[]>
+  /** Sends the file's current text: `didOpen` the first time, `didChange` after that. Returns the file's URI. */
+  readonly open: (file: string, text: string) => Promise<string>
+  /** Sends a request with exactly these params; nothing about a document is added. */
+  readonly send: (method: string, params: Record<string, unknown>) => Promise<unknown>
   /** Opens or refreshes the file, then sends a request about it. */
   readonly request: (method: string, file: string, text: string, params: Record<string, unknown>) => Promise<unknown>
   readonly shutdown: () => Promise<void>
@@ -119,11 +123,14 @@ export async function start(input: {
           synchronization: { didSave: true },
           publishDiagnostics: { relatedInformation: false },
           hover: { contentFormat: ["markdown", "plaintext"] },
-          definition: {},
+          definition: { linkSupport: true },
+          implementation: { linkSupport: true },
           references: {},
           documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          callHierarchy: {},
         },
-        workspace: { configuration: true, workspaceFolders: true },
+        // No resolveSupport for symbols: without it servers send complete locations.
+        workspace: { configuration: true, workspaceFolders: true, symbol: {} },
       },
     }),
   ]).catch(async (error: unknown) => {
@@ -180,6 +187,8 @@ export async function start(input: {
       await settled
       return published.get(uri) ?? []
     },
+    open: sync,
+    send: (method, params) => connection.sendRequest(method, params),
     request: async (method, file, text, params) => {
       const uri = await sync(file, text)
       return connection.sendRequest(method, { textDocument: { uri }, ...params })

@@ -124,8 +124,9 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           config: {
             directory: process.env.ORBIT_CONFIG_DIR,
             project: !truthy(process.env.ORBIT_CONFIG_PROJECT_DISABLE ?? process.env.ORBIT_DISABLE_PROJECT_CONFIG),
-            file: process.env.ORBIT_CONFIG,
-            content: overlay ?? process.env.ORBIT_CONFIG_CONTENT,
+            // A --settings file replaces ORBIT_CONFIG for this run: there is one explicit-file slot.
+            file: overlay?.file ?? process.env.ORBIT_CONFIG,
+            content: overlay?.content ?? process.env.ORBIT_CONFIG_CONTENT,
           },
           managed: { directory: process.env.ORBIT_MANAGED_DIR || undefined },
           trust: trustOptions(options.mode, process.env),

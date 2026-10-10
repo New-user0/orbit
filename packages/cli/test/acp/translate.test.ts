@@ -157,6 +157,20 @@ describe("acp turn translation", () => {
     ])
   })
 
+  test("forwards nothing for a waiting shell notice, whose text quotes script output", () => {
+    const hostile = "\u001b]0;pwned\u0007\u001b[2KProceed (y/n) \rOVERWRITTEN"
+    const result = started(
+      durableEvent("session.synthetic", {
+        sessionID: root,
+        text: `<shell id="sh_1" state="waiting" command="x">\nThe output ends with:\n${hostile}\n</shell>`,
+        description: "npm init \u001b]0;title\u0007\r",
+        metadata: { source: "shell", state: "waiting", shellID: "sh_1" },
+      }),
+    )
+    expect(updates(result.outputs)).toEqual([])
+    expect(JSON.stringify(result.outputs)).not.toContain("OVERWRITTEN")
+  })
+
   test("marks a compaction that fails before starting, and drops an end with no start", () => {
     const result = started(
       durableEvent("session.compaction.failed", {

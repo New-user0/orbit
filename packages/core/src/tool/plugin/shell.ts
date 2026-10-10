@@ -26,6 +26,7 @@ import { ShellParse } from "../../shell/parse.js"
 import { PowerShellParse } from "../../shell/powershell-parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
+import { ShellStall } from "../../shell/stall.js"
 
 export const name = "Bash"
 
@@ -230,7 +231,37 @@ export const Plugin = {
         command: string,
         settled: Deferred.Deferred<Output>,
       ) {
-        const info = (yield* jobs.wait({ id })).info
+        // Watched until the command ends.
+        const watcher = yield* ShellStall.watch({
+          size: shell.output(Shell.ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER }).pipe(
+            Effect.map((out) => out.size),
+          ),
+          tail: Effect.gen(function* () {
+            const size = (yield* shell.output(Shell.ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER })).size
+            return (yield* shell.output(Shell.ID.make(shellID), {
+              cursor: Math.max(0, size - ShellStall.TAIL_BYTES),
+              limit: ShellStall.TAIL_BYTES,
+            })).output
+          }),
+          onStall: (tail) =>
+            Effect.gen(function* () {
+              if ((yield* jobs.get(id))?.status !== "running") return
+              // A new message: the completion notice keeps the job's own ID, and the background marker stays until the
+              // command really ends.
+              yield* sessions.synthetic({
+                sessionID,
+                description: command,
+                ...ShellResult.notification({
+                  jobID: id,
+                  shellID,
+                  command,
+                  state: "waiting",
+                  text: ShellResult.stallNotice({ shellID, tail }),
+                }),
+              })
+            }).pipe(Effect.ignore),
+        }).pipe(Effect.forkChild({ startImmediately: true }))
+        const info = (yield* jobs.wait({ id }).pipe(Effect.ensuring(Fiber.interrupt(watcher)))).info
         if (!info || info.status === "running") return
         const output = info.status === "completed" ? yield* Deferred.await(settled) : undefined
         const text = output

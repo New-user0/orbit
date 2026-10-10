@@ -128,9 +128,14 @@ export interface Interface {
       ignores?: Repository
       maximumUntrackedFileBytes?: number
     }) => Effect.Effect<{ readonly skipped: readonly RelativePath[] }, OperationError>
+    /**
+     * The paths git ignores. By default a tracked file that matches a pattern counts as ignored, which is what a
+     * snapshot wants; `tracked: "keep"` leaves tracked files out of the answer, as `git status` does.
+     */
     readonly ignored: (input: {
       repository: Repository
       paths: readonly RelativePath[]
+      tracked?: "keep"
     }) => Effect.Effect<ReadonlySet<RelativePath>, OperationError>
   }
   readonly tree: {
@@ -438,13 +443,19 @@ const layer = Layer.effect(
     const ignored = Effect.fn("Git.index.ignored")(function* (input: {
       repository: Repository
       paths: readonly RelativePath[]
+      tracked?: "keep"
     }) {
       if (!input.paths.length) return new Set<RelativePath>()
       const result = yield* proc
         .run(
           ChildProcess.make(
             gitExecutable,
-            repositoryArgs(input.repository, ["check-ignore", "--no-index", "--stdin", "-z"]),
+            repositoryArgs(input.repository, [
+              "check-ignore",
+              ...(input.tracked === "keep" ? [] : ["--no-index"]),
+              "--stdin",
+              "-z",
+            ]),
             {
               cwd: input.repository.worktree,
               extendEnv: true,
