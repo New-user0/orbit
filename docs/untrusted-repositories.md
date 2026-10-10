@@ -150,7 +150,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   with `-NoProfile -NonInteractive -NoLogo -EncodedCommand`, nothing on stdin and no temp file. The command text is a
   base64 string literal that the script decodes, so it cannot close a quote, and the script only parses. Every failure
   (no host, spawn, timeout, exit, empty output, bad JSON, too long, parse errors) is an invalid result that callers read
-  as "ask". Proof: `test/shell-scan/powershell-parse.test.ts` (the real parser on every hiding spelling, the injected
+  as "ask". Proof: `test/shell-scan/powershell-parse.test.ts` (the real parser on the hiding spellings listed in its row tables, the injected
   host for each failure, and `.exe`, `.bat` and `.cmd` decoys in the working folder with a control that runs them).
 - Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
   MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working

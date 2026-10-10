@@ -264,9 +264,15 @@ let found: string | null | undefined
 // PATH only, never the working folder: which() skips it (class 10). Cached for the life of the process.
 export function findHost() {
   if (found !== undefined) return found ?? undefined
-  const first = which("pwsh") ?? (process.platform === "win32" ? which("powershell") : null)
-  found = usableHost(first)
+  found = hostFrom(which)
   return found ?? undefined
+}
+
+// The choice itself, with the lookup and platform injectable so a test can pin the fallback.
+export function hostFrom(lookup: (name: string) => string | null, options: Parameters<typeof usableHost>[1] = {}) {
+  const platform = options.platform ?? process.platform
+  const first = lookup("pwsh") ?? (platform === "win32" ? lookup("powershell") : null)
+  return usableHost(first, options)
 }
 
 // For tests: look the host up again, as a new process would.
@@ -496,7 +502,8 @@ function command(raw: RawCommandType): Command {
     ...classify(raw.name ?? undefined, raw.written),
     placeholder: false,
     text: raw.text,
-    ...(raw.operator === "&" || raw.operator === "." ? { operator: raw.operator } : {}),
+    // The parser names the operator: Ampersand, Dot, or Unknown when the command has none.
+    ...(raw.operator === "Ampersand" ? { operator: "&" as const } : raw.operator === "Dot" ? { operator: "." as const } : {}),
     nested: raw.nested,
     arguments: many(raw.arguments).map((argument) => ({
       kind: argument.kind,
@@ -521,7 +528,8 @@ function command(raw: RawCommandType): Command {
 }
 
 // The aliases Orbit resolves, written here rather than asked of a host, so the answer does not depend on the PowerShell
-// edition or on a profile. Left out on purpose: sc, sort, curl and wget, which are native programs on PowerShell 7.
+// edition or on a profile. Left out on purpose: sc, sort, curl, wget, compare and diff, which are native programs on PowerShell 7
+// for Linux and macOS.
 // An alias that is not here stays unknown and so never matches an allowlist.
 const ALIASES = new Map(
   Object.entries({
@@ -574,7 +582,6 @@ const ALIASES = new Map(
     "Import-Alias": "ipal",
     "Get-Unique": "gu",
     "Tee-Object": "tee",
-    "Compare-Object": "compare diff",
     "Push-Location": "pushd",
     "Pop-Location": "popd",
     "Rename-Item": "rni ren",
@@ -596,11 +603,11 @@ const ALIASES = new Map(
 )
 
 const EXTENSIONS = /\.(exe|cmd|bat|com)$/i
-// A module qualifier (Module\Name) makes the command a path, so the class is decided on the name as written. For the name
-// only, the qualifier of a module that PowerShell ships is dropped, so a deny rule on remove-item still matches
-// Microsoft.PowerShell.Management\Remove-Item. The class stays application: PowerShell 5.1 runs a script file of that
-// path in the working folder before it looks for the cmdlet.
-const QUALIFIER = /^(?:Microsoft\.PowerShell\.[A-Za-z]+|Microsoft\.WSMan\.Management)\\(?=[A-Za-z]+-[A-Za-z0-9]+$)/i
+// A module qualifier (Module\Name) makes the command a path, so the class is decided on the name as written: Windows
+// PowerShell 5.1 runs a script file of that path in the working folder before it looks for the cmdlet. For the name
+// only, any module qualifier is dropped, so a deny rule on remove-item also meets Foo\Remove-Item. A drive, a UNC path
+// and .\ or ..\ are paths, not modules, so a qualifier must start with a letter, digit or underscore.
+const QUALIFIER = /^[A-Za-z0-9_][A-Za-z0-9_.]*\\(?=[A-Za-z]+-[A-Za-z0-9]+$)/
 const CMDLET = /^[A-Za-z]+-[A-Za-z][A-Za-z0-9]*$/
 
 function classify(name: string | undefined, written: string): Pick<Command, "name" | "written" | "class"> {

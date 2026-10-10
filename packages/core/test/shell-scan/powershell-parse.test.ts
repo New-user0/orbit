@@ -117,7 +117,11 @@ const moreHiddenCommand: Array<[string, string]> = [
   ["a comma element with a comment", "Write-Output a,<# c #>(Remove-Item b)"],
   ["a comment after -name:", "Write-Output -name:<# c #>(Remove-Item b)"],
   ["a comment after a leading ]", "Write-Output ([int]<# c #>(Remove-Item a))"],
-  ["a glued backtick before CR LF", "Write-Output a;`\r\nRemove-Item b"],
+  ["a #' comment after a member", "$x.Length#'\nRemove-Item a"],
+  ["a #' comment after a command argument", "Write-Output a #'\nRemove-Item b"],
+  ["a #' comment after a subexpression", "$(1)#'\nRemove-Item a"],
+  ["a bracket argument before ;", "Write-Output [a; Remove-Item b; ]"],
+  ["a glued comment after a member before |", "$x.y<# c #>| Remove-Item"],
   ["a backtick before ; in a parameter name", "Write-Output -a`;b; Remove-Item c"],
   ["a form feed before the break", "Write-Output a\f\nRemove-Item b"],
 ]
@@ -131,6 +135,19 @@ const moreHiddenWrite: Array<[string, string, string, string]> = [
   ["a 2> glued to its target", "Write-Output a 2>f.txt", "2>", "f.txt"],
   ["a target ending in a dot", "'x' > f.", ">", "f."],
   ["a target holding [", "'x' > f[1].txt", ">", "f[1].txt"],
+  ["a target ending in #;", "$x > f#;", ">", "f#"],
+  ["a target ending in <#", "$x > f<#", ">", "f<#"],
+  ["a target holding a glued comment", "'x' > f<#c#>", ">", "f<#c#>"],
+  ["a target holding =", "'x' > f=1", ">", "f=1"],
+  ["a target that looks like a parameter, after a command", "Write-Output a > -a:<# c #>", ">", "-a:"],
+  ["a target that looks like a parameter, after an assignment", "$y = $x > -a:<# c #>", ">", "-a:"],
+  ["a write glued after -a:$x.y", "Write-Output -a:$x.y>f", ">", "f"],
+  ['a write glued after -a:"s"', 'Write-Output -a:"s">f', ">", "f"],
+  ["a write glued after -a:@(1)", "Write-Output -a:@(1)>f", ">", "f"],
+  ["a write glued after a,$x.Length", "Write-Output a,$x.Length>f", ">", "f"],
+  ["a write glued after a,'a'", "Write-Output a,'a'>f", ">", "f"],
+  ["a write glued after ]", "Write-Output ]>f", ">", "f"],
+  ["a write glued after -a ]", "Write-Output -a ]>f", ">", "f"],
 ]
 
 const everything = [
@@ -139,7 +156,9 @@ const everything = [
   ...moreHiddenWrite.map((row) => row[1]),
   "Microsoft.PowerShell.Foo\\Get-ChildItem",
   "Microsoft.PowerShell.Utility\\Get-ChildItem",
+  "Get-Date",
   "Write-Output a>f.txt",
+  "Write-Output a, `\r\nRemove-Item b",
   "'x' > $null",
   "'x' > ${null}",
   "'x' > $global:null",
@@ -286,6 +305,18 @@ describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHo
     const result = summary("[IO.File]::Delete('x')")
     expect(result.commands).toEqual([])
     expect(result.statements[0].elements[0].command).toMatchObject({ placeholder: true })
+  })
+
+  test("a backtick before CR LF in argument position makes the next line an argument, not a command", () => {
+    const result = summary("Write-Output a, `\r\nRemove-Item b")
+    expect(result.commands.map((command) => command.name)).toEqual(["write-output"])
+    expect(result.commands[0].arguments).toHaveLength(2)
+  })
+
+  test("the call and dot-source operators are kept through the real parser", () => {
+    expect(summary("& 'Remove-Item' a").commands[0].operator).toBe("&")
+    expect(summary(". ./a.ps1").commands[0].operator).toBe(".")
+    expect(summary("Get-Date").commands[0].operator).toBeUndefined()
   })
 
   test("a backtick before CR LF continues the command and the argument is plain", () => {
@@ -446,12 +477,25 @@ describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHo
     expect(result.valid && result.summary.commands[0].arguments[0].value).toBe("h\u00e9llo \ud83d\ude00")
   })
 
-  test("a text at the size cap is parsed", async () => {
-    const text = "Write-Output " + "a".repeat(3_000)
-    expect(PowerShellParse.fits(text)).toBe(true)
-    const result = await parse(text)
-    expect(result.valid && result.summary.commands[0].arguments[0].value?.length).toBe(3_000)
-  })
+  // The widest text fits() allows, in single-byte and three-byte characters, goes through the real host: a cap set too
+  // large would fail only in use, as a transient error that spawns again on every call.
+  test.each([
+    ["ASCII", "a", 1],
+    ["CJK", "あ", 3],
+  ])("the widest %s text that fits is parsed", async (_label, char, width) => {
+    const head = "Write-Output "
+    let low = 0
+    let high = 20_000
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2)
+      if (PowerShellParse.fits(head + char.repeat(mid))) low = mid
+      else high = mid - 1
+    }
+    expect(low * width).toBeGreaterThan(3_000)
+    expect(PowerShellParse.fits(head + char.repeat(low + 1))).toBe(false)
+    const result = await parse(head + char.repeat(low))
+    expect(result.valid && result.summary.commands[0].arguments[0].value?.length).toBe(low)
+  }, 30_000)
 
   test("inspect is scanned for a clean parse and opaque otherwise", async () => {
     const run = (text: string) =>
@@ -494,6 +538,11 @@ describe("PowerShellParse normalisation", () => {
     ["Microsoft.PowerShell.Management\\Get-ChildItem", "get-childitem", "application"],
     ["Microsoft.PowerShell.Utility\\Get-ChildItem", "get-childitem", "application"],
     ["Microsoft.PowerShell.Foo\\Get-ChildItem", "get-childitem", "application"],
+    ["Foo.Bar\\Remove-Item", "remove-item", "application"],
+    [".\\Remove-Item", ".\\remove-item", "application"],
+    ["..\\Remove-Item", "..\\remove-item", "application"],
+    ["C:\\Remove-Item", "c:\\remove-item", "application"],
+    ["\\\\host\\Remove-Item", "\\\\host\\remove-item", "application"],
     ["Microsoft.PowerShell.Management\\ls", "microsoft.powershell.management\\ls", "application"],
     ["md", "new-item", "cmdlet"],
     ["mkdir", "new-item", "cmdlet"],
@@ -520,7 +569,7 @@ describe("PowerShellParse normalisation", () => {
     ["C:\\tools\\git.exe", "c:\\tools\\git.exe", "application"],
     ["./git", "./git", "application"],
     [".\\git", ".\\git", "application"],
-    ["Foo\\Get-ChildItem", "foo\\get-childitem", "application"],
+    ["Foo\\Get-ChildItem", "get-childitem", "application"],
     ["Foo/Get-ChildItem", "foo/get-childitem", "application"],
     ["Get-Chi\u1e1bdItem", "get-chi\u1e1bditem", "application"],
     ["G\u0435t-Date", "g\u0435t-date", "application"],
@@ -531,7 +580,7 @@ describe("PowerShellParse normalisation", () => {
     expect(only(written)).toMatchObject({ name, class: kind })
   })
 
-  test.each(["sc", "sort", "curl", "wget"])("the alias %s is not resolved", (alias) => {
+  test.each(["sc", "sort", "curl", "wget", "compare", "diff"])("the alias %s is not resolved", (alias) => {
     expect(only(alias)).toMatchObject({ name: alias, class: "unknown" })
   })
 
@@ -549,11 +598,14 @@ describe("PowerShellParse normalisation", () => {
     expect(only("./ls").name).not.toBe("get-childitem")
   })
 
-  test("the call operator is kept and other values of it are dropped", () => {
-    const result = PowerShellParse.interpret(0, raw({ written: "x", name: "x", operator: "&" }))
-    expect(result.valid && result.summary.commands[0].operator).toBe("&")
-    const unknown = PowerShellParse.interpret(0, raw({ written: "x", name: "x", operator: "Unknown" }))
-    expect(unknown.valid && unknown.summary.commands[0].operator).toBeUndefined()
+  test.each<[string, "&" | "." | undefined]>([
+    ["Ampersand", "&"],
+    ["Dot", "."],
+    ["Unknown", undefined],
+    ["&", undefined],
+  ])("the parser's operator %s becomes %s", (given, expected) => {
+    const result = PowerShellParse.interpret(0, raw({ written: "x", name: "x", operator: given }))
+    expect(result.valid && result.summary.commands[0].operator).toBe(expected)
   })
 })
 
@@ -902,6 +954,16 @@ describe("PowerShellParse host lookup", () => {
     expect(PowerShellParse.usableHost("/snap/bin/pwsh", { platform: "linux", exists })).toBe("/opt/microsoft/powershell/7/pwsh")
     expect(PowerShellParse.usableHost(null, { platform: "linux", real, exists })).toBe("/opt/microsoft/powershell/7/pwsh")
     expect(PowerShellParse.usableHost("C:\\pwsh.exe", { platform: "win32" })).toBe("C:\\pwsh.exe")
+  })
+
+  test("hostFrom falls back to the real binary when PATH holds a link to the snap shim", () => {
+    const real = (file: string) => (file === "/usr/bin/pwsh" ? "/snap/bin/pwsh" : file)
+    const exists = (file: string) => file === "/opt/microsoft/powershell/7/pwsh"
+    const lookup = (name: string) => (name === "pwsh" ? "/usr/bin/pwsh" : null)
+    expect(PowerShellParse.hostFrom(lookup, { platform: "linux", real, exists })).toBe("/opt/microsoft/powershell/7/pwsh")
+    expect(PowerShellParse.hostFrom(lookup, { platform: "linux", real: (file) => file, exists })).toBe("/usr/bin/pwsh")
+    expect(PowerShellParse.hostFrom((name) => (name === "powershell" ? "C:\\ps.exe" : null), { platform: "win32" })).toBe("C:\\ps.exe")
+    expect(PowerShellParse.hostFrom((name) => (name === "powershell" ? "/x/powershell" : null), { platform: "linux", exists: () => false })).toBeNull()
   })
 
   test("a snap launcher is not a usable host", () => {
