@@ -597,6 +597,52 @@ describe("Config explicit file", () => {
     }),
   )
 
+  // Class 4 spellings of the project's own file that are not its lexical path: the 8.3 short name (Windows) and a link.
+  // Each must still count as the file discovery loaded. The short folder is the CLI end-to-end row.
+  const spellings = [
+    ["the 8.3 short name of the file", "file"],
+    ["a link to the file", "link"],
+  ] as const
+  spellings.forEach(([name, kind]) =>
+    it.live(`does not load the project's own file a second time, unstamped, as ${name}`, () =>
+      Effect.gen(function* () {
+        const folders = yield* layout
+        const project = path.join(folders.repo, "orbit.json")
+        const short = (target: string) =>
+          Bun.spawnSync(
+            [
+              "powershell.exe",
+              "-NoProfile",
+              "-Command",
+              "(New-Object -ComObject Scripting.FileSystemObject).GetFile($env:SHORT_OF).ShortPath",
+            ],
+            { env: { ...process.env, SHORT_OF: target } },
+          )
+            .stdout.toString()
+            .trim()
+        // Short names exist on Windows volumes that make them; elsewhere the row has nothing to test.
+        const shortFile = process.platform === "win32" ? short(project) : project
+        if (kind === "file" && shortFile === project) return
+        const link = path.join(folders.work, "link.json")
+        if (kind === "link") {
+          const made = yield* Effect.promise(() =>
+            fs.symlink(project, link).then(
+              () => true,
+              () => false, // unelevated Windows cannot make links
+            ),
+          )
+          if (!made) return
+        }
+        const file = kind === "file" ? shortFile : kind === "link" ? link : project
+        yield* Effect.gen(function* () {
+          const entries = yield* (yield* Config.Service).entries()
+          expect(documents(entries).filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
+          expect(JSON.stringify(entries.filter((entry) => entry.scope === "flag"))).not.toContain("echo project")
+        }).pipe(Effect.provide(loader(folders, { file })))
+      }),
+    ),
+  )
+
   it.live("loads a file that no scope has reached as a flag document, and the user's own file once", () =>
     Effect.gen(function* () {
       const folders = yield* layout

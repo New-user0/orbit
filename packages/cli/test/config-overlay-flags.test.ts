@@ -430,3 +430,42 @@ test("the run's overlay folder is removed while the interface is still up", asyn
   expect(run.stdout + run.stderr).not.toContain("not a file that exists")
   expect(await leftovers()).toEqual([])
 }, 120_000)
+
+// `orb loop --settings` reaches the settings through a private server like the other commands, and it never drives a
+// session the background service is running. The stand-in service records every path it is asked: the guard asks which
+// sessions run, and nothing else may reach the service when the run has a server of its own.
+test("orb loop --settings never drives the session the service runs, and keeps to its own server", async () => {
+  const sessionID = await sessionIn(workspace)
+  const asked: string[] = []
+  const service = Bun.serve({
+    port: 0,
+    fetch: (request) => {
+      const pathname = new URL(request.url).pathname
+      asked.push(pathname)
+      return pathname === "/api/session/active"
+        ? Response.json({ data: { [sessionID]: { type: "running" } } })
+        : Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [] })
+    },
+  })
+  const registration = path.join(root, "state", "orbit", ServiceConfig.filename())
+  await fs.mkdir(path.dirname(registration), { recursive: true })
+  await Bun.write(
+    registration,
+    JSON.stringify({ id: "stand-in", version: ORBIT_VERSION, url: service.url.toString(), pid: process.pid }),
+  )
+  try {
+    const run = await orb(
+      ["loop", "--model", model.model, "--settings", "{}", "--session", sessionID, "--times", "1", "10s", "say ok"],
+      { PWD: workspace },
+      workspace,
+      120_000,
+    )
+    expect(run.code).not.toBe(0)
+    expect(run.stdout + run.stderr).toContain(`Session ${sessionID} is running in the background service`)
+    // Only the guard's own discovery and question reached the service: the run's server is private.
+    expect(asked).toEqual(["/api/info", "/api/session/active"])
+  } finally {
+    await service.stop(true)
+    await fs.rm(registration, { force: true })
+  }
+}, 240_000)

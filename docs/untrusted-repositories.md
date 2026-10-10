@@ -206,7 +206,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   start programs through `--mcp-config`. `--settings` decides file or inline by the value's shape alone, `stat`s a file
   before opening it (a device, pipe or directory is refused unopened), reads it the way core does (UTF-8, not UTF-16),
   and passes the real path in a version 2 envelope, never in `ORBIT_CONFIG`, which the private server's tools inherit.
-  A flag document is the person's own and is never trust-stamped; core loads a file once, so naming the project's own
+  A flag document is the person's own and is never trust-stamped; core loads a file once, by real path (a link, case and a Windows 8.3 short name included), so naming the project's own
   `orbit.json` does not load it a second time, unstamped, in the flag scope (`Config.load`). The values are the
   person's own, so they are read and checked in the folder the person typed them in, before `orb <directory>` changes
   folder (a clone at that directory may ship a file of the same name) and before any server starts. The overlay does not

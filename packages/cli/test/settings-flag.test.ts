@@ -66,12 +66,6 @@ describe("the shape decides, never the disk", () => {
       await fs.rm(path.join(typed, "{}"), { force: true })
     }
   })
-
-  test("a relative file name is taken from the folder the command was typed in, not the folder it opens", async () => {
-    await Bun.write(path.join(typed, "s.json"), "{}")
-    await Bun.write(path.join(opened, "s.json"), '{"shell":"DECOY"}')
-    expect((await build(["s.json"]))?.file).toBe(await fs.realpath(path.join(typed, "s.json")))
-  })
 })
 
 describe("inline JSON", () => {
@@ -165,17 +159,37 @@ describe("a file", () => {
 
   test("is checked before it is opened: missing, a folder, and a name the system treats as a device", async () => {
     await fs.mkdir(path.join(typed, "folder.json"), { recursive: true })
-    const names = [
-      "missing.json",
-      "folder.json",
-      ...(process.platform === "win32" ? ["NUL", "CON", "con.json", "COM1", "LPT1"] : []),
-    ]
+    const device = process.platform === "win32" ? ["NUL", "CON", "con.json", "COM1", "LPT1"] : []
+    const names = ["missing.json", "folder.json", ...device]
     for (const name of names) {
       const message = await refused([name])
       expect({ name, message: message.startsWith(`--settings: ${name} `) }).toEqual({ name, message: true })
       expect(message.split("\n")).toHaveLength(1)
+      // stat reports these names as missing, so only the device guard gives the message that says what they are.
+      if (device.includes(name)) expect(message).toContain("is not a regular file; pass the JSON itself instead")
     }
   })
+
+  test("a third value reaches the handler and is refused in one line", async () => {
+    const message = await refused(["a.json", "b.json", "c.json"])
+    expect(message).toBe("--settings was given 3 times; give one file or one JSON value")
+  })
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a file that cannot be read after it was found names the flag",
+    async () => {
+      const locked = path.join(typed, "locked.json")
+      await Bun.write(locked, "{}")
+      await fs.chmod(locked, 0o000)
+      try {
+        const message = await refused(["locked.json"])
+        expect(message).toStartWith("--settings: locked.json could not be read: ")
+        expect(message.split("\n")).toHaveLength(1)
+      } finally {
+        await fs.rm(locked, { force: true })
+      }
+    },
+  )
 
   test.skipIf(process.platform === "win32")(
     "a standard input or process substitution path is refused with a hint",
@@ -458,6 +472,42 @@ describe("what the private server loads", () => {
       expect(scopes(upper)).not.toContain("flag")
     }
   })
+
+  // The 8.3 short name of a folder (Windows), or undefined where the volume makes none.
+  const shortName = (target: string) => {
+    if (process.platform !== "win32") return undefined
+    const short = Bun.spawnSync(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:SHORT_OF).ShortPath",
+      ],
+      { env: { ...process.env, SHORT_OF: target } },
+    )
+      .stdout.toString()
+      .trim()
+    return short === "" || short.toLowerCase() === target.toLowerCase() ? undefined : short
+  }
+
+  test("the folder's own file, named from a folder spelled by its 8.3 short name, still loads once and withheld", async () => {
+    const short = shortName(project)
+    if (short === undefined) return
+    const list = await entries(["--settings", "./orbit.json"], { ORBIT_TRUST_PROJECT: undefined }, short)
+    expect(list.filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
+    expect(JSON.stringify(list.filter((entry) => entry.scope === "flag"))).not.toContain("project-shell")
+    expect(list.filter((entry) => entry.scope === "project")).toMatchObject([{ trusted: false }])
+  })
+
+  // `orb <folder> --settings s.json` opens the interface in <folder>, but the name is the one typed where the command
+  // was typed. The folder it opens holds a file of that name that does not parse, so reading it would be refused. The
+  // interface has no terminal here and is stopped at the deadline; a refusal would come before it starts.
+  test("a relative name is taken from where the command was typed, not from the folder the interface opens", async () => {
+    await Bun.write(path.join(project, "typed-here.json"), '{"shell":"typed-here"}')
+    await Bun.write(path.join(home, "other", "typed-here.json"), "{ not json")
+    const result = await run([path.join(home, "other"), "--settings", "typed-here.json"], base, project, 20_000)
+    expect(result.stdout + result.stderr).not.toContain("--settings")
+  }, 90_000)
 
   test("a refused value starts no server and leaves no overlay", async () => {
     const before = await fs.readdir(path.join(home, "state", "orbit", "overlays")).catch(() => [])

@@ -412,8 +412,22 @@ async function settingsFile(value: string, cwd: string) {
   if (!stat?.isFile()) throw refuse("is not a file that exists and is not JSON")
   if (stat.size > MAX_BYTES) throw refuse(`is ${stat.size} bytes; the most one run takes is ${MAX_BYTES}`)
   // A UNC path stays as typed: resolving a link would reach the network a second time.
-  const file = process.platform === "win32" && /^[\\/]{2}[^\\/]/.test(typed) ? typed : await fs.realpath(typed)
-  const bytes = new Uint8Array(await Bun.file(file).arrayBuffer())
+  // A failure after the stat (permission denied, a file another program holds open) names the flag, like the rest.
+  const unreadable = (error: unknown) => refuse(`could not be read: ${errorMessage(error)}`)
+  const file =
+    process.platform === "win32" && /^[\\/]{2}[^\\/]/.test(typed)
+      ? typed
+      : await fs.realpath(typed).catch((error) => {
+          throw unreadable(error)
+        })
+  const bytes = await Bun.file(file)
+    .arrayBuffer()
+    .then(
+      (buffer) => new Uint8Array(buffer),
+      (error) => {
+        throw unreadable(error)
+      },
+    )
   if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))
     throw refuse("is UTF-16; save it as UTF-8")
   const text = new TextDecoder().decode(bytes)

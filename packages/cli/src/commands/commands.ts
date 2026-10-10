@@ -115,13 +115,13 @@ const PrintParams = {
 }
 
 // A config file for this run only. Every command that starts or reads a server takes it, and starts a private server.
-// At most two values are read so that a repeat reaches the handler, which refuses it with one line.
+// Up to twenty values are read, like --mcp-config, so that a repeat always reaches the handler and gets its one-line refusal.
 const SettingsParams = {
   settings: Flag.string("settings").pipe(
     Flag.withDescription(
       "A config file, or the JSON itself, in the orbit.json shape, for this run only. It ranks above project and local config and below managed settings. A relative file name is taken from the folder you typed the command in. Starts a private server for the run, separate from the background service, which takes a moment to start; cannot be combined with --server",
     ),
-    Flag.atMost(2),
+    Flag.atMost(20),
   ),
 }
 

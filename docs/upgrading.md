@@ -1103,16 +1103,18 @@ inline `--settings`, then `--mcp-config` and `--agents`. The value is inline JSO
 `{` or a comment, and a file name otherwise; the disk never decides. A relative file name is taken from the folder you
 typed the command in, and a relative `{file:...}` inside a file is taken from beside that file. The value is checked before
 anything starts: a missing file, a folder, a device, a file over 4 MiB, JSON that does not parse, an empty value and a
-repeated flag are each refused with one line. A file saved as UTF-16 (Windows PowerShell 5.1 does this for `>`) is refused
-with a request to save it as UTF-8; an empty file is accepted. Fields that do not fit the config schema are judged by the
+repeated flag are each refused before anything starts; `-p` and `run` print one line, and the interface, `loop`, `mini`
+and `debug config` print the error with a stack trace. A file saved as UTF-16 (Windows PowerShell 5.1 does this for `>`) is refused
+with a request to save it as UTF-8; an empty file is accepted, and an inherited `ORBIT_CONFIG` then still applies. Fields that do not fit the config schema are judged by the
 server, which logs them and drops the document; `orb debug config --settings ...` shows whether it arrived.
 
 A run with `--settings` uses a private server, like `--mcp-config`, so it starts a little slower, runs nothing on the
 background service, and cannot be combined with `--server`. With `--continue`, `--session` or `--resume` it stops when the
-background service is running that session. The settings never trust the folder: `--trust` is still what grants that.
+background service is running that session (pinned for `orb`, `-p` and `loop`). The settings never trust the folder: `--trust` is still what grants that.
 
 A config file that discovery already loaded (the project's own `orbit.json`, a local file or your user config) now loads
-once, at its own scope and under its own trust, however it is named, including through `ORBIT_CONFIG` or a `--settings`
+once, at its own scope and under its own trust, by real path (a link, a different case and, on Windows, an 8.3 short name count as the same
+file), including through `ORBIT_CONFIG` or a `--settings`
 that names it. Before, `ORBIT_CONFIG` pointing at a project's file loaded it a second time in the flag scope without the
 trust restrictions of an untrusted folder.
 

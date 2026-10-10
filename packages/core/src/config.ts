@@ -362,9 +362,14 @@ export const layer = (options?: Options) =>
         const projectEntries = yield* loadLevel(sources, projectScopes).pipe(Effect.orDie)
         // A file loads once, at the first scope that reached it: naming a project's own file as the explicit file must
         // not load it a second time, unstamped, in the flag scope, where an untrusted folder's trust no longer applies.
-        // Compared by real path, folding case where the file system does.
+        // Compared by real path, folding case where the file system does. On Windows the runtime's own link resolution
+        // leaves an 8.3 short name (PROGRA~1) as typed, so the native real path, which expands it, is taken as well.
         const identity = (file: string) =>
-          fs.resolve(file).pipe(Effect.map((real) => (process.platform === "win32" ? real.toLowerCase() : real)))
+          fs
+            .resolve(file)
+            .pipe(
+              Effect.map((real) => (process.platform === "win32" ? FSUtil.normalizePath(real).toLowerCase() : real)),
+            )
         const claimed = yield* Effect.forEach(
           [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
             entries ? [...entries.base, ...entries.local] : [],
