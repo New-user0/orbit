@@ -14168,6 +14168,20 @@
             },
             "additionalProperties": false
           },
+          "shell_tool": {
+            "type": "object",
+            "properties": {
+              "timeout": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "max_timeout": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
           "tool_output": {
             "type": "object",
             "properties": {

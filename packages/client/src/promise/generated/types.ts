@@ -2288,6 +2288,7 @@ export type ConfigEntry =
           image?: { auto_resize?: boolean; max_width?: number; max_height?: number; max_base64_bytes?: number }
         }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
+        shell_tool?: { timeout?: number; max_timeout?: number }
         tool_output?: { max_lines?: number; max_bytes?: number }
         tool_execution?: { max_concurrency?: number }
         mcp?: {

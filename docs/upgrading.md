@@ -322,6 +322,28 @@ Bypass is refused by the clients until a durable permission mode in the server r
 
 **What to do:** nothing unless your organization manages Orbit.
 
+### A foreground shell command that outlives its timeout moves to the background
+
+A foreground shell command that is still running at its timeout is no longer killed. It keeps running as a background
+shell job, the call returns its shell ID and output file, and one notification follows when it finishes. A command made
+only of sleeps (`sleep 60`, `Start-Sleep 60`) is still stopped at its timeout. Anything else is moved, including a
+command Orbit cannot read, and a sleep followed by other work. A command that exits before the call has seen it move is returned inline, as if nothing had happened, with no notification.
+
+A foreground `timeout` of `0` no longer means "never time out": it means the default, like leaving it out. A timeout
+above the maximum is lowered to the maximum in every shell, and for a background command too, whose kill deadline is
+still only set when a timeout is given.
+
+Two new settings in `orbit.json` choose the numbers: `shell_tool.timeout` (milliseconds, default 120000) and
+`shell_tool.max_timeout` (default 600000). The maximum is never below the default, so setting only a longer `timeout`
+raises the maximum to match. The tool description shows the model both numbers. A project's `shell_tool` waits for the
+folder to be trusted, like the other budget settings; yours applies everywhere.
+
+**Affects:** scripts and agents that relied on a long command being killed at its timeout, or on `timeout: 0` to wait
+without limit, and SDK callers that read `shell_tool` from the config schema.
+
+**What to do:** Stop a command you no longer want with `TaskStop`. Raise `shell_tool.timeout` and `shell_tool.max_timeout` if a command should be waited
+for longer before it moves.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
