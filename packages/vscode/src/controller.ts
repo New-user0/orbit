@@ -6,6 +6,7 @@ import {
   type TrustStatus,
 } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
+import { PermissionView } from "@orbit/schema/permission-view"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
 import { aboveFolders, holdsBack, readStatus, trusted, view, type TrustGrant } from "./trust.js"
 import { legacyToolName } from "./tool-name.js"
@@ -508,15 +509,7 @@ export class Controller {
         return
       }
       case "permission.asked":
-        this.update({
-          type: "permission",
-          id: event.data.id,
-          sessionID: event.data.sessionID,
-          action: event.data.action,
-          resources: event.data.resources,
-          files: changes(event.data.metadata),
-          status: "pending",
-        })
+        this.update(permissionItem(event.data))
         return
       case "form.created":
         this.emit({
@@ -592,6 +585,26 @@ export class Controller {
 function loopNotice(metadata: Readonly<Record<string, unknown>> | undefined, description: string | undefined) {
   if (typeof metadata?.notice !== "string" || description === undefined) return undefined
   return plain(description) || undefined
+}
+
+/** The chat item for a permission request: every place, file, method, URL and diff it shows is the request's own. */
+export function permissionItem(request: {
+  readonly id: string
+  readonly sessionID: string
+  readonly action: string
+  readonly resources: ReadonlyArray<string>
+  readonly metadata?: Readonly<Record<string, unknown>>
+}): Extract<Item, { type: "permission" }> {
+  return {
+    type: "permission",
+    id: request.id,
+    sessionID: request.sessionID,
+    action: request.action,
+    resources: request.resources,
+    view: PermissionView.of(request),
+    files: changes(request.metadata),
+    status: "pending",
+  }
 }
 
 function changes(metadata: Readonly<Record<string, unknown>> | undefined): ReadonlyArray<FileChange> {

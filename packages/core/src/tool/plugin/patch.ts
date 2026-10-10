@@ -131,8 +131,12 @@ export const Plugin = {
               }
               const prepared: Prepared[] = []
               const updates = new Map<string, string>()
+              const places: string[] = []
               const resolveTarget = Effect.fnUntraced(function* (value: string) {
                 const target = yield* access.resolve({ path: value, kind: "file" })
+                // Every file the patch reaches so far, a move's source and destination included, before anything is asked.
+                places.push(target.place)
+                yield* context.progress({ places: [...new Set(places)] })
                 if (!target.externalDirectory) return target
                 yield* access.authorizeExternal([target], context, {
                   filepath: target.place,
@@ -217,8 +221,15 @@ export const Plugin = {
                 save: ["*"],
                 metadata: {
                   filepath: targets.map((target) => target.resource).join(", "),
+                  // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
+                  paths: [...new Set(targets.map((target) => target.place))],
                   diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
-                  files: patchFiles,
+                  files: patchFiles.map((file, index) => {
+                    const change = prepared[index]!
+                    return change.type === "update" && change.moveTarget
+                      ? { ...file, place: change.moveTarget.place, from: change.target.place }
+                      : { ...file, place: change.target.place }
+                  }),
                 },
                 sessionID: context.sessionID,
                 agent: context.agent,
@@ -340,7 +351,7 @@ function errorMessage(error: unknown) {
 function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type {
   const target = (change.type === "update" ? change.moveTarget : undefined)?.resource ?? change.target.resource
   const diff = fileDiff(
-    change.target.absolute,
+    change.target.place,
     change.before,
     after,
     change.type === "add" ? "added" : change.type === "delete" ? "deleted" : "modified",

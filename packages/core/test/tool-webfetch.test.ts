@@ -448,7 +448,7 @@ describe("WebFetchTool registration", () => {
           resources: [url],
           aliases: { [url]: ["example.com"] },
           save: ["http://example.com/*"],
-          metadata: { url, format: "text", timeout: 4 },
+          metadata: { url, format: "text", timeout: 4, method: "GET" },
         },
       ])
       expect(requests).toMatchObject([
@@ -503,8 +503,8 @@ describe("WebFetchTool registration", () => {
         resources: ["https://example.com/a"],
         aliases: { "https://example.com/a": ["example.com"] },
         save: ["https://example.com/*"],
-        // The model and the TUI keep seeing the URL exactly as requested.
-        metadata: { url, format: "text" },
+        // A client shows the URL the rules matched, not the spelling the model chose.
+        metadata: { url: "https://example.com/a", format: "text", method: "GET" },
       })
       // The request is sent as written.
       expect(requests.map((request) => request.url)).toEqual([url])
@@ -537,6 +537,13 @@ describe("WebFetchTool registration", () => {
       "http://example.com:8080/*",
     ],
     ["https://example.com/?page=2", "https://example.com/?page=2", ["example.com"], "https://example.com/*"],
+    ["https://github.com@evil.example/x", "https://evil.example/x", ["evil.example"], "https://evil.example/*"],
+    [
+      "https://аpple.com/login",
+      "https://xn--pple-43d.com/login",
+      ["xn--pple-43d.com"],
+      "https://xn--pple-43d.com/*",
+    ],
   ] as const) {
     it.effect(`normalizes ${url} to ${resource} with the aliases ${aliases.join(" and ")}`, () =>
       Effect.gen(function* () {
@@ -549,7 +556,8 @@ describe("WebFetchTool registration", () => {
           resources: [resource],
           aliases: { [resource]: aliases },
           save: [save],
-          metadata: { url },
+          // The approval shows the normalized URL: a request for https://github.com@evil.example/x names evil.example.
+          metadata: { url: resource, method: "GET" },
         })
       }),
     )

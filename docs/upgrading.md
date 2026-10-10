@@ -1256,6 +1256,31 @@ search.
 
 **What to do:** answer the question, or allow the path for Read in your own rules or the agent's.
 
+### Every approval is drawn from the request, and names the folder, the method and the arguments
+
+The terminal interface, Mini, ACP and the VS Code card used to work out parts of an approval from the model's own tool
+input. They now draw only what the server put on the permission request. The request carries the absolute place of every
+file a Read, Edit, Write, NotebookEdit, LSP or Patch asks about (a moved file's source too), the folder a shell command
+runs in and a Grep or Glob searches, the method and URL of a fetch, the diff of each file with the place it is written to,
+and the arguments of an MCP tool. So the terminal interface, Mini and VS Code now say which folder a shell, Grep or Glob
+approval is for; an MCP call made through Code Mode shows its arguments, where it used to be approved by name alone; VS
+Code and ACP take a NotebookEdit's file from the request; and an ACP approval and the updates of the call after it show the
+place the tool acts on, where an ordinary tool call showed the path as the model spelled it, a link's own path included. A
+key the model adds to its input, such as a `cwd`, a `files` array or an old field name, changes nothing that is shown.
+An approval over ACP shows the server's diffs only. The finished call's own update of an Edit still builds its diff from the `old_string`
+and `new_string` of the input, now at the place the tool reported. A file tool, a shell command, a Glob or a Grep reports the place
+it resolved before it asks or acts (a `places` entry in its progress), so over ACP the updates of a call name the real place
+even when no rule asks about it. An ACP tool call's `rawInput` is still the call's input, as before. The argument text of an MCP
+call is shown whole, where it was cut at 2000 characters: in the terminal interface the prompt scrolls as a whole and the fullscreen view shows more, and the VS Code card writes out control characters, in the changed lines of a diff too, and keeps the command of a shell approval beside its folder. A fetch approval shows the URL the rules matched and the fetch connects to, without credentials and with an ASCII host, where it showed the spelling the model chose. The terminal interface and Mini list the resource of an MCP resource call and the id of a skill. The live pending call over ACP is sent with an empty input and names no place; when a session is loaded, each replayed call carries its recorded input (so its title and `rawInput` are as before) and names the places its record holds (a completed or failed call records them) and none for a call recorded without them. A shell call's `rawInput` keeps its declared `workdir` and gets a `cwd` only when it declared none.
+
+**Affects:** people who approve calls in the terminal interface, Mini, VS Code or an ACP client, ACP clients that read the
+locations, title or content of a tool call or an approval, and plugins or SDK callers that read the metadata of a
+permission request. The request gains `metadata.paths` (and, per file, `place` and `from`) on file requests,
+`metadata.method` on a WebFetch request and `metadata.arguments` on an MCP request, and `metadata.url` of a WebFetch request is
+now the normalized URL; the metadata of a completed or failed tool call gains `places`. Nothing is removed.
+
+**What to do:** nothing.
+
 ### Shell strings written as $'...' are read the way bash reads them
 
 The command scanner decoded some `$'...'` escapes differently from bash, so a command could hide behind one. It now

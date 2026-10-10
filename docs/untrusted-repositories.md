@@ -879,16 +879,28 @@ runs" is a permission.
   the place, file, method and diff only from those values; the raw input may appear only in a view labelled as raw
   input. A recorded call keeps the keys its schema drops at decode, so the raw input can carry a `cwd`, a `files` array
   or an old field name that the runner never uses. When the request lacks a value, add it on the server in the same PR.
-  New and changed approval code follows this now; `clients-ux-61` (M3) moves the existing clients onto it (Known gaps).
-- Show a place where the tool acts. A client prefers what the request carries: the resources of a request about files,
-  `metadata.workdir` of a shell request and `metadata.path` of a Grep or Glob request, all resolved by the server. A
-  path it takes from a tool's input goes through `FSUtil.resolveFrom`, which the tools use too, so `~` is the home
-  folder and `/c/...` the Windows drive. `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP,
-  `permission-files.subprocess.test.ts` the rows over a real `orb acp`, and `packages/tui/test/util/path-format.test.ts`
+  `PermissionView.of` (`packages/schema/src/permission-view.ts`) reads a request and nothing else, and every client draws
+  what it returns.
+- Show a place where the tool acts, and take it from the request. The server puts the absolute place on every request
+  that names one: `metadata.paths` of a Read, Edit, Write, NotebookEdit, LSP and Patch request (a moved file's source
+  too), with each diff's own `place` and, for a move, its `from`; `metadata.workdir` of a shell request and
+  `metadata.path` of a Grep or Glob request; `metadata.method` and `metadata.url` of a fetch; and
+  `metadata.arguments` of an MCP call, so a call through Code Mode is approved with what it sends. A client draws only
+  those, through `PermissionView.of`, and its own `rawInput` is the one place the model's keys appear, labelled as such.
+  A path from a tool's input is used only for a call that has recorded no place and is not being replayed, through
+  `FSUtil.resolveFrom` as the tools resolve it, and from the fields the tool declares. A live pending call is sent with an
+  empty input and names no place (no `cwd` either, for a shell); a replayed call carries its recorded input and names
+  the places its record holds and none otherwise.
+  An approval for a fetch shows the URL that the rules matched and the fetch connects to (no credentials, an ASCII host),
+  not the spelling the model chose, and a request for a resource or a skill lists what it names.
+  `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP and `packages/tui/test/util/path-format.test.ts`
   the terminal interface's and Mini's.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
-  as a folder of the project (class 4).
+  as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
+  and Grep also report the place they resolved in their progress (`places`) before they ask or act, and ACP names it in
+  the updates of the call (`packages/cli/test/acp/permission-files.subprocess.test.ts`, default rules, untrusted folder,
+  with a trusted control).
 - An allow that Orbit adds by itself is not the person's: it never decides a place that a link leads out to, and only
   the person's own rules and saved approvals do (`Permission.AssertInput.escaped`, class 4).
 - A rule keyed on one field does not cover the others. Grep and Glob ask their own rules about the pattern, so the path
@@ -906,11 +918,18 @@ runs" is a permission.
 - Plan mode: a config of `* * allow` must not make `general` spawnable.
 - Completeness: the classification table compiles only if every field of `Config.Info`, `ConfigAgent.Info` and
   `ConfigCommand.Info` is classified, and `packages/core/test/config/trust.test.ts` ("covers every field") checks it.
-- What is shown is what runs: `clients-ux-61` adds a matrix test (not on `main` yet) over every tool, every path
-  spelling the runner accepts, every key a model can add to its input and every client. It must fail if any client
-  shows a place, file, method or diff other than the one the runner uses, and it includes an `orb acp` subprocess row in
-  an untrusted folder with a trusted control. After it lands, a new tool, client or path form adds its row; before then,
-  a PR adds a table-driven test of the same shape for what it changes.
+- What is shown is what runs. `packages/core/test/approval-values.test.ts` runs Edit, Write, NotebookEdit, Patch (with
+  and without a move), Read and LSP over every path spelling the runner accepts (relative, absolute, `..`, `~`, a link
+  and, on Windows, the Git Bash drive form), in an untrusted folder and a trusted one, with every key a model can add on
+  the input, and asserts that the request names the place the tool really acted on. It writes the rows to
+  `packages/core/test/fixture/approval-matrix.json` (`UPDATE_APPROVAL_MATRIX=1` rewrites it); the requests of Glob, Grep,
+  Bash, WebFetch and an MCP call are in `approval-matrix-pinned.json`, each naming the core test that pins its request.
+  Every client draws those rows and fails on any place, file, method, URL or argument other than the request's, and on
+  any decoy: `packages/tui/test/approval-matrix.test.tsx` (the terminal UI's presentation, and Mini's drawn as the real
+  component), `packages/cli/test/acp/approval-matrix.test.ts` (ACP over the wire, approval and later updates),
+  `packages/vscode/test/approval-matrix.test.ts` (the item and card VS Code draws) and, over a real `orb acp` process in
+  an untrusted folder with a trusted control, `permission-files.subprocess.test.ts`. A new tool, client or path form
+  adds its row to these.
 
 **Review questions:**
 
@@ -918,7 +937,7 @@ runs" is a permission.
 - Does it pick a model, a provider or a budget? Then it is withheld as `providers`, never inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
-- Does any client work out what it shows from the model's raw input instead of the request's resolved values? Can a
+- Does any client work out what it shows from the model's raw input instead of the request's resolved values (`PermissionView.of`)? Can a
   key the model adds, or a `~`, Git Bash or relative spelling, make it show another place than the runner uses?
 - Does an allow that Orbit adds by itself decide something a repository can steer, such as a place a link leads to?
 - Which fields of the call do its rules key on, and is a path among the fields that no rule sees?
@@ -1706,12 +1725,12 @@ fixes it or asks.
   the mark of Orbit's own folder allows in every built-in agent, Explore among them") builds the agents through the
   real `orbit.agent` plugin with an editor that does not copy and fails when Explore copies its rules. The copying
   `agentHost` of the test fixtures does not keep the mark.
-- **Approvals not yet built only from the request.** Since M2 the server puts the resolved file or folder on file,
-  shell, Grep and Glob requests, and the terminal UI, Mini and ACP prefer it. Parts of an approval still come from the
-  call's recorded input, or are missing: the terminal UI, Mini and VS Code name no folder on a shell, Grep or Glob
-  approval; an MCP call through Code Mode is approved without its arguments; VS Code and ACP read NotebookEdit's fields
-  from the input; and ACP's ordinary tool call shows a link's own path. Task `clients-ux-61` (M3) moves every client
-  onto the request and adds the "what is shown is what runs" matrix test.
+- **An ACP tool call's diff still comes from its input's text.** The approval and the updates after it name the places
+  the server put on the request or that the tool reported in its progress, and the settled record keeps those places
+  (`places` in the metadata of a completed or failed call), so a replay on `session/load` names them too and names none
+  for a call recorded without them. The live pending call is sent with an empty input and names no place; a replayed one carries the recorded input. The finished call's
+  own diff is still built from the input's `old_string` and `new_string` (not an approval), at the recorded place, and
+  not drawn at all when the call has no place.
 
 ## Review checklist
 

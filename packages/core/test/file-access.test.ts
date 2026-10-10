@@ -64,6 +64,8 @@ describe("FileAccess.authorizeRead", () => {
           action: "Read",
           resources: ["README.md"],
           save: ["*"],
+          // The absolute place, which a client shows rather than the path as the input spelled it.
+          metadata: { paths: [absolute] },
           sessionID: invocation.sessionID,
           agent: invocation.agent,
           source: { type: "tool", messageID: invocation.messageID, id: invocation.id },

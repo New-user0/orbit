@@ -227,6 +227,8 @@ export const Plugin = {
               if (refused) return yield* refused
 
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
+              // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
+              yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
               yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
 
@@ -247,7 +249,11 @@ export const Plugin = {
                 action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
-                metadata: { files: [fileDiff(target.resource, source, replaced)] },
+                // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
+                metadata: {
+                  paths: [target.place],
+                  files: [{ ...fileDiff(target.resource, source, replaced), place: target.place }],
+                },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source: permissionSource,

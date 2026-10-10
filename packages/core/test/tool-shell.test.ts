@@ -1870,8 +1870,10 @@ describe("ShellTool", () => {
                 ...call({ command: helloCommand }, "call-shell-id-progress"),
                 progress: (update) => Effect.sync(() => updates.push(update)),
               })
-              expect(updates).toHaveLength(1)
-              expect(updates[0]?.shellID).toMatch(/^sh_/)
+              expect(updates.filter((update) => typeof update.shellID === "string")).toHaveLength(1)
+              expect(updates.find((update) => typeof update.shellID === "string")?.shellID).toMatch(/^sh_/)
+              // The folder the command runs in is reported first, before anything is asked, for a client to name.
+              expect(updates[0]?.places).toEqual([FSUtil.resolve(tmp.path)])
             }),
           )
         },
