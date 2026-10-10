@@ -868,8 +868,9 @@ runs" is a permission.
   `metadata.arguments` of an MCP call, so a call through Code Mode is approved with what it sends. A client draws only
   those, through `PermissionView.of`, and its own `rawInput` is the one place the model's keys appear, labelled as such.
   A path from a tool's input is used only for a call that has recorded no place and is not being replayed, through
-  `FSUtil.resolveFrom` as the tools resolve it, and from the fields the tool declares. A pending call is sent with an
-  empty input, and a replayed call names the places its record holds and none otherwise.
+  `FSUtil.resolveFrom` as the tools resolve it, and from the fields the tool declares. A live pending call is sent with an
+  empty input and names no place (no `cwd` either, for a shell); a replayed call carries its recorded input and names
+  the places its record holds and none otherwise.
   An approval for a fetch shows the URL that the rules matched and the fetch connects to (no credentials, an ASCII host),
   not the spelling the model chose, and a request for a resource or a skill lists what it names.
   `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP and `packages/tui/test/util/path-format.test.ts`
@@ -1707,7 +1708,7 @@ fixes it or asks.
 - **An ACP tool call's diff still comes from its input's text.** The approval and the updates after it name the places
   the server put on the request or that the tool reported in its progress, and the settled record keeps those places
   (`places` in the metadata of a completed or failed call), so a replay on `session/load` names them too and names none
-  for a call recorded without them. The pending call is sent with an empty input and names no place. The finished call's
+  for a call recorded without them. The live pending call is sent with an empty input and names no place; a replayed one carries the recorded input. The finished call's
   own diff is still built from the input's `old_string` and `new_string` (not an approval), at the recorded place, and
   not drawn at all when the call has no place.
 

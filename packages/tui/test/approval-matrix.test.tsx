@@ -69,13 +69,16 @@ const text = (value: unknown) => JSON.stringify(value)
 // The input's own spelling of the file, when it names another place than the request does (a link, a spelling that
 // leads elsewhere): read lexically against the project, as a person reading the prompt would. Whatever a client draws
 // outside the raw input must not contain it, so a title built from the input rather than the request fails here.
-const slashed = (value: string) => value.replaceAll("\\", "/").toLowerCase()
+// JSON doubles a backslash, so both spellings are folded to one slash.
+const slashed = (value: string) => value.replaceAll("\\\\", "/").replaceAll("\\", "/").toLowerCase()
+const lexicalOf = (raw: string) =>
+  slashed(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(world.project, raw))
 const misleading = (row: Row) => {
   const raw = [row.input.file_path, row.input.notebook_path, row.input.path].find(
     (item): item is string => typeof item === "string" && !item.includes("DECOY"),
   )
   if (raw === undefined) return undefined
-  const lexical = slashed(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(world.project, raw))
+  const lexical = lexicalOf(raw)
   return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
 }
 const request = (row: Row): MiniPermissionRequest => ({
@@ -107,7 +110,10 @@ for (const row of rows)
     const shown = text(present(row))
     expect(shown).not.toContain("DECOY")
     const own = misleading(row)
-    if (own !== undefined) expect(shown).not.toContain(own)
+    if (own !== undefined) {
+      expect(slashed(shown)).not.toContain(slashed(own))
+      expect(slashed(shown)).not.toContain(lexicalOf(own))
+    }
     for (const place of row.truth.places ?? []) expect(shown).toContain(place)
     if (row.truth.folder) expect(shown).toContain(row.truth.folder)
     if (row.truth.url) expect(shown).toContain(row.truth.url)
@@ -128,7 +134,10 @@ for (const row of rows)
       const shown = text(permissionInfo(request(row), undefined, mono))
       expect(shown).not.toContain("DECOY")
       const own = misleading(row)
-      if (own !== undefined) expect(shown).not.toContain(own)
+      if (own !== undefined) {
+      expect(slashed(shown)).not.toContain(slashed(own))
+      expect(slashed(shown)).not.toContain(lexicalOf(own))
+    }
       for (const place of row.truth.places ?? []) expect(shown).toContain(toolPath(place, { home: true }))
       if (row.truth.folder) expect(shown).toContain(toolPath(row.truth.folder, { home: true }))
       if (row.truth.url) expect(shown).toContain(row.truth.url)

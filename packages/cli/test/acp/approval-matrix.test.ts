@@ -55,13 +55,16 @@ const world = {
 }
 // The input's own spelling of the file, when it names another place than the request does (a link, a spelling that
 // leads elsewhere): read lexically against the project. Nothing drawn outside the raw input may contain it.
-const slashed = (value: string) => value.replaceAll("\\", "/").toLowerCase()
+// JSON doubles a backslash, so both spellings are folded to one slash.
+const slashed = (value: string) => value.replaceAll("\\\\", "/").replaceAll("\\", "/").toLowerCase()
+const lexicalOf = (raw: string) =>
+  slashed(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(world.project, raw))
 const misleading = (row: Row) => {
   const raw = [row.input.file_path, row.input.notebook_path, row.input.path].find(
     (item): item is string => typeof item === "string" && !item.includes("DECOY"),
   )
   if (raw === undefined) return undefined
-  const lexical = slashed(raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : path.resolve(world.project, raw))
+  const lexical = lexicalOf(raw)
   return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
 }
 const same = (items: ReadonlyArray<{ path: string }> | null | undefined) =>
@@ -98,7 +101,10 @@ describe("acp approvals show what the request carries", () => {
       const drawn = JSON.stringify({ ...call, rawInput: undefined })
       expect(drawn).not.toContain("DECOY")
       const own = misleading(row)
-      if (own !== undefined) expect(drawn).not.toContain(own)
+      if (own !== undefined) {
+        expect(slashed(drawn)).not.toContain(slashed(own))
+        expect(slashed(drawn)).not.toContain(lexicalOf(own))
+      }
 
       const places = row.truth.places ?? (row.truth.folder ? [row.truth.folder] : [])
       if (places.length > 0 || row.truth.folder)

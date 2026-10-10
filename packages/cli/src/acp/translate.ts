@@ -496,14 +496,20 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
       }
       continue
     }
-    // As live, the pending call carries no input and names no place. The updates name the places the tool recorded
-    // when it resolved them, and none when it recorded none: the input's spelling of a path can be a link that leads
-    // somewhere else.
+    // The pending call carries the recorded input, so a loaded session still shows which command ran or which URL was
+    // fetched, and the recorded places, so no place comes from the input's spelling of a path (it can be a link that
+    // leads somewhere else). A call recorded without places names none.
+    const places = part.state.status === "streaming" ? [] : recordedPlaces(part.state.metadata)
     yield {
       sessionUpdate: "tool_call",
-      ...pendingToolCall({ toolCallId: part.id, toolName: part.name, state: { input: {} }, cwd }),
+      ...pendingToolCall({
+        toolCallId: part.id,
+        toolName: part.name,
+        state: { input: part.state.status === "streaming" ? {} : part.state.input },
+        cwd,
+        places,
+      }),
     }
-    const places = part.state.status === "streaming" ? [] : recordedPlaces(part.state.metadata)
     switch (part.state.status) {
       case "completed":
         yield {

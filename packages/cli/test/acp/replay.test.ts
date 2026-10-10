@@ -59,6 +59,10 @@ describe("acp session replay over the wire", () => {
       ],
     })
     expect(updates[11]?.update).toMatchObject({ toolCallId: "call_streaming", status: "pending", rawInput: {} })
+    // Every replayed pending call shows the recorded input and, for a shell, the command as its title.
+    expect(updates[5]?.update).toMatchObject({ title: "printf done", rawInput: { command: "printf done" } })
+    expect(updates[7]?.update).toMatchObject({ title: "pwd", rawInput: { command: "pwd" } })
+    expect(updates[9]?.update).toMatchObject({ title: "read", rawInput: { path: "/workspace/missing.ts" } })
   })
 
   test("continues replay after one message fails to translate", async () => {
@@ -152,10 +156,85 @@ describe("acp session replay names the recorded places", () => {
           expect(shown).not.toContain(link)
           expect(shown.every((item) => item === real)).toBe(true)
           if (!recorded) expect(shown).toEqual([])
-          // The pending call is sent as it is live: no input and no place.
-          expect(updates[0]).toMatchObject({ status: "pending", rawInput: {} })
-          expect(updates[0]?.locations ?? []).toEqual([])
+          // The pending call carries the recorded input and names only the recorded places (checked in `shown`).
+          expect(updates[0]).toMatchObject({ status: "pending", title: tool, rawInput: input })
         })
+})
+
+// A shell call's replayed rows show the command and the recorded input, and never a `cwd` where the command did not run.
+// `cfg` is a link to a folder outside the project: the command ran in `real`, which the record holds or does not.
+describe("acp session replay of a shell call through a link", () => {
+  const real = path.resolve("/outside/config")
+  const session = path.resolve("/workspace")
+  const states = {
+    completed: { status: "completed", content: [{ type: "text", text: "ok" }] },
+    running: { status: "running" },
+    error: { status: "error", error: { type: "tool.error", message: "no" } },
+  }
+  for (const tool of ["bash", "powershell"])
+    for (const [name, state] of Object.entries(states))
+      for (const recorded of [true, false])
+        test(`${tool} ${name} with a workdir, ${recorded ? "recorded" : "not recorded"}`, async () => {
+          await using acp = await startWire()
+          acp.server.sessions.set("ses_shell", makeSession("ses_shell"))
+          acp.server.messages.set("ses_shell", [
+            {
+              ...assistantMessage("msg_shell"),
+              content: [
+                {
+                  type: "tool",
+                  id: "call_shell",
+                  name: tool,
+                  time: { created: 1, completed: 2 },
+                  state: {
+                    ...state,
+                    input: { command: "echo ran", workdir: "cfg", cwd: "/elsewhere" },
+                    metadata: recorded ? { places: [real] } : {},
+                  },
+                },
+              ],
+            },
+          ] as unknown as SessionMessageInfo[])
+          await acp.initialize()
+          await acp.request("session/load", { cwd: "/workspace", sessionId: "ses_shell", mcpServers: [] })
+
+          const updates = acp.updates.flatMap((item) =>
+            item.update.sessionUpdate === "tool_call" || item.update.sessionUpdate === "tool_call_update"
+              ? [item.update]
+              : [],
+          )
+          expect(updates.length).toBe(2)
+          expect(updates[0]).toMatchObject({ status: "pending", title: "echo ran" })
+          for (const update of updates) {
+            if ("rawInput" in update) expect(update.rawInput).toEqual({ command: "echo ran", workdir: "cfg" })
+            const shown = (update.locations ?? []).map((item) => item.path)
+            expect(shown).toEqual(recorded ? [real] : [])
+            expect(shown).not.toContain(session)
+          }
+        })
+
+  test("a shell call without a workdir shows the command and the session folder", async () => {
+    await using acp = await startWire()
+    acp.server.sessions.set("ses_shell", makeSession("ses_shell"))
+    acp.server.messages.set("ses_shell", [
+      {
+        ...assistantMessage("msg_shell"),
+        content: [
+          {
+            type: "tool",
+            id: "call_shell",
+            name: "bash",
+            time: { created: 1, completed: 2 },
+            state: { status: "running", input: { command: "echo ran" }, metadata: { places: [session] } },
+          },
+        ],
+      },
+    ] as unknown as SessionMessageInfo[])
+    await acp.initialize()
+    await acp.request("session/load", { cwd: "/workspace", sessionId: "ses_shell", mcpServers: [] })
+    const first = acp.updates.find((item) => item.update.sessionUpdate === "tool_call")?.update
+    expect(first).toMatchObject({ title: "echo ran", rawInput: { command: "echo ran" } })
+  })
 })
 
 function replayToolMessage(id: string, state: Record<string, unknown>) {

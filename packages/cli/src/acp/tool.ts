@@ -116,7 +116,9 @@ export function toLocations(
       // The shell tools declare `workdir`; a `cwd` key the model adds to its input does not move the command, and an
       // empty one runs it in the session's folder.
       const workdir = stringValue(input.workdir)
-      return workdir ? locationFrom(cwd, workdir) : [{ path: cwd }]
+      if (workdir) return locationFrom(cwd, workdir)
+      // The pending call has no input yet, so it names no place.
+      return Object.keys(input).length === 0 ? [] : [{ path: cwd }]
     }
     case "read":
     case "edit":
@@ -280,7 +282,7 @@ function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {
   if (!isShell(toolName)) return input
   // The command runs in its workdir or in the session's folder, never in a `cwd` the model added to its input.
   const declared = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "cwd"))
-  return input.workdir ? declared : { ...declared, cwd }
+  return input.workdir || Object.keys(declared).length === 0 ? declared : { ...declared, cwd }
 }
 
 function isShell(toolName: string) {
