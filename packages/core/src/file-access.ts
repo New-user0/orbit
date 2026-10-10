@@ -7,6 +7,7 @@ import { Global } from "@orbit/util/global"
 import { Array, Context, Effect, Layer, Schema } from "effect"
 import { lstat } from "fs/promises"
 import path from "path"
+import { DevicePath } from "./device-path.js"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
@@ -14,6 +15,15 @@ import { ProjectTrust } from "./project-trust.js"
 import { AbsolutePath } from "./schema.js"
 import type { SessionErrors } from "./session/error.js"
 import { Tool } from "./tool.js"
+
+/** A read named a device or stream that never ends, such as `/dev/zero` or `NUL`. Nothing is asked or opened. */
+export class DeviceError extends Schema.TaggedError<DeviceError>()("FileAccess.DeviceError", {
+  resource: Schema.String,
+}) {
+  override get message() {
+    return `${this.resource} is a device or stream, not a file, and reading it would never finish. Name a regular file instead.`
+  }
+}
 
 export const Kind = Schema.Literals(["file", "directory"])
 export type Kind = typeof Kind.Type
@@ -81,7 +91,7 @@ export interface Interface {
     file: string,
     context: Invocation,
     options?: ReadOptions,
-  ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | Error | SessionErrors.NotFoundError>
+  ) => Effect.Effect<Target, FSUtil.Error | ToolFailure | DeviceError | Error | SessionErrors.NotFoundError>
   /**
    * The targets among absolute `files` that are in the project, by name or by another spelling of its folder, and that a
    * link in it leads out of while it is not trusted, each with its real place and an `escaped` external directory. Nothing else about the files is refused
@@ -296,6 +306,9 @@ const layer = Layer.effect(
       options?: ReadOptions,
     ) {
       const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
+      // Before anything is asked or opened: a device is no place for a question, and a stat of one can block.
+      if (DevicePath.blocked(target.absolute) || DevicePath.blocked(target.place))
+        return yield* new DeviceError({ resource: file })
       const sibling =
         options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
 

@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect } from "bun:test"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
+import { pathToFileURL } from "url"
 import { Effect, Exit, Layer, Result } from "effect"
 import { Config } from "@orbit/core/config"
 import { FileLedger } from "@orbit/core/file-ledger"
@@ -13,6 +16,7 @@ import { Permission } from "@orbit/core/permission"
 import { Session } from "@orbit/core/session"
 import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Global } from "@orbit/util/global"
+import { Token } from "@orbit/core/util/token"
 import { FileAccess } from "@orbit/core/file-access"
 import { location } from "./fixture/location"
 import { Tool } from "@orbit/core/tool"
@@ -237,6 +241,91 @@ describe("ReadTool", () => {
       ])
     }),
   )
+  it.effect("refuses a device with its own message, asks nothing and opens nothing", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const device = process.platform === "win32" ? "NUL" : "/dev/stdin"
+
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-read-device", name: "Read", input: { file_path: device } },
+      })
+
+      expect(result).toMatchObject({
+        status: "error",
+        error: { message: expect.stringContaining("is a device or stream, not a file") },
+      })
+      expect(assertions).toEqual([])
+      expect(readCalls).toEqual([])
+    }),
+  )
+
+  it.effect("pages a notebook with huge outputs within the budget", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const directory = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "orbit-notebook-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })))
+      const file = path.join(directory, "big.ipynb")
+      const outputLines = Array.from({ length: 1_500 }, (_, index) => `${index} ${"o".repeat(80)}`)
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          file,
+          JSON.stringify({
+            cells: [
+              {
+                cell_type: "code",
+                id: "big",
+                metadata: {},
+                source: ["print('x')"],
+                outputs: [
+                  { output_type: "stream", name: "stdout", text: outputLines.map((line) => `${line}\n`) },
+                  { output_type: "stream", name: "stdout", text: ["z".repeat(500_000)] },
+                ],
+              },
+            ],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          }),
+        ),
+      )
+      readResult = {
+        type: "file",
+        uri: pathToFileURL(file).href,
+        name: "big.ipynb",
+        content: "{}",
+        encoding: "utf8",
+        mime: "application/json",
+      }
+
+      const first = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-big-notebook", name: "Read", input: { file_path: file } },
+      })
+      if (first.status !== "completed") throw new Error("expected the first page")
+      const text = first.content?.[0]?.type === "text" ? first.content?.[0].text : ""
+      expect(first.output).toMatchObject({ type: "text-page", truncated: true })
+      // The page ends before the output passes the budget, and says where to go on.
+      expect(Token.estimate(text)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS + 100)
+      const next = first.output.type === "text-page" ? first.output.next : undefined
+      expect(next).toBeGreaterThan(1)
+      expect(text).toContain(`Continue reading with offset: ${next}`)
+
+      // The giant line is clamped, so a page that holds it stays within the budget too.
+      const last = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-big-notebook-2", name: "Read", input: { file_path: file, offset: next } },
+      })
+      if (last.status !== "completed") throw new Error("expected the next page")
+      expect(Token.estimate(last.content?.[0]?.type === "text" ? last.content?.[0].text : "")).toBeLessThanOrEqual(
+        ReadToolFileSystem.MAX_READ_TOKENS + 100,
+      )
+    }).pipe(Effect.scoped),
+  )
+
   it.effect("asks for external_directory approval before reading an external absolute path", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
@@ -968,7 +1057,7 @@ describe("ReadTool", () => {
       expect(result.content).toEqual([
         {
           type: "text",
-          text: "Read file large.txt, lines 2-2\n2: hello\n[Output truncated. Continue reading with offset: 3]",
+          text: "Read file large.txt, lines 2-2\n2: hello\n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 3, or use Grep to find specific content.]",
         },
       ])
       expect(readCalls).toEqual([

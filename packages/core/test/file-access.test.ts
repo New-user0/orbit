@@ -74,6 +74,35 @@ describe("FileAccess.authorizeRead", () => {
     }).pipe(provide(requests))
   })
 
+  // A device is refused from its resolved path, before the external-directory question and the read rules.
+  const devices =
+    process.platform === "win32"
+      ? ["NUL", "nul.txt", "COM1", "src/con.txt", "AUX"]
+      : ["/dev/zero", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "/dev/./urandom", "/dev/pts/0"]
+  for (const device of devices)
+    it.live(`refuses the device ${device} without asking`, () => {
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const access = yield* FileAccess.Service
+        const error = yield* access.authorizeRead(device, invocation).pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(FileAccess.DeviceError)
+        expect(error.message).toContain("device or stream")
+        expect(requests).toEqual([])
+      }).pipe(provide(requests))
+    })
+
+  it.live("still authorizes a file whose name only starts like a device", () => {
+    const requests: Permission.AssertInput[] = []
+    return Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      yield* access.authorizeRead("console.log", invocation)
+      yield* access.authorizeRead("con-notes.md", invocation)
+
+      expect(requests.map((request) => request.action)).toEqual(["Read", "Read"])
+    }).pipe(provide(requests))
+  })
+
   it.live("authorizes an external directory before the file's read rules", () => {
     const requests: Permission.AssertInput[] = []
     return Effect.gen(function* () {

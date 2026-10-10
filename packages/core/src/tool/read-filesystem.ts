@@ -10,14 +10,20 @@ import type { Files } from "../environment/index.js"
 import { FileSystem } from "../filesystem.js"
 import { Mime } from "../mime.js"
 import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath } from "../schema.js"
+import { Token } from "../util/token.js"
 
 export const MAX_READ_LINES = 2_000
-export const MAX_READ_BYTES = 50 * 1024
+/** What one read may render for the model, estimated as `Token.estimate` does, line numbers included. */
+export const MAX_READ_TOKENS = 25_000
 export const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024
 const FIRST_CHUNK = 256 * 1024
 const MAX_LINE_LENGTH = 2_000
 const TREE_BASE = 6
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
+
+/** The characters a line takes in the model text: its `N: ` prefix, the line and the newline after it. */
+export const renderedLength = (line: number, text: string) => String(line).length + 3 + text.length
+export const withinBudget = (characters: number) => Token.estimateLength(characters) <= MAX_READ_TOKENS
 export const MEDIA_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"])
 
 export class BinaryFileError extends Schema.TaggedError<BinaryFileError>()("ReadTool.BinaryFileError", {
@@ -148,14 +154,19 @@ export const read = Effect.fn("ReadTool.read")(function* (
     }
   }
 
-  const paged = first.info.size > MAX_READ_BYTES || page.offset !== undefined || page.limit !== undefined
-  if (!paged) {
+  // The whole file comes back only when the first chunk holds it, it is no longer than a page, and its rendered text
+  // fits the budget; anything else pages from the first line, with the next offset to continue from.
+  const whole =
+    page.offset === undefined && page.limit === undefined && first.bytes.length >= first.info.size
+      ? wholeFile(first.bytes)
+      : undefined
+  if (whole !== undefined) {
     if (first.bytes.includes(0)) return yield* new BinaryFileError({ resource })
     return {
       type: "file" as const,
       uri: pathToFileURL(input).href,
       name: path.basename(input),
-      content: new TextDecoder().decode(first.bytes).split("\n").map(clampLine).join("\n"),
+      content: whole,
       encoding: "utf8" as const,
       mime: mimeType(input),
     }
@@ -193,7 +204,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
           return [leaf.bytes.subarray(Math.max(0, start - leafStart))]
         }),
       )
-      const result = textPage(selected, eof, { limit })
+      const result = textPage(selected, eof, { limit }, offset)
       if (result !== undefined) {
         const translated = {
           ...result,
@@ -222,6 +233,16 @@ export const read = Effect.fn("ReadTool.read")(function* (
     lines += leaf.summary.lines
   }
 })
+
+// The clamped text of a file that fits one read, or undefined when it needs paging.
+const wholeFile = (bytes: Uint8Array) => {
+  const lines = new TextDecoder().decode(bytes).split("\n")
+  const count = lines.at(-1) === "" ? lines.length - 1 : lines.length
+  if (count > MAX_READ_LINES) return
+  const clamped = lines.map(clampLine)
+  const characters = clamped.slice(0, count).reduce((total, line, index) => total + renderedLength(index + 1, line), 0)
+  return withinBudget(characters) ? clamped.join("\n") : undefined
+}
 
 const readFile = (
   files: Files,
@@ -288,7 +309,8 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
   })
 }
 
-const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
+// `origin` is the file's number for the line that `offset` selects, when `bytes` start later than the file does.
+const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput, origin = page.offset || 1) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
   const decoded = new TextDecoder().decode(bytes)
@@ -301,13 +323,14 @@ const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
   let next: number | undefined
   for (const [index, value] of available.slice(offset - 1).entries()) {
     const line = offset + index
-    if (entries.length >= limit || size >= MAX_READ_BYTES) {
+    if (entries.length >= limit) {
       next = line
       break
     }
     const text = clampLine(value)
-    const lineSize = Buffer.byteLength(text, "utf-8") + (entries.length > 0 ? 1 : 0)
-    if (size + lineSize > MAX_READ_BYTES) {
+    const lineSize = renderedLength(origin + index, text)
+    // A page always holds a line, so one long line never stops a read from moving on.
+    if (entries.length > 0 && !withinBudget(size + lineSize)) {
       next = line
       break
     }
@@ -323,7 +346,7 @@ const textPage = (bytes: Uint8Array, eof: boolean, page: PageInput) => {
   return { entries, offset, next, consumed }
 }
 
-const clampLine = (line: string) =>
+export const clampLine = (line: string) =>
   line.length > MAX_LINE_LENGTH ? line.slice(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : line
 
 // A trailing newline ends the last line instead of starting an empty one.

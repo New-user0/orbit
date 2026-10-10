@@ -1931,3 +1931,15 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 **What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
+
+## Files and web tools
+
+Changes to the file tools and the web tools.
+
+### Read refuses devices and budgets its output by tokens
+
+The Read tool now refuses a device or stream path before it asks or opens anything: `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/tty*`, `/dev/pts/*`, `/dev/fd/*` and `/proc/<pid>/fd/*` on Linux and macOS, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9`, `CONIN$`, `CONOUT$` (with or without an extension) and the `\.\` and `\?\` forms on Windows. Files such as `console.log` still read. A read also returns at most about 25,000 tokens of rendered text (line numbers included) instead of 50 KB: a file of ordinary lines up to that size comes back whole where it was paged before, a file of more than 2,000 lines pages whatever its size, and a truncated read ends with the offset to continue from and a hint to use Grep. Notebooks page by the same budget.
+
+**Affects:** people and scripts that read very large files or device paths through the Read tool.
+
+**What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
