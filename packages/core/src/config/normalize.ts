@@ -67,6 +67,14 @@ export function normalize(input: unknown): Result {
   const diagnostics: Diagnostic[] = []
   const encoded: Record<string, unknown> = {}
   unsupportedTopLevel.forEach((key) => unsupportedIfPresent(input, key, [key], diagnostics))
+  // Restrictions are read from managed settings files, which split `managed` off before they get here. In any other
+  // document the key never takes effect.
+  if (own(input, "managed"))
+    diagnostics.push({
+      kind: "unsupported",
+      path: ["managed"],
+      message: "ignored managed restrictions outside the managed settings files",
+    })
 
   const legacySnapshots = own(input, "snapshot")
     ? decodeEncoded(Schema.Boolean, input.snapshot, ["snapshot"], diagnostics)

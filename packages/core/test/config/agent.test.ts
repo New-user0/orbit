@@ -157,9 +157,9 @@ permissions:
         resource: "C:\\Users\\test\\p\\**",
         effect: "allow",
       })
-      expect(
-        Permission.evaluate("external_directory", "C:\\Users\\test\\p\\orbit\\src\\*", permissions).effect,
-      ).toBe("allow")
+      expect(Permission.evaluate("external_directory", "C:\\Users\\test\\p\\orbit\\src\\*", permissions).effect).toBe(
+        "allow",
+      )
       expect(Permission.evaluate("external_directory", "C:\\Users\\test\\cache\\files\\*", permissions).effect).toBe(
         "deny",
       )
@@ -253,6 +253,50 @@ permissions:
       expect(Permission.evaluate("read", ".env", build.permissions).effect).toBe("deny")
       expect(Permission.evaluate("external_directory", orbitData, build.permissions).effect).toBe("deny")
       expect(Permission.evaluate("external_directory", "/outside/*", build.permissions).effect).toBe("allow")
+    }),
+  )
+
+  it.effect("leaves the permission rules of a managed document out of every agent", () =>
+    Effect.gen(function* () {
+      const agents = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agents) }))
+
+      const entries = [
+        new Document({
+          type: "document",
+          scope: "user",
+          info: decode({ permissions: [{ action: "read", resource: "*", effect: "allow" }] }),
+        }),
+        new Document({
+          type: "document",
+          scope: "managed",
+          info: decode({
+            permissions: [{ action: "edit", resource: "*", effect: "deny" }],
+            agents: {
+              build: { permissions: [{ action: "shell", resource: "rm *", effect: "deny" }] },
+              fresh: {
+                description: "Managed agent",
+                permissions: [{ action: "webfetch", resource: "*", effect: "deny" }],
+              },
+            },
+          }),
+        }),
+      ]
+      yield* ConfigAgentPlugin.Plugin.effect(host({ agent: agentHost(agents) })).pipe(
+        Effect.provide(Config.testLayer(entries)),
+      )
+
+      const build = yield* agents.get(Agent.defaultID)
+      const fresh = yield* agents.get(Agent.ID.make("fresh"))
+      if (!build || !fresh) throw new Error("expected the configured agents")
+      expect(build.permissions).toContainEqual({ action: "read", resource: "*", effect: "allow" })
+      // The managed document still defines the agent, but its rules are enforced from ManagedPolicy, not copied in.
+      expect(fresh.description).toBe("Managed agent")
+      for (const agent of [build, fresh]) {
+        expect(agent.permissions).not.toContainEqual({ action: "edit", resource: "*", effect: "deny" })
+        expect(agent.permissions).not.toContainEqual({ action: "shell", resource: "rm *", effect: "deny" })
+        expect(agent.permissions).not.toContainEqual({ action: "webfetch", resource: "*", effect: "deny" })
+      }
     }),
   )
 
