@@ -20,3 +20,7 @@ test("names the tools the way the model is offered them, and not by their old na
   // The guidance is looked up by the current name, so a list of old names asks for none of it.
   expect(SessionSystemPrompt.make(["edit", "read"])).not.toContain("Use Edit")
 })
+
+test("renders no web search guidance, because the tool can be removed after the prompt is rendered", () => {
+  expect(SessionSystemPrompt.make(["WebSearch", "Read"]).toLowerCase()).not.toContain("websearch")
+})

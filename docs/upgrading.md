@@ -1931,3 +1931,11 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 **What to do:** Update a script that read `cost` as a number to read `cost.usd`, one that read `model.providerID` to
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
+
+### Web search results end with their sources
+
+The `WebSearch` tool's description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page also end with a one-line reminder of that rule; an empty result does not. Domain filtering and the query sent to providers are unchanged.
+
+**Affects:** people who read `WebSearch` tool output in logs, and plugin or SDK code that compares it exactly.
+
+**What to do:** nothing, unless you parse the result text: expect the reminder line after the last result.

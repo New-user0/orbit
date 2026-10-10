@@ -123,7 +123,9 @@ describe("WebSearchTool registration", () => {
         }),
       ).toMatchObject({
         status: "completed",
-        content: [{ type: "text", text: "## [Search results](https://example.com)\n\nsearch results" }],
+        content: [{ type: "text", text: `## [Search results](https://example.com)\n\nsearch results
+
+${WebSearchTool.SOURCES_REMINDER}` }],
       })
       expect(fixture.assertions).toMatchObject([
         {
@@ -181,7 +183,9 @@ describe("WebSearchTool registration", () => {
         content: [
           {
             type: "text",
-            text: "## [Effect](https://effect.website)\nPublished: 2026-07-25T00:00:00.000Z\n\nparallel results",
+            text: `## [Effect](https://effect.website)\nPublished: 2026-07-25T00:00:00.000Z\n\nparallel results
+
+${WebSearchTool.SOURCES_REMINDER}`,
           },
         ],
         metadata: { provider: "parallel" },
@@ -215,6 +219,26 @@ describe("WebSearchTool registration", () => {
     }),
   )
 
+  it.effect("requires a Sources section in the description and ends results with a reminder", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* fixture.websearch.select(WebSearch.ID.make("exa"))
+      const definition = (yield* toolDefinitions(fixture.registry)).find((tool) => tool.name === "WebSearch")
+      expect(definition?.description).toContain('"Sources:" section')
+      expect(definition?.description).toContain("allowedDomains")
+      expect(definition?.description).toContain("blockedDomains")
+      expect(definition?.description).toContain(String(new Date().getFullYear()))
+      const result = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-sources", name: "WebSearch", input: { query: "effect" } },
+      })
+      expect(result.content).toMatchObject([{ type: "text" }])
+      const text = (result.content?.[0] as { text: string }).text
+      expect(text.endsWith(WebSearchTool.SOURCES_REMINDER)).toBe(true)
+    }),
+  )
+
   it.effect("uses the concise no-results fallback", () =>
     Effect.gen(function* () {
       const fixture = yield* setup
@@ -232,6 +256,7 @@ describe("WebSearchTool registration", () => {
         status: "completed",
         content: [{ type: "text", text: WebSearchTool.NO_RESULTS }],
       })
+      expect(WebSearchTool.NO_RESULTS).not.toContain("Sources")
     }),
   )
 
