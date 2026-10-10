@@ -1198,7 +1198,7 @@ approval names the place the tool acts on. An 8.3 short name of the project's fo
 is in the project's folder. A repository link whose target is a share, in any of these spellings (a local
 `\\localhost\C$\…` included), is refused the same way, with no question, for a tool's path and for the plain words of a
 shell command, and is never opened; a part with `~` (an 8.3 short name) below such a link is refused too, as its long
-name could only be found by opening the share. The words a shell command names are followed through a repository link in these
+name could only be found by opening the share. `file-access-spelling.test.ts` pins that only `readLink` touches such a link or a path below it. The words a shell command names are followed through a repository link in these
 spellings as well, and a drive made from the project's folder (`subst`) is the project. The lock that serializes edits of one file now takes the long name without the periods and spaces
 Windows drops, so `new.txt.` and `new.txt` wait for each other.
 

@@ -583,8 +583,9 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
   that no disk access happens: record the paths the file system is called with (`packages/core/test/fixture/recorded-fs.ts`)
   and assert that none names the share, rather than a time limit, which a fast failing host meets either way. A link's own path is a drive path, so a listing
   of the share it leads to shows under the link's path: the recorder also keeps each call as `method path` (`calls`), and
-  the share-link rows assert that no `readDirectoryEntries` names the link (the 8.3 short-name lookup), which fails when
-  `refuseShare` is removed.
+  the share-link rows and the deny row of `file-access-spelling.test.ts` assert that every recorded call naming the link
+  or a path below it is a `readLink`, because any other call follows the link and opens the share. Two mutations fail
+  them: a `fs.stat(absolute)` before `trust.escapes(absolute)`, and `refuseShare` replaced by `Effect.void`.
 - Untrusted: the file is not read and `config file skipped` is logged once. After a grant the file appears without a
   restart. The trusted control follows links as before.
 - For a tool, point the link at a folder that Orbit allows by itself, such as the global config folder, so that only the
@@ -1649,7 +1650,8 @@ fixes it or asks.
   records every path it is called with, and asserts that none starts with `\\` or `//` in the rows for a share given
   directly (nine spellings, trusted and not, `resolve` and `escaped`), for a link to a share in six spellings
   (every kind of path a tool resolves, `~` parts, a shell word), and for the person's deny row beside the junction
-  control; the link rows need Developer Mode and fail instead of passing without it. The `orb acp` table in
+  control (the link rows and the deny row also assert that only `readLink` names the link or a path below it, which the
+  recorded drive path would otherwise hide from the share check); the link rows need Developer Mode and fail instead of passing without it. The `orb acp` table in
   `permission-files.subprocess.test.ts` crosses every row of `linkRows` with the six link targets untrusted, and the
   first with the person's deny and with a trusted control. What remains: a share named in a shell command's text
   directly, which is asked about as the shell asks, or in a path that a loader other than the file tools reads, such

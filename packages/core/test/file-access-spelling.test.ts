@@ -250,14 +250,16 @@ describe("FileAccess for another spelling of the project's folder", () => {
             const word = yield* access.escaped([path.join(project, `shared${index}`, "a.txt")]).pipe(Effect.flip)
             expect([link.name, word]).toMatchObject([link.name, { code: "file.spelling" }])
             expect([link.name, sharesTouched(recorded.touched)]).toEqual([link.name, []])
-            // The short-name rows must not list the link's folder, which is the connection to the share.
+            // A call on the link's own path follows the link and opens the share, which `sharesTouched` cannot see
+            // (its path is a drive path), so only `readLink` may name the link or a path below it.
+            const at = path.join(project, `shared${index}`).toLowerCase()
             expect([
               link.name,
-              recorded.calls.filter((call) =>
-                call
-                  .toLowerCase()
-                  .startsWith(`readdirectoryentries ${path.join(project, `shared${index}`).toLowerCase()}`),
-              ),
+              recorded.calls.filter((call) => {
+                const [method, ...rest] = call.split(" ")
+                const file = rest.join(" ").toLowerCase()
+                return method !== "readLink" && (file === at || file.startsWith(at + path.sep))
+              }),
             ]).toEqual([link.name, []])
           }
         }).pipe(provideProject(project, false, recorded))
@@ -285,9 +287,19 @@ describe("FileAccess for another spelling of the project's folder", () => {
             "deny",
           )
           recorded.touched.length = 0
+          recorded.calls.length = 0
           const failure = yield* access.resolve({ path: "shared/notes.md" }).pipe(Effect.flip)
           expect(failure).toMatchObject({ code: "file.spelling" })
           expect(sharesTouched(recorded.touched)).toEqual([])
+          // Only `readLink` may name the link or a path below it: any other call follows it and opens the share.
+          const at = path.join(project, "shared").toLowerCase()
+          expect(
+            recorded.calls.filter((call) => {
+              const [method, ...rest] = call.split(" ")
+              const file = rest.join(" ").toLowerCase()
+              return method !== "readLink" && (file === at || file.startsWith(at + path.sep))
+            }),
+          ).toEqual([])
         }).pipe(provideProject(project, false, recorded))
         // The owner trusted the folder: its link is its own, and nothing is refused.
         yield* Effect.gen(function* () {
