@@ -26,11 +26,15 @@ const it = testEffect(Layer.empty)
 
 // The real configuration loader over a project in a home of its own, with trust that nothing grants on its own. A
 // project with a `canonical` folder is a linked worktree of the checkout that sits there.
-function loader(folders: Folders, options: { readonly implicit?: boolean; readonly canonical?: string } = {}) {
+function loader(
+  folders: Folders,
+  options: { readonly implicit?: boolean; readonly canonical?: string; readonly file?: string } = {},
+) {
   const here = location({ directory: AbsolutePath.make(folders.repo) })
   return AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]), [
     Config.node.replace(
       Config.configured({
+        file: options.file,
         content: JSON.stringify({ shell: "flag-shell", hooks: { SessionEnd: [flagHook] } }),
       }),
     ),
@@ -569,6 +573,48 @@ describe("Config under workspace trust", () => {
         expect(yield* project.allows(mine)).toBe(true)
         expect(yield* project.allows(ownedByRepo)).toBe(false)
       }).pipe(Effect.provide(loader(inHome)))
+    }),
+  )
+})
+
+describe("Config explicit file", () => {
+  it.live("loads a file that discovery already reached once, at its own scope and under its own trust", () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      const project = path.join(folders.repo, "orbit.json")
+      // The same file under every spelling a person can type: as it is, and (on Windows) with its case changed.
+      const spellings = [project, ...(process.platform === "win32" ? [project.toUpperCase()] : [])]
+      yield* Effect.forEach(spellings, (file) =>
+        Effect.gen(function* () {
+          const entries = yield* (yield* Config.Service).entries()
+          expect(documents(entries).filter((entry) => entry.path === AbsolutePath.make(project))).toHaveLength(1)
+          expect(named(entries, project)).toMatchObject({ scope: "project", trusted: false })
+          expect(documents(entries).filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
+          // The copy a flag Document would have made carries the hooks the untrusted folder may not supply.
+          expect(JSON.stringify(entries.filter((entry) => entry.scope === "flag"))).not.toContain("echo project")
+        }).pipe(Effect.provide(loader(folders, { file }))),
+      )
+    }),
+  )
+
+  it.live("loads a file that no scope has reached as a flag document, and the user's own file once", () =>
+    Effect.gen(function* () {
+      const folders = yield* layout
+      const other = path.join(folders.work, "team.json")
+      yield* Effect.promise(() => write(other, { model: "team/model" }))
+      yield* Effect.gen(function* () {
+        const entries = yield* (yield* Config.Service).entries()
+        expect(named(entries, other)).toMatchObject({ scope: "flag" })
+        expect(named(entries, other)?.trusted).toBeUndefined()
+        expect(named(entries, other)?.info.model).toMatchObject({ providerID: "team", model: "model" })
+      }).pipe(Effect.provide(loader(folders, { file: other })))
+      const user = path.join(folders.globalConfig, "orbit.json")
+      yield* Effect.gen(function* () {
+        const entries = yield* (yield* Config.Service).entries()
+        expect(documents(entries).filter((entry) => entry.path === AbsolutePath.make(user))).toMatchObject([
+          { scope: "user" },
+        ])
+      }).pipe(Effect.provide(loader(folders, { file: user })))
     }),
   )
 })

@@ -12,30 +12,103 @@ const printed = (argv: string[]) => {
 }
 
 test.each([
-  [["-p", "run", "the", "tests"], ["--print=true", "run", "the", "tests"]],
-  [["-p", "debug", "x"], ["--print=true", "debug", "x"]],
-  [["-p", "yes", "do", "it"], ["--print=true", "yes", "do", "it"]],
-  [["-pc", "yes"], ["--print=true", "--continue=true", "yes"]],
-  [["--model", "x/y", "-p", "fix", "it"], ["--model", "x/y", "--print=true", "fix", "it"]],
-  [["fix it", "-p"], ["fix it", "--print=true"]],
-  [["--print", "service", "stop"], ["--print=true", "service", "stop"]],
-  [["--standalone", "-p", "yes"], ["--standalone=true", "--print=true", "yes"]],
-  [["-pm", "x/y", "run", "it"], ["--print=true", "-m", "x/y", "run", "it"]],
-  [["-p", "--", "--foo", "bar"], ["--print=true", "--", "--foo", "bar"]],
-  [["-p", "x", "--", "-p", "run"], ["--print=true", "x", "--", "-p", "run"]],
-  [["--title", "-p", "-p", "x"], ["--title", "-p", "--print=true", "x"]],
+  [
+    ["-p", "run", "the", "tests"],
+    ["--print=true", "run", "the", "tests"],
+  ],
+  [
+    ["-p", "debug", "x"],
+    ["--print=true", "debug", "x"],
+  ],
+  [
+    ["-p", "yes", "do", "it"],
+    ["--print=true", "yes", "do", "it"],
+  ],
+  [
+    ["-pc", "yes"],
+    ["--print=true", "--continue=true", "yes"],
+  ],
+  [
+    ["--model", "x/y", "-p", "fix", "it"],
+    ["--model", "x/y", "--print=true", "fix", "it"],
+  ],
+  [
+    ["fix it", "-p"],
+    ["fix it", "--print=true"],
+  ],
+  [
+    ["--print", "service", "stop"],
+    ["--print=true", "service", "stop"],
+  ],
+  [
+    ["--standalone", "-p", "yes"],
+    ["--standalone=true", "--print=true", "yes"],
+  ],
+  [
+    ["-pm", "x/y", "run", "it"],
+    ["--print=true", "-m", "x/y", "run", "it"],
+  ],
+  [
+    ["-p", "--", "--foo", "bar"],
+    ["--print=true", "--", "--foo", "bar"],
+  ],
+  [
+    ["-p", "x", "--", "-p", "run"],
+    ["--print=true", "x", "--", "-p", "run"],
+  ],
+  [
+    ["--title", "-p", "-p", "x"],
+    ["--title", "-p", "--print=true", "x"],
+  ],
   [["-p"], ["--print=true"]],
-  [["-p", "--max-turns", "3", "yes"], ["--print=true", "--max-turns", "3", "yes"]],
-  [["--max-cost", "0.5", "-p", "run"], ["--max-cost", "0.5", "--print=true", "run"]],
-  [["-p", "--thinking", "yes"], ["--print=true", "--thinking=true", "yes"]],
-  [["-p", "--bare=false", "x"], ["--print=true", "--bare=false", "x"]],
-  [["-p", "--no-thinking", "yes", "do", "it"], ["--print=true", "--thinking=false", "yes", "do", "it"]],
-  [["-p", "--thinking", "false", "yes"], ["--print=true", "--thinking=true", "false", "yes"]],
-  [["-p", "--bare", "true", "or", "false:"], ["--print=true", "--bare=true", "true", "or", "false:"]],
-  [["-p", "-c", "false", "story"], ["--print=true", "--continue=true", "false", "story"]],
-  [["--print", "no", "x"], ["--print=true", "no", "x"]],
-  [["-p", "--constructor", "x"], ["--print=true", "--constructor", "x"]],
-  [["-s=abc", "-p", "run"], ["-s=abc", "--print=true", "run"]],
+  [
+    ["-p", "--max-turns", "3", "yes"],
+    ["--print=true", "--max-turns", "3", "yes"],
+  ],
+  [
+    ["--max-cost", "0.5", "-p", "run"],
+    ["--max-cost", "0.5", "--print=true", "run"],
+  ],
+  [
+    ["-p", "--thinking", "yes"],
+    ["--print=true", "--thinking=true", "yes"],
+  ],
+  [
+    ["-p", "--bare=false", "x"],
+    ["--print=true", "--bare=false", "x"],
+  ],
+  [
+    ["-p", "--no-thinking", "yes", "do", "it"],
+    ["--print=true", "--thinking=false", "yes", "do", "it"],
+  ],
+  [
+    ["-p", "--thinking", "false", "yes"],
+    ["--print=true", "--thinking=true", "false", "yes"],
+  ],
+  [
+    ["-p", "--bare", "true", "or", "false:"],
+    ["--print=true", "--bare=true", "true", "or", "false:"],
+  ],
+  [
+    ["-p", "-c", "false", "story"],
+    ["--print=true", "--continue=true", "false", "story"],
+  ],
+  [
+    ["--print", "no", "x"],
+    ["--print=true", "no", "x"],
+  ],
+  [
+    ["-p", "--constructor", "x"],
+    ["--print=true", "--constructor", "x"],
+  ],
+  [
+    ["-s=abc", "-p", "run"],
+    ["-s=abc", "--print=true", "run"],
+  ],
+  [
+    ["-p", "--settings", "s.json", "hello"],
+    ["--print=true", "--settings", "s.json", "hello"],
+  ],
 ])("%j is a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
 })
@@ -103,7 +176,11 @@ test("the flag tables match the flags that orb --help and orb -p --help print", 
   const booleans = (flags: typeof root) => flags.filter((flag) => !flag.value && !builtin.includes(flag.long))
   // yolo and dangerously-skip-permissions are aliases of auto that the help does not print.
   const hidden = ["yolo", "dangerously-skip-permissions"]
-  expect(booleans(print).map((flag) => flag.long).sort()).toEqual(
+  expect(
+    booleans(print)
+      .map((flag) => flag.long)
+      .sort(),
+  ).toEqual(
     Object.keys(PrintBooleanFlags)
       .filter((name) => !hidden.includes(name))
       .sort(),
@@ -119,26 +196,62 @@ test("the flag tables match the flags that orb --help and orb -p --help print", 
 test.each([
   [["-r"], ["--resume="]],
   [["--resume"], ["--resume="]],
-  [["-r", "--standalone"], ["--resume=", "--standalone"]],
-  [["--resume", "-c"], ["--resume=", "-c"]],
+  [
+    ["-r", "--standalone"],
+    ["--resume=", "--standalone"],
+  ],
+  [
+    ["--resume", "-c"],
+    ["--resume=", "-c"],
+  ],
   [["-cr"], ["-c", "--resume="]],
-  [["--standalone", "-r"], ["--standalone", "--resume="]],
-  [["run", "-r"], ["run", "--resume="]],
-  [["run", "hi", "--resume", "--format", "json"], ["run", "hi", "--resume=", "--format", "json"]],
-  [["-r", "--", "x"], ["--resume=", "--", "x"]],
+  [
+    ["--standalone", "-r"],
+    ["--standalone", "--resume="],
+  ],
+  [
+    ["run", "-r"],
+    ["run", "--resume="],
+  ],
+  [
+    ["run", "hi", "--resume", "--format", "json"],
+    ["run", "hi", "--resume=", "--format", "json"],
+  ],
+  [
+    ["-r", "--", "x"],
+    ["--resume=", "--", "x"],
+  ],
   // The interface takes a directory as its first word, which is not a subcommand.
-  [[".", "-r"], [".", "--resume="]],
-  [["/some/dir", "--resume"], ["/some/dir", "--resume="]],
-  [["dir", "-r", "--standalone"], ["dir", "--resume=", "--standalone"]],
+  [
+    [".", "-r"],
+    [".", "--resume="],
+  ],
+  [
+    ["/some/dir", "--resume"],
+    ["/some/dir", "--resume="],
+  ],
+  [
+    ["dir", "-r", "--standalone"],
+    ["dir", "--resume=", "--standalone"],
+  ],
 ])("%j gets an empty resume value on the interface and on run", (argv, expected) => {
   expect(classify(argv)).toEqual({ mode: "root", args: expected })
 })
 
 test.each([
-  [["-p", "-r"], ["--print=true", "--resume="]],
-  [["-r", "-p", "hi"], ["--resume=", "--print=true", "hi"]],
+  [
+    ["-p", "-r"],
+    ["--print=true", "--resume="],
+  ],
+  [
+    ["-r", "-p", "hi"],
+    ["--resume=", "--print=true", "hi"],
+  ],
   [["-pr"], ["--print=true", "--resume="]],
-  [["-p", "--resume", "--bare", "hi"], ["--print=true", "--resume=", "--bare=true", "hi"]],
+  [
+    ["-p", "--resume", "--bare", "hi"],
+    ["--print=true", "--resume=", "--bare=true", "hi"],
+  ],
 ])("%j gets an empty resume value on a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
 })
@@ -159,9 +272,18 @@ test.each([
 })
 
 test.each([
-  [["-p", "-r", "ses_abc", "hi"], ["--print=true", "-r", "ses_abc", "hi"]],
-  [["-p", "--resume", "fix", "it"], ["--print=true", "--resume", "fix", "it"]],
-  [["-p", "x", "--", "-r"], ["--print=true", "x", "--", "-r"]],
+  [
+    ["-p", "-r", "ses_abc", "hi"],
+    ["--print=true", "-r", "ses_abc", "hi"],
+  ],
+  [
+    ["-p", "--resume", "fix", "it"],
+    ["--print=true", "--resume", "fix", "it"],
+  ],
+  [
+    ["-p", "x", "--", "-r"],
+    ["--print=true", "x", "--", "-r"],
+  ],
 ])("%j takes the word after -r as its value on a print line", (argv, expected) => {
   expect(printed(argv)).toEqual(expected)
 })
@@ -182,7 +304,13 @@ test.each(widening.flatMap((flag) => literalWords.map((word) => [flag, word] as 
 
 test.each(widening)("orb -p %s keeps its inline and bare forms", (flag) => {
   expect(printed(["-p", `${flag}=false`, "fix"])).toEqual(["--print=true", `${flag}=false`, "fix"])
-  expect(printed(["-p", flag, "--model", "x/y", "fix"])).toEqual(["--print=true", `${flag}=true`, "--model", "x/y", "fix"])
+  expect(printed(["-p", flag, "--model", "x/y", "fix"])).toEqual([
+    "--print=true",
+    `${flag}=true`,
+    "--model",
+    "x/y",
+    "fix",
+  ])
   // On an ordinary line the word is the flag's value, which is what `orb run` does too.
   expect(classify(["run", flag, "false", "fix"]).mode).toBe("root")
 })

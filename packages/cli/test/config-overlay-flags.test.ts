@@ -383,7 +383,7 @@ test.each([
     })
 
     // What core would read after the CLI has changed to the opened folder.
-    const token = /\{file:([^}]+)\}/.exec(content!)![1]
+    const token = /\{file:([^}]+)\}/.exec(content!.content!)![1]
     expect(await Bun.file(path.resolve(project, token)).text()).toBe("FROM-HOME")
   },
 )

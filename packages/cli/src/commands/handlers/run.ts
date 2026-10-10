@@ -18,6 +18,7 @@ type HeadlessInput = {
   readonly standalone: boolean
   readonly trust: boolean
   readonly bare: boolean
+  readonly settings: ReadonlyArray<string>
   readonly mcpConfig: ReadonlyArray<string>
   readonly agents: Option.Option<string>
   readonly message: ReadonlyArray<string>
@@ -62,8 +63,10 @@ export function headlessInput(input: HeadlessInput) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
       process.env.ORBIT_DISABLE_INSTRUCTIONS = "1"
     }
-    // --mcp-config and --agents reach the private server through ORBIT_CONFIG_CONTENT_FILE, set here for the same reason.
+    // --settings, --mcp-config and --agents reach the private server through ORBIT_CONFIG_CONTENT_FILE, set here for the
+    // same reason.
     const applied = yield* ConfigOverlay.apply({
+      settings: input.settings,
       mcpConfig: input.mcpConfig,
       agents: Option.getOrUndefined(input.agents),
       server: Option.getOrUndefined(input.server),

@@ -1093,6 +1093,34 @@ and never deleted.
 
 **What to do:** Nothing.
 
+### `--settings` loads a config file or inline JSON for one run
+
+`orb`, `orb -p`, `orb run`, `orb mini`, `orb loop` and `orb debug config` take `--settings <file-or-json>`: a config in
+the `orbit.json` shape (comments and trailing commas allowed) that applies to this run only. It ranks in the flag scope,
+above project and local config and below managed settings. Within that scope an `ORBIT_CONFIG` file or a `--settings`
+file comes first (a `--settings` file takes the place of `ORBIT_CONFIG` for the run), then `ORBIT_CONFIG_CONTENT`, then an
+inline `--settings`, then `--mcp-config` and `--agents`. The value is inline JSON when it starts, after whitespace, with
+`{` or a comment, and a file name otherwise; the disk never decides. A relative file name is taken from the folder you
+typed the command in, and a relative `{file:...}` inside a file is taken from beside that file. The value is checked before
+anything starts: a missing file, a folder, a device, a file over 4 MiB, JSON that does not parse, an empty value and a
+repeated flag are each refused with one line. A file saved as UTF-16 (Windows PowerShell 5.1 does this for `>`) is refused
+with a request to save it as UTF-8; an empty file is accepted. Fields that do not fit the config schema are judged by the
+server, which logs them and drops the document; `orb debug config --settings ...` shows whether it arrived.
+
+A run with `--settings` uses a private server, like `--mcp-config`, so it starts a little slower, runs nothing on the
+background service, and cannot be combined with `--server`. With `--continue`, `--session` or `--resume` it stops when the
+background service is running that session. The settings never trust the folder: `--trust` is still what grants that.
+
+A config file that discovery already loaded (the project's own `orbit.json`, a local file or your user config) now loads
+once, at its own scope and under its own trust, however it is named, including through `ORBIT_CONFIG` or a `--settings`
+that names it. Before, `ORBIT_CONFIG` pointing at a project's file loaded it a second time in the flag scope without the
+trust restrictions of an untrusted folder.
+
+**Affects:** people who want settings for a single run, and anyone who set `ORBIT_CONFIG` to a file inside a project.
+
+**What to do:** Nothing. Pass a file or JSON to `--settings`; to give an untrusted project's file full effect, trust the
+folder rather than naming its file.
+
 ### Terminal bell, idle reminder and a status in the window title
 
 `attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the

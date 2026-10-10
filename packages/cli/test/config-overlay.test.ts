@@ -21,8 +21,8 @@ const overlays = path.join(Global.Path.state, "overlays")
 const server = (extra: object = {}) => ({ type: "local", command: ["fx"], ...extra })
 
 async function built(input: Partial<Parameters<typeof ConfigOverlay.build>[0]>) {
-  const content = await ConfigOverlay.build({ mcpConfig: [], cwd: root, ...input })
-  return content === undefined ? undefined : JSON.parse(content)
+  const built = await ConfigOverlay.build({ mcpConfig: [], cwd: root, ...input })
+  return built?.content === undefined ? undefined : JSON.parse(built.content)
 }
 
 async function refused(input: Partial<Parameters<typeof ConfigOverlay.build>[0]>) {
@@ -149,21 +149,21 @@ test("a merged document over 4 MiB is refused before anything starts", async () 
 })
 
 test("the envelope is versioned, only its file is removed when read, and the server cannot be pointed at another shape", async () => {
-  const written = await ConfigOverlay.write('{"agents":{}}')
-  expect(JSON.parse(await Bun.file(written.file).text())).toEqual({ version: 1, content: '{"agents":{}}' })
+  const written = await ConfigOverlay.write({ content: '{"agents":{}}' })
+  expect(JSON.parse(await Bun.file(written.file).text())).toEqual({ version: 2, content: '{"agents":{}}' })
   if (process.platform !== "win32") expect((await fs.stat(written.file)).mode & 0o777).toBe(0o600)
   expect(path.dirname(path.dirname(written.file))).toBe(overlays)
 
-  expect(await ConfigOverlay.consume(written.file)).toBe('{"agents":{}}')
+  expect(await ConfigOverlay.consume(written.file)).toEqual({ content: '{"agents":{}}', file: undefined })
   expect(await Bun.file(written.file).exists()).toBe(false)
   expect((await fs.stat(path.dirname(written.file))).isDirectory()).toBe(true)
   await written.remove()
   expect(await Bun.file(path.dirname(written.file)).exists()).toBe(false)
 
   const other = path.join(root, "other.json")
-  for (const text of ['{"version":2,"content":"{}"}', '{"content":"{}"}', "not json", '{"version":1,"content":1}']) {
+  for (const text of ['{"version":1,"content":"{}"}', '{"content":"{}"}', "not json", '{"version":1,"content":1}']) {
     await Bun.write(other, text)
-    await expect(ConfigOverlay.consume(other)).rejects.toThrow("version 1 overlay")
+    await expect(ConfigOverlay.consume(other)).rejects.toThrow("version 2 overlay")
   }
 })
 
@@ -173,7 +173,7 @@ test("the envelope is versioned, only its file is removed when read, and the ser
 test("the server leaves alone every file it was pointed at that the CLI did not write", async () => {
   await fs.mkdir(overlays, { recursive: true })
   const folder = await fs.mkdtemp(path.join(overlays, "overlay-"))
-  const envelope = JSON.stringify({ version: 1, content: "{}" })
+  const envelope = JSON.stringify({ version: 2, content: "{}" })
   const survivors = [
     ["a config of the person's in the project folder", path.join(root, "my-config.json"), '{"model":"a/b"}'],
     ["a valid envelope outside the overlays folder", path.join(root, "envelope.json"), envelope],
@@ -185,7 +185,7 @@ test("the server leaves alone every file it was pointed at that the CLI did not 
   try {
     for (const [name, file, text] of survivors) {
       await Bun.write(file, text)
-      await expect(ConfigOverlay.consume(file)).rejects.toThrow("version 1 overlay")
+      await expect(ConfigOverlay.consume(file)).rejects.toThrow("version 2 overlay")
       expect({ name, kept: await Bun.file(file).text() }).toEqual({ name, kept: text })
     }
   } finally {
@@ -201,7 +201,7 @@ test("a folder left by a run that died is swept, a fresh one is not", async () =
   const old = new Date(Date.now() - 2 * 60 * 60 * 1000)
   await fs.utimes(stale, old, old)
 
-  const written = await ConfigOverlay.write("{}")
+  const written = await ConfigOverlay.write({ content: "{}" })
 
   expect(await fs.stat(stale).catch(() => undefined)).toBeUndefined()
   expect((await fs.stat(fresh)).isDirectory()).toBe(true)
@@ -431,7 +431,7 @@ test.each([
     cwd: form === "file" ? path.join(root, "elsewhere") : where,
   })
 
-  const parsed = JSON.parse(content!)
+  const parsed = JSON.parse(content!.content!)
   const resolved =
     flag === "agents"
       ? [parsed.agents.a.system, parsed.agents.a.description]
@@ -444,7 +444,7 @@ test.each([
 test("release removes the variable and the run's folder, and leaves a file that is not the CLI's", async () => {
   const before = process.env.ORBIT_CONFIG_CONTENT_FILE
   try {
-    const written = await ConfigOverlay.write("{}")
+    const written = await ConfigOverlay.write({ content: "{}" })
     process.env.ORBIT_CONFIG_CONTENT_FILE = written.file
     await ConfigOverlay.release()
     expect(process.env.ORBIT_CONFIG_CONTENT_FILE).toBeUndefined()
@@ -463,7 +463,7 @@ test("release removes the variable and the run's folder, and leaves a file that 
 })
 
 test("the overlay folder is in no folder that agents may write without asking", async () => {
-  const written = await ConfigOverlay.write("{}")
+  const written = await ConfigOverlay.write({ content: "{}" })
   try {
     for (const allowed of [Global.Path.tmp, Global.Path.data, Global.Path.config]) {
       const relative = path.relative(allowed, written.file)
@@ -588,11 +588,11 @@ test("consume: a path of the CLI's shape that is gone is refused, and one that c
 test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "consume still returns the content when the file cannot be deleted",
   async () => {
-    const written = await ConfigOverlay.write('{"agents":{}}')
+    const written = await ConfigOverlay.write({ content: '{"agents":{}}' })
     const folder = path.dirname(written.file)
     await fs.chmod(folder, 0o555)
     try {
-      expect(await ConfigOverlay.consume(written.file)).toBe('{"agents":{}}')
+      expect(await ConfigOverlay.consume(written.file)).toEqual({ content: '{"agents":{}}', file: undefined })
       expect(await Bun.file(written.file).exists()).toBe(true)
     } finally {
       await fs.chmod(folder, 0o700)

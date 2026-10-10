@@ -31,7 +31,13 @@ const base = () => path.join(Global.Path.state, "overlays")
 // A file `write` makes: one level below the overlays folder, in an overlay folder.
 const OWN_FILE = /^overlay-[^\\/]+[\\/][^\\/]+\.json$/
 
-const Envelope = Schema.Struct({ version: Schema.Literal(1), content: Schema.String })
+// `content` is the merged document and `file` the real path of a --settings file, which travels by path so that the
+// references inside it resolve beside it. Either may be missing.
+const Envelope = Schema.Struct({
+  version: Schema.Literal(2),
+  content: Schema.optional(Schema.String),
+  file: Schema.optional(Schema.String),
+})
 
 const decodeMcp = Schema.decodeUnknownResult(ConfigMCP.Info)
 const decodeAgents = Schema.decodeUnknownResult(Schema.Record(Schema.String, ConfigAgent.Info))
@@ -41,8 +47,10 @@ const decodeEnvelope = Schema.decodeUnknownResult(Schema.fromJsonString(Envelope
 type Json = { [key: string]: unknown }
 
 export type Input = {
+  /** The --settings value: a file name or the JSON itself. More than one is refused. */
+  readonly settings?: ReadonlyArray<string>
   /** Each --mcp-config value, in order. */
-  readonly mcpConfig: ReadonlyArray<string>
+  readonly mcpConfig?: ReadonlyArray<string>
   /** The --agents value. */
   readonly agents?: string
   /** The inherited ORBIT_CONFIG_CONTENT, which the flags layer on top of. */
@@ -58,33 +66,48 @@ export function conflict(input: { readonly server: string | undefined; readonly 
 }
 
 /** The flags of the overlay that were given, as they are typed. */
-export function given(input: { readonly mcpConfig: ReadonlyArray<string>; readonly agents?: string }) {
-  return [...(input.mcpConfig.length > 0 ? ["--mcp-config"] : []), ...(input.agents !== undefined ? ["--agents"] : [])]
+export function given(input: {
+  readonly settings?: ReadonlyArray<string>
+  readonly mcpConfig?: ReadonlyArray<string>
+  readonly agents?: string
+}) {
+  return [
+    ...(input.settings?.length ? ["--settings"] : []),
+    ...(input.mcpConfig?.length ? ["--mcp-config"] : []),
+    ...(input.agents !== undefined ? ["--agents"] : []),
+  ]
 }
 
 /**
- * Reads, validates and merges the flags into one config document: the inherited ORBIT_CONFIG_CONTENT, then each
- * --mcp-config in order, then --agents. Returns undefined when no flag was given. Every error names the flag and, for a
- * value that does not fit the schema, the path inside it.
+ * Reads, validates and merges the flags into one config document: the inherited ORBIT_CONFIG_CONTENT, then an inline
+ * --settings, then each --mcp-config in order, then --agents. A --settings file is not merged: its real path is
+ * returned beside the document, so the references inside it resolve beside it. Returns undefined when no flag was
+ * given. Every error names the flag and, for a value that does not fit the schema, the path inside it.
  */
 export async function build(input: Input) {
-  if (input.mcpConfig.length === 0 && input.agents === undefined) return undefined
+  const mcpConfig = input.mcpConfig ?? []
+  if (given({ ...input, mcpConfig }).length === 0) return undefined
+  const settings = input.settings?.length
+    ? await settingsSource(input.settings, input.cwd)
+    : { layer: undefined, file: undefined }
+  const layers = [
+    ...(settings.layer ? [settings.layer] : []),
+    ...(await Promise.all(mcpConfig.map((value) => mcpLayer(value, input.cwd)))),
+    ...(input.agents === undefined ? [] : [await agentsLayer(input.agents, input.cwd)]),
+  ]
+  // A file alone leaves the inherited content where it is: the server still reads it from the environment.
+  if (layers.length === 0) return { file: settings.file }
   const inherited =
     input.inherited === undefined
       ? {}
       : object("ORBIT_CONFIG_CONTENT", parseJsonc("ORBIT_CONFIG_CONTENT", input.inherited))
-  const layers = [
-    ...(await Promise.all(input.mcpConfig.map((value) => mcpLayer(value, input.cwd)))),
-    ...(input.agents === undefined ? [] : [await agentsLayer(input.agents, input.cwd)]),
-  ]
-  const merged = layers.reduce(merge, inherited)
-  const content = JSON.stringify(merged)
+  const content = JSON.stringify(layers.reduce(merge, inherited))
   const size = Buffer.byteLength(content)
   if (size > MAX_BYTES)
     throw new Error(
-      `The config given with --mcp-config and --agents is ${size} bytes; the most one run takes is ${MAX_BYTES}`,
+      `The config given with --settings, --mcp-config and --agents is ${size} bytes; the most one run takes is ${MAX_BYTES}`,
     )
-  return content
+  return { content, file: settings.file }
 }
 
 /**
@@ -92,23 +115,24 @@ export async function build(input: Input) {
  * function that removes both. Folders left by runs that died are swept first. A file carries the document because the
  * environment and the command line have size limits and are visible to other processes.
  */
-export async function write(content: string) {
+export async function write(document: { readonly content?: string; readonly file?: string }) {
   await sweep()
   await fs.mkdir(base(), { recursive: true, mode: 0o700 })
   // mkdtemp creates the folder mode 0700 and fails when the name exists, so no other user can have made it first.
   const folder = await fs.mkdtemp(path.join(base(), "overlay-"))
   const file = path.join(folder, `${randomUUID()}.json`)
-  await fs.writeFile(file, JSON.stringify({ version: 1, content }), { mode: 0o600, flag: "wx" })
+  await fs.writeFile(file, JSON.stringify({ version: 2, ...document }), { mode: 0o600, flag: "wx" })
   return { file, remove: () => fs.rm(folder, { recursive: true, force: true }) }
 }
 
 /**
  * What the server does with ORBIT_CONFIG_CONTENT_FILE: read the envelope once and delete it. The variable can be
- * inherited from anywhere, so a path outside the folders `write` makes, and a file that is not a version 1 envelope,
- * are refused and left exactly as they are.
+ * inherited from anywhere, so a path outside the folders `write` makes, and a file that is not a version 2 envelope,
+ * are refused and left exactly as they are. Returns the merged document and the --settings file, either of which may be
+ * missing.
  */
 export async function consume(file: string) {
-  const refusal = new Error("ORBIT_CONFIG_CONTENT_FILE does not hold a version 1 overlay")
+  const refusal = new Error("ORBIT_CONFIG_CONTENT_FILE does not hold a version 2 overlay")
   refusal.name = "OverlayRefusal"
   if (!OWN_FILE.test(path.relative(base(), file))) throw refusal
   // A path of the CLI's own shape that is gone (a run that is over) is not a config for this server; any other error
@@ -126,7 +150,7 @@ export async function consume(file: string) {
   await fs
     .rm(file, { force: true })
     .catch((error) => console.error("could not delete the overlay file", errorMessage(error)))
-  return envelope.success.content
+  return { content: envelope.success.content, file: envelope.success.file }
 }
 
 /**
@@ -139,17 +163,17 @@ export const apply = Effect.fn("cli.config-overlay.apply")(function* (
 ) {
   const refused = conflict({ server: input.server, flags: given(input) })
   if (refused !== undefined) return yield* Effect.fail(new Error(refused))
-  const content = yield* Effect.tryPromise({
+  const document = yield* Effect.tryPromise({
     try: () => build({ ...input, cwd: process.cwd(), inherited: process.env.ORBIT_CONFIG_CONTENT }),
     catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
   })
-  if (content === undefined) {
+  if (document === undefined) {
     // No flag: a value inherited from the environment is not this run's to hand to the server it starts.
     delete process.env.ORBIT_CONFIG_CONTENT_FILE
     return false
   }
   const written = yield* Effect.tryPromise({
-    try: () => write(content),
+    try: () => write(document),
     catch: (cause) => new Error(`Could not write the config for this run: ${errorMessage(cause)}`, { cause }),
   })
   process.env.ORBIT_CONFIG_CONTENT_FILE = written.file
@@ -217,7 +241,7 @@ export const refuseActive = Effect.fn("cli.config-overlay.refuse-active")(functi
   if (target in active)
     return yield* Effect.fail(
       new Error(
-        `Session ${target} is running in the background service. A run with --mcp-config or --agents uses a private server and would run it a second time; stop it there or start a new session`,
+        `Session ${target} is running in the background service. A run with --settings, --mcp-config or --agents uses a private server and would run it a second time; stop it there or start a new session`,
       ),
     )
   return target
@@ -339,8 +363,7 @@ function anchor(server: Json, directory: string) {
 // comment followed by more lines, is inline JSONC, and anything else is a file name. A folder that ships a file named
 // after the text a person types must not replace it. A file whose name starts with { is reached as ./{...}.
 async function read(flag: string, value: string, cwd: string) {
-  // A // value on one line is all comment and cannot hold an object: it is an absolute path (//server/share/x.json).
-  if (/^(\{|\/\*|\/\/[^\r\n]*[\r\n])/.test(value.trim())) return { text: value, directory: cwd }
+  if (inline(value)) return { text: value, directory: cwd }
   const file = path.resolve(cwd, value)
   const stat = await fs.stat(file).catch(() => undefined)
   if (!stat?.isFile()) throw new Error(`${flag}: ${shown(value)} is not a file that exists and is not JSON`)
@@ -349,16 +372,69 @@ async function read(flag: string, value: string, cwd: string) {
   return { text: await Bun.file(file).text(), directory: path.dirname(file) }
 }
 
+// A // value on one line is all comment and cannot hold an object: it is an absolute path (//server/share/x.json).
+export function inline(value: string) {
+  return /^(\{|\/\*|\/\/[^\r\n]*[\r\n])/.test(value.trim())
+}
+
+// Windows names that open a device, not a file, in any folder and with any extension: opening CON waits for the console.
+const DEVICE = /^(con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])([.:].*)?$/i
+
+/**
+ * The --settings value, by its shape alone: inline JSON becomes a layer of the merged document, anything else is a file
+ * that travels by path. Both are checked here, before any server starts.
+ */
+async function settingsSource(values: ReadonlyArray<string>, cwd: string) {
+  const flag = "--settings"
+  if (values.length > 1) throw new Error(`${flag} was given ${values.length} times; give one file or one JSON value`)
+  const value = values[0]
+  if (value.trim() === "") throw new Error(`${flag}: the value is empty; give a file or the JSON itself`)
+  if (inline(value)) {
+    // Windows PowerShell 5.1 removes the double quotes inside an argument it passes to a program.
+    const hint = value.includes('"') ? "" : "; the shell may have removed the double quotes, a file avoids that"
+    return { layer: anchorFiles(flag, object(flag, parseJsonc(flag, value, hint)), cwd) }
+  }
+  return { file: await settingsFile(value, cwd) }
+}
+
+// The file is checked the way core reads it, so a file that passes here is one core loads: UTF-8 with or without a
+// byte-order mark. It is `stat`ed before anything opens it, so a device or a pipe is refused rather than waited on.
+async function settingsFile(value: string, cwd: string) {
+  const flag = "--settings"
+  const typed = path.resolve(cwd, value)
+  const refuse = (why: string) => new Error(`${flag}: ${shown(value)} ${why}`)
+  const device =
+    process.platform === "win32"
+      ? DEVICE.test(path.basename(typed).replace(/[. ]+$/, "")) || /^[\\/]{2}[.?][\\/]/.test(typed)
+      : /^\/(dev|proc)\//.test(typed)
+  if (device) throw refuse("is not a regular file; pass the JSON itself instead")
+  const stat = await fs.stat(typed).catch(() => undefined)
+  if (!stat?.isFile()) throw refuse("is not a file that exists and is not JSON")
+  if (stat.size > MAX_BYTES) throw refuse(`is ${stat.size} bytes; the most one run takes is ${MAX_BYTES}`)
+  // A UNC path stays as typed: resolving a link would reach the network a second time.
+  const file = process.platform === "win32" && /^[\\/]{2}[^\\/]/.test(typed) ? typed : await fs.realpath(typed)
+  const bytes = new Uint8Array(await Bun.file(file).arrayBuffer())
+  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))
+    throw refuse("is UTF-16; save it as UTF-8")
+  const text = new TextDecoder().decode(bytes)
+  // An empty file is an empty document, as in any other config file, and there is nothing for the server to load.
+  if (text.trim() === "") return undefined
+  object(`${flag} ${shown(value)}`, parseJsonc(`${flag} ${shown(value)}`, text))
+  return file
+}
+
 // What a value says about itself in an error: short, and without characters that act on a terminal.
 function shown(value: string) {
   return plain(value.length > 80 ? `${value.slice(0, 80)}...` : value)
 }
 
-function parseJsonc(flag: string, text: string): unknown {
+function parseJsonc(flag: string, text: string, hint = ""): unknown {
   const errors: ParseError[] = []
   const value: unknown = parse(text, errors, { allowTrailingComma: true })
   if (errors.length > 0)
-    throw new Error(`${flag}: invalid JSON (${printParseErrorCode(errors[0].error)} at offset ${errors[0].offset})`)
+    throw new Error(
+      `${flag}: invalid JSON (${printParseErrorCode(errors[0].error)} at offset ${errors[0].offset})${hint}`,
+    )
   return value
 }
 
