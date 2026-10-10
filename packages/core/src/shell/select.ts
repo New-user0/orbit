@@ -12,6 +12,7 @@ import { which } from "../util/which.js"
 
 const META: Record<string, { deny?: boolean; login?: boolean; ps?: boolean }> = {
   bash: { login: true },
+  csh: { deny: true, login: true },
   dash: { login: true },
   fish: { deny: true, login: true },
   ksh: { login: true },
@@ -19,6 +20,7 @@ const META: Record<string, { deny?: boolean; login?: boolean; ps?: boolean }> = 
   powershell: { ps: true },
   pwsh: { ps: true },
   sh: { login: true },
+  tcsh: { deny: true, login: true },
   zsh: { login: true },
 }
 
