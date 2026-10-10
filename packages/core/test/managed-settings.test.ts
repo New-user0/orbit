@@ -267,7 +267,7 @@ describe("ManagedSettings.read", () => {
       const tmp = yield* tmpdirScoped()
       yield* write(tmp.path, {
         "managed-settings.json": {
-          managed: { plugins: { block: ["*", "acme.*", "@corp/*", "@corp/*-tools", "a*b"], allow: ["@scope/x*"] } },
+          managed: { plugins: { block: ["*", "acme.*", "@corp/*", "@corp/*-tools", "a*b", "/opt/plugins/*", "C:/plugins/*"], allow: ["@scope/x*"] } },
         },
       })
       const snapshot = yield* read(tmp.path)
@@ -276,6 +276,8 @@ describe("ManagedSettings.read", () => {
         ["$.managed.plugins.allow.0", "invalid"],
         ["$.managed.plugins.block.3", "invalid"],
         ["$.managed.plugins.block.4", "invalid"],
+        ["$.managed.plugins.block.5", "invalid"],
+        ["$.managed.plugins.block.6", "invalid"],
       ])
     }),
   )

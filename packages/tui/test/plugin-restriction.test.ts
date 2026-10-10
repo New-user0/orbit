@@ -140,3 +140,61 @@ test("a block that arrives later takes a running plugin down", async () => {
     },
   )
 })
+
+test("a running plugin whose ID is blocked is not kept when its new revision fails to load", async () => {
+  let blocked = false
+  await run(
+    reply(() => (blocked ? { block: ["project.hello"] } : {})),
+    async (fixture, setup) => {
+      await setup.waitFor(async () => (await fixture.marks()).includes("loaded"), { maxPasses: 200 })
+      // The new revision does not load, and by the time it is tried the ID is blocked.
+      await Bun.write(path.join(fixture.plugin, "tui.ts"), "export default (")
+      blocked = true
+      setup.events.emit({ id: "evt_config", created: 1, type: "config.updated", data: {} })
+      await setup.waitFor(async () => (await fixture.marks()).includes("unloaded"), { maxPasses: 200 })
+      expect(await fixture.marks()).toEqual(["imported", "loaded", "unloaded"])
+    },
+  )
+})
+
+test("an unreadable answer logs the skip once per answer, not once per plugin", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  const lines: string[] = []
+  await inside(fixture.path, async () => {
+    await using setup = await createAppFixture({
+      state: state.path,
+      log: (_level, message) => lines.push(message),
+      config: { animations: false, plugins: ["@corp/a@^1", "@corp/b@^1", "@corp/c@^1"] },
+      fetch: (url) => (url.pathname === "/api/config/effective" ? new Response("gone", { status: 503 }) : undefined),
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await setup.flush()
+  })
+  expect(lines.filter((line) => line.includes("skipped the external plugins"))).toHaveLength(1)
+})
+
+test("the failed state of a blocked plugin names the organization", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  await inside(fixture.path, async () => {
+    await using setup = await createAppFixture({
+      state: state.path,
+      config: { animations: false, plugins: ["@corp/blocked@^1"] },
+      fetch: (url) =>
+        url.pathname === "/api/config/effective"
+          ? json({ compatibility: true, plugins: { block: ["@corp/blocked"], organization: "Acme" } })
+          : undefined,
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await setup.flush()
+    await setup.mockInput.typeText("/plugins")
+    setup.mockInput.pressEnter()
+    await setup.waitForFrame((frame) => frame.includes("enter view error"))
+    setup.mockInput.pressEnter()
+    await setup.waitForFrame((frame) => frame.includes("Acme"))
+    expect(setup.captureCharFrame()).toContain("Blocked by Acme's managed settings")
+  })
+})

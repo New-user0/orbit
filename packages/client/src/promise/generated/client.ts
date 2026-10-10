@@ -565,7 +565,7 @@ export function make(options: ClientOptions) {
             query: { location: input["location"] },
             body: { targets: input["targets"] },
             successStatus: 204,
-            declaredStatuses: [400, 401, 503],
+            declaredStatuses: [400, 401, 403, 503],
             empty: true,
           },
           requestOptions,

@@ -201,11 +201,26 @@ export const layer = Layer.effectDiscard(
       const org = policy.current()
       const managed: Managed = {
         restrictions: yield* Effect.promise(() =>
-          PluginRestriction.real(org.restrictions.plugins ?? {}, (file) => Effect.runPromise(fs.resolve(file))),
+          PluginRestriction.real(
+            org.restrictions.plugins ?? {},
+            (file) => Effect.runPromise(fs.resolve(file)),
+            (file) =>
+              Effect.runFork(
+                Effect.logWarning("managed plugin selector could not be resolved; using it as written", { file }),
+              ),
+          ),
         ),
         identify: (target) =>
           path.isAbsolute(target)
-            ? fs.resolve(target).pipe(Effect.map((real) => ({ target: real, verified: true })))
+            ? fs.resolve(target).pipe(
+                Effect.map((real) => ({ target: real, verified: true })),
+                // An unresolvable path is one unverified entry (refused under an allow list), not a failed activation.
+                Effect.catchCause(() =>
+                  Effect.logWarning("plugin path could not be resolved; checking it as written", { target }).pipe(
+                    Effect.as({ target, verified: false }),
+                  ),
+                ),
+              )
             : Effect.promise(() => PluginRestriction.identify(target)),
         message:
           org.organization === undefined

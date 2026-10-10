@@ -475,6 +475,49 @@ describe("PluginSupervisor", () => {
       }),
     )
 
+    // A path realpath cannot resolve is one entry's problem: the built-in, host and allowed plugins stay active.
+    for (const row of [
+      { name: "a target under a file (ENOTDIR)", only: "posix", restrictions: "none" },
+      { name: "a symlink loop (ELOOP)", only: "posix", restrictions: "none" },
+      { name: "a managed block selector under a file", only: "posix", restrictions: "bad selector" },
+      { name: "an allow list and a target under a file", only: "posix", restrictions: "allow" },
+      { name: "an unreachable UNC target", only: "win32", restrictions: "none" },
+      { name: "an unreachable UNC target under an allow list", only: "win32", restrictions: "allow" },
+    ] as const) {
+      if ((row.only === "win32") !== (process.platform === "win32")) continue
+      it.live(`keeps every other plugin active when it meets ${row.name}`, () =>
+        Effect.gen(function* () {
+          const tmp = (yield* tmpdirScoped()).path
+          const good = yield* plugin(tmp, "good", "corp.good")
+          const underFile = path.join(tmp, "good", "index.ts", "x")
+          const bad =
+            row.only === "win32"
+              ? "\\\\nonexistent-host-xyz\\share\\x"
+              : row.name.includes("loop")
+                ? path.join(tmp, "loop-a")
+                : underFile
+          if (row.name.includes("loop")) {
+            yield* Effect.promise(async () => {
+              await fs.symlink(path.join(tmp, "loop-b"), path.join(tmp, "loop-a"))
+              await fs.symlink(path.join(tmp, "loop-a"), path.join(tmp, "loop-b"))
+            })
+          }
+          const restrictions =
+            row.restrictions === "allow"
+              ? { plugins: { allow: [good] } }
+              : row.restrictions === "bad selector"
+                ? { plugins: { block: [underFile] } }
+                : {}
+          const add = (target: string) => ({ type: "add" as const, target, options: {} })
+          const list = yield* inventory(restrictions, [add(good), add(bad)])
+          expect(state(list, "orbit.config.policy")).toEqual({ status: "active" })
+          expect(state(list, "host.plugin")).toEqual({ status: "active" })
+          expect(state(list, "corp.good")).toEqual({ status: "active" })
+          expect(failedTargets(list)).toEqual([bad])
+        }),
+      )
+    }
+
     it.live("never installs a package that is blocked or off the allow list", () =>
       Effect.gen(function* () {
         // A registry package would be installed by modules.load; it is reported as failed without that.

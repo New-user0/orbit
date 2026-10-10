@@ -308,6 +308,10 @@ it.live("reports the plugin lists managed settings set, and an empty object when
         managed: { managed: { plugins: { allow: ["@corp/x"], block: ["acme.*"], marketplaces: ["https://m.example"] } } },
       })).plugins,
     ).toEqual({ allow: ["@corp/x"], block: ["acme.*"] })
+    // The organization's name rides along so a client can say whose settings blocked a plugin.
+    expect(
+      (yield* effective({ managed: { managed: { organization: "Acme", plugins: { block: ["acme.*"] } } } })).plugins,
+    ).toEqual({ block: ["acme.*"], organization: "Acme" })
     // A project's own file cannot set them.
     expect((yield* effective({ project: { managed: { plugins: { allow: [] } } } })).plugins).toEqual({})
   }),

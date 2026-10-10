@@ -24,6 +24,7 @@ async function run(input: {
   config?: Config.Info
   server?: unknown[]
   root?: string
+  log?: (level: string, message: string) => void
   check: (setup: Awaited<ReturnType<typeof createAppFixture>>, prepared: string[]) => Promise<void>
 }) {
   await using project = await tmpdir()
@@ -33,6 +34,7 @@ async function run(input: {
   await inside(input.root ?? project.path, async () => {
     await using setup = await createAppFixture({
       state: state.path,
+      log: (level, message) => input.log?.(level, message),
       config: { animations: false, ...input.config },
       packages: {
         prepare: async (spec) => {
@@ -110,6 +112,48 @@ test("a selector written through a link meets the real folder, in both direction
       check: async () => expect(await Bun.file(marks).exists(), name).toBe(false),
     })
   }
+})
+
+// A plugin folder outside .orbit/plugins, so it is reached only by the entry that names it.
+async function outside() {
+  const fixture = await tmpdir()
+  const plugin = path.join(fixture.path, "elsewhere", "hello")
+  const marks = path.join(fixture.path, "marks.txt")
+  await mkdir(path.join(fixture.path, ".git"), { recursive: true })
+  await mkdir(plugin, { recursive: true })
+  await Bun.write(
+    path.join(plugin, "tui.ts"),
+    `import { appendFileSync } from "node:fs"\nappendFileSync(${JSON.stringify(marks)}, "imported\\n")\nexport default { id: "outside.hello", setup() {} }\n`,
+  )
+  const link = path.join(fixture.path, "link")
+  await symlink(plugin, link, "junction")
+  return { fixture, marks, link, real: await realpath(plugin) }
+}
+
+test("a cli.json entry spelled through a link is checked by the real folder it leads to", async () => {
+  const { fixture, marks, link, real } = await outside()
+  await using _ = fixture
+  // The control: nothing blocks the folder, so the entry named by the link is imported.
+  await run({
+    plugins: { block: ["@corp/unrelated"] },
+    config: { plugins: [link] },
+    root: fixture.path,
+    check: async (setup) => {
+      await setup.waitFor(async () => await Bun.file(marks).exists(), { maxPasses: 200 })
+      expect(await Bun.file(marks).exists()).toBe(true)
+    },
+  })
+  await Bun.file(marks).delete()
+  // The real path is blocked; the link is the only spelling the entry uses, and the folder is never imported.
+  await run({
+    plugins: { block: [real] },
+    config: { plugins: [link] },
+    root: fixture.path,
+    check: async (setup) => {
+      await setup.flush()
+      expect(await Bun.file(marks).exists()).toBe(false)
+    },
+  })
 })
 
 test("an allow list written through a link admits the real folder (control)", async () => {

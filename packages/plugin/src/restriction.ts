@@ -54,6 +54,8 @@ export async function identify(spec: string): Promise<Required<Pick<Subject, "ta
  * prefix (`corp.*`, `@corp/*`). Any other `*` would match nothing, so the caller reports it instead of loading it.
  */
 export function wildcard(selector: string) {
+  // An absolute selector is compared whole, so a `*` in one would match nothing; it is invalid, not a prefix.
+  if (/^([a-zA-Z]:[\\/]|[\\/])/.test(selector)) return false
   return selector === "*" || ((selector.endsWith(".*") || selector.endsWith("/*")) && !selector.slice(0, -1).includes("*"))
 }
 
@@ -61,9 +63,19 @@ export function wildcard(selector: string) {
  * The lists with every absolute path selector made real, so a selector written through a link (a Windows junction, macOS
  * `/tmp`) meets the real path that a target is identified by. Call it once per activation, not once per target.
  */
-export async function real(restrictions: Restrictions, resolve: (file: string) => Promise<string>): Promise<Restrictions> {
+export async function real(
+  restrictions: Restrictions,
+  resolve: (file: string) => Promise<string>,
+  onError?: (file: string, cause: unknown) => void,
+): Promise<Restrictions> {
+  // A selector that cannot be resolved stays as written: one bad entry must not cost the others.
+  const attempt = (selector: string) =>
+    resolve(selector).catch((cause) => {
+      onError?.(selector, cause)
+      return selector
+    })
   const each = (selectors: readonly string[] | undefined) =>
-    selectors && Promise.all(selectors.map((selector) => (path.isAbsolute(selector) ? resolve(selector) : selector)))
+    selectors && Promise.all(selectors.map((selector) => (path.isAbsolute(selector) ? attempt(selector) : selector)))
   const [allow, block] = await Promise.all([each(restrictions.allow), each(restrictions.block)])
   return { ...(allow ? { allow } : {}), ...(block ? { block } : {}) }
 }

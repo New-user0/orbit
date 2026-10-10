@@ -18,6 +18,8 @@ export async function createAppFixture(
     fetch?: FetchHandler
     /** How a package spec becomes a folder; a test passes its own to see which specs the TUI asks for. */
     packages?: TuiInput["packages"]
+    /** Where log lines go; a test passes its own to see what was logged. */
+    log?: TuiInput["log"]
   } = {},
 ) {
   const { run } = await import("../../src/app")
@@ -45,7 +47,7 @@ export async function createAppFixture(
       packages: input.packages ?? { prepare: async () => ({ directory: "" }) },
       terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
       args: input.args ?? {},
-      log: () => {},
+      log: input.log ?? (() => {}),
     }).pipe(
       Effect.provide(Global.layerWith({ state: input.state ?? state?.path })),
       Effect.provide(FileSystem.layerNoop({})),

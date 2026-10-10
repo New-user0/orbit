@@ -17,7 +17,7 @@ describe("scoped wildcards and real paths", () => {
 
   test("only a whole * or a .* or /* suffix is a wildcard", () => {
     for (const selector of ["*", "acme.*", "@corp/*"]) expect(PluginRestriction.wildcard(selector)).toBe(true)
-    for (const selector of ["@corp/*-tools", "a*b", "**", "@co*/x/*"])
+    for (const selector of ["@corp/*-tools", "a*b", "**", "@co*/x/*", "/opt/plugins/*", "C:/plugins/*", "C:\\plugins\\*", "\\\\host\\share\\*"])
       expect(PluginRestriction.wildcard(selector)).toBe(false)
   })
 
@@ -29,5 +29,21 @@ describe("scoped wildcards and real paths", () => {
     )
     expect(real).toEqual({ allow: ["@corp/x", target], block: [target] })
     expect(await PluginRestriction.real({}, async (file) => file)).toEqual({})
+  })
+
+  test("real() keeps a selector it cannot resolve as written, reports it once, and resolves the rest", async () => {
+    const bad = path.resolve("bad", "plugin")
+    const good = path.resolve("good", "plugin")
+    const failed: string[] = []
+    const real = await PluginRestriction.real(
+      { block: [bad, good] },
+      async (file) => {
+        if (file === bad) throw new Error("ENOTDIR")
+        return file + "-real"
+      },
+      (file) => failed.push(file),
+    )
+    expect(real).toEqual({ block: [bad, good + "-real"] })
+    expect(failed).toEqual([bad])
   })
 })

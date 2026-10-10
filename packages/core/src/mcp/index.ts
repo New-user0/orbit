@@ -65,8 +65,8 @@ export class BlockedError extends Schema.TaggedError<BlockedError>()("MCP.Blocke
 }) {
   override get message() {
     return this.reason === "denied"
-      ? `MCP server "${this.server}" is blocked by your organization's policy`
-      : `MCP server "${this.server}" is not on your organization's list of allowed MCP servers`
+      ? `MCP server "${this.server}" is blocked by managed settings`
+      : `MCP server "${this.server}" is not on the allow list in managed settings`
   }
 }
 

@@ -26,11 +26,22 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
+// A second organization whose allow list names one server, so an unlisted one is refused for not being on it.
+const allowing = path.join(root, "allowing")
+await Bun.write(
+  path.join(allowing, "managed-settings.json"),
+  JSON.stringify({ managed: { mcp: { allow: [{ serverName: "listed" }] } } }),
+)
+
 async function orb(...args: string[]) {
+  return run(managed, args)
+}
+
+async function run(directory: string, args: string[]) {
   const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), ...args], {
     cwd: path.join(import.meta.dir, ".."),
     env: isolatedEnv(root, {
-      ORBIT_MANAGED_DIR: managed,
+      ORBIT_MANAGED_DIR: directory,
       npm_config_registry: `http://127.0.0.1:${registry.port}/`,
     }),
     stdout: "pipe",
@@ -51,8 +62,16 @@ describe("orb mcp add under managed settings", () => {
   test("refuses a server the organization denies and writes nothing", async () => {
     const result = await orb("mcp", "add", "--global", "blocked", "--", "node", "server.js")
     expect(result.exitCode).not.toBe(0)
-    expect(result.stdout + result.stderr).toContain("denied by managed settings")
+    expect(result.stdout + result.stderr).toContain("blocked by managed settings")
     expect(await configured()).not.toContain("blocked")
+  })
+
+  test("refuses a server that is not on the allow list and writes nothing", async () => {
+    const before = await configured()
+    const result = await run(allowing, ["mcp", "add", "--global", "unlisted", "--", "node", "server.js"])
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stdout + result.stderr).toContain("not on the allow list in managed settings")
+    expect(await configured()).toBe(before)
   })
 
   test("still adds a server the lists do not touch", async () => {

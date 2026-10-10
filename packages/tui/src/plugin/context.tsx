@@ -387,7 +387,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
       const identity = await (local
         ? realpath(fileURLToPath(local)).then(
             (real) => ({ target: real, verified: true }),
-            () => ({ target: fileURLToPath(local), verified: true }),
+            () => ({ target: fileURLToPath(local), verified: false }),
           )
         : PluginRestriction.identify(target))
       if (
