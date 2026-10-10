@@ -66,46 +66,48 @@ export const Plugin = {
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertRead(context.sessionID, target.absolute, input.notebook_path)
-              const original = yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
-                Effect.tap((snapshot) =>
-                  ledger.assertFresh(context.sessionID, target.absolute, input.notebook_path, snapshot),
-                ),
-                Effect.catchTag("Environment.NotFound", () =>
-                  Effect.fail(new ToolFailure({ message: `File not found: ${input.notebook_path}` })),
-                ),
-              )
-              const notebook = Notebook.parse(original.text)
-              if (!notebook)
-                return yield* new ToolFailure({ message: `${input.notebook_path} is not a valid notebook.` })
-              const edit = yield* resolveEdit(input, notebook)
-              const next = Notebook.apply(notebook, edit)
-              const after = Notebook.serialize(next, original.text)
-              const preview = fileDiff(target.resource, original.text, after)
-              yield* permission.assert({
-                action: "Edit",
-                resources: [target.resource],
-                save: ["*"],
-                // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
-                metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source: { type: "tool" as const, messageID: context.messageID, id: context.id },
-              })
-              // Notebooks skip the formatter: reformatting JSON would rewrite every line of the file.
-              yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.notebook_path, original)
-              const result = yield* fileMutation.write({ target, content: after })
-              yield* ledger.recordWrite(
-                context.sessionID,
-                target.absolute,
-                yield* FileMutation.readSnapshot(environment.files, target.absolute),
-              )
-              return {
-                files: [fileDiff(result.resource, original.text, after)],
-                cells: NonNegativeInt.make(next.cells.length),
-              }
+              // Locked only now: the lock key resolves the path on disk, which FileAccess must have checked first.
+              return yield* Effect.gen(function* () {
+                yield* ledger.assertRead(context.sessionID, target.absolute, input.notebook_path)
+                const original = yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                  Effect.tap((snapshot) =>
+                    ledger.assertFresh(context.sessionID, target.absolute, input.notebook_path, snapshot),
+                  ),
+                  Effect.catchTag("Environment.NotFound", () =>
+                    Effect.fail(new ToolFailure({ message: `File not found: ${input.notebook_path}` })),
+                  ),
+                )
+                const notebook = Notebook.parse(original.text)
+                if (!notebook)
+                  return yield* new ToolFailure({ message: `${input.notebook_path} is not a valid notebook.` })
+                const edit = yield* resolveEdit(input, notebook)
+                const next = Notebook.apply(notebook, edit)
+                const after = Notebook.serialize(next, original.text)
+                const preview = fileDiff(target.resource, original.text, after)
+                yield* permission.assert({
+                  action: "Edit",
+                  resources: [target.resource],
+                  save: ["*"],
+                  // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
+                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool" as const, messageID: context.messageID, id: context.id },
+                })
+                // Notebooks skip the formatter: reformatting JSON would rewrite every line of the file.
+                yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.notebook_path, original)
+                const result = yield* fileMutation.write({ target, content: after })
+                yield* ledger.recordWrite(
+                  context.sessionID,
+                  target.absolute,
+                  yield* FileMutation.readSnapshot(environment.files, target.absolute),
+                )
+                return {
+                  files: [fileDiff(result.resource, original.text, after)],
+                  cells: NonNegativeInt.make(next.cells.length),
+                }
+              }).pipe(fileMutation.withLock([target.absolute]))
             }).pipe(
-              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.notebook_path)]),
               Effect.map((output) => ({
                 output,
                 content: `Edited ${output.files[0]?.file} (${input.mode}; ${output.cells} cells)`,

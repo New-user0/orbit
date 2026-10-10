@@ -75,9 +75,7 @@ export const assertUnchanged = Effect.fn("FileMutation.assertUnchanged")(functio
   const now = yield* readSnapshot(files, target).pipe(
     Effect.catchTag("Environment.NotFound", () => Effect.undefined),
     Effect.catch((error) =>
-      Effect.logWarning(`could not read ${target} again after approval`, error).pipe(
-        Effect.as("unreadable" as const),
-      ),
+      Effect.logWarning(`could not read ${target} again after approval`, error).pipe(Effect.as("unreadable" as const)),
     ),
   )
   // The digest folds line endings; the decoded text keeps them, so both together mean the same bytes.
@@ -107,6 +105,8 @@ export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
 // The key is the file's long name (for a file that exists; a new file keeps the spelling it is given) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock. A path that cannot be resolved keeps its lexical key.
 function lockKey(target: string) {
   const lexical = FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target)))
+  // Resolving a share's path connects to its host; FileAccess refuses such a path, so a key for one stays lexical.
+  if (process.platform === "win32" && (lexical.startsWith("\\\\") || lexical.startsWith("//"))) return lexical
   try {
     return FSUtil.resolve(lexical)
   } catch {

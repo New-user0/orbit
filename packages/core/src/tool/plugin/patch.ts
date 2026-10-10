@@ -108,14 +108,6 @@ export const Plugin = {
           execute: (input, context) => {
             const applied: Array<typeof Applied.Type> = []
             const parsed = Patch.parse(input.patchText)
-            const lockTargets = Result.isSuccess(parsed)
-              ? parsed.success.flatMap((hunk) => [
-                  FileAccess.resolvePath(location.directory, hunk.path),
-                  ...(hunk.type === "update" && hunk.movePath
-                    ? [FileAccess.resolvePath(location.directory, hunk.movePath)]
-                    : []),
-                ])
-              : []
             const fail = (operation: string, error: unknown) => {
               const completed = applied.map((item) => item.resource).join(", ")
               return new ToolFailure({
@@ -135,260 +127,272 @@ export const Plugin = {
               if (hunks.length === 0) {
                 return yield* new ToolFailure({ message: "patch rejected: empty patch" })
               }
-              const prepared: Prepared[] = []
-              const updates = new Map<string, string>()
-              const places: string[] = []
-              // Each path's state when it was first read, before anyone is asked: absent, or the snapshot. Rechecked after approval.
-              const states = new Map<
-                string,
-                { absolute: string; display: string; snapshot: FileMutation.Snapshot | undefined }
-              >()
-              // Which spelling first named each file, so a second spelling of one file is refused before anyone is asked.
-              const spellings = new Map<string, string>()
-              const identify = (target: { readonly absolute: string }, display: string) =>
-                Effect.try({
-                  try: () => fileIdentity(target.absolute),
-                  catch: (error) =>
-                    new ToolFailure({
-                      message: `patch verification failed: Failed to resolve ${display}: ${errorMessage(error)}`,
-                    }),
-                }).pipe(
-                  Effect.tap((id) =>
-                    spellings.has(id) && spellings.get(id) !== target.absolute
-                      ? Effect.fail(
-                          new ToolFailure({
-                            message: `patch verification failed: ${display} and ${spellings.get(id)} are the same file`,
-                          }),
-                        )
-                      : Effect.sync(() => spellings.set(id, target.absolute)),
-                  ),
-                )
-              const probe = (target: { readonly absolute: string }, display: string, id: string) =>
-                FileMutation.readSnapshot(environment.files, target.absolute).pipe(
-                  Effect.catchTag("Environment.NotFound", () => Effect.undefined),
-                  Effect.mapError(
-                    (error) =>
+              // Every path is checked by FileAccess before the lock key resolves it on disk (a share would be opened).
+              const locked = yield* Effect.forEach(
+                hunks.flatMap((hunk) =>
+                  hunk.type === "update" && hunk.movePath ? [hunk.path, hunk.movePath] : [hunk.path],
+                ),
+                (value) => access.resolve({ path: value, kind: "file" }),
+              )
+              return yield* Effect.gen(function* () {
+                const prepared: Prepared[] = []
+                const updates = new Map<string, string>()
+                const places: string[] = []
+                // Each path's state when it was first read, before anyone is asked: absent, or the snapshot. Rechecked after approval.
+                const states = new Map<
+                  string,
+                  { absolute: string; display: string; snapshot: FileMutation.Snapshot | undefined }
+                >()
+                // Which spelling first named each file, so a second spelling of one file is refused before anyone is asked.
+                const spellings = new Map<string, string>()
+                const identify = (target: { readonly absolute: string }, display: string) =>
+                  Effect.try({
+                    try: () => fileIdentity(target.absolute),
+                    catch: (error) =>
                       new ToolFailure({
-                        message: `patch verification failed: Failed to read ${target.absolute}: ${errorMessage(error)}`,
+                        message: `patch verification failed: Failed to resolve ${display}: ${errorMessage(error)}`,
                       }),
-                  ),
-                  Effect.tap((snapshot) =>
-                    Effect.sync(() => {
-                      if (!states.has(id)) states.set(id, { absolute: target.absolute, display, snapshot })
-                    }),
-                  ),
-                )
-              const resolveTarget = Effect.fnUntraced(function* (value: string) {
-                const target = yield* access.resolve({ path: value, kind: "file" })
-                // Every file the patch reaches so far, a move's source and destination included, before anything is asked.
-                places.push(target.place)
-                yield* context.progress({ places: [...new Set(places)] })
-                if (!target.externalDirectory) return target
-                yield* access.authorizeExternal([target], context, {
-                  filepath: target.place,
-                  parentDir: target.externalDirectory.directory,
+                  }).pipe(
+                    Effect.tap((id) =>
+                      spellings.has(id) && spellings.get(id) !== target.absolute
+                        ? Effect.fail(
+                            new ToolFailure({
+                              message: `patch verification failed: ${display} and ${spellings.get(id)} are the same file`,
+                            }),
+                          )
+                        : Effect.sync(() => spellings.set(id, target.absolute)),
+                    ),
+                  )
+                const probe = (target: { readonly absolute: string }, display: string, id: string) =>
+                  FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                    Effect.catchTag("Environment.NotFound", () => Effect.undefined),
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({
+                          message: `patch verification failed: Failed to read ${target.absolute}: ${errorMessage(error)}`,
+                        }),
+                    ),
+                    Effect.tap((snapshot) =>
+                      Effect.sync(() => {
+                        if (!states.has(id)) states.set(id, { absolute: target.absolute, display, snapshot })
+                      }),
+                    ),
+                  )
+                const resolveTarget = Effect.fnUntraced(function* (value: string) {
+                  const target = yield* access.resolve({ path: value, kind: "file" })
+                  // Every file the patch reaches so far, a move's source and destination included, before anything is asked.
+                  places.push(target.place)
+                  yield* context.progress({ places: [...new Set(places)] })
+                  if (!target.externalDirectory) return target
+                  yield* access.authorizeExternal([target], context, {
+                    filepath: target.place,
+                    parentDir: target.externalDirectory.directory,
+                  })
+                  return target
                 })
-                return target
-              })
-              for (const hunk of hunks) {
-                yield* Effect.gen(function* () {
-                  const target = yield* resolveTarget(hunk.path)
-                  const id = yield* identify(target, hunk.path)
-                  if (hunk.type === "add") {
+                for (const hunk of hunks) {
+                  yield* Effect.gen(function* () {
+                    const target = yield* resolveTarget(hunk.path)
+                    const id = yield* identify(target, hunk.path)
+                    if (hunk.type === "add") {
+                      yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
+                      const existing = yield* probe(target, hunk.path, id)
+                      yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, existing)
+                      const content =
+                        hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
+                      prepared.push({
+                        ...hunk,
+                        target,
+                        // Like Write, a replacing Add File keeps the BOM the file already has.
+                        content: existing?.bom ? Bom.join(Bom.split(content).text, true) : content,
+                        // A file that already exists is replaced, so its text is what the approval shows as removed.
+                        before: existing?.text ?? "",
+                        after: Bom.split(content).text,
+                        existed: existing !== undefined,
+                      })
+                      return
+                    }
+                    // Refused before any content is loaded; the snapshot then tells a touched file from an edited one.
+                    const previous = hunk.type === "update" ? updates.get(id) : undefined
                     yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
-                    const existing = yield* probe(target, hunk.path, id)
-                    yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, existing)
-                    const content =
-                      hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
+                    const snapshot =
+                      previous === undefined
+                        ? yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                            Effect.mapError(
+                              (error) =>
+                                new ToolFailure({
+                                  message:
+                                    hunk.type === "delete"
+                                      ? `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`
+                                      : `patch verification failed: Failed to read file to update ${target.absolute}: ${errorMessage(error)}`,
+                                }),
+                            ),
+                          )
+                        : undefined
+                    if (snapshot) {
+                      yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, snapshot)
+                      if (!states.has(id)) states.set(id, { absolute: target.absolute, display: hunk.path, snapshot })
+                    }
+                    if (hunk.type === "delete") {
+                      prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
+                      return
+                    }
+                    const original = previous ?? Bom.join(snapshot!.text, snapshot!.bom)
+                    const before = Bom.split(original).text
+                    const update = yield* Effect.try({
+                      try: () => Patch.derive(hunk.path, hunk.chunks, original),
+                      catch: (error) =>
+                        new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
+                    })
+                    const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                    const moveID = moveTarget && hunk.movePath ? yield* identify(moveTarget, hunk.movePath) : undefined
+                    // Writing the destination and then removing the source would delete a file moved onto itself.
+                    if (moveID !== undefined && moveID === id)
+                      return yield* new ToolFailure({
+                        message: `patch verification failed: ${hunk.movePath} is the file being moved (${hunk.path}); a move needs a different destination`,
+                      })
+                    // The destination follows the same sequence as an Add File target: read, probe, freshness.
+                    const replaced =
+                      moveTarget && hunk.movePath && moveID !== undefined
+                        ? yield* ledger.assertRead(context.sessionID, moveTarget.absolute, hunk.movePath).pipe(
+                            Effect.andThen(probe(moveTarget, hunk.movePath, moveID)),
+                            Effect.tap((existing) =>
+                              ledger.assertFresh(context.sessionID, moveTarget.absolute, hunk.movePath!, existing),
+                            ),
+                          )
+                        : undefined
                     prepared.push({
                       ...hunk,
                       target,
-                      // Like Write, a replacing Add File keeps the BOM the file already has.
-                      content: existing?.bom ? Bom.join(Bom.split(content).text, true) : content,
-                      // A file that already exists is replaced, so its text is what the approval shows as removed.
-                      before: existing?.text ?? "",
-                      after: Bom.split(content).text,
-                      existed: existing !== undefined,
+                      content: Patch.joinBom(update.content, update.bom),
+                      before,
+                      after: update.content,
+                      moveTarget,
+                      replaced: replaced?.text,
                     })
-                    return
-                  }
-                  // Refused before any content is loaded; the snapshot then tells a touched file from an edited one.
-                  const previous = hunk.type === "update" ? updates.get(id) : undefined
-                  yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
-                  const snapshot =
-                    previous === undefined
-                      ? yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
-                          Effect.mapError(
-                            (error) =>
-                              new ToolFailure({
-                                message:
-                                  hunk.type === "delete"
-                                    ? `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`
-                                    : `patch verification failed: Failed to read file to update ${target.absolute}: ${errorMessage(error)}`,
-                              }),
-                          ),
-                        )
-                      : undefined
-                  if (snapshot) {
-                    yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, snapshot)
-                    if (!states.has(id)) states.set(id, { absolute: target.absolute, display: hunk.path, snapshot })
-                  }
-                  if (hunk.type === "delete") {
-                    prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
-                    return
-                  }
-                  const original = previous ?? Bom.join(snapshot!.text, snapshot!.bom)
-                  const before = Bom.split(original).text
-                  const update = yield* Effect.try({
-                    try: () => Patch.derive(hunk.path, hunk.chunks, original),
-                    catch: (error) => new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
-                  })
-                  const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
-                  const moveID = moveTarget && hunk.movePath ? yield* identify(moveTarget, hunk.movePath) : undefined
-                  // Writing the destination and then removing the source would delete a file moved onto itself.
-                  if (moveID !== undefined && moveID === id)
-                    return yield* new ToolFailure({
-                      message: `patch verification failed: ${hunk.movePath} is the file being moved (${hunk.path}); a move needs a different destination`,
-                    })
-                  // The destination follows the same sequence as an Add File target: read, probe, freshness.
-                  const replaced =
-                    moveTarget && hunk.movePath && moveID !== undefined
-                      ? yield* ledger.assertRead(context.sessionID, moveTarget.absolute, hunk.movePath).pipe(
-                          Effect.andThen(probe(moveTarget, hunk.movePath, moveID)),
-                          Effect.tap((existing) =>
-                            ledger.assertFresh(context.sessionID, moveTarget.absolute, hunk.movePath!, existing),
-                          ),
-                        )
-                      : undefined
-                  prepared.push({
-                    ...hunk,
-                    target,
-                    content: Patch.joinBom(update.content, update.bom),
-                    before,
-                    after: update.content,
-                    moveTarget,
-                    replaced: replaced?.text,
-                  })
-                  if (!moveTarget) updates.set(id, Patch.joinBom(update.content, update.bom))
-                }).pipe(
-                  Effect.mapError((error) =>
-                    error instanceof ToolFailure
-                      ? error
-                      : new ToolFailure({ message: `Unable to prepare patch at ${hunk.path}`, error }),
-                  ),
+                    if (!moveTarget) updates.set(id, Patch.joinBom(update.content, update.bom))
+                  }).pipe(
+                    Effect.mapError((error) =>
+                      error instanceof ToolFailure
+                        ? error
+                        : new ToolFailure({ message: `Unable to prepare patch at ${hunk.path}`, error }),
+                    ),
+                  )
+                }
+
+                const patchFiles = prepared.flatMap((change) => [patchFile(change), ...replacedFile(change)])
+                const targets = prepared.flatMap((change) => [
+                  change.target,
+                  ...(change.type === "update" && change.moveTarget ? [change.moveTarget] : []),
+                ])
+                yield* permission.assert({
+                  action: "Edit",
+                  resources: [...new Set(targets.map((target) => target.resource))],
+                  save: ["*"],
+                  metadata: {
+                    filepath: targets.map((target) => target.resource).join(", "),
+                    // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
+                    paths: [...new Set(targets.map((target) => target.place))],
+                    diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
+                    files: prepared.flatMap((change) => {
+                      const [file, ...replaced] = [patchFile(change), ...replacedFile(change)]
+                      return change.type === "update" && change.moveTarget
+                        ? [
+                            { ...file!, place: change.moveTarget.place, from: change.target.place },
+                            ...replaced.map((item) => ({ ...item, place: change.moveTarget!.place })),
+                          ]
+                        : [{ ...file!, place: change.target.place }]
+                    }),
+                  },
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source,
+                })
+
+                // Every path before the first write, so a stale one leaves no partial patch.
+                yield* Effect.forEach(
+                  states.values(),
+                  (state) =>
+                    FileMutation.assertUnchanged(environment.files, state.absolute, state.display, state.snapshot),
+                  { discard: true },
                 )
-              }
 
-              const patchFiles = prepared.flatMap((change) => [patchFile(change), ...replacedFile(change)])
-              const targets = prepared.flatMap((change) => [
-                change.target,
-                ...(change.type === "update" && change.moveTarget ? [change.moveTarget] : []),
-              ])
-              yield* permission.assert({
-                action: "Edit",
-                resources: [...new Set(targets.map((target) => target.resource))],
-                save: ["*"],
-                metadata: {
-                  filepath: targets.map((target) => target.resource).join(", "),
-                  // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
-                  paths: [...new Set(targets.map((target) => target.place))],
-                  diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
-                  files: prepared.flatMap((change) => {
-                    const [file, ...replaced] = [patchFile(change), ...replacedFile(change)]
-                    return change.type === "update" && change.moveTarget
-                      ? [
-                          { ...file!, place: change.moveTarget.place, from: change.target.place },
-                          ...replaced.map((item) => ({ ...item, place: change.moveTarget!.place })),
-                        ]
-                      : [{ ...file!, place: change.target.place }]
-                  }),
-                },
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source,
-              })
-
-              // Every path before the first write, so a stale one leaves no partial patch.
-              yield* Effect.forEach(
-                states.values(),
-                (state) =>
-                  FileMutation.assertUnchanged(environment.files, state.absolute, state.display, state.snapshot),
-                { discard: true },
-              )
-
-              yield* Effect.forEach(
-                prepared,
-                (change) =>
-                  Effect.gen(function* () {
-                    if (change.type === "delete") {
+                yield* Effect.forEach(
+                  prepared,
+                  (change) =>
+                    Effect.gen(function* () {
+                      if (change.type === "delete") {
+                        yield* environment.files
+                          .remove(change.target.absolute)
+                          .pipe(Effect.mapError((error) => fail(`Failed to delete ${change.target.resource}`, error)))
+                        applied.push({
+                          type: change.type,
+                          resource: change.target.resource,
+                          target: change.target.absolute,
+                        })
+                        return
+                      }
+                      if (change.type === "update" && change.moveTarget) {
+                        const moveTarget = change.moveTarget
+                        yield* environment.files
+                          .write(moveTarget.absolute, new TextEncoder().encode(change.content))
+                          .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
+                        yield* environment.files
+                          .remove(change.target.absolute)
+                          .pipe(
+                            Effect.mapError((error) =>
+                              fail(
+                                `Wrote ${moveTarget.resource} but failed to remove ${change.target.resource}`,
+                                error,
+                              ),
+                            ),
+                          )
+                        applied.push({
+                          type: change.type,
+                          resource: change.moveTarget.resource,
+                          target: change.moveTarget.absolute,
+                        })
+                        return
+                      }
                       yield* environment.files
-                        .remove(change.target.absolute)
-                        .pipe(Effect.mapError((error) => fail(`Failed to delete ${change.target.resource}`, error)))
+                        .write(change.target.absolute, new TextEncoder().encode(change.content))
+                        .pipe(Effect.mapError((error) => fail(`Failed to write ${change.target.resource}`, error)))
                       applied.push({
                         type: change.type,
                         resource: change.target.resource,
                         target: change.target.absolute,
                       })
-                      return
-                    }
-                    if (change.type === "update" && change.moveTarget) {
-                      const moveTarget = change.moveTarget
-                      yield* environment.files
-                        .write(moveTarget.absolute, new TextEncoder().encode(change.content))
-                        .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
-                      yield* environment.files
-                        .remove(change.target.absolute)
-                        .pipe(
-                          Effect.mapError((error) =>
-                            fail(`Wrote ${moveTarget.resource} but failed to remove ${change.target.resource}`, error),
-                          ),
-                        )
-                      applied.push({
-                        type: change.type,
-                        resource: change.moveTarget.resource,
-                        target: change.moveTarget.absolute,
-                      })
-                      return
-                    }
-                    yield* environment.files
-                      .write(change.target.absolute, new TextEncoder().encode(change.content))
-                      .pipe(Effect.mapError((error) => fail(`Failed to write ${change.target.resource}`, error)))
-                    applied.push({
-                      type: change.type,
-                      resource: change.target.resource,
-                      target: change.target.absolute,
-                    })
-                  }),
-                { discard: true },
-              )
-              const formatted = new Map<string, string>()
-              yield* Effect.forEach(
-                [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
-                (target) =>
-                  Effect.gen(function* () {
-                    const written = yield* FileMutation.readSnapshot(environment.files, target).pipe(
-                      Effect.mapError((error) => fail(`Failed to read ${target}`, error)),
-                    )
-                    const final = (yield* formatter.file(target))
-                      ? yield* FileMutation.syncTextBom(environment.files, target, written.bom).pipe(
-                          Effect.andThen(FileMutation.readSnapshot(environment.files, target)),
-                          Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
-                        )
-                      : written
-                    formatted.set(target, final.text)
-                    yield* ledger.recordWrite(context.sessionID, target, final)
-                  }),
-                { discard: true },
-              )
-              const files = prepared.flatMap((change) => {
-                if (change.type === "delete") return [patchFile(change)]
-                const target = change.type === "update" && change.moveTarget ? change.moveTarget : change.target
-                const after = formatted.get(target.absolute)
-                return [patchFile(change, after), ...replacedFile(change, after)]
-              })
-              return { applied, files }
+                    }),
+                  { discard: true },
+                )
+                const formatted = new Map<string, string>()
+                yield* Effect.forEach(
+                  [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
+                  (target) =>
+                    Effect.gen(function* () {
+                      const written = yield* FileMutation.readSnapshot(environment.files, target).pipe(
+                        Effect.mapError((error) => fail(`Failed to read ${target}`, error)),
+                      )
+                      const final = (yield* formatter.file(target))
+                        ? yield* FileMutation.syncTextBom(environment.files, target, written.bom).pipe(
+                            Effect.andThen(FileMutation.readSnapshot(environment.files, target)),
+                            Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
+                          )
+                        : written
+                      formatted.set(target, final.text)
+                      yield* ledger.recordWrite(context.sessionID, target, final)
+                    }),
+                  { discard: true },
+                )
+                const files = prepared.flatMap((change) => {
+                  if (change.type === "delete") return [patchFile(change)]
+                  const target = change.type === "update" && change.moveTarget ? change.moveTarget : change.target
+                  const after = formatted.get(target.absolute)
+                  return [patchFile(change, after), ...replacedFile(change, after)]
+                })
+                return { applied, files }
+              }).pipe(fileMutation.withLock(locked.map((target) => target.absolute)))
             }).pipe(
-              fileMutation.withLock(lockTargets),
               Effect.map((output) => ({
                 output,
                 content: toModelContent(output),
