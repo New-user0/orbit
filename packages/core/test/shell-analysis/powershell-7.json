@@ -1,0 +1,14 @@
+{
+ "Get-ChildItem && Get-Content a": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineChainAst\",\"text\":\"Get-ChildItem && Get-Content a\",\"top\":true,\"elements\":[],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"Get-ChildItem\",\"written\":\"Get-ChildItem\",\"text\":\"Get-ChildItem\",\"operator\":\"Unknown\",\"nested\":true,\"arguments\":[],\"redirects\":[]},{\"name\":\"Get-Content\",\"written\":\"Get-Content\",\"text\":\"Get-Content a\",\"operator\":\"Unknown\",\"nested\":true,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"a\",\"value\":\"a\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "Get-Content a || Get-Content b": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineChainAst\",\"text\":\"Get-Content a || Get-Content b\",\"top\":true,\"elements\":[],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"Get-Content\",\"written\":\"Get-Content\",\"text\":\"Get-Content a\",\"operator\":\"Unknown\",\"nested\":true,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"a\",\"value\":\"a\"}],\"redirects\":[]},{\"name\":\"Get-Content\",\"written\":\"Get-Content\",\"text\":\"Get-Content b\",\"operator\":\"Unknown\",\"nested\":true,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"b\",\"value\":\"b\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "Get-ChildItem && Get-ChildItem": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineChainAst\",\"text\":\"Get-ChildItem && Get-ChildItem\",\"top\":true,\"elements\":[],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"Get-ChildItem\",\"written\":\"Get-ChildItem\",\"text\":\"Get-ChildItem\",\"operator\":\"Unknown\",\"nested\":true,\"arguments\":[],\"redirects\":[]},{\"name\":\"Get-ChildItem\",\"written\":\"Get-ChildItem\",\"text\":\"Get-ChildItem\",\"operator\":\"Unknown\",\"nested\":true,\"arguments\":[],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ }
+}

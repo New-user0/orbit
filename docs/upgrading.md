@@ -2029,6 +2029,19 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
 
+### The shell tool no longer runs commands in csh or tcsh
+
+When the tool shell is picked for compatibility, Orbit used to accept a `csh` or `tcsh` login shell and run commands in
+it. Those shells cannot run the POSIX syntax that models write, and Orbit cannot analyse their syntax to decide which
+commands need a question. They are now skipped like `fish` and `nu`: the tool falls back to the shell Orbit picks
+otherwise (`zsh` on macOS, `bash` or `sh` on Linux, PowerShell or Git Bash on Windows). Your own terminal and your login
+shell are unchanged.
+
+**Affects:** people whose login shell, `SHELL` or `shell` setting is `csh` or `tcsh`.
+
+**What to do:** nothing. Commands that relied on csh syntax (`setenv`, `set x = y`) must be written for the shell Orbit
+picks.
+
 ## Tools
 
 ### Web search results start with a Sources reminder
