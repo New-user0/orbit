@@ -233,9 +233,7 @@ describe("ReadToolFileSystem", () => {
       const file = path.join(directory, "short.txt")
       yield* files.writeFileString(file, "one\n")
 
-      const error = yield* readContent(environment, absolute(file), "short.txt", { offset: 2 }).pipe(
-        Effect.flip,
-      )
+      const error = yield* readContent(environment, absolute(file), "short.txt", { offset: 2 }).pipe(Effect.flip)
 
       expect(error).toBeInstanceOf(ReadToolFileSystem.OffsetOutOfRangeError)
       expect(error.message).toBe("Offset 2 is out of range for this file (1 line)")

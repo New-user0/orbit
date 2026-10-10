@@ -341,7 +341,92 @@ describe("Read repeat stubs and the freshness of the edit tools", () => {
         expect(yield* run("t2", tool.name, tool.run(name))).toMatchObject({ status: "completed" })
       }),
     )
+
+    it.live("counts a CRLF to LF rewrite as no change, and an added byte order mark as one", () =>
+      Effect.gen(function* () {
+        const { name, file, run, later } = yield* setup(tool)
+        yield* Effect.promise(() => fs.writeFile(file, tool.initial.replaceAll("\n", "\r\n")))
+        yield* run("r", "Read", { file_path: name })
+        yield* Effect.promise(() => fs.writeFile(file, tool.initial))
+        yield* later()
+        expect(yield* run("t", tool.name, tool.run(name))).toMatchObject({ status: "completed" })
+        expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(tool.changed)
+
+        // The other direction: the tool recorded LF text, and the file is now rewritten with CRLF.
+        yield* Effect.promise(() => fs.writeFile(file, tool.changed.replaceAll("\n", "\r\n")))
+        yield* later(7_000)
+        expect(yield* run("t1", tool.name, tool.back(name))).toMatchObject({ status: "completed" })
+
+        // Back to the starting text, read again, then a BOM is the only difference.
+        yield* Effect.promise(() => fs.writeFile(file, tool.initial))
+        yield* run("r2", "Read", { file_path: name })
+        const withBom = "﻿" + tool.initial
+        yield* Effect.promise(() => fs.writeFile(file, withBom))
+        yield* later(9_000)
+        expect(errorType(yield* run("t2", tool.name, tool.run(name)))).toBe("file.stale")
+        expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe(withBom)
+      }),
+    )
   })
+
+  describe("Patch Add File on an existing file", () => {
+    const add = (name: string) => ({ patchText: `*** Begin Patch\n*** Add File: ${name}\n+fresh\n*** End Patch` })
+    const cases = [
+      { name: "never read", code: "file.unread", mode: undefined, read: false, change: false },
+      { name: "read and then changed", code: "file.stale", mode: undefined, read: true, change: true },
+      // Present but not openable: its time is unknown, so it is refused as unread and nothing is written.
+      { name: "never read and not readable", code: "file.unread", mode: 0o200, read: false, change: false },
+    ] as const
+    for (const item of cases) {
+      const test = item.mode !== undefined && process.platform === "win32" ? it.live.skip : it.live
+      test(`refuses ${item.name} with ${item.code} and leaves the bytes`, () =>
+        Effect.gen(function* () {
+          const { name, file, run, later } = yield* setup(tools[2])
+          if (item.read) yield* run("r", "Read", { file_path: name })
+          if (item.change) {
+            yield* Effect.promise(() => fs.writeFile(file, "one\nzzz\nthree\n"))
+            yield* later()
+          }
+          const expected = item.change ? "one\nzzz\nthree\n" : tools[2].initial
+          if (item.mode !== undefined) yield* Effect.promise(() => fs.chmod(file, item.mode))
+          expect(errorType(yield* run("p", "Patch", add(name)))).toBe(item.code)
+          yield* Effect.promise(() => fs.chmod(file, 0o644))
+          expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(expected)
+        }))
+    }
+  })
+
+  it.live("forgets freshness and marks for a deleted or moved Session, and keeps the other Session", () =>
+    Effect.gen(function* () {
+      const { name, file, bus, location, registry } = yield* setup()
+      const sessions = yield* Session.Service
+      const ref = Location.Ref.make({ directory: location.directory })
+      const keeper = (yield* sessions.create({ location: ref })).id
+      const runKeeper = (id: string, tool: string, input: unknown) =>
+        executeTool(registry, call(keeper, id, tool, input))
+      const edit = { file_path: name, old_string: "two", new_string: "TWO" }
+      const undo = { file_path: name, old_string: "TWO", new_string: "two" }
+
+      for (const event of ["deleted", "moved"] as const) {
+        // A fresh Session each time, since a deleted one cannot be moved.
+        const sessionID = (yield* sessions.create({ location: ref })).id
+        const run = (id: string, tool: string, input: unknown) =>
+          executeTool(registry, call(sessionID, id, tool, input))
+        yield* Effect.promise(() => fs.writeFile(file, tools[0].initial))
+        yield* run(`r-${event}`, "Read", { file_path: name })
+        yield* runKeeper(`k-${event}`, "Read", { file_path: name })
+        expect(unchanged(yield* run(`s-${event}`, "Read", { file_path: name }))).toBe(true)
+        if (event === "deleted") yield* bus.publish(SessionEvent.Deleted, { sessionID })
+        else yield* bus.publish(SessionEvent.Moved, { sessionID, location: ref, projectID: Project.ID.global })
+        expect(errorType(yield* run(`e-${event}`, "Edit", edit))).toBe("file.unread")
+        expect(unchanged(yield* run(`n-${event}`, "Read", { file_path: name }))).toBe(false)
+        // The other Session keeps both its freshness and its repeat-read mark.
+        expect(unchanged(yield* runKeeper(`ks-${event}`, "Read", { file_path: name }))).toBe(true)
+        expect(yield* runKeeper(`ke-${event}`, "Edit", edit)).toMatchObject({ status: "completed" })
+        expect(yield* runKeeper(`ku-${event}`, "Edit", undo)).toMatchObject({ status: "completed" })
+      }
+    }),
+  )
 
   it.live(
     "answers an identical repeat read with the stub for text and a notebook, and stays out of its way for a different range",

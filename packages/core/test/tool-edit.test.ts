@@ -676,6 +676,14 @@ describe("EditTool", () => {
                 yield* Effect.promise(() => fs.utimes(target, later, later))
                 const input = { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true }
                 expect(yield* validateEdit(registry, input).pipe(Effect.exit)).toEqual(Exit.void)
+                // Every read is followed by another touch, so execute's file is newer than what validate remembered:
+                // only the snapshot of execute's own read can show the bytes are the same.
+                let bump = 90_000
+                edit.afterRead = () =>
+                  Effect.promise(() => {
+                    const next = new Date(Date.now() + (bump += 1_000))
+                    return fs.utimes(target, next, next)
+                  })
                 expect(yield* executeTool(registry, call(input))).toMatchObject({ status: "completed" })
                 expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after after")
 

@@ -277,4 +277,21 @@ describe("FileLedger", () => {
       yield* ledger.assertFresh(sessionID, file, "a.ts", { mtimeMs: 2, digest: "x" })
     }).pipe(Effect.provide(ledgerLayer)),
   )
+
+  it.live("treats a path that exists but cannot be read as present: unread without a record, stale with one", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      // A directory exists but cannot be opened as a file, so its time is unknown.
+      const dir = path.join(tmp.path, "dir")
+      yield* Effect.promise(() => fs.mkdir(dir))
+      const ledger = yield* FileLedger.Service
+      expect((yield* ledger.assertRead(sessionID, dir, "dir").pipe(Effect.flip)).code).toBe("file.unread")
+      expect((yield* ledger.assertFresh(sessionID, dir, "dir").pipe(Effect.flip)).code).toBe("file.unread")
+      yield* ledger.recordRead(sessionID, dir, { mtimeMs: 1 })
+      expect((yield* ledger.assertFresh(sessionID, dir, "dir").pipe(Effect.flip)).code).toBe("file.stale")
+      expect(yield* ledger.assertRead(sessionID, path.join(tmp.path, "missing"), "missing").pipe(Effect.exit)).toEqual(
+        Exit.void,
+      )
+    }).pipe(Effect.provide(ledgerLayer)),
+  )
 })

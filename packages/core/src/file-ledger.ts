@@ -109,7 +109,10 @@ const layer = Layer.effect(
       // A stat that follows links, like the time a read records: `files.stat` would describe the link itself.
       environment.files.read(path, { offset: 0, length: 0 }).pipe(
         Effect.map((file) => file.info.mtimeMs),
-        Effect.catch(() => Effect.undefined),
+        // Only a missing file counts as absent. A file that is there but cannot be opened has an unknown time, so it is
+        // treated as changed: an unread one fails `file.unread` and a read one fails `file.stale`.
+        Effect.catchTag("Environment.NotFound", () => Effect.undefined),
+        Effect.catch(() => Effect.succeed(Number.POSITIVE_INFINITY)),
       )
     const unread = (display: string) =>
       new ToolFailure({
