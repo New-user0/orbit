@@ -395,6 +395,23 @@ test.each<[string, OrbitEvent]>([
       },
     },
   ],
+  [
+    "a global form for the session's location",
+    {
+      id: "evt_global_form",
+      created: 3,
+      location: { directory },
+      type: "form.created",
+      data: {
+        form: {
+          id: "form_global",
+          sessionID: "global",
+          title: "Input requested",
+          fields: [{ key: "authorization", type: "external", url: "https://example.com" }],
+        },
+      },
+    },
+  ],
 ])("the terminal title says needs input for %s", async (_name, request) => {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })

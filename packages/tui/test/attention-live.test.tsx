@@ -30,10 +30,24 @@ test("the bell rings between frames while a live tab pulse keeps the renderer ru
     expect(app.renderer.isRunning).toBe(true)
     const written: string[] = []
     const attention = createTuiAttention({ renderer: app.renderer, config, writeBell: (text) => written.push(text) })
+    // Count frames drawn after notify starts; the bell must not be written before the first one.
+    let frames = 0
+    app.renderer.on("frame", () => frames++)
+    let framesAtWrite = -1
+    const attention2 = createTuiAttention({
+      renderer: app.renderer,
+      config,
+      writeBell: () => {
+        framesAtWrite = frames
+      },
+    })
+    await attention2.notify({ message: "Permission needs input" })
+    expect(framesAtWrite).toBeGreaterThanOrEqual(1)
+    attention2.dispose()
     const started = Date.now()
     const result = await attention.notify({ message: "Permission needs input" })
     expect(result).toMatchObject({ ok: true, bell: true })
-    expect(written).toEqual([""])
+    expect(written).toEqual(["\x07"])
     expect(Date.now() - started).toBeLessThan(1000)
     attention.dispose()
   } finally {
@@ -70,7 +84,7 @@ test("the idle reminder's options ring only a blurred terminal", async () => {
   expect(await attention.notify(options)).toMatchObject({ ok: false, skipped: "focused" })
   listeners.get("blur")?.()
   expect(await attention.notify(options)).toMatchObject({ ok: true, bell: true })
-  expect(written).toEqual([""])
+  expect(written).toEqual(["\x07"])
   // Without the request option, unknown focus still rings.
   const fresh = createTuiAttention({
     renderer: {

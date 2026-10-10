@@ -55,6 +55,8 @@ type CycleResult = {
 
 export type LifecycleInput = {
   host: MiniHost
+  // A seam for tests, which draw into a test renderer instead of the terminal.
+  createRenderer?: typeof createCliRenderer
   getDirectory: () => string
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
@@ -155,7 +157,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   const tuiConfig = await input.tuiConfig
   const miniSettings = resolveMiniSettings(tuiConfig)
   const mono = miniSettings.mono
-  const renderer = await createCliRenderer({
+  const renderer = await (input.createRenderer ?? createCliRenderer)({
     stdin: input.host.terminal.stdin,
     targetFps: 30,
     maxFps: 60,

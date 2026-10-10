@@ -17,15 +17,13 @@ export async function ringTerminalBell(
   renderer: BellRenderer,
   write: (text: string) => unknown = (text) => process.stdout.write(text),
 ) {
-  if (renderer.isRunning && renderer.on && renderer.off) {
-    let listener!: () => void
-    const frame = new Promise<void>((resolve) => {
-      listener = resolve
-      renderer.on?.("frame", listener)
-    })
-    await Promise.race([frame, renderer.idle()])
-    renderer.off("frame", listener)
-  } else await renderer.idle()
+  if (!renderer.isRunning || !renderer.on || !renderer.off) await renderer.idle()
+  else {
+    const frame = Promise.withResolvers<void>()
+    renderer.on("frame", frame.resolve)
+    await Promise.race([frame.promise, renderer.idle()])
+    renderer.off("frame", frame.resolve)
+  }
   if (renderer.isDestroyed) return false
   write("\x07")
   return true

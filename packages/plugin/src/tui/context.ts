@@ -303,7 +303,11 @@ export interface AttentionNotifyOptions {
   readonly message: string
   readonly notification?: AttentionNotification
   readonly sound?: AttentionSound
-  /** When the terminal bell may ring; defaults to blurred or unknown focus. Only matters when the bell is on. */
+  /**
+   * When the terminal bell may ring; defaults to blurred or unknown focus. Only matters when the bell is on. An object
+   * rings the bell even when `notification` is false (a subagent's permission still needs a person); when absent, the
+   * bell follows `notification !== false`.
+   */
   readonly bell?: { readonly when?: AttentionWhen }
 }
 

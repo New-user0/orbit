@@ -174,7 +174,7 @@ export function createTuiAttention(input: {
         const bellSkip =
           bellWhen === undefined ? (focus === "focused" ? "focused" : undefined) : focusSkip(bellWhen, focus)
         const bell =
-          input.config.attention.bell && request.notification !== false && !bellSkip
+          input.config.attention.bell && (request.bell !== undefined || request.notification !== false) && !bellSkip
             ? await ringTerminalBell(input.renderer, input.writeBell)
             : false
 

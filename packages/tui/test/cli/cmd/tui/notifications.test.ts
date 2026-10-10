@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { EventEmitter } from "node:events"
 import Notifications from "../../../../src/feature-plugins/system/notifications"
+import { createTuiAttention } from "../../../../src/attention"
 import type { OrbitEvent, PermissionAsked } from "@orbit/client"
 import type { AttentionNotifyOptions, Context, Route, ToastOptions } from "@orbit/plugin/tui/context"
 
 type Session = { id: string; title: string; parentID?: string }
 
-async function setup(route: Route = { type: "session", sessionID: "session" }, idleReminder = 0) {
+async function setup(
+  route: Route = { type: "session", sessionID: "session" },
+  idleReminder = 0,
+  realAttention?: Context["attention"],
+) {
   const keys = new EventEmitter()
   const notifications: AttentionNotifyOptions[] = []
   const toasts: ToastOptions[] = []
@@ -29,7 +34,7 @@ async function setup(route: Route = { type: "session", sessionID: "session" }, i
       toast: { show: (toast: ToastOptions) => toasts.push(toast) },
     },
     renderer: { keyInput: keys },
-    attention: {
+    attention: realAttention ?? {
       idleReminder,
       async notify(input: AttentionNotifyOptions) {
         notifications.push(input)
@@ -274,6 +279,7 @@ describe("internal notifications TUI plugin", () => {
         title: "Questions",
         message: "Input needs response",
         notification: false,
+        bell: {},
         sound: { name: "question", when: "always" },
       },
       {
@@ -364,3 +370,45 @@ describe("idle reminder", () => {
     expect(waiting(harness)).toEqual([])
   })
 })
+
+// The real plugin through the real attention host: a subagent that needs a person rings the bell, its completion does not.
+describe("terminal bell for subagents", () => {
+  test.each([
+    ["root permission", () => permissionAsked("per-1", "session"), true],
+    ["subagent permission", () => permissionAsked("per-2", "subagent"), true],
+    ["subagent form", () => ({ id: "f", created: 0, type: "form.created", data: { form: form("form-2", "subagent") } }) as OrbitEvent, true],
+    ["subagent Session done", () => executionSucceeded("d1", "subagent"), false],
+  ] as const)("%s rings: %p", async (_name, event, rings) => {
+    const written: string[] = []
+    const attention = createTuiAttention({
+      renderer: {
+        isDestroyed: false,
+        on: () => {},
+        off: () => {},
+        triggerNotification: () => true,
+        idle: async () => {},
+      },
+      config: {
+        attention: {
+          notifications: false,
+          sound: false,
+          bell: true,
+          idle_reminder: 0,
+          volume: 0.4,
+          sound_pack: "orbit.default",
+          sounds: {},
+        },
+      },
+      writeBell: (text) => written.push(text),
+    })
+    const harness = await setup(undefined, 0, attention)
+    harness.emit(event())
+    await Bun.sleep(20)
+    expect(written).toEqual(rings ? ["\x07"] : [])
+    attention.dispose()
+  })
+})
+
+function permissionAsked(id: string, sessionID: string): OrbitEvent {
+  return { id: "e-" + id, created: 0, type: "permission.asked", data: permission(id, sessionID) } as OrbitEvent
+}

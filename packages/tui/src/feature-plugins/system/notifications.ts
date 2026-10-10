@@ -8,6 +8,8 @@ function notify(
   message: string,
   sound: AttentionSoundName,
   title?: string,
+  // A subagent's permission or form still needs a person, so it rings the bell; its "Session done" stays silent.
+  needsPerson = false,
 ) {
   const session = sessionID ? context.data.session.get(sessionID) : undefined
   const isSubagent = session?.parentID !== undefined
@@ -16,6 +18,7 @@ function notify(
     message,
     notification: isSubagent ? false : { when: "blurred" },
     sound: { name: sound, when: "always" },
+    bell: needsPerson && isSubagent ? {} : undefined,
   })
 }
 
@@ -73,7 +76,7 @@ export default Plugin.define({
         if (forms.has(event.data.form.id)) return
         forms.add(event.data.form.id)
         cancelReminder()
-        notify(context, event.data.form.sessionID, "Input needs response", "question", event.data.form.title)
+        notify(context, event.data.form.sessionID, "Input needs response", "question", event.data.form.title, true)
       }),
       context.data.on("form.replied", (event) => forms.delete(event.data.id)),
       context.data.on("form.cancelled", (event) => forms.delete(event.data.id)),
@@ -81,7 +84,7 @@ export default Plugin.define({
         if (permissions.has(event.data.id)) return
         permissions.add(event.data.id)
         cancelReminder()
-        notify(context, event.data.sessionID, "Permission needs input", "permission")
+        notify(context, event.data.sessionID, "Permission needs input", "permission", undefined, true)
       }),
       context.data.on("permission.replied", (event) => permissions.delete(event.data.requestID)),
       context.data.on("session.execution.started", (event) => started(event.data.sessionID)),
