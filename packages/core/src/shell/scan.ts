@@ -38,6 +38,8 @@ export type WordFlags = {
   // Unquoted pathname patterns and brace lists.
   glob?: true
   brace?: true
+  // An unquoted leading ~ (or one after = or : in an assignment value) that bash replaces with a home folder.
+  tilde?: true
 }
 export type Redirect = {
   operator: string
@@ -79,8 +81,6 @@ const BASH_DECLARATIONS = new Set(["declare", "typeset", "export", "readonly", "
 const MAX_INPUT_LENGTH = 64 * 1024
 const MAX_SUBSTITUTION_DEPTH = 32
 
-// Set when a nesting bound refuses text, so the failure that follows is classed as a limit and not as bad syntax.
-let depthLimitHit = false
 
 export function inspect(input: string): Inspection {
   const result = inspectBash(input)
@@ -112,12 +112,14 @@ function plain(detail: Detail): Command {
   }
 }
 
+// depthLimitHit is set when a nesting bound refuses text, so the failure that follows is classed as a limit and not as bad syntax.
+type Budget = { remaining: number; depthLimitHit: boolean }
+
 function inspectBash(input: string): Scanned | Opaque {
-  depthLimitHit = false
-  return scanBash(input, 0, { remaining: MAX_INPUT_LENGTH * MAX_SUBSTITUTION_DEPTH })
+  return scanBash(input, 0, { remaining: MAX_INPUT_LENGTH * MAX_SUBSTITUTION_DEPTH, depthLimitHit: false })
 }
 
-function scanBash(input: string, depth: number, budget: { remaining: number }): Scanned | Opaque {
+function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaque {
   // Bound both nesting and total source visited by expansion scans.
   budget.remaining -= input.length
   if (input.length > MAX_INPUT_LENGTH || budget.remaining < 0 || depth > MAX_SUBSTITUTION_DEPTH)
@@ -125,7 +127,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
   const fail = (reason: OpaqueReason): Opaque => ({
     kind: "opaque",
     reason,
-    class: depthLimitHit || depth >= MAX_SUBSTITUTION_DEPTH ? "limit" : "syntax",
+    class: budget.depthLimitHit || depth >= MAX_SUBSTITUTION_DEPTH ? "limit" : "syntax",
   })
   const syntax = (reason: OpaqueReason): Opaque => ({ kind: "opaque", reason, class: "syntax" })
   const unsupported = (reason: OpaqueReason): Opaque => ({ kind: "opaque", reason, class: "unsupported" })
@@ -139,11 +141,15 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
   const wordFlags: WordFlags[] = []
   const redirects: Redirect[] = []
   let flags: WordFlags = {}
+  // One entry per open unquoted brace in the current word; true once it holds a comma or a range.
+  const braces: boolean[] = []
   let redirectOperator: string | undefined
   let redirectFd: string | undefined
   const words: string[] = []
   const rawWords: string[] = []
   const assignmentWords: boolean[] = []
+  // Index of the first word that is not an assignment, or -1 while the command has only prefix assignments.
+  let commandName = -1
   let word = ""
   let wordStarted = false
   let wordStart = 0
@@ -181,7 +187,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
   }> = []
 
   const adopt = (result: Scanned, origin: Origin, target: Detail[]) => {
-    result.roots.forEach((root) => (root.origin = origin))
+    result.roots.forEach((root) => (root.origin ??= origin))
     target.push(...result.roots)
     features.assignment ||= result.features.assignment
     features.functionDefinition ||= result.features.functionDefinition
@@ -205,12 +211,22 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
   }
   const header = () => ["header", "pattern", "do"].includes(structures.at(-1)?.phase ?? "")
 
+  // Only a prefix assignment or an argument of a declaration builtin is exempt from globbing and brace expansion.
+  // Anywhere else an assignment-looking word (echo A=*) expands like any other argument.
+  const assignmentExempt = () => {
+    if (!assignmentWord || redirectTarget) return false
+    const name = commandName
+    return name < 0 || BASH_DECLARATIONS.has(rawWords[name])
+  }
+
   const finishWord = () => {
     if (!wordStarted) return
+    braces.length = 0
     if (!redirectTarget) {
       words.push(word)
       // Unquoted trailing continuations are ignored syntax, not part of the raw token.
       rawWords.push(input.slice(wordStart, wordEnd))
+      if (!assignmentWord && commandName < 0) commandName = words.length - 1
       assignmentWords.push(assignmentWord)
       wordFlags.push(flags)
       commandEnd = wordEnd
@@ -297,6 +313,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
           ? { redirectWordCount: redirectWordCount - name }
           : {}),
       }
+      if (name === 0 && rawWords[0] === "coproc") features.background = true
       commands.push(command)
       roots.push(command)
       node = command
@@ -332,6 +349,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
     words.length = 0
     rawWords.length = 0
     assignmentWords.length = 0
+    commandName = -1
     separated = true
     hasRedirect = false
     resourceEnd = undefined
@@ -362,7 +380,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         continue
       }
       if (structure?.kind === "for" && structure.phase === "header" && char === "(" && input[index + 1] !== "(") {
-        const values = bashExpansion(input, index, depth, "array")
+        const values = bashExpansion(budget, input, index, depth, "array")
         if (!values) return fail("compound-command")
         finishCommand()
         const failure = addSubstitutions(values, roots)
@@ -462,6 +480,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         ) {
           index += token ? token.length - 1 : 0
           if (token === "time") index += /^[ \t]+-p\b/.exec(input.slice(index + 1))?.[0].length ?? 0
+          if (token === "coproc") features.background = true
           if (token === "coproc")
             index +=
               /^[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+(?=[{(]|(?:if|while|until|for|case)\b)/.exec(
@@ -475,7 +494,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         ((!words.length && !hasRedirect && !header()) || (structure?.kind === "for" && structure.phase === "header")) &&
         input.startsWith("((", index)
       ) {
-        const expression = bashExpansion(input, index, depth, "arithmetic")
+        const expression = bashExpansion(budget, input, index, depth, "arithmetic")
         if (!expression) return fail("invalid-structure")
         const failure = addSubstitutions(expression, roots)
         if (failure) return failure
@@ -493,7 +512,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         !header() &&
         (char === "(" || (char === "{" && /[ \t\n]/.test(input[index + 1] ?? "")))
       ) {
-        const group = bashDelimited(input, index, depth)
+        const group = bashDelimited(budget, input, index, depth)
         if (!group || !group.source.trim()) return fail("invalid-structure")
         const result = scanBash(group.source, depth + 1, budget)
         if (result.kind === "opaque") return result
@@ -507,7 +526,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         continue
       }
       if (!words.length && !hasRedirect && input.startsWith("[[", index)) {
-        const expression = bashExpansion(input, index, depth, "test")
+        const expression = bashExpansion(budget, input, index, depth, "test")
         if (!expression) return fail("invalid-structure")
         const failure = addSubstitutions(expression, roots)
         if (failure) return failure
@@ -538,7 +557,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         } else word += char
       } else if ((char === "$" && "({[".includes(input[index + 1] ?? "\0")) || char === "`") {
         flags[expansionFlag(input, index)] = true
-        const substitution = bashExpansion(input, index, depth, undefined, true)
+        const substitution = bashExpansion(budget, input, index, depth, undefined, true)
         if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
         const failure = addSubstitutions(substitution)
         if (failure) return failure
@@ -583,7 +602,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       continue
     }
     if (char === "\\") {
-      if (index + 1 >= input.length) return syntax("unterminated-escape")
+      if (index + 1 >= input.length) return unsupported("unterminated-escape")
       if (input[index + 1] === "\n") index++
       else {
         wordStarted = true
@@ -605,13 +624,24 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       else flags[expansionFlag(input, index)] = true
       const substitution =
         char === "("
-          ? bashExpansion(input, index, depth, assignmentWord ? "array" : "pattern")
+          ? bashExpansion(budget, input, index, depth, assignmentWord ? "array" : "pattern")
           : char === "["
-            ? bashExpansion(input, index, depth, "subscript")
-            : bashExpansion(input, index, depth)
+            ? bashExpansion(budget, input, index, depth, "subscript")
+            : bashExpansion(budget, input, index, depth)
       if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
       const failure = addSubstitutions(substitution)
       if (failure) return failure
+      // A command substitution nested in another expansion is still a command.
+      if (substitution.substitutions?.length) flags.command = true
+      if (char === "(" && assignmentWord) {
+        // Array values are words of their own: they glob, brace-expand and substitute like arguments.
+        const values = scanBash(": " + substitution.source, depth + 1, budget)
+        if (values.kind === "opaque") flags.glob = true
+        else
+          values.roots
+            .filter((root) => !root.origin)
+            .forEach((root) => root.flags.forEach((entry) => Object.assign(flags, entry)))
+      }
       wordStarted = true
       word += input.slice(index, substitution.end + 1)
       index = substitution.end
@@ -620,7 +650,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
     }
     if ((char === "<" || char === ">" || (char === "=" && !wordStarted)) && input[index + 1] === "(") {
       flags.process = true
-      const substitution = bashDelimited(input, index + 1, depth)
+      const substitution = bashDelimited(budget, input, index + 1, depth)
       if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
       const failure = addSubstitutions(substitution)
       if (failure) return failure
@@ -655,6 +685,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         word = ""
         wordStarted = false
         flags = {}
+        braces.length = 0
       } else finishWord()
       // Trailing redirects wrap a whole list/pipeline in the legacy grammar, not its last command.
       // Prefix redirects remain part of the command, and later words remain redirect destinations.
@@ -726,7 +757,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
             if (heredoc.command) heredoc.command.resource = input.slice(heredoc.start, body.end).trim()
             heredoc.record.body = body.source
             if (!heredoc.quoted) {
-              const expansion = bashExpansion(body.source, 0, depth, "heredoc")
+              const expansion = bashExpansion(budget, body.source, 0, depth, "heredoc")
               if (!expansion) return fail("command-substitution")
               const failure = addSubstitutions(expansion, heredoc.node?.nested ?? roots, "heredoc")
               if (failure) return failure
@@ -754,14 +785,25 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
     wordStarted = true
     if (char === "=" && !assignmentHeadUnsafe && /^[A-Za-z_][A-Za-z0-9_]*(?:\[.*\])?\+?$/.test(word))
       assignmentWord = true
+    const exempt = assignmentExempt()
     if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) flags.parameter = true
     else if (
-      !assignmentWord &&
+      !exempt &&
       input[index - 1] !== "$" &&
       (char === "*" || char === "?" || (char === "[" && matchAt(BRACKET_GLOB, input, index)))
     )
       flags.glob = true
-    else if (!assignmentWord && char === "{" && matchAt(BRACE_LIST, input, index)) flags.brace = true
+    else if (
+      char === "~" &&
+      (index === wordStart || (assignmentWord && !redirectTarget && ":=".includes(input[index - 1])))
+    )
+      flags.tilde = true
+    // Braces are tracked as a stack so every check stays linear in the word.
+    else if (char === "{") braces.push(false)
+    else if (char === "}" && braces.length) {
+      if (braces.pop() && !exempt) flags.brace = true
+    } else if (braces.length && (char === "," || (char === "." && input[index + 1] === ".")))
+      braces[braces.length - 1] = true
     word += char
     wordEnd = index + 1
   }
@@ -781,8 +823,8 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
   return { kind: "scanned", commands, roots, features }
 }
 
-const BRACKET_GLOB = /\[[^\]\s]+\]/y
-const BRACE_LIST = /\{[^\s]*?(?:,|\.\.)[^\s]*?\}/y
+// Linear: the class excludes both brackets, so a failed match never rescans.
+const BRACKET_GLOB = /\[[^\][\s]+\]/y
 
 function matchAt(pattern: RegExp, input: string, index: number) {
   pattern.lastIndex = index
@@ -807,9 +849,9 @@ function bashFunctionHead(input: string, start: number) {
   )?.[0]
 }
 
-function bashDelimited(input: string, start: number, depth: number): BashExpansion | undefined {
+function bashDelimited(budget: Budget, input: string, start: number, depth: number): BashExpansion | undefined {
   if (depth >= MAX_SUBSTITUTION_DEPTH) {
-    depthLimitHit = true
+    budget.depthLimitHit = true
     return
   }
   const close = input[start] === "{" ? "}" : ")"
@@ -834,8 +876,8 @@ function bashDelimited(input: string, start: number, depth: number): BashExpansi
       }
       const nested =
         char === '"' || input.startsWith('$"', index)
-          ? bashExpansion(input, index + (char === "$" ? 1 : 0), depth + 1, "double")
-          : bashExpansion(input, index, depth + 1)
+          ? bashExpansion(budget, input, index + (char === "$" ? 1 : 0), depth + 1, "double")
+          : bashExpansion(budget, input, index, depth + 1)
       if (!nested) return
       index = nested.end
       continue
@@ -889,14 +931,14 @@ function bashDelimited(input: string, start: number, depth: number): BashExpansi
       continue
     }
     if (input.startsWith("((", index)) {
-      const nested = bashExpansion(input, index, depth + 1, "arithmetic")
+      const nested = bashExpansion(budget, input, index, depth + 1, "arithmetic")
       if (!nested) return
       index = nested.end
       commandStart = false
       continue
     }
     if (char === "(" || (char === "{" && boundary && /[ \t\n]/.test(input[index + 1] ?? ""))) {
-      const nested = bashDelimited(input, index, depth + 1)
+      const nested = bashDelimited(budget, input, index, depth + 1)
       if (!nested) return
       index = nested.end
       commandStart = false
@@ -909,6 +951,7 @@ function bashDelimited(input: string, start: number, depth: number): BashExpansi
 }
 
 function bashExpansion(
+  budget: Budget,
   input: string,
   start: number,
   depth: number,
@@ -925,7 +968,7 @@ function bashExpansion(
   quoted = false,
 ): BashExpansion | undefined {
   if (depth >= MAX_SUBSTITUTION_DEPTH) {
-    depthLimitHit = true
+    budget.depthLimitHit = true
     return
   }
   if (!mode && input[start] === "`") {
@@ -942,9 +985,9 @@ function bashExpansion(
     return
   }
   if (!mode && input.startsWith("$(", start) && !input.startsWith("$((", start))
-    return bashDelimited(input, start + 1, depth)
+    return bashDelimited(budget, input, start + 1, depth)
   if (!mode && /^\$\{[ \t\n|]/.test(input.slice(start))) {
-    const nested = bashDelimited(input, start + 1, depth)
+    const nested = bashDelimited(budget, input, start + 1, depth)
     if (!nested) return
     return { ...nested, source: nested.source.startsWith("|") ? nested.source.slice(1) : nested.source }
   }
@@ -995,14 +1038,14 @@ function bashExpansion(
       continue
     }
     if (char === '"' && kind !== "heredoc") {
-      const nested = bashExpansion(input, index, depth + 1, "double")
+      const nested = bashExpansion(budget, input, index, depth + 1, "double")
       if (!nested) return
       substitutions.push(...nested.substitutions!)
       index = nested.end
       continue
     }
     if (char === "`" || (char === "$" && "({[".includes(input[index + 1] ?? "\0"))) {
-      const nested = bashExpansion(input, index, depth + 1, undefined, kind === "double" || quoted)
+      const nested = bashExpansion(budget, input, index, depth + 1, undefined, kind === "double" || quoted)
       if (!nested) return
       substitutions.push(...(nested.substitutions ?? [nested.source]))
       index = nested.end
@@ -1012,7 +1055,7 @@ function bashExpansion(
       ((kind === "array" && "<>=".includes(char)) || (kind === "test" && "<>".includes(char))) &&
       input[index + 1] === "("
     ) {
-      const nested = bashDelimited(input, index + 1, depth + 1)
+      const nested = bashDelimited(budget, input, index + 1, depth + 1)
       if (!nested) return
       substitutions.push(nested.source)
       index = nested.end
@@ -1023,6 +1066,7 @@ function bashExpansion(
       (kind === "parameter" && char === "[" && /^[!#]?[A-Za-z_][A-Za-z0-9_]*$/.test(input.slice(start + offset, index)))
     ) {
       const nested = bashExpansion(
+        budget,
         input,
         index,
         depth + 1,

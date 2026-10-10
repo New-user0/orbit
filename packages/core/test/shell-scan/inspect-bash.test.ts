@@ -250,7 +250,8 @@ describe("ShellScan.inspect opaque classes", () => {
   const cases: Array<[string, string, ShellScan.OpaqueClass]> = [
     ["unterminated quote", `echo "a`, "syntax"],
     ["unterminated single quote", `echo 'a`, "syntax"],
-    ["trailing escape", "echo a\\", "syntax"],
+    ["trailing escape", "echo a\\", "unsupported"],
+    ["delimiter depth", "cat <(( " + "( ".repeat(40) + "a" + " )".repeat(40) + " ))", "limit"],
     ["unterminated substitution", "echo $(a", "syntax"],
     ["stray parenthesis", "echo (a)", "syntax"],
     ["empty group", "( )", "syntax"],
@@ -277,4 +278,99 @@ describe("ShellScan.inspect opaque classes", () => {
   test("scan keeps reporting the reason alone", () => {
     expect(ShellScan.scan(`echo "a`)).toEqual({ kind: "opaque", reason: "unterminated-quote" })
   })
+})
+
+// Class matrix for word expansion: positions (prefix assignment, declaration argument, plain argument, redirect target,
+// array value) x expansions (glob, brace, tilde, nested command substitution).
+describe("ShellScan.inspect expansion positions", () => {
+  const argument: Array<[string, ShellScan.WordFlags]> = [
+    ["echo A=*", { glob: true }],
+    ["echo A={a,b}", { brace: true }],
+    ['echo {a,"b c"}', { brace: true }],
+    ["echo {a,{b}}", { brace: true }],
+    ["echo {a}", {}],
+    ["echo ~/f", { tilde: true }],
+    ['echo "~/f" \\~/f', {}],
+    ["echo A=~/x", { tilde: true }],
+    ["echo ${x:-$(a)}", { parameter: true, command: true }],
+    ["echo $((1+$(b)))", { arithmetic: true, command: true }],
+    ["echo @(a|$(d))", { glob: true, command: true }],
+  ]
+  test.each(argument)("argument %s", (input, expected) => {
+    const flags = only(input).flags.slice(1)
+    expect(Object.assign({}, ...flags)).toEqual(expected)
+  })
+
+  test("a prefix assignment and a declaration argument are exempt from glob and brace, not from tilde", () => {
+    expect(only("A=* B={a,b} env").assignments.map((assignment) => assignment.flags)).toEqual([{}, {}])
+    expect(only("A=~/x:~/y env").assignments[0].flags).toEqual({ tilde: true })
+    expect(only("export A=* B={a,b}").flags.slice(1)).toEqual([{}, {}])
+    expect(only("declare -x A=*").flags.slice(1)).toEqual([{}, {}])
+  })
+
+  test.each([
+    ["a[$(x)]=1", { arithmetic: true, command: true }],
+    ["a=($(x))", { command: true }],
+    ["a=(*)", { glob: true }],
+    ["a=({b,c})", { brace: true }],
+    ["a=(x $y)", { parameter: true }],
+  ] as Array<[string, ShellScan.WordFlags]>)("assignment %s", (input, expected) => {
+    expect(scanned(input).statements[0].assignments[0].flags).toEqual(expected)
+  })
+
+  test.each([
+    ["echo x > ~/.bashrc", true],
+    ["echo x > ~user/f", true],
+    ['echo x > "~/f"', false],
+    ["echo x > \\~/f", false],
+    ["echo x > a~/f", false],
+    ["echo x > A=*", true],
+    ["echo x > f", false],
+  ])("redirect target %s dynamic=%p", (input, dynamic) => {
+    expect(only(input).redirects[0].dynamic).toBe(dynamic)
+  })
+})
+
+describe("ShellScan.inspect origin and background", () => {
+  const flat = (nodes: ShellScan.Detail[]): ShellScan.Detail[] => nodes.flatMap((node) => [node, ...flat(node.nested)])
+  test.each([
+    ["( A=$(x) )", ["group", "substitution"]],
+    ["{ [[ $(a) ]]; }", ["substitution"]],
+    ["$(A=$(x))", ["substitution"]],
+  ])("nested origins in %s", (input, origins) => {
+    const result = scanned(input)
+    const found = new Set(flat([...result.commands, ...result.statements]).map((node) => node.origin))
+    expect([...found].filter(Boolean).map(String).sort()).toEqual([...origins].sort())
+  })
+
+  test("a coproc runs in the background", () => {
+    expect(scanned("coproc a").features.background).toBe(true)
+    expect(scanned("coproc NAME { a; }").features.background).toBe(true)
+    expect(scanned("echo coproc").features.background).toBe(false)
+  })
+})
+
+describe("ShellScan.inspect cost", () => {
+  // Each input ran in cubic or quadratic time in the first version. A child process lets the deadline fire.
+  const hostile: Array<[string, string]> = [
+    ["brace commas", `"echo x" + "{,".repeat(4096)`],
+    ["open braces", `"{".repeat(60000)`],
+    ["open brackets", `"[".repeat(60000)`],
+    ["brace ranges", `"echo " + "{a..".repeat(8000)`],
+    ["array values", `"a=(" + "{,".repeat(8000) + ")"`],
+  ]
+  test.each(hostile)("%s finish under a deadline", async (_name, expression) => {
+    const source = new URL("../../src/shell/scan.ts", import.meta.url).href
+    const child = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "-e",
+        `const { ShellScan } = await import(${JSON.stringify(source)}); ShellScan.inspect(${expression})`,
+      ],
+      stdout: "ignore",
+      stderr: "ignore",
+      timeout: 8000,
+    })
+    expect(await child.exited).toBe(0)
+  }, 15000)
 })
