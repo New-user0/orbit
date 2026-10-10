@@ -6,16 +6,20 @@ import { optional } from "./schema.js"
 const Option = Schema.Struct({
   label: Schema.String.annotate({ description: "Display text (1-5 words, concise)" }),
   description: Schema.String.annotate({ description: "Explanation of choice" }),
-  preview: Schema.String.pipe(optional).annotate({
-    description:
-      "Optional markdown shown while this option is focused, for comparing concrete artifacts such as snippets or layouts. Single-select questions only.",
-  }),
+  // Annotate the inner schema: an annotation on the optional() wrapper never reaches the JSON Schema.
+  preview: optional(
+    Schema.String.annotate({
+      description:
+        "Optional markdown shown beside this option while it is focused. Single-select questions only; ignored when multiple is true.",
+    }),
+  ),
 })
 
 const base = {
   question: Schema.String.annotate({ description: "Complete question" }),
   header: Schema.String.annotate({ description: "Very short label (max 12 chars)" }),
   options: Schema.Array(Option)
+    .annotate({ description: "Available choices (2-4)" })
     .check(
       Schema.isMinLength(2),
       Schema.isMaxLength(4),
@@ -25,14 +29,14 @@ const base = {
             ? undefined
             : "Option labels must be different within a question",
         // The client generator serializes every check, so a custom filter must describe itself.
+        // The runtime string is never emitted: only `.Type` of this representation is consumed.
         {
           representation: { id: "orbit/question/uniqueLabels", payload: null },
           toCode: () => ({ runtime: "Schema.makeFilter(() => undefined)" }),
         },
       ),
-    )
-    .annotate({ description: "Available choices (2-4)" }),
-  multiple: Schema.Boolean.pipe(optional).annotate({ description: "Allow selecting multiple choices" }),
+    ),
+  multiple: optional(Schema.Boolean.annotate({ description: "Allow selecting multiple choices" })),
 }
 
 export const Prompt = Schema.Struct(base).annotate({ identifier: "Question.Prompt" })

@@ -21,8 +21,8 @@ How questions are shaped:
 - To recommend an option, list it first and end its label with "(Recommended)".
 
 Previews:
-- An option may carry a \`preview\`: markdown that the user sees while that option is focused. It is drawn in a fixed-width box, so multi-line text such as a sketch of a layout, two competing code snippets or a configuration sample works well.
-- Use a preview only when the user has to compare concrete artifacts. When the label and description are enough, leave it out.
+- An option may carry a \`preview\`: markdown that the user sees while that option is focused. It is drawn in a fixed-width box, so line breaks and alignment are kept.
+- Add one only when the user can choose well only by seeing what each option would produce. When the label and description are enough, leave it out.
 - Previews are for single-select questions. On a \`multiple: true\` question they are ignored.
 
 Planning:
@@ -32,6 +32,7 @@ Planning:
 
 export const Input = Schema.Struct({
   questions: Schema.Array(Question.Prompt)
+    .annotate({ description: "Questions to ask (1-4)" })
     .check(
       Schema.isMinLength(1),
       Schema.isMaxLength(4),
@@ -40,8 +41,7 @@ export const Input = Schema.Struct({
           ? undefined
           : "Question texts must be different within a call",
       ),
-    )
-    .annotate({ description: "Questions to ask (1-4)" }),
+    ),
 })
 
 export const Output = Schema.Struct({

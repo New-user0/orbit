@@ -291,6 +291,7 @@ describe("QuestionTool", () => {
     }),
   )
 
+  const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null
   const pair = (label: string, extra: object = {}) => ({ label, description: label, ...extra })
   const question = (text: string, labels: string[], extra: object = {}) => ({
     question: text,
@@ -308,17 +309,18 @@ describe("QuestionTool", () => {
   it.effect("states the count limits in the tool JSON Schema and the optional preview", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
-      const schema = (yield* toolDefinitions(registry)).find((tool) => tool.name === QuestionTool.name)?.inputSchema as any
-      const find = (node: any, key: string): any => {
-        if (node === null || typeof node !== "object") return undefined
+      const schema = (yield* toolDefinitions(registry)).find((tool) => tool.name === QuestionTool.name)?.inputSchema
+      const find = (node: unknown, key: string): unknown => {
+        if (!isRecord(node)) return undefined
         if (key in node) return node[key]
         return Object.values(node)
           .map((child) => find(child, key))
           .find((hit) => hit !== undefined)
       }
-      expect(schema.properties.questions).toMatchObject({ minItems: 1, maxItems: 4 })
-      expect(find(schema, "options")).toMatchObject({ minItems: 2, maxItems: 4 })
-      expect(find(schema, "preview")).toHaveProperty("type", "string")
+      expect(find(schema, "questions")).toMatchObject({ minItems: 1, maxItems: 4, description: "Questions to ask (1-4)" })
+      expect(find(schema, "options")).toMatchObject({ minItems: 2, maxItems: 4, description: "Available choices (2-4)" })
+      expect(find(schema, "preview")).toMatchObject({ type: "string", description: expect.stringContaining("markdown") })
+      expect(find(schema, "multiple")).toMatchObject({ description: "Allow selecting multiple choices" })
       expect(JSON.stringify(schema)).not.toMatch(/"required":\[[^\]]*"preview"/)
     }),
   )
