@@ -144,6 +144,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
   `test/util/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+- The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
+  command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
+  `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
+  `CrossSpawnSpawner`. Only a snap launcher that `PATH` did find is swapped, on Linux, for the real binary at a fixed
+  package path. The host runs in the system temp folder,
+  with `-NoProfile -NonInteractive -NoLogo -EncodedCommand`, nothing on stdin and no temp file. The command text is a
+  base64 string literal that the script decodes, so it cannot close a quote, and the script only parses. Every failure
+  (no host, spawn, timeout, exit, empty output, bad JSON, too long, parse errors) is an invalid result that callers read
+  as "ask". Proof: `test/shell-scan/powershell-parse.test.ts` (the real parser on the hiding spellings listed in its row tables, the injected
+  host for each failure, and `.exe`, `.bat` and `.cmd` decoys in the working folder with a control that runs them).
 - Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
   MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working
   folder before `PATH` for a bare name, unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`.
@@ -232,6 +242,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the path it found, in the folder of the file. Proof: `test/config-v2.test.tsx` (the file is read from beside cli.json
   only, with a control), `test/keybindings-file.test.ts` (the hostile names and keys), `test/editor.test.ts` (the Windows
   decoy test, with a control).
+- The operating system notification programs (`notify-send`, `osascript`, Windows PowerShell), started when
+  `attention.backend` is `"system"`: found with `which` over absolute `PATH` entries only, started through
+  `CrossSpawnSpawner` (`AppProcess`) in the person's home folder with a script that is a constant of the module, and the
+  title and message passed as separate arguments (Linux, macOS) or environment values (Windows), after the host removed
+  control characters and the session title, the form title and the failure message went through `plain`. `cli.json` is read from the global folder only,
+  so a project cannot choose the backend. Proof: `test/util/os-notify.test.ts` (a message that breaks quoting, run against
+  the real Windows PowerShell with a dry-run switch; decoys in the working folder and a relative `PATH` entry, with a
+  control).
 
 **VS Code extension** (`packages/vscode`, which runs in VS Code's extension host: not an Orbit process, and shared with
 every other extension):

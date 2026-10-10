@@ -1056,6 +1056,30 @@ have notifications, sound or the bell on, who get the reminder.
 
 **What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
 
+### System notifications for the TUI and Mini, and notices in VS Code
+
+`attention.backend` in `cli.json` chooses where a notification appears. `"terminal"`, the default, asks the terminal
+to show it, as before. `"system"` uses the operating system's own notifications (`notify-send` on Linux, Notification
+Center on macOS, a toast from Windows PowerShell on Windows) and falls back to the terminal when the program is missing,
+exits with an error or runs longer than 10 seconds. `attention.notifications` is still the master switch and still off by
+default, and a notification still shows only while the terminal is blurred. The title and the message reach the program
+as data, never as part of a script. Mini now honours `attention.notifications`, `attention.backend`, `attention.bell` and
+`attention.idle_reminder` exactly as the TUI does, including the reminder after a finished session.
+
+A subagent's permission request or form now notifies like a root session's does. It used to send a sound and a bell
+only. A subagent finishing stays silent.
+
+The VS Code extension has a new setting, `orbit.notifications` (on by default). While the Orbit chat is hidden or the
+window is in the background, it shows a notice when a permission needs review ("Orbit needs your review") and when a
+working period ends ("Orbit finished"), each with an Open button. These are notices inside VS Code, not operating
+system notifications.
+
+**Affects:** TUI and Mini users who turn notifications on, people who use subagents with notifications on, and VS Code
+users, who get the new notices unless they turn `orbit.notifications` off.
+
+**What to do:** Nothing. Set `"attention": { "backend": "system" }` to use the operating system's notifications, and
+`orbit.notifications` to `false` to silence the VS Code notices.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -1985,3 +2009,26 @@ The file tools remember what a Session read of a file and what its own edits lef
 **Affects:** people who run formatters, version control or build tools while a Session is open, and clients that show Read results.
 
 **What to do:** Nothing.
+
+### Grep returns up to 250 matches in a token-bounded page, and clips long lines
+
+Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
+a page in `content` mode also stops before its text passes about 25,000 tokens, so a call with a lot of `context` holds
+fewer. A truncated result says which matches it shows and the exact `offset` that continues it; paging from that
+offset skips nothing and repeats nothing, because matches come in path order. A line longer than 500 characters is cut
+to a window that starts about 100 characters before its first match, with ellipsis markers and a
+`[line truncated: N chars]` note, and the submatch offsets in the result index into the clipped text; a match that runs
+past the window is kept and cut at its end. A multiline match is measured one line at a time, so only a line longer
+than 500 characters is cut, and a match of more than 20,000 characters ends with a
+`[match continues for N more lines]` marker. A line that is not valid UTF-8 is shown with replacement characters
+instead of failing the search. Submatch
+`start` and `end` are now offsets in UTF-16 characters of the row's `text`, not UTF-8 bytes, on every line including
+unclipped ones (a plugin reading `Ripgrep.Service` sees this too); `Match.offset` stays a byte offset. Grep and Glob
+also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders and files of those names, as they already skipped `.git`.
+Glob still returns at most 100 files.
+
+**Affects:** people who read Grep results in scripts or plugins, and anyone who relied on a search entering one of
+those version-control folders.
+
+**What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
+truncation note for more results.
