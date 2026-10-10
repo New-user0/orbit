@@ -91,8 +91,13 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         try: () => takeOverlay(options.mode, process.env),
         catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
       }).pipe(
+        // Only the refusal of a file that is not the CLI's own; an I/O error on an own file stops the run.
         Effect.catch((error) =>
-          Effect.logWarning("ignoring ORBIT_CONFIG_CONTENT_FILE", { reason: error.message }).pipe(Effect.as(undefined)),
+          error.name === "OverlayRefusal"
+            ? Effect.logWarning("ignoring ORBIT_CONFIG_CONTENT_FILE", { reason: error.message }).pipe(
+                Effect.as(undefined),
+              )
+            : Effect.fail(error),
         ),
       )
       const server = yield* start(

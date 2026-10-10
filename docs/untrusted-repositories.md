@@ -185,7 +185,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   refusal before a session exists goes out in the requested output format. `--continue` is checked against the session
   the run will use, resolved once in the folder the run works in (`process.cwd()` after `orb <directory>` has changed
   folder), and the run takes that ID as its target. Only the session named at start is checked: the session list,
-  restored tabs and `/resume` of an overlay run can still open one the service is running, as with `--standalone`.
+  restored tabs and `/resume` of an overlay run can still open one the service is running, as with `--standalone`. A value is inline JSONC or a file name by its shape (`{` or a comment first), never by what is on disk, so a clone cannot supply a file named after the typed text (class 1; "a file named {}").
   Proof: `packages/cli/test/config-overlay.test.ts`, `packages/cli/test/config-overlay-flags.test.ts` ("names a file in
   the folder the person typed it in", "is read from the person's folder", "is not trusted", "never drains", "orb
   --agents --continue", "refused as a result object"),

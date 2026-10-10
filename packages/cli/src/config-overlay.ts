@@ -109,11 +109,13 @@ export async function write(content: string) {
  */
 export async function consume(file: string) {
   const refusal = new Error("ORBIT_CONFIG_CONTENT_FILE does not hold a version 1 overlay")
+  refusal.name = "OverlayRefusal"
   if (!OWN_FILE.test(path.relative(base(), file))) throw refusal
   const envelope = decodeEnvelope(await Bun.file(file).text())
   if (envelope._tag === "Failure") throw refusal
-  // Only the file: the folder around it is the CLI's to remove.
-  await fs.rm(file, { force: true })
+  // Only the file: the folder around it is the CLI's to remove. The content was read, so a delete that fails (a scanner
+  // holding the file on Windows) must not cost the run its config; the CLI removes the folder when the run ends.
+  await fs.rm(file, { force: true }).catch((error) => console.error("could not delete the overlay file", errorMessage(error)))
   return envelope.success.content
 }
 
@@ -284,7 +286,8 @@ function anchorFiles<T extends Json>(flag: string, layer: T, directory: string):
   if (!text.includes("{file:")) return layer
   return JSON.parse(
     text.replace(/\{file:([^}]+)\}/g, (token, reference: string) => {
-      if (reference.startsWith("~/") || path.isAbsolute(reference)) return token
+      // A reference that holds a token of its own ({env:VAR}) is resolved by core first, so it is left as written.
+      if (reference.includes("{") || reference.startsWith("~/") || path.isAbsolute(reference)) return token
       const resolved = path.resolve(directory, reference).replaceAll("\\", "/")
       // The token has no way to quote these, so a folder that holds them cannot be named.
       if (/["}]/.test(resolved)) throw new Error(`${flag}: cannot resolve ${shown(token)} from ${shown(directory)}`)
@@ -310,18 +313,17 @@ function anchor(server: Json, directory: string) {
   }
 }
 
-// A value that names a file is read from it; any other value is the JSON itself. The file wins, so a value is never
-// taken for JSON just because of how it starts, and a file is measured before it is read.
+// The shape of a value decides, never the disk: a value that starts (after whitespace) with { or a // or /* comment is
+// inline JSONC, and anything else is a file name. A folder that ships a file named after the text a person types
+// must not replace it. A file whose name starts with { is reached as ./{...}.
 async function read(flag: string, value: string, cwd: string) {
+  if (/^\s*(\{|\/[/*])/.test(value)) return { text: value, directory: cwd }
   const file = path.resolve(cwd, value)
   const stat = await fs.stat(file).catch(() => undefined)
-  if (stat?.isFile()) {
-    if (stat.size > MAX_BYTES)
-      throw new Error(`${flag}: ${shown(value)} is ${stat.size} bytes; the most one run takes is ${MAX_BYTES}`)
-    return { text: await Bun.file(file).text(), directory: path.dirname(file) }
-  }
-  if (/^\s*(\{|\/[/*])/.test(value)) return { text: value, directory: cwd }
-  throw new Error(`${flag}: ${shown(value)} is not a file that exists and is not JSON`)
+  if (!stat?.isFile()) throw new Error(`${flag}: ${shown(value)} is not a file that exists and is not JSON`)
+  if (stat.size > MAX_BYTES)
+    throw new Error(`${flag}: ${shown(value)} is ${stat.size} bytes; the most one run takes is ${MAX_BYTES}`)
+  return { text: await Bun.file(file).text(), directory: path.dirname(file) }
 }
 
 // What a value says about itself in an error: short, and without characters that act on a terminal.

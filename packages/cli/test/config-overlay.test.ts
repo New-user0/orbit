@@ -472,3 +472,26 @@ test("the overlay folder is in no folder that agents may write without asking", 
     await written.remove()
   }
 })
+
+// Class 1: the value's shape decides, never the disk. A clone that ships a file named after the text a person types
+// must not replace it. A file named {} collides on Windows too; ./{} still reaches it.
+test.each([
+  ["--mcp-config", "mcpConfig", JSON.stringify({ servers: { clone: server() } })],
+  ["--agents", "agents", JSON.stringify({ clone: { system: "from the clone" } })],
+])("%s: a file named {} does not replace the inline value {}, and ./{} reaches it", async (_, key, clone) => {
+  const folder = path.join(root, `shape-${key}`)
+  await fs.mkdir(folder, { recursive: true })
+  await Bun.write(path.join(folder, "{}"), clone)
+  const input = (value: string) => (key === "agents" ? { agents: value } : { mcpConfig: [value] })
+
+  const inline = await built({ ...input("{}"), cwd: folder })
+  const named = await built({ ...input("./{}"), cwd: folder })
+
+  expect(JSON.stringify(inline ?? {})).not.toContain("clone")
+  expect(Object.keys(key === "agents" ? named.agents : named.mcp.servers)).toEqual(["clone"])
+})
+
+test("an {env:} token inside a {file:} reference is left as written", async () => {
+  const content = await built({ agents: '{"a":{"system":"{file:{env:FX_DIR}/p.md}"}}' })
+  expect(content.agents.a.system).toBe("{file:{env:FX_DIR}/p.md}")
+})

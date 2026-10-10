@@ -1017,14 +1017,14 @@ is refused with a hint. The values are checked before anything starts, an error 
 value, and the merged document may not pass 4 MiB. They layer over `ORBIT_CONFIG_CONTENT`, then `--mcp-config` in order,
 then `--agents`.
 
-A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not touch the
+A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not run anything on the
 background service. The config reaches that server in a file in Orbit's state folder that only your user can open,
 which the server deletes when it has read it, and `orb` removes the variable and the folder as soon as the server is up. The environment that `orb` hands to a session no longer carries
 `ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
 the run stops, before the interface starts, when the background service reports that session as running, or when a service is registered and alive
 but cannot be asked, because two servers would run it at once; `--fork` is not checked, since a fork never runs the
-session it copies, and an `orb` that opens the session list cannot tell, and does not check. A relative file name is
-taken from the folder you typed it in, also with `orb <directory>`, and so is a relative `{file:...}` inside the value. Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
+session it copies, and an `orb` that opens the session list cannot tell, and does not check. A value that starts, after whitespace, with `{` or a `//` or `/*` comment is read as inline JSONC and anything else is a file name; the disk never decides, so a folder that ships a file named after the text you typed cannot replace it (a file whose name starts with `{` is reached as `./{...}`). A relative file name is
+taken from the folder you typed it in, also with `orb <directory>`; a relative `{file:...}` inside the value is taken from the folder of the file that holds it, or the folder you typed an inline value in. With `--continue --session <id>` the session named is the one opened, also without these flags. Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
 the same agent already has from `ORBIT_CONFIG_CONTENT`. A `ORBIT_CONFIG_CONTENT_FILE` that you set yourself is ignored (a server logs one line)
 and never deleted.
 
