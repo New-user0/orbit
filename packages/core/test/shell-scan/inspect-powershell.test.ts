@@ -524,6 +524,54 @@ describe("ShellScan.inspect powershell .NET statements", () => {
       expect(scanned(input).commands.map((command) => command.words[0])).toContain("Remove-Item")
     }
   })
+
+  // Windows PowerShell 5.1 also continues over blank lines, comments and a backtick-newline after a trailing . or ::.
+  // The scanner does not follow that, so every such spelling is opaque instead of a guess.
+  test.each([
+    "$w.\n\nWrite('payload')",
+    "$w.\r\n\r\nWrite('payload')",
+    "$w.\n \t \nWrite('payload')",
+    "$w. # c\nWrite('payload')",
+    "$w.\n# c\nWrite('payload')",
+    "$w.\n  <# c #>Write('payload')",
+    "$w.<# c #>Write('payload')",
+    "$w.`\nWrite('payload')",
+    "$w.`\r\nWrite('payload')",
+    "[IO.File]::\n\nDelete('x')",
+    "[IO.File]:: # c\nDelete('x')",
+    "(Get-Item a).\n\nDelete()",
+  ])("a trailing . or :: followed by more than one line break or a comment is opaque: %j", (input) => {
+    expect(ShellScan.inspect(input, "powershell")).toMatchObject({ kind: "opaque", class: "syntax" })
+  })
+
+  test("a one-line continuation and a one-line call still report the invocation", () => {
+    for (const input of ["$w.\nWrite('x')", "$w.Write('x')", "$w. \n  Write('x')"])
+      expect(scanned(input).statements.flatMap((item) => item.invocations)).toContainEqual({ kind: "instance", member: "Write" })
+  })
+
+  // A <# #> comment glued to an expression token is a block comment, not a line comment that hides the rest.
+  test.each([
+    "$x<# c #>; Remove-Item a",
+    "$x = $y<# c #>; Remove-Item a",
+    "$x.Length<# c #>; Remove-Item a",
+    "${x}<# c #>; Remove-Item a",
+    "$x[0]<# c #>; Remove-Item a",
+    "$(1)<# c #>; Remove-Item a",
+    "@(1)<# c #>; Remove-Item a",
+    "1<# c #>; Remove-Item a",
+    "$x+1<# c #>; Remove-Item a",
+    "[int]<# c #>; Remove-Item a",
+    "$x<# c\n#>; Remove-Item a",
+    "$x <# c #>; Remove-Item a",
+    '"s"<# c #>; Remove-Item a',
+    "Write-Output a<#c#>; Remove-Item b",
+  ])("a glued block comment hides nothing: %j", (input) => {
+    expect(scanned(input).commands.map((command) => command.words[0])).toContain("Remove-Item")
+  })
+
+  test("a glued block comment before > leaves the redirect", () => {
+    expect(scanned("$x<#c#>>f").statements.flatMap((item) => item.redirects.map((redirect) => redirect.target))).toEqual(["f"])
+  })
 })
 
 describe("ShellScan.inspect powershell command definitions", () => {

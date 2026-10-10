@@ -1737,6 +1737,7 @@ function scanPowerShellNested(
       continue
     }
     if (char === "`") {
+      if (/[\r\n]/.test(input[index + 1] ?? "") && memberContinues(index)) return syntax("invalid-structure")
       const escape = powerShellEscape(input, index)
       if (!escape) return syntax("unterminated-escape")
       // At a token boundary escaped whitespace is trivia, not a new argument.
@@ -1756,7 +1757,13 @@ function scanPowerShellNested(
       index += 2
       continue
     }
-    if (char === "<" && input[index + 1] === "#" && !started) {
+    // After a trailing . or :: Windows PowerShell 5.1 also continues over comments and blank lines. The scanner does
+    // not follow that, so it refuses the whole input instead of guessing where the member name is.
+    if ((char === "#" || (char === "<" && input[index + 1] === "#")) && memberContinues(index))
+      return syntax("invalid-structure")
+    // A <# #> comment ends an expression token wherever it is glued to one; `$x<# c #>; ...` is not a line comment.
+    if (char === "<" && input[index + 1] === "#" && (!started || expression)) {
+      if (started) finishWord(index)
       const end = powerShellComment(input, index)
       if (end === undefined) return syntax("invalid-structure")
       if (!words.length && !invocation) segment = end + 1
@@ -1943,7 +1950,9 @@ function scanPowerShellNested(
             ? char
             : undefined
     if (separator && (separator === "\n" || separator === "\r" || separator === "\r\n") && memberContinues(index)) {
-      // Member access goes on over a line break after . or ::, so the next line is part of this statement.
+      // Member access goes on over a line break after . or ::, so the next line is part of this statement. A second
+      // line break or a comment in between continues too, but the scanner does not follow it.
+      if (/^[ \t]*(?:[\r\n]|#|<#)/.test(input.slice(index + separator.length))) return syntax("invalid-structure")
       index += separator.length - 1
       continue
     }
