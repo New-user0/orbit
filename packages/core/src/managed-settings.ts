@@ -3,9 +3,8 @@ export * as ManagedSettings from "./managed-settings.js"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { parse, type ParseError } from "jsonc-parser"
-import { Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Option, PubSub, Schema, SchemaAST, Stream } from "effect"
 import { Info } from "@orbit/schema/config"
-import { ConfigExperimental } from "@orbit/schema/config/experimental"
 import { ConfigManaged } from "@orbit/schema/config/managed"
 import { FSUtil } from "@orbit/util/fs-util"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
@@ -115,7 +114,11 @@ export const read = Effect.fn("ManagedSettings.read")(function* (directory: stri
     )
   // A name the folder lists is there even when its target is not (a broken link), so reading it as absent is a loss.
   const baseListed = yield* fs.readDirectoryEntries(directory).pipe(
-    Effect.map((entries) => entries.some((entry) => entry.name === "managed-settings.json")),
+    Effect.map((entries) =>
+      entries.some((entry) =>
+        caseInsensitive ? entry.name.toLowerCase() === "managed-settings.json" : entry.name === "managed-settings.json",
+      ),
+    ),
     Effect.catch(() => Effect.succeed(false)),
   )
   const loaded = yield* Effect.forEach(
@@ -183,14 +186,13 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, source: stri
     path: `$.${diagnostic.path.join(".")}`,
     message: diagnostic.message,
   }))
-  // The normalizer ignores a key it does not know, so a typo such as `permisions` would turn an organization's deny
-  // off without a word. A key it already reported is not reported twice.
+  // The normalizer ignores a key it does not know, so a typo such as `permisions` or `sandbox.enabeld` would turn an
+  // organization's setting off without a word. A path it already reported (or one inside it) is not reported twice.
   const normalizedProblems = [
     ...reported,
-    ...[
-      ...unknownKeys(others, topLevel, "$"),
-      ...(isRecord(others.experimental) ? unknownKeys(others.experimental, experimentalKeys, "$.experimental") : []),
-    ].filter((item) => !reported.some((known) => known.path === item.path)),
+    ...unknownKeys(others).filter(
+      (item) => !reported.some((known) => item.path === known.path || item.path.startsWith(`${known.path}.`)),
+    ),
   ].map((item) => problem(item.kind, item.path, item.message))
   return {
     source,
@@ -206,18 +208,52 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, source: stri
   } satisfies Loaded & { source: string }
 })
 
-// The keys of a file: every config field, plus the legacy spellings the normalizer migrates.
-const topLevel: readonly string[] = [
-  ...Object.keys(Info.fields),
+// The legacy spellings the normalizer migrates at the top level. Their shapes belong to the V1 schemas, so only the
+// native fields are walked.
+const legacyKeys: readonly string[] = [
   ...["agent", "attachment", "autoshare", "autoupdate", "command", "mode", "permission", "plugin", "provider"],
   ...["reference", "small_model", "snapshot", "tools", "enabled_providers", "disabled_providers"],
 ]
-const experimentalKeys: readonly string[] = Object.keys(ConfigExperimental.Info.fields)
+// Migrated by the normalizer, so it works although the schema has no such field.
+const legacyPaths: readonly string[] = ["$.experimental.mcp_timeout"]
+const encodedInfo = Schema.toEncoded(Info).ast
 
-function unknownKeys(value: Record<string, unknown>, known: readonly string[], at: string): Problem[] {
-  return Object.keys(value)
-    .filter((key) => !known.includes(key))
-    .map((key) => ({ kind: "unsupported", path: `${at}.${key}`, message: "ignored an unknown key" }))
+/** Every key the schema does not know, at any depth: struct fields, record values, union members and list items. */
+function unknownKeys(others: Record<string, unknown>): Problem[] {
+  const native = Object.fromEntries(Object.entries(others).filter(([key]) => !legacyKeys.includes(key)))
+  const found = walk(encodedInfo, native, "$").filter((item) => !legacyPaths.includes(item.path))
+  return found.filter((item, index) => found.findIndex((other) => other.path === item.path) === index)
+}
+
+function walk(ast: SchemaAST.AST, value: unknown, at: string): Problem[] {
+  const nodes = members(ast)
+  if (Array.isArray(value)) {
+    const lists = nodes.filter(SchemaAST.isArrays)
+    return value.flatMap((item, index) =>
+      lists
+        .flatMap((list) => list.elements[index] ?? list.rest[0] ?? [])
+        .flatMap((type) => walk(type, item, `${at}.${index}`)),
+    )
+  }
+  if (!isRecord(value)) return []
+  const structs = nodes.filter(SchemaAST.isObjects)
+  if (structs.length === 0) return []
+  return Object.entries(value).flatMap(([key, child]) => {
+    const types = structs.flatMap((struct) => {
+      const field = struct.propertySignatures.find((item) => item.name === key)
+      return field ? [field.type] : struct.indexSignatures.map((item) => item.type)
+    })
+    if (types.length === 0)
+      return [{ kind: "unsupported", path: `${at}.${key}`, message: "ignored an unknown key" } satisfies Problem]
+    return types.flatMap((type) => walk(type, child, `${at}.${key}`))
+  })
+}
+
+// The shapes a value may take: the members of a union, followed through lazy references.
+function members(ast: SchemaAST.AST): SchemaAST.AST[] {
+  if (SchemaAST.isUnion(ast)) return ast.types.flatMap(members)
+  if (SchemaAST.isSuspend(ast)) return members(ast.thunk())
+  return [ast]
 }
 
 type Problem = { readonly kind: Diagnostic["kind"]; readonly path: string; readonly message: string }
@@ -282,19 +318,21 @@ function cleanRestrictions(raw: unknown) {
 
 // Objects merge by key, lists of independent entries concatenate (a list of strings loses its repeats) and any other
 // value takes the later one. A `command` is one argument list, and so is a tiered `cost`: joining two files' lists
-// would run a command that no file contains.
+// would run a command that no file contains. An MCP server is one definition, as it is across documents: a later
+// file's `url` must not keep an earlier file's `headers` or `oauth` client secret and send them to another host.
 const wholeValues = ["command", "cost"]
 
-function merge(base: unknown, next: unknown, key?: string): unknown {
+function merge(base: unknown, next: unknown, at: readonly string[] = []): unknown {
   if (next === undefined) return base
-  if (Array.isArray(base) && Array.isArray(next) && !wholeValues.includes(key ?? "")) {
+  if (at.length === 3 && at[0] === "mcp" && at[1] === "servers") return next
+  if (Array.isArray(base) && Array.isArray(next) && !wholeValues.includes(at.at(-1) ?? "")) {
     const all = [...base, ...next]
     return all.every((item) => typeof item === "string") ? [...new Set(all)] : all
   }
   // A model selection is one value: a later file that names a model does not inherit the variant of an earlier one.
   if (isRecord(base) && isRecord(next) && !isSelection(next))
     return Object.fromEntries(
-      [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [key, merge(base[key], next[key], key)]),
+      [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [key, merge(base[key], next[key], [...at, key])]),
     )
   return next
 }

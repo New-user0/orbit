@@ -104,17 +104,23 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   update, and `MCP tools`), `core/test/session-runner.test.ts` (`does not authorize itself`, `registry gate is declined`),
   `plugin-browser/test/tools.test.ts` (the browser tools ask on `browser`), and the `expectRegistryAsks` line in the suite
   of each built-in the registry asks about.
-- Managed settings (`/etc/orbit`, `/Library/Application Support/Orbit`, `%ProgramData%\Orbit`, or `ORBIT_MANAGED_DIR`):
-  `ManagedSettings.read` reads a fixed folder the machine's administrator owns, never one a repository supplies, so it
-  has no trust gate, and nothing in a project can name its location (the override is the server's environment or
+- Managed settings (`/etc/orbit`, `/Library/Application Support/Orbit`, `%ProgramFiles%\Orbit`, or `ORBIT_MANAGED_DIR`):
+  `ManagedSettings.read` reads a fixed folder, never one a repository supplies, so it has no trust gate. The default
+  folders are ones only an administrator (root, or on Windows a member of Administrators) can create or add a file to;
+  Windows uses Program Files, not ProgramData, because a standard user can create and write under ProgramData and
+  what they put there would run as every other user (owner decision 2026-10-10, "Program Files (Recommended)"; no ACL
+  check is built, and an `ORBIT_MANAGED_DIR` that a user can write is the user's own choice), and nothing in a project can name its location (the override is the server's environment or
   `ServerOptions.managed.directory`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
   with a diagnostic. An empty or relative override is refused with one log line and the per-OS default applies
   (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes
   on its own (class 7): a file or folder that exists but cannot be read or listed, an unknown key in `managed` or its
-  sections, an unknown top-level or `experimental` key, a listed file that is a link to nothing, an unresolvable
-  variable and a drop-in named `*.jsonc` or with `.json` in another case are reported, never dropped silently (other
-  names such as `10.yaml` or `10.json.bak` and sub-folders are ignored), and a later file's model, or its `command` or
-  `cost` list, replaces an earlier one as a whole. A relative `ProgramData` falls back to `C:\ProgramData`. Proof: `core/test/managed-settings.test.ts`,
+  sections, an unknown key at any depth of the other settings (one walk of the config schema: struct fields, record
+  values, union members and list items; the legacy top-level spellings are not walked), a listed file that is a link
+  to nothing (the base file in any case on Windows and macOS), an unresolvable variable and a drop-in named `*.jsonc`
+  or with `.json` in another case are reported, never dropped silently (other names such as `10.yaml` or
+  `10.json.bak` and sub-folders are ignored), and a later file's model, its `command` or `cost` list, or its
+  `mcp.servers.<name>` replaces an earlier one as a whole, so a later `url` never keeps an earlier `headers` or
+  `oauth`. A relative `ProgramFiles` falls back to `C:\Program Files`. Proof: `core/test/managed-settings.test.ts`,
   `cli/test/doctor-managed.test.ts`, `util/test/managed-path.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.

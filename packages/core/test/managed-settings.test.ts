@@ -2,10 +2,11 @@ import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Ref, Stream } from "effect"
-import { Event, type Document } from "@orbit/schema/config"
+import { Event, type Document, type Info } from "@orbit/schema/config"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
 import { ConfigNormalize } from "@orbit/core/config/normalize"
+import { ConfigPluginSource } from "@orbit/core/config/plugin/source"
 import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
@@ -25,7 +26,7 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Layer.empty)
 
 // The managed folder, the project and the global config folder live in one temp folder; the real /etc/orbit and
-// %ProgramData%\Orbit are never read because the directory is always given.
+// %ProgramFiles%\Orbit are never read because the directory is always given.
 const layers = (root: string, directory = path.join(root, "managed")) =>
   Layer.mergeAll(
     AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, ManagedPolicy.node, ManagedSettings.node]), [
@@ -41,6 +42,27 @@ const layers = (root: string, directory = path.join(root, "managed")) =>
       WellKnown.node.replace(emptyWellknownNode),
       Watcher.node.replace(Watcher.testLayer),
     ]),
+    Watcher.testLayer,
+  )
+
+const pluginLayers = (root: string) =>
+  Layer.mergeAll(
+    AppNodeBuilder.build(
+      LayerNode.group([Config.node, Bus.node, ManagedPolicy.node, ManagedSettings.node, ConfigPluginSource.node]),
+      [
+        ManagedSettings.node.replace(ManagedSettings.configured({ directory: path.join(root, "managed") })),
+        Location.node.replace(
+          Layer.succeed(
+            Location.Service,
+            Location.Service.of(location({ directory: AbsolutePath.make(path.join(root, "project")) })),
+          ),
+        ),
+        Global.node.replace(Global.layerWith({ config: path.join(root, "global"), home: path.join(root, "home") })),
+        Credential.node.replace(emptyCredentialNode),
+        WellKnown.node.replace(emptyWellknownNode),
+        Watcher.node.replace(Watcher.testLayer),
+      ],
+    ),
     Watcher.testLayer,
   )
 
@@ -60,6 +82,13 @@ const write = (directory: string, files: Record<string, unknown>) =>
 const read = (directory: string) => ManagedSettings.read(directory).pipe(Effect.provide(reader))
 
 const rule = (effect: "allow" | "deny" | "ask", resource: string) => ({ action: "Bash", resource, effect })
+
+// Follows keys through a decoded value without asserting its shape.
+const field = (value: unknown, ...keys: string[]) =>
+  keys.reduce<unknown>(
+    (current, key) => (typeof current === "object" && current !== null ? Object.fromEntries(Object.entries(current))[key] : undefined),
+    value,
+  )
 
 describe("ManagedSettings.read", () => {
   it.live("applies the base file first and then the drop-ins by filename", () =>
@@ -608,7 +637,7 @@ describe("ManagedSettings.read command lists", () => {
         { formatter: { fmt: { command: ["npx", "-y", "fmt-a", "$FILE"] } } },
         { formatter: { fmt: { command: ["npx", "-y", "fmt-b", "$FILE"] } } },
       ],
-      pick: (info: any) => info.formatter?.fmt?.command,
+      pick: (info: Info) => field(info, "formatter", "fmt", "command"),
       expected: ["npx", "-y", "fmt-b", "$FILE"],
     },
     {
@@ -617,7 +646,7 @@ describe("ManagedSettings.read command lists", () => {
         { lsp: { l: { command: ["npx", "-y", "ls-a"], extensions: [".a"] } } },
         { lsp: { l: { command: ["npx", "-y", "ls-b"], extensions: [".b"] } } },
       ],
-      pick: (info: any) => info.lsp?.l?.command,
+      pick: (info: Info) => field(info, "lsp", "l", "command"),
       expected: ["npx", "-y", "ls-b"],
     },
     {
@@ -626,7 +655,7 @@ describe("ManagedSettings.read command lists", () => {
         { mcp: { servers: { s: { type: "local", command: ["node", "a.js"] } } } },
         { mcp: { servers: { s: { type: "local", command: ["node", "b.js"] } } } },
       ],
-      pick: (info: any) => info.mcp?.servers?.s?.command ?? info.mcp?.s?.command,
+      pick: (info: Info) => field(info, "mcp", "servers", "s", "command"),
       expected: ["node", "b.js"],
     },
   ]
@@ -659,6 +688,149 @@ describe("ManagedSettings.read command lists", () => {
 
       expect(snapshot.info.instructions).toEqual(["a.md", "b.md"])
       expect(snapshot.info.sandbox?.write).toEqual(["/a", "/b"])
+    }),
+  )
+})
+
+describe("ManagedSettings.read mcp servers", () => {
+  // A server is one definition, as across documents: a later file never inherits a header or a client secret that an
+  // earlier file wrote for another host.
+  const rows = [
+    {
+      name: "url with headers",
+      first: { type: "remote", url: "https://a.example/mcp", headers: { Authorization: "Bearer A" } },
+      second: { type: "remote", url: "https://b.example/mcp" },
+      expected: { type: "remote", url: "https://b.example/mcp" },
+    },
+    {
+      name: "oauth",
+      first: { type: "remote", url: "https://a.example/mcp", oauth: { client_id: "a", client_secret: "secret-a" } },
+      second: { type: "remote", url: "https://b.example/mcp", oauth: { client_id: "b" } },
+      expected: { type: "remote", url: "https://b.example/mcp", oauth: { client_id: "b" } },
+    },
+    {
+      name: "a local server over a remote one",
+      first: { type: "remote", url: "https://a.example/mcp", headers: { Authorization: "Bearer A" } },
+      second: { type: "local", command: ["node", "b.js"] },
+      expected: { type: "local", command: ["node", "b.js"] },
+    },
+  ]
+
+  rows.forEach((row) =>
+    it.live(`${row.name} comes from one file`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, {
+          "managed-settings.json": { mcp: { servers: { s: row.first, keep: { type: "local", command: ["k"] } } } },
+          "managed-settings.d/10.json": { mcp: { servers: { s: row.second } } },
+        })
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(JSON.parse(JSON.stringify(field(snapshot.info, "mcp", "servers", "s")))).toEqual(row.expected)
+        // Servers the later file does not name stay.
+        expect(field(snapshot.info, "mcp", "servers", "keep", "command")).toEqual(["k"])
+        expect(snapshot.diagnostics).toEqual([])
+      }),
+    ),
+  )
+})
+
+describe("ManagedSettings.read unknown keys at every depth", () => {
+  const rows = [
+    { name: "sandbox.enabeld", file: { sandbox: { enabeld: true, network: false } }, at: "$.sandbox.enabeld" },
+    {
+      name: "a server's disable",
+      file: { mcp: { servers: { s: { type: "local", command: ["x"], disable: true } } } },
+      at: "$.mcp.servers.s.disable",
+    },
+    {
+      name: "an agent's permisions",
+      file: { agents: { build: { permisions: [rule("deny", "rm *")] } } },
+      at: "$.agents.build.permisions",
+    },
+    { name: "compaction.autto", file: { compaction: { autto: true } }, at: "$.compaction.autto" },
+    {
+      name: "a key in a list of rules",
+      file: { permissions: [{ ...rule("deny", "rm *"), efect: "deny" }] },
+      at: "$.permissions.0.efect",
+    },
+    {
+      name: "a nested key of a remote server",
+      file: { mcp: { servers: { s: { type: "remote", url: "https://a.example", oauth: { client_secrett: "x" } } } } },
+      at: "$.mcp.servers.s.oauth.client_secrett",
+    },
+  ]
+
+  rows.forEach((row) =>
+    it.live(`reports ${row.name}`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, { "managed-settings.json": row.file })
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(snapshot.diagnostics).toEqual([
+          expect.objectContaining({ path: row.at, kind: "unsupported", message: "ignored an unknown key" }),
+        ])
+      }),
+    ),
+  )
+
+  it.live("adds no diagnostic for a document that uses the known keys at depth", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": {
+          sandbox: { enabled: true, network: false, write: ["/a"] },
+          mcp: {
+            servers: {
+              s: { type: "local", command: ["x"], disabled: true },
+              r: { type: "remote", url: "https://a.example", headers: { A: "b" }, oauth: { client_id: "c" } },
+            },
+          },
+          agents: { build: { permissions: [rule("deny", "rm *")], steps: 3 } },
+          compaction: { auto: true, keep: { tokens: 10 } },
+          permissions: [rule("deny", "rm *")],
+        },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.diagnostics).toEqual([])
+    }),
+  )
+
+  it.live("one malformed entry costs only itself", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": {
+          agents: { bad: "not an object", also: null, good: { permisions: [], steps: 2 } },
+          sandbox: "yes",
+          permissions: [rule("deny", "rm *"), 7],
+          shell: "kept",
+        },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.shell).toBe("kept")
+      expect(snapshot.info.permissions).toEqual([rule("deny", "rm *")])
+      expect(snapshot.diagnostics).toContainEqual(
+        expect.objectContaining({ path: "$.agents.good.permisions", kind: "unsupported" }),
+      )
+    }),
+  )
+
+  it.live("does not repeat a path the normalizer reported", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, { "managed-settings.json": { server: { port: 1 }, shell: "zsh" } })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.diagnostics.filter((item) => item.path === "$.server")).toHaveLength(1)
     }),
   )
 })
@@ -697,7 +869,7 @@ describe("ManagedSettings.read unknown keys outside managed", () => {
           $schema: "https://example.invalid/schema.json",
           autoshare: false,
           disabled_providers: ["openai"],
-          experimental: { policies: [], subagent_depth: 2 },
+          experimental: { policies: [], subagent_depth: 2, mcp_timeout: 5000 },
           shell: "zsh",
         },
       })
@@ -714,6 +886,16 @@ describe("ManagedSettings.read broken links", () => {
   const rows = [
     { name: "a drop-in", link: "managed-settings.d/10-link.json", sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } } },
     { name: "the base file", link: "managed-settings.json", sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } } },
+    // Only where file names ignore case does a differently cased link name the base file.
+    ...(process.platform === "win32" || process.platform === "darwin"
+      ? [
+          {
+            name: "the base file in another case",
+            link: "Managed-Settings.json",
+            sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } },
+          },
+        ]
+      : []),
   ]
 
   rows.forEach((row) =>
@@ -733,7 +915,7 @@ describe("ManagedSettings.read broken links", () => {
         const snapshot = yield* read(tmp.path)
 
         expect(snapshot.diagnostics).toContainEqual(
-          expect.objectContaining({ source: path.join(tmp.path, row.link), path: "$", kind: "invalid" }),
+          expect.objectContaining({ source: path.join(tmp.path, row.link.toLowerCase()), path: "$", kind: "invalid" }),
         )
         expect(snapshot.info.shell).toBe("ok")
       }),
@@ -756,6 +938,36 @@ describe("ManagedSettings paths in a drop-in", () => {
 
         expect(document?.path).toBe(AbsolutePath.make(path.join(tmp.path, "managed", "managed-settings.json")))
       }).pipe(Effect.provide(layers(tmp.path)))
+    }),
+  )
+
+  it.live("a relative plugin path in a drop-in resolves against the managed folder", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "project/.keep": "",
+        "managed/managed-settings.d/10.json": { plugins: ["./planted"] },
+      })
+      yield* Effect.gen(function* () {
+        const source = yield* ConfigPluginSource.Service
+        const operations = yield* source.operations()
+
+        expect(operations.map((operation) => operation.target)).toContain(path.join(tmp.path, "managed", "planted"))
+      }).pipe(Effect.scoped, Effect.provide(pluginLayers(tmp.path)))
+    }),
+  )
+
+  it.live("a {file:} variable resolves against the file that holds it", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.d/x.txt": "from-dropin-folder",
+        "managed-settings.d/10.json": '{ "shell": "{file:./x.txt}" }',
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.shell).toBe("from-dropin-folder")
     }),
   )
 })

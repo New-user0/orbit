@@ -263,19 +263,23 @@ your user config.
 
 ### Managed settings files
 
-An organization can now put settings where users cannot override them. Orbit reads `managed-settings.json`, then the
-`managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux, `/Library/Application Support/Orbit`
-on macOS and `%ProgramData%\Orbit` on Windows (`C:\ProgramData\Orbit` when that variable is unset).
-`ORBIT_MANAGED_DIR` points the server at another folder, and `orb debug paths managed` prints the one in use. Objects
-merge by key, lists of independent entries (permissions, policies, instructions, plugins, restriction lists) concatenate
-and lose their repeats, and any other value, including a `command` argument list, takes the later file's. A relative
-path in a drop-in resolves against the managed folder, not `managed-settings.d`. The
-merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
+An organization can now put settings in a folder that only an administrator can write. Orbit reads
+`managed-settings.json`, then the `managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux,
+`/Library/Application Support/Orbit` on macOS and `%ProgramFiles%\Orbit` on Windows (`C:\Program Files\Orbit` when that
+variable is unset). Windows does not use `%ProgramData%`, because a standard user can create and write under it.
+`ORBIT_MANAGED_DIR` points the server at another folder (Orbit does not check who can write it), and
+`orb debug paths managed` prints the one in use. Objects merge by key, lists of independent entries (permissions,
+policies, instructions, plugins, restriction lists) concatenate and lose their repeats, and any other value takes the
+later file's: a `command` argument list, a tiered `cost`, a model, and a whole `mcp.servers.<name>` definition, so a
+later file's `url` never keeps an earlier file's `headers` or `oauth`. A relative `plugins` path in a drop-in
+resolves against the managed folder, not `managed-settings.d`; a `{file:}` variable resolves against the file that
+holds it. The merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
 while the server runs. A `managed` block in these files holds restrictions (`organization`, `mcp`, `plugins`,
 `network` and the hook and permission switches); the key is ignored with a diagnostic in any other config file. Orbit
 never creates the folder, and a folder created after the server starts is read on the next start.
 
-A file or an entry that does not decode is skipped on its own and never drops what its siblings say. `orb doctor` lists
+A file or an entry that does not decode is skipped on its own and never drops what its siblings say, and a key that
+Orbit does not know, at any depth (`sandbox.enabeld`, a server's `disable`), is reported instead of ignored. `orb doctor` lists
 the managed files by name and each problem it found. This release loads and merges the settings and hands the
 permission rules and restrictions to the policy service; enforcing them follows separately.
 

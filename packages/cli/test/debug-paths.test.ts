@@ -76,7 +76,7 @@ describe("debug paths managed", () => {
     const only = await cli(["debug", "paths", "managed"], { ORBIT_MANAGED_DIR: "" })
     const expected =
       process.platform === "win32"
-        ? path.win32.join(process.env.ProgramData || "C:\\ProgramData", "Orbit")
+        ? path.win32.join(process.env.ProgramFiles || "C:\\Program Files", "Orbit")
         : process.platform === "darwin"
           ? "/Library/Application Support/Orbit"
           : "/etc/orbit"
