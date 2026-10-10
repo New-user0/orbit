@@ -380,7 +380,7 @@ function items(entries: Entry[], show: Show) {
     const detail = one(item.detail)
     return `${one(item.name) || "?"} (${kind(item.kind)}) at ${show(string(item.uri))}${line === undefined ? "" : `:${line}`}${detail ? ` [${detail}]` : ""}`
   }
-  if (entries.length === 1) return `Call hierarchy item: ${text(entries[0]!)}`
+  if (entries.length === 1) return `Function at that position: ${text(entries[0]!)}`
   return [`${entries.length} call hierarchy items:`, ...entries.map((item) => `  ${text(item)}`)].join("\n")
 }
 

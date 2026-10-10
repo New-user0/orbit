@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
 import { Document, Info } from "@orbit/schema/config"
@@ -128,13 +129,12 @@ const windowsOnly = process.platform === "win32" ? it.live : it.live.skip
 
 describe("LSP tool", () => {
   it.live("implementation prints each location, a link at its whole target when it has no selection", () =>
-    project({}, ({ call, directory }) =>
+    project({}, ({ call }) =>
       Effect.gen(function* () {
         const found = yield* call(at("implementation", "impl"))
         expect(found.failed).toBe(false)
         expect(found.text).toBe("2 implementations:\n  src/impl-a.fake:5:3\n  src/impl-b.fake:10:2")
         expect((yield* call(at("implementation", "plain"))).text).toContain("No implementation found")
-        void directory
       }),
     ),
   )
@@ -336,6 +336,17 @@ describe("LSP tool", () => {
       ),
   )
 
+  windowsOnly("a result on another drive is shown absolute, with forward slashes", () =>
+    project({ flags: ["--other-drive"] }, ({ call }) =>
+      call(at("references", "outside")).pipe(
+        Effect.map((found) => {
+          expect(found.text).toStartWith("3 references in 3 files:")
+          expect(found.text).toContain("\nZ:/elsewhere/x.fake:\n  1:1")
+        }),
+      ),
+    ),
+  )
+
   it.live("results in git-ignored files are left out, tracked ones stay, and the count follows", () =>
     project({ repo: true }, ({ call, directory }) =>
       Effect.gen(function* () {
@@ -351,10 +362,36 @@ describe("LSP tool", () => {
         expect((yield* call({ action: "symbols" })).failed).toBe(false)
         // A file git tracks is never hidden, even when a pattern matches it.
         yield* Effect.promise(async () => {
-          const { $ } = await import("bun")
           await $`git add -f ignored/a.fake`.cwd(directory).quiet()
         })
         expect((yield* call(at("references", "plain"))).text).toStartWith("4 references in 3 files:")
+      }),
+    ),
+  )
+
+  // Every answer of the fake server lies in an ignored folder; the filter must hide it for exactly these actions.
+  it.live("only definition, implementation, references and workspace_symbols hide ignored files", () =>
+    project({ repo: true, flags: ["--src=ignored"] }, ({ call, directory }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => Bun.write(path.join(directory, ".gitignore"), "ignored/\n"))
+        const rows = [
+          { input: at("definition", "plain"), hidden: true, shown: "ignored/one.fake" },
+          { input: at("implementation", "impl"), hidden: true, shown: "ignored/impl-a.fake" },
+          { input: at("references", "single"), hidden: true, shown: "ignored/b.fake" },
+          { input: { action: "workspace_symbols" }, hidden: true, shown: "alpha" },
+          { input: at("hover", "plain"), hidden: false, shown: "a fake symbol" },
+          { input: { action: "symbols" }, hidden: false, shown: "Outer" },
+          { input: at("prepare_call_hierarchy", "fn"), hidden: false, shown: "ignored/fn.fake" },
+          { input: at("incoming_calls", "fn"), hidden: false, shown: "ignored/c1.fake" },
+          { input: at("outgoing_calls", "fn"), hidden: false, shown: "ignored/c1.fake" },
+        ]
+        for (const row of rows) {
+          const found = yield* call(row.input)
+          expect({ input: row.input, shown: found.text.includes(row.shown) }).toEqual({
+            input: row.input,
+            shown: !row.hidden,
+          })
+        }
       }),
     ),
   )
@@ -380,7 +417,10 @@ describe("LSP tool", () => {
   it.live("content-modified fails with the server's error after three retries", () =>
     project({ flags: ["--content-modified=9"] }, ({ call, log }) =>
       Effect.gen(function* () {
+        const started = Date.now()
         const found = yield* call(at("hover", "plain"))
+        // The three retries wait 0.5 s, 1 s and 2 s.
+        expect(Date.now() - started).toBeGreaterThanOrEqual(3400)
         expect(found).toEqual({ failed: true, text: expect.stringContaining("content modified") })
         expect((yield* requests(log)).filter((item) => item.method === "textDocument/hover")).toHaveLength(4)
       }),

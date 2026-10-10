@@ -2158,7 +2158,7 @@ while it was indexing, and refuses a file larger than 10 MB with a message inste
 The existing actions print differently: `definition` and `references` give a headline with a count, references are grouped
 by file, a link falls back to its whole target when it has no selection range, hover shows a list as separate paragraphs
 and starts with the range's position when the server sends one, and `symbols` shows each symbol's kind, detail and the line
-where its range starts. Paths are relative to the project only when that is shorter and does not climb two folders, use
+where its range starts. Paths are relative to the session's folder only when that is shorter and does not climb two folders, use
 forward slashes, and a result that is not a file path (for example a `jdt:` address) is printed as given. Results in
 git-ignored files are left out of `definition`, `implementation`, `references` and `workspace_symbols`; a file git tracks is
 always shown, and a folder that is not a repository hides nothing.

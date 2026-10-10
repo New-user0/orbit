@@ -88,12 +88,16 @@ const logFile = flag("log")
 let contentModified = Number(flag("content-modified") ?? 0)
 const failCode = flag("fail")
 // `--encoded-uris` writes the drive the way several servers do on Windows: lower case, with the colon encoded.
-const at = (file: string) =>
-  `${
+// `--src=<folder>` moves every answer that would be under `src/` into that folder, such as an ignored one.
+const srcFolder = flag("src") ?? "src"
+const at = (name: string) => {
+  const file = name.startsWith("src/") ? `${srcFolder}/${name.slice(4)}` : name
+  return `${
     process.argv.includes("--encoded-uris")
       ? rootUri.replace(/^file:\/\/\/([A-Za-z]):/, (_, drive: string) => `file:///${drive.toLowerCase()}%3A`)
       : rootUri
   }/${file}`
+}
 const lineAt = (uri: string, number: number) => texts.get(uri)?.split("\n")[number] ?? ""
 const range = (startLine: number, character = 0) => ({
   start: { line: startLine, character },
@@ -133,6 +137,8 @@ query("textDocument/references", (params) =>
       ? [
           { uri: at("../one-up.fake"), range: range(0) },
           { uri: at("../../two-up.fake"), range: range(0) },
+          // `--other-drive` adds a file on another Windows drive.
+          ...(process.argv.includes("--other-drive") ? [{ uri: "file:///Z:/elsewhere/x.fake", range: range(0) }] : []),
         ]
       : [
         { uri: at("ignored/a.fake"), range: range(0) },

@@ -215,12 +215,18 @@ const layer = Layer.effect(
       }),
       ignored: Effect.fn("Lsp.ignored")(
         function* (files) {
+          // git runs in this folder's repository, so the folder has to be trusted first.
+          if (!(yield* trust.trusted())) return new Set<string>()
           const repository = yield* git.repo.discover(location.directory)
           if (!repository || files.length === 0) return new Set<string>()
+          // git reports the real worktree, while results use the Location's own spelling (a junction, a link or a
+          // subst drive), so each path is re-rooted from the Location onto the real folder before it is compared.
+          const real = yield* fs.resolve(location.directory)
           // A path outside the worktree is not asked about: git would refuse the whole batch.
           const inside = files.flatMap((file) => {
-            const relative = path.relative(repository.worktree, file)
-            return relative === "" || relative.startsWith("..") || path.isAbsolute(relative)
+            const within = path.relative(location.directory, file)
+            const relative = path.relative(repository.worktree, outside(within) ? file : path.join(real, within))
+            return relative === "" || outside(relative)
               ? []
               : [{ file, relative: RelativePath.make(relative.split(path.sep).join("/")) }]
           })
@@ -232,9 +238,9 @@ const layer = Layer.effect(
           return new Set(inside.filter((item) => hidden.has(item.relative)).map((item) => item.file))
         },
         Effect.timeout("5 seconds"),
-        // A check that fails shows every result.
-        Effect.catchCause((cause) =>
-          Effect.logDebug("git ignore check failed; showing every result", cause).pipe(
+        // A check that fails shows every result. Defects and interruption still surface.
+        Effect.catch((error) =>
+          Effect.logDebug("git ignore check failed; showing every result", error).pipe(
             Effect.as(new Set<string>() as ReadonlySet<string>),
           ),
         ),
@@ -242,6 +248,10 @@ const layer = Layer.effect(
     })
   }),
 )
+
+// A relative path that leaves its base: `..` itself, `../x`, or another drive. A folder named `..cache` stays inside.
+const outside = (relative: string) =>
+  relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)
 
 export const node = makeLocationNode({
   service: Service,
