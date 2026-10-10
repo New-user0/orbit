@@ -649,6 +649,23 @@ describe("an option with no value or an attached value leaves the next word to b
   test("date --iso-8601=seconds and +FORMAT stay read-only", () => {
     expect(bash("date --iso-8601=seconds").readOnly).toBe(true)
     expect(bash("date --iso-8601 +%s").readOnly).toBe(true)
+    expect(bash("date --iso-8601").readOnly).toBe(true)
+    expect(bash("date -I").readOnly).toBe(true)
+  })
+  // BSD ls takes no value for -w, -T and -I, BSD fmt none for -p: the next word is a file that is read.
+  test.each([
+    ["ls -w /etc", ["/etc"]],
+    ["ls -T /etc", ["/etc"]],
+    ["ls -I /etc", ["/etc"]],
+    ["fmt -p /etc/x", ["/etc/x"]],
+  ])("%s keeps its next word as a read path", (text, expected) => {
+    const verdict = bash(text)
+    expect(verdict.readOnly).toBe(true)
+    expect(verdict.readPaths).toEqual(expected)
+  })
+  // binutils strings expands @FILE into arguments read from FILE, so neither FILE nor its contents are checked.
+  test.each(["strings @x", "strings -- @x", "strings bin @/etc/x", "strings -n 4 @x"])("%s asks", (text) => {
+    expect(bash(text).readOnly).toBe(false)
   })
   test("a second --base-directory asks, whichever order", () => {
     expect(bash("fd --base-directory src --base-directory .. -t f .").readOnly).toBe(false)

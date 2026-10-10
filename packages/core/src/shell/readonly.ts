@@ -73,7 +73,8 @@ const BASH: Record<string, Spec> = {
   tail: { flags: "any", values: values("-n -c --lines --bytes --pid -s --sleep-interval"), operands: reading },
   wc: { flags: "any", operands: reading },
   stat: { flags: "any", values: values("-c --format --printf"), operands: reading },
-  strings: { flags: "any", values: values("-n --bytes -t --radix -e --encoding -T --target"), operands: reading },
+  // binutils replaces an `@FILE` argument with the arguments read from FILE, before options and after `--`: refuse it.
+  strings: { flags: "any", values: values("-n --bytes -t --radix -e --encoding -T --target"), operands: reading, check: (args) => args.some((arg) => arg.startsWith("@")) },
   hexdump: { flags: "any", values: values("-A -j -N -t -e -n -s"), operands: reading },
   od: { flags: "any", values: values("-A -j -N -t -S --skip-bytes --read-bytes --format --address-radix"), operands: reading },
   nl: { flags: "any", values: values("-s -w -v -i -b -f -h -l -n -d"), operands: reading },
@@ -85,7 +86,7 @@ const BASH: Record<string, Spec> = {
   fold: { flags: "any", values: values("-w --width"), operands: reading },
   expand: { flags: "any", values: values("-t --tabs"), operands: reading },
   unexpand: { flags: "any", values: values("-t --tabs"), operands: reading },
-  fmt: { flags: "any", values: values("-w -p --width --prefix"), operands: reading },
+  fmt: { flags: "any", values: values("-w --width --prefix"), operands: reading },
   comm: { flags: "any", values: values("--output-delimiter"), operands: reading },
   cmp: { flags: "any", values: values("-i -n --ignore-initial --bytes"), operands: reading },
   diff: { flags: "any", values: values("-U -C -L --label -W --width -x --exclude"), filePaths: ["-X", "--exclude-from", "--from-file", "--to-file"], operands: reading },
@@ -93,7 +94,7 @@ const BASH: Record<string, Spec> = {
   pr: { flags: "any", values: values("-h -l -w -o -N --header --length --width"), operands: reading },
   df: { flags: "any", values: values("-t -x --type --exclude-type -B --block-size"), operands: reading },
   du: { flags: "any", values: values("-d --max-depth -B --block-size -t --threshold --exclude"), filePaths: ["-X", "--exclude-from"], operands: { read: true, default: "." } },
-  ls: { flags: "any", values: values("-w --width -T --tabsize -I --ignore --hide --block-size --sort --time --format --indicator-style"), operands: { read: true, default: "." } },
+  ls: { flags: "any", values: values("--width --tabsize --ignore --hide --block-size --sort --time --format --indicator-style"), operands: { read: true, default: "." } },
   realpath: { flags: "any", values: values("--relative-to --relative-base"), operands: reading },
   readlink: { flags: "any", operands: reading },
   test: { flags: "any", operands: reading, check: (args) => args.some((arg) => arg === "-v" || arg === "-R") },
@@ -410,7 +411,7 @@ function positionals(args: string[], valued: Record<string, Value | "">) {
       ends = true
       continue
     }
-    if (!token.includes("=") && valued[token] && valued[token] !== "optional") index++
+    if (!token.includes("=") && valued[token]) index++
   }
   return result
 }

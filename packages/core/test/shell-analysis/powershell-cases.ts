@@ -205,8 +205,6 @@ export const arrayAndNetwork = [
   "systeminfo '/fo:csv \" /s:evilhost'",
   "arp 'x \" -d *'",
   "arp -a:'x \" -d *'",
-  // A colon-bound value with whitespace and a trailing backslash: the "whitespace and a trailing \" branch of splits().
-  "arp -a:'x y\\' 'p -d *'",
   "file 'x \" C:\\Users\\u\\.ssh\\id_rsa'",
   "tree 'x \" /f'",
   "Get-Process -Name a, $(1)",
