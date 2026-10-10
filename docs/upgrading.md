@@ -2088,6 +2088,25 @@ those version-control folders.
 **What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
 truncation note for more results.
 
+### Language servers hear about every write, and about each save
+
+A file created or overwritten with Write now goes to its language server, so the tool result carries the same inline
+errors that Edit already reported; before, a Write got none. After every edit (Write, Edit, Patch and NotebookEdit),
+the server is also sent `textDocument/didSave` once the new text is synced, with the text only when the server asked
+for it. Servers that run extra checks on save, such as rust-analyzer with `cargo check`, may now do so after each edit.
+The `LSP` tool never saves.
+
+Language servers and formatters now also decide per file. A file outside the project is served only when the folder that
+owns it (the nearest folder above it with a `.git` or `.hg`, else its own folder) is trusted too; trusting the project
+is no longer enough for an edit that reaches into another folder. A link is decided twice, by the spelling it was
+given and by where it really leads, and the stricter answer wins: a link in an untrusted folder, even one with no
+`.git`, that leads into a trusted one is refused. A skipped file leaves the tool result as it was. A server is started through Orbit's process spawner: a bare program name is found on `PATH`
+only.
+
+**Affects:** people with a language server configured or on `PATH`, mostly Rust users.
+
+**What to do:** Nothing. Set `lsp` to `false` to turn language servers off.
+
 ### A web search that nobody agreed to fails as "websearch.not-enabled"
 
 When the web search consent form is cancelled, is not answered within a minute, or cannot be shown, the `WebSearch` tool now

@@ -1,24 +1,33 @@
 import { describe, expect } from "bun:test"
 import path from "path"
+import { Document, Info } from "@orbit/schema/config"
+import { Global } from "@orbit/util/global"
+import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Config } from "@orbit/core/config"
+import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Tool } from "@orbit/schema/tool"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Agent } from "@orbit/core/agent"
 import { Location } from "@orbit/core/location"
+import { FileAccess } from "@orbit/core/file-access"
 import { Lsp } from "@orbit/core/lsp/index"
 import { LspPlugin } from "@orbit/core/lsp/plugin"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginHost } from "@orbit/core/plugin/host"
 import { Session } from "@orbit/core/session"
-import { Effect, Layer } from "effect"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { Context, Effect, Layer, Schema, type Scope } from "effect"
+import fs from "fs/promises"
+import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
-const asked: string[][] = []
+const asked: { files: string[]; options: { readonly save?: boolean } | undefined }[] = []
 const lspLayer = Layer.mock(Lsp.Service, {
-  diagnostics: (files) =>
+  diagnostics: (files, options) =>
     Effect.sync(() => {
-      asked.push([...files])
+      asked.push({ files: [...files], options })
       return Object.fromEntries(
         files.map((file) => [
           file,
@@ -40,7 +49,302 @@ const lspLayer = Layer.mock(Lsp.Service, {
 })
 const it = testEffect(Layer.merge(PluginTestLayer, lspLayer))
 
+const base = (tool: string, input: unknown, result: Tool.Result) => ({
+  sessionID: Session.ID.make("ses_lsp_plugin"),
+  agent: Agent.ID.make("build"),
+  messageID: SessionMessage.ID.make("msg_lsp_plugin"),
+  id: Tool.CallID.make("call_lsp_plugin"),
+  tool,
+  input,
+  status: "completed" as const,
+  result,
+})
+
+const fakeServer = path.join(import.meta.dir, "..", "fixtures", "lsp", "fake-server.ts")
+
 describe("LspPlugin", () => {
+  const register = Effect.gen(function* () {
+    const hooks = yield* PluginHooks.Service
+    const location = yield* Location.Service
+    yield* LspPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+    return { hooks, location }
+  })
+
+  it.effect("resolves a Write's target from its own input, the way the tool does", () =>
+    Effect.gen(function* () {
+      const { hooks, location } = yield* register
+      const inside = path.resolve(location.directory, "src/a.fake")
+      const outside = path.join(path.dirname(location.directory), "elsewhere", "a.fake")
+      const drive = (prefix: string, file: string) =>
+        `${prefix}${file[0]!.toLowerCase()}/${file.slice(3).replaceAll("\\", "/")}`
+      const rows = [
+        ["src/a.fake", inside],
+        ["src/../src/a.fake", inside],
+        ["../elsewhere/a.fake", outside],
+        [outside, outside],
+        ["~/a.fake", path.join(Global.Path.home, "a.fake")],
+        ...(process.platform === "win32"
+          ? [
+              [drive("/", inside), inside],
+              [drive("/cygdrive/", inside), inside],
+              [drive("/mnt/", inside), inside],
+              [drive("/", outside), outside],
+              [drive("/cygdrive/", outside), outside],
+              [drive("/mnt/", outside), outside],
+              ["src/a.fake.", inside],
+              ["src/a.fake ", inside],
+            ]
+          : []),
+      ] as const
+      for (const [given, expected] of rows) {
+        asked.length = 0
+        yield* hooks.trigger(
+          "tool",
+          "execute.after",
+          base("Write", { file_path: given, content: "x" }, { content: "Wrote it" } as Tool.Result),
+        )
+        expect({ given, asked }).toEqual({ given, asked: [{ files: [expected], options: { save: true } }] })
+      }
+      // The older field name, as a plugin hook may leave it.
+      asked.length = 0
+      yield* hooks.trigger(
+        "tool",
+        "execute.after",
+        base("Write", { path: "src/a.fake" }, { content: "x" } as Tool.Result),
+      )
+      expect(asked.map((item) => item.files)).toEqual([[path.resolve(location.directory, "src/a.fake")]])
+    }),
+  )
+
+  it.effect(
+    "Patch and NotebookEdit save the files in their metadata, and a failed or unrelated call asks nothing",
+    () =>
+      Effect.gen(function* () {
+        const { hooks, location } = yield* register
+        for (const tool of ["Patch", "NotebookEdit"]) {
+          asked.length = 0
+          yield* hooks.trigger(
+            "tool",
+            "execute.after",
+            base(tool, {}, {
+              content: "ok",
+              metadata: { files: [{ file: "b.ipynb" }, { file: "gone.ts", status: "deleted" }] },
+            } as Tool.Result),
+          )
+          expect(asked).toEqual([{ files: [path.resolve(location.directory, "b.ipynb")], options: { save: true } }])
+        }
+        asked.length = 0
+        yield* hooks.trigger("tool", "execute.after", {
+          ...base("Write", { file_path: "a.fake" }, { content: "x" } as Tool.Result),
+          status: "error" as const,
+          error: { type: "unknown", message: "failed" } as never,
+        })
+        yield* hooks.trigger(
+          "tool",
+          "execute.after",
+          base("Read", { file_path: "a.fake" }, { content: "x" } as Tool.Result),
+        )
+        expect(asked).toEqual([])
+      }),
+  )
+
+  // The real Lsp, ProjectTrust and the fake server, in the Location the plugin runs in. The Location's project is
+  // trusted and nothing else is; the server writes a line to `marker` for every document it is told to open.
+  const real = (
+    body: (
+      hooks: PluginHooks.Interface,
+      directory: string,
+      extra: {
+        readonly trust: WorkspaceTrust.Interface
+        readonly marker: string
+        // The target a real Write returns for a path: what the tool resolved, not what a test writes by hand.
+        readonly written: (file: string) => Effect.Effect<string, unknown>
+      },
+    ) => Effect.Effect<void, unknown, Scope.Scope>,
+  ) =>
+    Effect.gen(function* () {
+      const location = yield* Location.Service
+      const marker = path.join((yield* tmpdirScoped()).path, "opened.txt")
+      yield* Effect.promise(() => Bun.write(marker, ""))
+      const lsp = yield* Layer.build(
+        AppNodeBuilder.build(LayerNode.group([Lsp.node, WorkspaceTrust.node, FileAccess.node]), [
+          WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+          Config.node.replace(
+            Config.testLayer([
+              new Document({
+                type: "document",
+                info: Schema.decodeUnknownSync(Info)({
+                  lsp: { fake: { command: [process.execPath, fakeServer, `--marker=${marker}`], extensions: [".fake"] } },
+                }),
+              }),
+            ]),
+          ),
+          Location.node.replace(Layer.succeed(Location.Service, location)),
+        ]),
+      )
+      const hooks = yield* PluginHooks.Service
+      yield* LspPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service)).pipe(
+        Effect.provideService(Lsp.Service, Context.get(lsp, Lsp.Service)),
+      )
+      const trust = Context.get(lsp, WorkspaceTrust.Service)
+      yield* trust.grant(location.directory, { persist: false, via: "test" })
+      const access = Context.get(lsp, FileAccess.Service)
+      yield* body(hooks, location.directory, {
+        trust,
+        marker,
+        written: (file) => access.resolve({ path: file, kind: "file" }).pipe(Effect.map((target) => target.absolute)),
+      })
+    })
+
+  it.live("a Write with only its input reaches the server, and its result gains only diagnostics", () =>
+    real((hooks, directory) =>
+      Effect.gen(function* () {
+        const file = path.join(directory, "src", "a.fake")
+        yield* Effect.promise(() => Bun.write(file, "here is an ERROR\n"))
+        const output = { operation: "write", target: file, resource: "src/a.fake", existed: false }
+        const event = base("Write", { file_path: "src/a.fake", content: "x" }, {
+          output,
+          content: "Wrote src/a.fake",
+        } as Tool.Result)
+        yield* hooks.trigger("tool", "execute.after", event)
+        expect(event.result.output).toEqual(output)
+        expect(Object.keys(event.result.metadata ?? {})).toEqual(["diagnostics"])
+        expect(event.result.content).toEqual([
+          { type: "text", text: "Wrote src/a.fake" },
+          {
+            type: "text",
+            text: expect.stringContaining("checked on save (with text)"),
+          },
+        ])
+        expect(JSON.stringify(event.result.content)).toContain("found ERROR")
+
+        // A clean file leaves the result alone.
+        yield* Effect.promise(() => Bun.write(file, "fine\n"))
+        const clean = base("Write", { file_path: "src/a.fake" }, { content: "Wrote it" } as Tool.Result)
+        yield* hooks.trigger("tool", "execute.after", clean)
+        expect(clean.result).toEqual({ content: "Wrote it" })
+      }),
+    ),
+  )
+
+  // A Write to a file outside the project reaches the project's server only when the folder that owns the file is
+  // trusted too. Every spelling that the tool accepts for such a path is decided on the file it names.
+  it.live("a Write outside the project reaches a server only when the file's own folder is trusted", () =>
+    real((hooks, directory, extra) =>
+      Effect.gen(function* () {
+        const outer = (yield* tmpdirScoped()).path
+        const untrusted = path.join(outer, "untrusted")
+        const trusted = path.join(outer, "trusted")
+        yield* Effect.promise(() =>
+          Promise.all(
+            [untrusted, trusted].map(async (folder) => {
+              await fs.mkdir(path.join(folder, ".git"), { recursive: true })
+              await Bun.write(path.join(folder, "a.fake"), "an ERROR\n")
+            }),
+          ),
+        )
+        yield* extra.trust.grant(trusted, { persist: false, via: "test" })
+        const home = path.join(Global.Path.home, "orbit-n3-home.fake")
+        yield* Effect.promise(() => Bun.write(home, "an ERROR\n"))
+        yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(home, { force: true })))
+
+        const drive = (prefix: string, file: string) =>
+          `${prefix}${file[0]!.toLowerCase()}/${file.slice(3).replaceAll("\\", "/")}`
+        const untrustedFile = path.join(untrusted, "a.fake")
+        const trustedFile = path.join(trusted, "a.fake")
+        const rows: ReadonlyArray<readonly [string, string, boolean]> = [
+          ["inside, relative", "inside.fake", true],
+          ["untrusted, absolute", untrustedFile, false],
+          ["trusted, absolute (control)", trustedFile, true],
+          ["untrusted, relative with ..", path.relative(directory, untrustedFile), false],
+          ["trusted, relative with ..", path.relative(directory, trustedFile), true],
+          ["untrusted, with a dot segment", path.join(untrusted, ".", "a.fake"), false],
+          ["the home folder", "~/orbit-n3-home.fake", false],
+          ...(process.platform === "win32"
+            ? ([
+                ["untrusted, Git Bash form", drive("/", untrustedFile), false],
+                ["untrusted, Cygwin form", drive("/cygdrive/", untrustedFile), false],
+                ["untrusted, WSL form", drive("/mnt/", untrustedFile), false],
+                ["untrusted, trailing dot", `${untrustedFile}.`, false],
+                ["untrusted, trailing space", `${untrustedFile} `, false],
+                ["untrusted, other case", untrustedFile.toUpperCase(), false],
+                ["trusted, Git Bash form", drive("/", trustedFile), true],
+                ["trusted, Cygwin form", drive("/cygdrive/", trustedFile), true],
+                ["trusted, WSL form", drive("/mnt/", trustedFile), true],
+                ["trusted, other case", trustedFile.toUpperCase(), true],
+              ] as const)
+            : []),
+        ]
+        yield* Effect.promise(() => Bun.write(path.join(directory, "inside.fake"), "an ERROR\n"))
+        const outcomes = yield* Effect.forEach(rows, ([name, given]) =>
+          Effect.gen(function* () {
+            const event = base("Write", { file_path: given, content: "x" }, { content: "Wrote it" } as Tool.Result)
+            yield* hooks.trigger("tool", "execute.after", event)
+            return [name, JSON.stringify(event.result).includes("found ERROR")] as const
+          }),
+        )
+        expect(outcomes).toEqual(rows.map(([name, , allowed]) => [name, allowed]))
+        // The server was never told to open a refused file, by any spelling. (A file reached again by another spelling
+        // is sent as a change, so the marker counts each file once.)
+        const opened = (yield* Effect.promise(() => Bun.file(extra.marker).text())).toLowerCase()
+        expect(opened).toContain("inside.fake")
+        expect(opened).not.toContain("untrusted")
+        expect(opened).not.toContain("orbit-n3-home")
+      }),
+    ),
+  )
+  // The server is told the path the tool wrote (its output), and that path is decided twice: by the spelling and by
+  // where the file really is, and the stricter answer wins. Each row takes its target from the real FileAccess.resolve,
+  // as the Write tool does. A link in an untrusted folder that leads into the project is sent as the project path (the
+  // tool anchors it there); one that leads into a trusted folder keeps the untrusted spelling and is refused.
+  it.live("a Write through a link reaches the server only when the spelling and the real place are both trusted", () =>
+    real((hooks, directory, extra) =>
+      Effect.gen(function* () {
+        const outer = (yield* tmpdirScoped()).path
+        const untrusted = path.join(outer, "untrusted")
+        const trusted = path.join(outer, "trusted")
+        yield* Effect.promise(() =>
+          Promise.all([untrusted, trusted].map((folder) => fs.mkdir(path.join(folder, ".git"), { recursive: true }))),
+        )
+        yield* extra.trust.grant(trusted, { persist: false, via: "test" })
+        yield* Effect.promise(async () => {
+          await Bun.write(path.join(directory, "inside.fake"), "an ERROR\n")
+          await Bun.write(path.join(trusted, "dir", "t.fake"), "an ERROR\n")
+          await Bun.write(path.join(untrusted, "dir", "u.fake"), "an ERROR\n")
+          await fs.symlink(directory, path.join(untrusted, "link"), "junction")
+          await fs.symlink(path.join(trusted, "dir"), path.join(untrusted, "tlink"), "junction")
+          await fs.symlink(path.join(trusted, "dir"), path.join(trusted, "clink"), "junction")
+          await fs.symlink(path.join(untrusted, "dir"), path.join(trusted, "ulink"), "junction")
+        })
+        const rows: ReadonlyArray<readonly [string, string, boolean]> = [
+          ["untrusted link into the project", path.join(untrusted, "link", "inside.fake"), true],
+          ["untrusted link into a trusted folder", path.join(untrusted, "tlink", "t.fake"), false],
+          ["trusted link into a trusted folder (control)", path.join(trusted, "clink", "t.fake"), true],
+          ["trusted link into an untrusted folder", path.join(trusted, "ulink", "u.fake"), false],
+        ]
+        const outcomes = yield* Effect.forEach(rows, ([name, given]) =>
+          Effect.gen(function* () {
+            const target = yield* extra.written(given)
+            const output = { operation: "write", target, resource: name, existed: true }
+            const event = base("Write", { file_path: given, content: "x" }, {
+              output,
+              content: "Wrote it",
+            } as Tool.Result)
+            yield* hooks.trigger("tool", "execute.after", event)
+            return [name, JSON.stringify(event.result).includes("found ERROR")] as const
+          }),
+        )
+        expect(outcomes).toEqual(rows.map(([name, , allowed]) => [name, allowed]))
+        // The server was told about the project file and the control only, by no spelling under the untrusted folder.
+        const opened = (yield* Effect.promise(() => Bun.file(extra.marker).text())).toLowerCase()
+        expect(opened).toContain("inside.fake")
+        expect(opened).toContain("t.fake")
+        expect(opened).not.toContain("untrusted")
+        expect(opened).not.toContain("u.fake")
+      }),
+    ),
+  )
+
   it.effect("adds language server errors for the files an edit changed", () =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service
@@ -61,7 +365,7 @@ describe("LspPlugin", () => {
       }
       yield* hooks.trigger("tool", "execute.after", event)
       const absolute = path.resolve(location.directory, "src/a.ts")
-      expect(asked).toEqual([[absolute]])
+      expect(asked).toEqual([{ files: [absolute], options: { save: true } }])
       expect(event.result.content).toEqual([
         { type: "text", text: "Edited src/a.ts (1 replacement)" },
         {

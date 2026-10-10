@@ -57,8 +57,11 @@ const layer = Layer.effect(
 
     const file = Effect.fn("Formatter.file")(function* (filepath: string) {
       // A formatter reads the folder's own config, and several of them run it as code, so none runs while the
-      // Location's project is not trusted.
-      if (!(yield* trust.trusted())) return false
+      // Location's project is not trusted, and none runs for a file outside the project whose own folder is not trusted.
+      if (!(yield* trust.trustedAt(filepath))) {
+        yield* Effect.logWarning("formatter skipped a file whose folder is not trusted", { file: filepath })
+        return false
+      }
       const extension = path.extname(filepath)
       const matching = state.get().formatters.filter((formatter) => formatter.extensions.includes(extension))
 
