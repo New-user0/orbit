@@ -1,6 +1,22 @@
 import { expect, test } from "bun:test"
 import { Env } from "../src/env"
 
+test("session environment omits the run's config overlay", () => {
+  process.env.ORBIT_CONFIG_CONTENT = '{"mcp":{}}'
+  process.env.ORBIT_CONFIG_CONTENT_FILE = "/overlay.json"
+  process.env.ORBIT_CONFIG_DIR_KEPT = "included"
+
+  const environment = Env.session()
+
+  delete process.env.ORBIT_CONFIG_CONTENT
+  delete process.env.ORBIT_CONFIG_CONTENT_FILE
+  delete process.env.ORBIT_CONFIG_DIR_KEPT
+
+  expect(environment.ORBIT_CONFIG_CONTENT).toBeUndefined()
+  expect(environment.ORBIT_CONFIG_CONTENT_FILE).toBeUndefined()
+  expect(environment.ORBIT_CONFIG_DIR_KEPT).toBe("included")
+})
+
 test("session environment omits server credentials", () => {
   const previousPassword = process.env.ORBIT_PASSWORD
   const previousLegacyPassword = process.env.ORBIT_SERVER_PASSWORD
