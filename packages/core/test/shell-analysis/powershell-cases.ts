@@ -154,11 +154,24 @@ export const arrayAndNetwork = [
   "tasklist /fo:csv,/s:evilhost",
   "getmac /fo:csv, /s:evilhost",
   "systeminfo /fo:csv, /s:evilhost",
+  // A value for a native program that the C runtime splits again: an embedded `"`, or a trailing `\` after whitespace (class 6).
+  "tasklist '/fo:csv \" /s:evilhost'",
+  "tasklist /fi 'imagename eq x \" /s:evilhost'",
+  "tasklist 'x \" /s:evilhost'",
+  'tasklist "x `" /s:evilhost"',
+  "tasklist /fo:'csv \" /s:evilhost'",
+  "tasklist /fi 'imagename eq x\\' 'p /s:evilhost'",
+  "getmac '/fo:csv \" /s:evilhost'",
+  "systeminfo '/fo:csv \" /s:evilhost'",
+  "arp 'x \" -d *'",
+  "arp -a:'x \" -d *'",
+  "file 'x \" C:\\Users\\u\\.ssh\\id_rsa'",
+  "tree 'x \" /f'",
   "Get-Process -Name a, $(1)",
   "Get-Process -Name a, @(1)",
 ]
 
-export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "Get-Process -Name a, b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
+export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "Get-Process -Name a, b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh", 'tasklist /fi "imagename eq notepad.exe"']
 
 // Texts that only pwsh 7 can parse: `&&` and `||` chains. powershell-7.json is recorded with pwsh 7 in Docker, the rest
 // with Windows PowerShell 5.1.

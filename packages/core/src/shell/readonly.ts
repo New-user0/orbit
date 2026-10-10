@@ -577,6 +577,13 @@ function drive(text: string) {
 const CONSTANT = new Set(["StringConstantExpressionAst", "ConstantExpressionAst"])
 
 /** Whether one PowerShell command is allowlisted, and the paths it reads. `command.head` is the alias-resolved name. */
+// Windows PowerShell 5.1 (and pwsh before 7.3) builds a native command line without escaping: a value with whitespace is
+// wrapped in quotes, so an embedded `"` closes the wrapper early and a trailing `\` escapes its closing quote. The
+// program's C runtime then splits the line again, so one judged value can arrive as several arguments.
+function splits(value: string) {
+  return value.includes('"') || (/\s/.test(value) && value.endsWith("\\"))
+}
+
 export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Context, later: boolean): Verdict {
   const source = command.source
   if (!source || source.placeholder || source.operator || source.nested || command.dynamicHead) return refuse("command")
@@ -600,6 +607,7 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       // The value of any colon-bound parameter is an argument like the rest: a share or provider path is refused here.
       if (bound?.value !== undefined && (namedProvider(bound.value) || share(bound.value, ctx))) return refuse("provider")
       if (spec.native) {
+        if (bound?.value !== undefined && splits(bound.value)) return refuse("argument:split")
         // `-s:host` is the flag `-s` with a value (tasklist and getmac take a remote system that way), so the name is
         // checked bound or not.
         if (spec.flags === "any") continue
@@ -627,6 +635,7 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
     const text = arg.value ?? arg.text
     if (namedProvider(text) || share(text, ctx)) return refuse("provider")
     if ((pending === "path" || (pending === undefined && spec.reads)) && drive(text)) return refuse("provider")
+    if (spec.native && splits(text)) return refuse("argument:split")
     if (spec.native && (text.startsWith("-") || (ctx.platform === "win32" && text.startsWith("/")))) {
       // `/s:host` is `/s` with a value: the flag is what comes before the colon.
       if (spec.flags !== "any" && (spec.flags === "none" || !spec.flags.has(text.toLowerCase().split(":")[0]))) return refuse("flag")
