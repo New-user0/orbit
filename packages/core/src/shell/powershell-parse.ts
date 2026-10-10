@@ -49,6 +49,8 @@ export type Command = {
   // Not a command at all: a statement or pipeline element that is an expression. Its name is its whole text, so it can
   // never match an allowlist entry.
   placeholder: boolean
+  // GetCommandName was null: the name is computed (& $x, a call on an expression), so it is not known before the command runs.
+  dynamic: boolean
   text: string
   // `&` or `.` when the command is invoked through the call or dot-source operator.
   operator?: "&" | "."
@@ -491,7 +493,7 @@ function elements(statement: Schema.Schema.Type<typeof RawStatement>, commands: 
 }
 
 function placeholder(text: string): Command {
-  return { name: text, written: text, class: "unknown", placeholder: true, text, nested: false, arguments: [], redirects: [] }
+  return { name: text, written: text, class: "unknown", placeholder: true, dynamic: false, text, nested: false, arguments: [], redirects: [] }
 }
 
 function redirect(raw: RawRedirectType): Redirect {
@@ -508,6 +510,7 @@ function command(raw: RawCommandType): Command {
   return {
     ...classify(raw.name ?? undefined, raw.written),
     placeholder: false,
+    dynamic: raw.name === null || raw.name === undefined,
     text: raw.text,
     // The parser names the operator: Ampersand, Dot, or Unknown when the command has none.
     ...(raw.operator === "Ampersand" ? { operator: "&" as const } : raw.operator === "Dot" ? { operator: "." as const } : {}),
