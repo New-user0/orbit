@@ -344,7 +344,11 @@ describe("read paths", () => {
     ["git grep foo -- a b", []],
     ["git status", []],
     ["git log -p", []],
-    ["git diff a b", []],
+    ["git diff a b", ["a", "b"]],
+    ["git diff ../a ../b", ["../a", "../b"]],
+    ["git diff --stat a ~/b", ["a", "/home/u/b"]],
+    ["git diff HEAD~1 HEAD", ["HEAD~1", "HEAD"]],
+    ["git diff HEAD~1 -- a b", []],
   ]
   test.each(paths)("%s", (text, expected) => {
     expect(bash(text).readPaths).toEqual(expected)
@@ -400,6 +404,19 @@ describe("PowerShell git, gh, docker and dotnet", () => {
     expect(powershell("git tag -l v*", pwshLinux()).readOnly).toBe(false)
     expect(powershell("git tag -l 'v*'", pwshLinux()).readOnly).toBe(true)
     expect(powershell("git tag -l v*", pwsh()).readOnly).toBe(true)
+  })
+  test.each(["git log *''", "git diff a'*'", 'git log a"*"', "git log a?", "git log [a]*"])("partly quoted wildcard on pwsh Linux: %s", (text) => {
+    expect(powershell(text, pwshLinux()).readOnly).toBe(false)
+    expect(powershell(text, pwsh()).readOnly).toBe(true)
+  })
+  test("a partly quoted option-shaped wildcard is refused on pwsh Linux", () => {
+    expect(powershell(`git log -"-"o*`, pwshLinux()).readOnly).toBe(false)
+  })
+  test("a whole quoted wildcard and a colon-bound parameter", () => {
+    expect(powershell("git log '*'", pwshLinux()).readOnly).toBe(true)
+    expect(powershell('git log "a*"', pwshLinux()).readOnly).toBe(true)
+    expect(powershell("git log -n: 5", pwsh()).readOnly).toBe(false)
+    expect(powershell("git log -n:5", pwsh()).readOnly).toBe(false)
   })
   test("a program name in another case is another program on Linux", () => {
     expect(powershell("GIT status", pwshLinux()).readOnly).toBe(false)

@@ -697,7 +697,18 @@ function git(args: string[], ctx: ShellAnalysis.Context): Verdict {
     return refuse("git:operand")
   const noIndex = scanned.seen.some((item) => item.name === "--no-index")
   // --no-index reads plain files: the first two operands of diff, every operand after the pattern of grep.
-  const files = !noIndex ? [] : key === "diff" ? scanned.operands.slice(0, 2) : key === "grep" ? (scanned.pattern ? scanned.operands : scanned.operands.slice(1)) : []
+  // diff also switches to no-index mode on its own when one of exactly two words before any `--` lies outside the work tree,
+  // so those words are listed as read paths even without the flag; a revision such as HEAD~1 resolves inside the folder.
+  const files =
+    key === "diff"
+      ? noIndex || !rest.includes("--")
+        ? scanned.operands.slice(0, 2)
+        : []
+      : noIndex && key === "grep"
+        ? scanned.pattern
+          ? scanned.operands
+          : scanned.operands.slice(1)
+        : []
   return { ok: true, reads: [...scanned.reads, ...files].map((path) => expandHome(path, ctx)) }
 }
 
@@ -787,7 +798,8 @@ function dotnet(args: string[], ctx: ShellAnalysis.Context): Verdict {
 }
 
 // PowerShell hands a native program the words below: a constant is its value, a parameter is its text, and a parameter
-// bound with a colon is `-name:value` (that is how `--pretty=format:%h` arrives). What PowerShell may change on the way
+// bound with a colon refuses (PowerShell hands a program two words for `-n: 5`); `--pretty=format:%h` is a string constant,
+// not a bound parameter. What PowerShell may change on the way
 // refuses, because the validator would judge an argv that the program does not receive.
 function program(name: NonNullable<PsSpec["program"]>, command: ShellAnalysis.Command, ctx: ShellAnalysis.Context): Verdict {
   const source = command.source!
@@ -798,29 +810,29 @@ function program(name: NonNullable<PsSpec["program"]>, command: ShellAnalysis.Co
     if (arg.kind === "CommandParameterAst") {
       // An en dash, em dash or horizontal bar starts a parameter to PowerShell but reaches a native as written.
       if (!arg.text.startsWith("-") || arg.text === "--") return refuse("argument:dash")
-      if (!arg.bound) {
-        args.push(arg.text)
-        continue
-      }
-      if (!CONSTANT.has(arg.bound.kind) || arg.bound.value === undefined) return refuse("bound")
-      if (!sound(arg.bound.value, ctx)) return refuse("argument:split")
-      args.push(`-${arg.parameter ?? ""}:${arg.bound.value}`)
+      if (arg.bound) return refuse("bound")
+      args.push(arg.text)
       continue
     }
     if (arg.kind === "ArrayLiteralAst") return refuse("array:native")
     if (!CONSTANT.has(arg.kind) || arg.value === undefined) return refuse("argument")
     // `--` is PowerShell's own end of parameters, and whether it reaches the program depends on the edition.
     if (/^[–—―]/.test(arg.text)) return refuse("argument:dash")
-    if (arg.value === "--" || !sound(arg.value, ctx)) return refuse("argument:split")
-    // pwsh on Linux and macOS expands a bareword that has a wildcard against the folder before it starts the program.
-    if (ctx.platform !== "win32" && !/['"]/.test(arg.text) && /[*?[]/.test(arg.text)) return refuse("argument:glob")
-    args.push(arg.value)
+    // A number reaches a native as written (0x10, 1e3), not as its converted value.
+    const value = arg.kind === "ConstantExpressionAst" ? arg.text : arg.value
+    if (value === "--" || !sound(value, ctx)) return refuse("argument:split")
+    // pwsh on Linux and macOS expands a bareword that has a wildcard against the folder before it starts the program, and
+    // so does a partly quoted one (`*''`, `a'*'`); only a whole quoted string is left alone.
+    if (ctx.platform !== "win32" && /[*?[]/.test(value) && !WHOLE_QUOTED.test(arg.text)) return refuse("argument:glob")
+    args.push(value)
   }
   if (name === "git") return git(args, ctx)
   if (name === "gh") return gh(args)
   if (name === "docker") return docker(args)
   return dotnet(args, ctx)
 }
+
+const WHOLE_QUOTED = /^(?:'(?:[^']|'')*'|"(?:[^"`]|`.|"")*")$/
 
 function sound(value: string, ctx: ShellAnalysis.Context) {
   return !splits(value) && !namedProvider(value) && !share(value, ctx)

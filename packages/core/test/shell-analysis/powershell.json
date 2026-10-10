@@ -1034,5 +1034,49 @@
  "GIT status": {
   "code": 0,
   "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"GIT status\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"GIT status\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"GIT\",\"written\":\"GIT\",\"text\":\"GIT status\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"status\",\"value\":\"status\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log *''": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log *\\u0027\\u0027\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log *\\u0027\\u0027\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log *\\u0027\\u0027\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"*\\u0027\\u0027\",\"value\":\"*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git diff a'*'": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git diff a\\u0027*\\u0027\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git diff a\\u0027*\\u0027\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git diff a\\u0027*\\u0027\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"diff\",\"value\":\"diff\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"a\\u0027*\\u0027\",\"value\":\"a*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log a\"*\"": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log a\\\"*\\\"\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log a\\\"*\\\"\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log a\\\"*\\\"\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"a\\\"*\\\"\",\"value\":\"a*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log -\"-\"o*": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log -\\\"-\\\"o*\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log -\\\"-\\\"o*\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log -\\\"-\\\"o*\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"-\\\"-\\\"o*\",\"value\":\"--o*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log '*'": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log \\u0027*\\u0027\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log \\u0027*\\u0027\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log \\u0027*\\u0027\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"\\u0027*\\u0027\",\"value\":\"*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log 0x10": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log 0x10\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log 0x10\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log 0x10\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"ConstantExpressionAst\",\"text\":\"0x10\",\"value\":\"16\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log -n: 5": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log -n: 5\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log -n: 5\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log -n: 5\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"CommandParameterAst\",\"text\":\"-n: 5\",\"parameter\":\"n\",\"bound\":{\"kind\":\"ConstantExpressionAst\",\"text\":\"5\",\"value\":\"5\"}}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log a?": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log a?\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log a?\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log a?\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"a?\",\"value\":\"a?\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log [a]*": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log [a]*\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log [a]*\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log [a]*\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"[a]*\",\"value\":\"[a]*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log \"a*\"": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log \\\"a*\\\"\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log \\\"a*\\\"\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log \\\"a*\\\"\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"StringConstantExpressionAst\",\"text\":\"\\\"a*\\\"\",\"value\":\"a*\"}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
+ },
+ "git log -n:5": {
+  "code": 0,
+  "output": "{\"errors\":[],\"statements\":[{\"kind\":\"PipelineAst\",\"text\":\"git log -n:5\",\"top\":true,\"elements\":[{\"kind\":\"command\",\"text\":\"git log -n:5\",\"command\":0}],\"redirects\":[],\"memberAccess\":false,\"subexpression\":false,\"expandable\":false,\"scriptBlock\":false,\"assignment\":false}],\"commands\":[{\"name\":\"git\",\"written\":\"git\",\"text\":\"git log -n:5\",\"operator\":\"Unknown\",\"nested\":false,\"arguments\":[{\"kind\":\"StringConstantExpressionAst\",\"text\":\"log\",\"value\":\"log\"},{\"kind\":\"CommandParameterAst\",\"text\":\"-n:5\",\"parameter\":\"n\",\"bound\":{\"kind\":\"ConstantExpressionAst\",\"text\":\"5\",\"value\":\"5\"}}],\"redirects\":[]}],\"variables\":[],\"types\":[],\"stopParsing\":false,\"usings\":[],\"requires\":false}"
  }
 }

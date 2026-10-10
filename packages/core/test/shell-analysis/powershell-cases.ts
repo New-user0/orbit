@@ -280,4 +280,4 @@ export const toolNotReadOnly = [
 ]
 
 // Native globbing: pwsh on Linux and macOS expands a bareword with a wildcard before it starts the program.
-export const toolPlatform = ["git tag -l v*", "git tag -l 'v*'", "GIT status"]
+export const toolPlatform = ["git tag -l v*", "git tag -l 'v*'", "GIT status", "git log *''", "git diff a'*'", 'git log a"*"', "git log -\"-\"o*", "git log '*'", "git log 0x10", "git log -n: 5", "git log a?", "git log [a]*", 'git log "a*"', "git log -n:5"]

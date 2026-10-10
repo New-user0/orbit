@@ -10,7 +10,7 @@ import { arrayAndNetwork, arrayAndNetworkOk, chain, notReadOnly, platform, readO
 const seven = process.argv[2] === "linux7"
 const host = seven ? undefined : (which("pwsh") ?? which("powershell"))
 if (!seven && !host) throw new Error("no pwsh or powershell on PATH")
-const texts = seven ? chain : [...new Set([...readOnly, ...notReadOnly, ...platform, ...arrayAndNetwork, ...arrayAndNetworkOk, ...toolReadOnly, ...toolNotReadOnly, ...toolPlatform])]
+const texts = seven ? [...new Set([...chain, ...toolPlatform])] : [...new Set([...readOnly, ...notReadOnly, ...platform, ...arrayAndNetwork, ...arrayAndNetworkOk, ...toolReadOnly, ...toolNotReadOnly, ...toolPlatform])]
 const rows = Object.fromEntries(
   await Promise.all(
     texts.map(async (text) => {
