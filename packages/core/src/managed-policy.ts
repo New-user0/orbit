@@ -14,6 +14,8 @@ export interface State {
   readonly statements: ReadonlyArray<ConfigPolicy.Info>
   /** Permission rules from the managed settings files. Only the file source supplies them. */
   readonly rules?: Permission.Ruleset
+  /** Permission rules that managed settings give a named agent (`agents.<name>.permissions`). */
+  readonly agentRules?: Readonly<Record<string, Permission.Ruleset>>
   /** Restrictions from the managed settings files. Only the file source supplies them. */
   readonly restrictions?: ConfigManaged.Restrictions
   /** Organization name for denial messages, when the source knows it. */
@@ -25,6 +27,7 @@ export interface Current {
   /** The file source's statements, then the connection's. */
   readonly statements: ReadonlyArray<ConfigPolicy.Info>
   readonly rules: Permission.Ruleset
+  readonly agentRules: Readonly<Record<string, Permission.Ruleset>>
   readonly restrictions: ConfigManaged.Restrictions
   /** The file's organization, else the connection's. */
   readonly organization?: string
@@ -49,6 +52,7 @@ const layer = Layer.sync(Service, () => {
       return {
         statements: [...sources.file.statements, ...sources.connection.statements],
         rules: sources.file.rules ?? [],
+        agentRules: sources.file.agentRules ?? {},
         restrictions: sources.file.restrictions ?? {},
         ...(organization === undefined ? {} : { organization }),
       }

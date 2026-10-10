@@ -593,6 +593,7 @@ export function permissionItem(request: {
   readonly sessionID: string
   readonly action: string
   readonly resources: ReadonlyArray<string>
+  readonly save?: ReadonlyArray<string>
   readonly metadata?: Readonly<Record<string, unknown>>
 }): Extract<Item, { type: "permission" }> {
   return {
@@ -602,6 +603,7 @@ export function permissionItem(request: {
     action: request.action,
     resources: request.resources,
     view: PermissionView.of(request),
+    canSave: (request.save?.length ?? 0) > 0,
     files: changes(request.metadata),
     status: "pending",
   }

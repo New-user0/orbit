@@ -82,6 +82,24 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             : randomBytes(32).toString("base64url")
       if (!password) return yield* Effect.fail(new Error("Missing server password"))
       const instanceID = randomUUID()
+      // The CLI hands a private server its run-scoped config as a file, because the environment is size limited; the
+      // file wins over ORBIT_CONFIG_CONTENT, which the CLI has already merged into it. The shared service never reads
+      // one: a variable that happened to be set when it started must not shape every client's config.
+      // A value this server did not get from the CLI (inherited, or left by a run that is over) costs one log line
+      // and is not used, so it cannot stop a server that has nothing to do with it from starting.
+      const overlay = yield* Effect.tryPromise({
+        try: () => takeOverlay(options.mode, process.env),
+        catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+      }).pipe(
+        // Only the refusal of a file that is not the CLI's own; an I/O error on an own file stops the run.
+        Effect.catch((error) =>
+          error.name === "OverlayRefusal"
+            ? Effect.logWarning("ignoring ORBIT_CONFIG_CONTENT_FILE", { reason: error.message }).pipe(
+                Effect.as(undefined),
+              )
+            : Effect.fail(error),
+        ),
+      )
       const server = yield* start(
         {
           app: {
@@ -105,11 +123,9 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           },
           config: {
             directory: process.env.ORBIT_CONFIG_DIR,
-            project: !truthy(
-              process.env.ORBIT_CONFIG_PROJECT_DISABLE ?? process.env.ORBIT_DISABLE_PROJECT_CONFIG,
-            ),
+            project: !truthy(process.env.ORBIT_CONFIG_PROJECT_DISABLE ?? process.env.ORBIT_DISABLE_PROJECT_CONFIG),
             file: process.env.ORBIT_CONFIG,
-            content: process.env.ORBIT_CONFIG_CONTENT,
+            content: overlay ?? process.env.ORBIT_CONFIG_CONTENT,
           },
           managed: { directory: process.env.ORBIT_MANAGED_DIR || undefined },
           trust: trustOptions(options.mode, process.env),
@@ -190,6 +206,19 @@ function serviceURL(hostname: string, port: number) {
  */
 export function trustOptions(mode: Mode, env: Readonly<Record<string, string | undefined>>) {
   return { implicit: mode === "service" ? false : truthy(env.ORBIT_TRUST_PROJECT) }
+}
+
+/**
+ * The run-scoped config that the CLI left for this server in ORBIT_CONFIG_CONTENT_FILE, read once. The variable is
+ * removed from `env` whatever happens, so nothing this server starts inherits it. The background service never reads
+ * it, and a path that is not a file the CLI wrote is refused without being touched.
+ */
+export async function takeOverlay(mode: Mode, env: Record<string, string | undefined>) {
+  const file = env.ORBIT_CONFIG_CONTENT_FILE
+  delete env.ORBIT_CONFIG_CONTENT_FILE
+  if (file === undefined || mode === "service") return undefined
+  const { ConfigOverlay } = await import("./config-overlay")
+  return ConfigOverlay.consume(file)
 }
 
 function truthy(value?: string) {

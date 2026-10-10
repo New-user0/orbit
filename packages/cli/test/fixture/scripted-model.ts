@@ -26,9 +26,16 @@ export type ScriptedReply =
       readonly tool?: { readonly name: string; readonly input: unknown }
       /** The finish reason of the step, such as "content_filter" for a step the runner counts as failed. */
       readonly finish?: string
+      /** Wait this long before answering, so a slow start such as an MCP server connecting is over by the next request. */
+      readonly delayMs?: number
     }
 
-export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
+export function scriptedModel(
+  replies: ReadonlyArray<ScriptedReply> = ["ok"],
+  contextLength = 32_768,
+  /** Called for each request before it is answered, so a test can look at the machine while the run is in progress. */
+  observe?: (request: ScriptedRequest) => void | Promise<void>,
+) {
   const requests: ScriptedRequest[] = []
   const details = {
     format: "gguf",
@@ -59,7 +66,7 @@ export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
         return Response.json({
           parameters: "",
           capabilities: ["completion", "tools"],
-          model_info: { "general.architecture": "llama", "llama.context_length": 32_768 },
+          model_info: { "general.architecture": "llama", "llama.context_length": contextLength },
           details: { parent_model: "", ...details },
         })
       if (pathname === "/api/ps") return Response.json({ models: [] })
@@ -72,10 +79,12 @@ export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"]) {
         body,
       }
       requests.push(entry)
+      await observe?.(entry)
       const reply = entry.step
         ? (replies[Math.min(requests.filter((item) => item.step).length - 1, replies.length - 1)] ?? "ok")
         : "Title"
       const scripted = typeof reply === "string" ? { chunks: [reply] } : reply
+      if ("delayMs" in scripted && scripted.delayMs) await Bun.sleep(scripted.delayMs)
       const events = [
         ...(scripted.tool
           ? [

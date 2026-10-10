@@ -147,8 +147,8 @@ export const Plugin = {
               for (const hunk of hunks) {
                 yield* Effect.gen(function* () {
                   const target = yield* resolveTarget(hunk.path)
-                  yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path)
                   if (hunk.type === "add") {
+                    yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path)
                     const content =
                       hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
                     prepared.push({
@@ -160,32 +160,29 @@ export const Plugin = {
                     })
                     return
                   }
+                  // Refused before any content is loaded; the snapshot then tells a touched file from an edited one.
+                  const previous = hunk.type === "update" ? updates.get(target.absolute) : undefined
+                  yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
+                  const snapshot =
+                    previous === undefined
+                      ? yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                          Effect.mapError(
+                            (error) =>
+                              new ToolFailure({
+                                message:
+                                  hunk.type === "delete"
+                                    ? `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`
+                                    : `patch verification failed: Failed to read file to update ${target.absolute}: ${errorMessage(error)}`,
+                              }),
+                          ),
+                        )
+                      : undefined
+                  if (snapshot) yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, snapshot)
                   if (hunk.type === "delete") {
-                    const content = yield* FileMutation.readText(environment.files, target.absolute).pipe(
-                      Effect.mapError(
-                        (error) =>
-                          new ToolFailure({
-                            message: `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`,
-                          }),
-                      ),
-                    )
-                    prepared.push({ ...hunk, target, before: content.text, after: "" })
+                    prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
                     return
                   }
-                  const previous = updates.get(target.absolute)
-                  const original =
-                    previous ??
-                    (yield* Effect.gen(function* () {
-                      const content = yield* FileMutation.readText(environment.files, target.absolute).pipe(
-                        Effect.mapError(
-                          (error) =>
-                            new ToolFailure({
-                              message: `patch verification failed: Failed to read file to update ${target.absolute}: ${errorMessage(error)}`,
-                            }),
-                        ),
-                      )
-                      return Bom.join(content.text, content.bom)
-                    }))
+                  const original = previous ?? Bom.join(snapshot!.text, snapshot!.bom)
                   const before = Bom.split(original).text
                   const update = yield* Effect.try({
                     try: () => Patch.derive(hunk.path, hunk.chunks, original),
@@ -286,18 +283,17 @@ export const Plugin = {
                 [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
                 (target) =>
                   Effect.gen(function* () {
-                    const current = yield* FileMutation.readText(environment.files, target).pipe(
+                    const written = yield* FileMutation.readSnapshot(environment.files, target).pipe(
                       Effect.mapError((error) => fail(`Failed to read ${target}`, error)),
                     )
-                    formatted.set(
-                      target,
-                      (yield* formatter.file(target))
-                        ? yield* FileMutation.syncTextBom(environment.files, target, current.bom).pipe(
-                            Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
-                          )
-                        : current.text,
-                    )
-                    yield* ledger.record(context.sessionID, target)
+                    const final = (yield* formatter.file(target))
+                      ? yield* FileMutation.syncTextBom(environment.files, target, written.bom).pipe(
+                          Effect.andThen(FileMutation.readSnapshot(environment.files, target)),
+                          Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
+                        )
+                      : written
+                    formatted.set(target, final.text)
+                    yield* ledger.recordWrite(context.sessionID, target, final)
                   }),
                 { discard: true },
               )

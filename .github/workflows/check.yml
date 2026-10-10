@@ -102,7 +102,7 @@ jobs:
         run: bun run test test/shell-analysis
       - name: orb flow, the workflow tool and orb -p end to end
         working-directory: packages/cli
-        run: bun test --timeout 60000 test/flow.test.ts test/flow-verify.test.ts test/flow-team.test.ts test/workflow-tool.test.ts test/argv.test.ts test/print.test.ts
+        run: bun test --timeout 60000 test/flow.test.ts test/flow-verify.test.ts test/flow-team.test.ts test/workflow-tool.test.ts test/argv.test.ts test/print.test.ts test/config-overlay-flags.test.ts
 
   artifact:
     name: build and scan binary and extension

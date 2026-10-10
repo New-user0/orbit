@@ -418,7 +418,7 @@ function permission(item: Extract<Item, { type: "permission" }>) {
     vscode.postMessage({ type: "permission", id: item.id, decision })
   actions.append(
     button("Allow", reply("once"), "primary"),
-    button("Always allow", reply("always")),
+    ...(item.canSave ? [button("Always allow", reply("always"))] : []),
     button("Reject", reply("reject")),
     element("span", "spacer"),
   )

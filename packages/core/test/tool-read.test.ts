@@ -82,7 +82,7 @@ const reader = Layer.succeed(
       if (readDefect !== undefined) return Effect.die(readDefect)
       if (readOverride) return readOverride(input, resource, page)
       if (readFailure !== undefined) return Effect.fail(readFailure)
-      return Effect.succeed(readResult)
+      return Effect.succeed({ content: readResult })
     },
   }),
 )
@@ -370,7 +370,9 @@ describe("ReadTool", () => {
           }),
         )
         await fs.mkdir(folder)
-        await Promise.all(Array.from({ length: 5 }, (_, index) => fs.writeFile(path.join(folder, `f${index}.txt`), "x")))
+        await Promise.all(
+          Array.from({ length: 5 }, (_, index) => fs.writeFile(path.join(folder, `f${index}.txt`), "x")),
+        )
       })
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
@@ -389,7 +391,12 @@ describe("ReadTool", () => {
       const listed = yield* executeTool(registry, {
         sessionID,
         ...toolIdentity,
-        call: { type: "tool-call", id: "call-nb-folder", name: "Read", input: { file_path: folder, offset: 3, limit: 2 } },
+        call: {
+          type: "tool-call",
+          id: "call-nb-folder",
+          name: "Read",
+          input: { file_path: folder, offset: 3, limit: 2 },
+        },
       })
       if (listed.status !== "completed" || listed.output.type !== "list-page") throw new Error("expected a list page")
       expect(listed.output.entries).toHaveLength(2)
@@ -884,7 +891,7 @@ describe("ReadTool", () => {
       readOverride = (input) =>
         input === requestedAbsolute
           ? Effect.fail(new Environment.NotFound({ path: requestedAbsolute }))
-          : Effect.succeed(readResult)
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       const result = yield* executeTool(registry, {
@@ -916,7 +923,9 @@ describe("ReadTool", () => {
       const recovered = path.join(directory, "report\u202ffinal.txt")
       directoryEntryDetails = [{ name: path.basename(recovered), type: "file" }]
       readOverride = (input) =>
-        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed(readResult)
+        input === requested
+          ? Effect.fail(new Environment.NotFound({ path: requested }))
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       expect(
@@ -942,7 +951,9 @@ describe("ReadTool", () => {
       deniedResource = path.basename(recovered)
       directoryEntryDetails = [{ name: path.basename(recovered), type: "file" }]
       readOverride = (input) =>
-        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed(readResult)
+        input === requested
+          ? Effect.fail(new Environment.NotFound({ path: requested }))
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       expect(
@@ -992,7 +1003,9 @@ describe("ReadTool", () => {
       readOverride = (input) =>
         input === requestedAbsolute
           ? Effect.fail(new Environment.NotFound({ path: requestedAbsolute }))
-          : Effect.succeed(new ReadToolFileSystem.ListPage({ type: "list-page", entries: [], truncated: false }))
+          : Effect.succeed({
+              content: new ReadToolFileSystem.ListPage({ type: "list-page", entries: [], truncated: false }),
+            })
       const registry = yield* Tool.Service
 
       expect(

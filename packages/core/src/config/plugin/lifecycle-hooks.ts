@@ -10,7 +10,9 @@ import { AppProcess } from "@orbit/util/process"
 import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../../config.js"
+import { HookSources } from "../hook-sources.js"
 import { Location } from "../../location.js"
+import { ManagedPolicy } from "../../managed-policy.js"
 import { isRecord } from "@orbit/ai/utils/record"
 import { Mcp } from "../../mcp/index.js"
 import { ToolNames } from "../../tool/names.js"
@@ -40,7 +42,9 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * This is the interim runner, and it honors less than the hooks schema describes. It warns once for each of these:
  * - Hooks of the other types (prompt, agent, http) are skipped.
  * - The `shell`, `async`, `async_rewake`, `once`, `if` and `status_message` settings of a command are ignored.
- * - The `disabled`, `managed_only` and `http` policies are not enforced.
+ * - The `http` policy of a hooks block, and `disabled` and `managed_only` outside the managed file, are not enforced.
+ *   The organization's `managed_hooks_only` and `disable_hooks` restrictions, and `hooks.disabled` and
+ *   `hooks.managed_only` of the managed file, are, through `HookSources.collect`.
  *
  * No warning covers these differences from the schema's descriptions:
  * - Only PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop and PreCompact fire; hooks under the other
@@ -82,6 +86,7 @@ export const Plugin = define({
     const processes = yield* AppProcess.Service
     const shells = yield* ShellSelect.Service
     const location = yield* Location.Service
+    const managed = yield* ManagedPolicy.Service
 
     // Each warning is logged once, not on every event: hooks are matched every time an event fires.
     const warned = new Set<string>()
@@ -106,11 +111,12 @@ export const Plugin = define({
       aliases: readonly string[],
     ) {
       // A later document outranks an earlier one, and the position is its rank.
-      const documents = (yield* config.entries()).flatMap((entry) =>
-        entry.type === "document" && entry.info.hooks
+      const documents = HookSources.collect(yield* config.entries(), managed.current().restrictions).flatMap((entry) =>
+        entry.info.hooks
           ? [
               {
                 hooks: entry.info.hooks,
+                managed: entry.scope === "managed",
                 foreign: CompatSettings.isForeign(entry.path),
                 directory: CompatSettings.projectDirectory(entry, location.directory),
               },
@@ -118,7 +124,13 @@ export const Plugin = define({
           : [],
       )
       yield* Effect.forEach(
-        documents.flatMap((document) => UNENFORCED_POLICIES.filter((policy) => document.hooks[policy])),
+        // The managed file's `disabled` and `managed_only` are enforced by `HookSources.collect`.
+        documents.flatMap((document) =>
+          UNENFORCED_POLICIES.filter(
+            (policy) =>
+              document.hooks[policy] && !(document.managed && (policy === "disabled" || policy === "managed_only")),
+          ),
+        ),
         (policy) =>
           warnOnce(`policy:${policy}`, "hook policy is not enforced yet and is ignored", {
             setting: `hooks.${policy}`,

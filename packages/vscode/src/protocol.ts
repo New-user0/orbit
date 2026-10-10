@@ -49,6 +49,8 @@ export type Item =
       readonly sessionID: string
       readonly action: string
       readonly resources: ReadonlyArray<string>
+      /** Whether an "always" reply would save a grant; managed_permissions_only withholds it. */
+      readonly canSave: boolean
       /** What the card shows: the request's own values, never the calling tool's input. */
       readonly view: PermissionView.View
       readonly files: ReadonlyArray<FileChange>

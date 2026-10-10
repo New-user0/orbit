@@ -201,6 +201,25 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
+- The run-scoped config of `--mcp-config` and `--agents` (`packages/cli/src/config-overlay.ts`), which reads a file by
+  name, hands its content to a private server, and can start programs through `--mcp-config`. The values are the
+  person's own, so they are read and checked in the folder the person typed them in, before `orb <directory>` changes
+  folder (a clone at that directory may ship a file of the same name) and before any server starts. The overlay does not
+  trust the folder: the private server keeps `ORBIT_TRUST_PROJECT` as it was, and `orb -p` still stops in an untrusted
+  folder. The file that carries the content to the server is read only when it is a file the CLI wrote
+  (`overlays/overlay-*/<id>.json` in Orbit's per-user state folder, which is in no folder an agent may write without
+  asking) and holds a version 1 envelope; any other path in `ORBIT_CONFIG_CONTENT_FILE` is left untouched with one log
+  line, and the background service never reads it. A relative `{file:}` reference in a value is made absolute against
+  the folder of the file that holds it (the start folder for an inline value) before it is merged, because core would
+  otherwise read it in the opened folder. Errors that echo the value or keys from inside it go through `plain`, and a
+  refusal before a session exists goes out in the requested output format. `--continue` is checked against the session
+  the run will use, resolved once in the folder the run works in (`process.cwd()` after `orb <directory>` has changed
+  folder). Only the session named at start is checked: the session list,
+  restored tabs and `/resume` of an overlay run can still open one the service is running, as with `--standalone`. A value is inline JSONC or a file name by its shape (`{`, a `/*` comment or a `//` comment with more lines first), never by what is on disk, so a clone cannot supply a file named after the typed text (class 1; "no spelling of an inline value"). A `{file:}` that holds an `{env:}` is anchored by what its head resolves to, with a leading `{env:NAME}` read from this process's environment, which the server inherits.
+  Proof: `packages/cli/test/config-overlay.test.ts`, `packages/cli/test/config-overlay-flags.test.ts` ("names a file in
+  the folder the person typed it in", "is read from the person's folder", "is not trusted", "never drains", "orb
+  --agents --continue", "refused as a result object"),
+  `packages/cli/test/server-process.test.ts`.
 
 **Terminal UI** (`packages/tui`):
 
@@ -242,6 +261,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the path it found, in the folder of the file. Proof: `test/config-v2.test.tsx` (the file is read from beside cli.json
   only, with a control), `test/keybindings-file.test.ts` (the hostile names and keys), `test/editor.test.ts` (the Windows
   decoy test, with a control).
+- The operating system notification programs (`notify-send`, `osascript`, Windows PowerShell), started when
+  `attention.backend` is `"system"`: found with `which` over absolute `PATH` entries only, started through
+  `CrossSpawnSpawner` (`AppProcess`) in the person's home folder with a script that is a constant of the module, and the
+  title and message passed as separate arguments (Linux, macOS) or environment values (Windows), after the host removed
+  control characters and the session title, the form title and the failure message went through `plain`. `cli.json` is read from the global folder only,
+  so a project cannot choose the backend. Proof: `test/util/os-notify.test.ts` (a message that breaks quoting, run against
+  the real Windows PowerShell with a dry-run switch; decoys in the working folder and a relative `PATH` entry, with a
+  control).
 
 **VS Code extension** (`packages/vscode`, which runs in VS Code's extension host: not an Orbit process, and shared with
 every other extension):
@@ -799,7 +826,7 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - For a command that checks trust, the older-server row is explicit. A command that only checks held-back config goes
   ahead with a warning on stderr. One that would import a file or run what a file defines stops with `unanswered(...)`,
   which names `orb service restart`, `--standalone` and `--trust` (`packages/cli/src/util/trust.ts`).
-- A setting that validates is enforced, or it warns once that it is not: `hooks.disabled`, `managed_only` and `http` do
+- A setting that validates is enforced, or it warns once that it is not: `hooks.http`, and `hooks.disabled` and `managed_only` outside the managed file, do
   (`UNENFORCED_POLICIES` in `packages/core/src/config/plugin/lifecycle-hooks.ts`).
 - Parse a switch as its siblings are parsed (`1` and `true`, case-insensitive; `ORBIT_DISABLE_COMPAT` once took only
   `1`).
@@ -1605,7 +1632,8 @@ fixes it or asks.
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
   starts a run without `requireTrust`. Nothing calls it except an import-boundary test, so it is dormant. Whoever wires
-  it in calls `requireTrust` first.
+  it in calls `requireTrust` first. It and `runNonInteractive({ auto })` also select the mode that skips permission prompts
+  without the managed-settings check that the command handlers make (`bypassRefusal`), so whoever wires them in adds it too.
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.

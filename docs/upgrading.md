@@ -284,13 +284,43 @@ A file or an entry that does not decode is skipped on its own and never drops wh
 Orbit does not know, at any depth of the native settings (`sandbox.enabeld`, a server's `disable`, an agent's `permisions`), is
 reported instead of ignored. The legacy top-level spellings (`agent`, `provider`, `permission` and the rest) are not
 checked, and neither is a key that another variant of the same value knows (`headers` on a local server). `orb doctor` lists
-the managed files by name and each problem it found. This release loads and merges the settings and hands the
-permission rules and restrictions to the policy service; enforcing them follows separately.
+the managed files by name and each problem it found. The permission rules and restrictions go to the policy service,
+which enforces them (see "Managed permission rules, hook limits and the bypass switch are enforced").
 
 **Affects:** machines that already have a file at one of those paths, and people who run a server with
 `ORBIT_MANAGED_DIR` set.
 
 **What to do:** Nothing unless your organization manages Orbit.
+
+### Managed permission rules, hook limits and the bypass switch are enforced
+
+Managed settings now take effect. Permission checks end in a managed layer that runs in core after the plugin hooks, so
+no plugin can override it. In order of precedence: a configured deny (agent rules, session rules and every non-managed
+config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
+then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
+`managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
+upgrades an ask, but never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a managed `Read` or `Edit` rule also decides a file inside the session's folder by its absolute place, so a deny on `~/.ssh/*` holds when Orbit runs in the home folder. The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
+managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
+
+- `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
+  approvals, drops allow rules from a session's own permissions, offers no "always" on a request, and treats an
+  "always" reply as "once". The built-in rules of the agents stay.
+- `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings. The managed file's own `hooks.disabled` and `hooks.managed_only` mean the same.
+- `disable_bypass_permissions` makes `orb`, `orb run`, `orb -p`, `orb loop`, `orb flow run`, `orb flow resume` and
+  `orb eval` refuse `--auto`, `--yolo` and `--dangerously-skip-permissions`. A workflow or suite node whose
+  `permissions` is `auto` (including a team member's) has its requests rejected, with the managed message as feedback.
+  The terminal interface keeps asking for permission and shows a notice when auto-accept was requested. A server that
+  cannot say whether bypass is allowed counts as refusing it.
+- `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
+- `orb flow clean` now compares a worktree's folder with the run's folder the way the platform compares paths, so a
+  run is cleaned up when the repository path is spelled with other case on Windows.
+
+Bypass is refused by the clients until a durable permission mode in the server reads the managed settings itself.
+
+**Affects:** organizations that ship managed settings, and people on their machines who use `--auto` or workflows with
+`permissions: auto`.
+
+**What to do:** nothing unless your organization manages Orbit.
 
 ## Clients
 
@@ -1038,6 +1068,31 @@ approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini
 
 **What to do:** Nothing.
 
+### `--mcp-config` and `--agents` add MCP servers and agents for one run
+
+`orb`, `orb run` and `orb -p` take `--mcp-config` (repeatable) and `--agents`. Each value is a JSON file or the JSON
+itself (comments and trailing commas are allowed). `--mcp-config` takes `{"servers": {"<name>": {"type": "local",
+"command": ["<program>"]}}}`, the shape of the `mcp` key, and `--agents` takes a map from agent name to the same fields as
+the `agents` key. A relative program or `cwd` in a file means the folder of that file. Another product's `mcpServers` map
+is refused with a hint. The values are checked before anything starts, an error names the flag and the path inside the
+value, and the merged document may not pass 4 MiB. They layer over `ORBIT_CONFIG_CONTENT`, then `--mcp-config` in order,
+then `--agents`.
+
+A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not run anything on the
+background service. The config reaches that server in a file in Orbit's state folder that only your user can open,
+which the server deletes when it has read it, and `orb` removes the variable and the folder as soon as the server is up. The environment that `orb` hands to a session no longer carries
+`ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
+the run stops, before the interface starts, when the background service reports that session as running, or when a service is registered and alive
+but cannot be asked, because two servers would run it at once; `--fork` is not checked, since a fork never runs the
+session it copies, and an `orb` that opens the session list cannot tell, and does not check. A value that starts, after whitespace, with `{`, a `/*` comment, or a `//` comment followed by another line is read as inline JSONC and anything else is a file name (so a one-line `//server/share/mcp.json` is a path); the disk never decides, so a folder that ships a file named after the text you typed cannot replace it (a file whose name starts with `{` is reached as `./{...}`). This replaces the earlier rule that a value was a file whenever a file of that name existed. A relative file name is
+taken from the folder you typed it in, also with `orb <directory>`; a relative `{file:...}` inside the value is taken from the folder of the file that holds it, or the folder you typed an inline value in, also when it holds an `{env:NAME}` (a reference that starts with `{env:NAME}` is anchored when NAME holds a relative path, and left to Orbit when it holds an absolute one). Only the session named at start is checked: the session list, restored tabs and `/resume` can still open one the service runs, as with `--standalone`. Rules that `--agents` gives an agent add to the rules
+the same agent already has from `ORBIT_CONFIG_CONTENT`. A `ORBIT_CONFIG_CONTENT_FILE` that you set yourself is ignored (a server logs one line)
+and never deleted.
+
+**Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
+
+**What to do:** Nothing.
+
 ### Terminal bell, idle reminder and a status in the window title
 
 `attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the
@@ -1055,6 +1110,30 @@ permission or form waits, including those of its subagents (in Mini, on Linux, a
 have notifications, sound or the bell on, who get the reminder.
 
 **What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
+
+### System notifications for the TUI and Mini, and notices in VS Code
+
+`attention.backend` in `cli.json` chooses where a notification appears. `"terminal"`, the default, asks the terminal
+to show it, as before. `"system"` uses the operating system's own notifications (`notify-send` on Linux, Notification
+Center on macOS, a toast from Windows PowerShell on Windows) and falls back to the terminal when the program is missing,
+exits with an error or runs longer than 10 seconds. `attention.notifications` is still the master switch and still off by
+default, and a notification still shows only while the terminal is blurred. The title and the message reach the program
+as data, never as part of a script. Mini now honours `attention.notifications`, `attention.backend`, `attention.bell` and
+`attention.idle_reminder` exactly as the TUI does, including the reminder after a finished session.
+
+A subagent's permission request or form now notifies like a root session's does. It used to send a sound and a bell
+only. A subagent finishing stays silent.
+
+The VS Code extension has a new setting, `orbit.notifications` (on by default). While the Orbit chat is hidden or the
+window is in the background, it shows a notice when a permission needs review ("Orbit needs your review") and when a
+working period ends ("Orbit finished"), each with an Open button. These are notices inside VS Code, not operating
+system notifications.
+
+**Affects:** TUI and Mini users who turn notifications on, people who use subagents with notifications on, and VS Code
+users, who get the new notices unless they turn `orbit.notifications` off.
+
+**What to do:** Nothing. Set `"attention": { "backend": "system" }` to use the operating system's notifications, and
+`orbit.notifications` to `false` to silence the VS Code notices.
 
 ## Permissions
 
@@ -1990,3 +2069,34 @@ The Read, Grep and Glob tools now refuse a device or stream path with a message 
 **Affects:** people and scripts that read very large files or device paths through the Read tool.
 
 **What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
+
+### A touched file no longer blocks an edit, and a repeat read is short
+
+The file tools remember what a Session read of a file and what its own edits left behind. When a file's modification time is newer than the one remembered but its bytes are the same (a touch, a checkout that rewrote the same content, a formatter that changed nothing), Edit, Write, NotebookEdit and Patch now go ahead instead of reporting that the file changed. This applies to files of up to 256 KiB that the Session read, whatever range it asked for, and files it last edited or wrote; a larger file still compares modification times only. A file whose content changed is refused as before, and a change of line endings alone (CRLF to LF) counts as no change while adding or removing a byte order mark does not. A file that was never read is refused before any of it is loaded. A file reached through a symbolic link is compared by the link target's modification time, as its read recorded it. Separately, reading the same range of an unchanged text file or notebook again in the same Session answers with a short "unchanged since your last read" note instead of the text; the tool's structured output is unchanged and its metadata says `unchanged: true`. Only the last range read of a file is remembered, so reading range A, then range B, then A again returns A in full. The note is never used for a directory listing, an image or a PDF, and never skips the permission check. The note is not used after the Session is compacted or a revert is committed, nor after any Edit, Write, Patch or NotebookEdit of that file. A completed compaction also forgets that the Session read any file: a file has to be read again after a compaction before Edit, Write, Patch or NotebookEdit may change it (a failed compaction changes nothing).
+
+**Affects:** people who run formatters, version control or build tools while a Session is open, and clients that show Read results.
+
+**What to do:** Nothing.
+
+### Grep returns up to 250 matches in a token-bounded page, and clips long lines
+
+Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
+a page in `content` mode also stops before its text passes about 25,000 tokens, so a call with a lot of `context` holds
+fewer. A truncated result says which matches it shows and the exact `offset` that continues it; paging from that
+offset skips nothing and repeats nothing, because matches come in path order. A line longer than 500 characters is cut
+to a window that starts about 100 characters before its first match, with ellipsis markers and a
+`[line truncated: N chars]` note, and the submatch offsets in the result index into the clipped text; a match that runs
+past the window is kept and cut at its end. A multiline match is measured one line at a time, so only a line longer
+than 500 characters is cut, and a match of more than 20,000 characters ends with a
+`[match continues for N more lines]` marker. A line that is not valid UTF-8 is shown with replacement characters
+instead of failing the search. Submatch
+`start` and `end` are now offsets in UTF-16 characters of the row's `text`, not UTF-8 bytes, on every line including
+unclipped ones (a plugin reading `Ripgrep.Service` sees this too); `Match.offset` stays a byte offset. Grep and Glob
+also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders and files of those names, as they already skipped `.git`.
+Glob still returns at most 100 files.
+
+**Affects:** people who read Grep results in scripts or plugins, and anyone who relied on a search entering one of
+those version-control folders.
+
+**What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
+truncation note for more results.

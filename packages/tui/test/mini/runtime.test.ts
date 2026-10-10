@@ -166,6 +166,66 @@ describe("run interactive runtime", () => {
     await task
   })
 
+  test("hands the transport's events to the lifecycle's attention observer", async () => {
+    const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+    const api = footer()
+    const observed: string[] = []
+    stubCatalogLists(sdk)
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses_root",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp", canonical: "/tmp" } },
+          agent: "build",
+          model: undefined,
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: undefined,
+        variant: undefined,
+        files: [],
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: api,
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          setTitle: () => {},
+          observe: (event) => observed.push(event.type),
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async (input) => {
+            input.onEvent?.({
+              id: "evt_1",
+              created: 0,
+              type: "permission.asked",
+              data: { id: "per_1", sessionID: "ses_root", action: "read", resources: [] },
+            } as Parameters<NonNullable<typeof input.onEvent>>[0])
+            api.close()
+            return {
+              runPromptTurn: async () => {},
+              admitPromptTurn: async () => {},
+              waitForIdle: async () => {},
+              interruptActiveTurn: async () => {},
+              selectSubagent: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => String(error),
+        }),
+      },
+    )
+    await task
+    expect(observed).toEqual(["permission.asked"])
+  })
+
   test("routes form responses to their owners with global location and local settlement", async () => {
     const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
     const api = footer()

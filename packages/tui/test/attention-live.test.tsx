@@ -8,6 +8,7 @@ import { createTuiAttention } from "../src/attention"
 const config = {
   attention: {
     notifications: false,
+    backend: "terminal" as const,
     sound: false,
     bell: true,
     idle_reminder: 60,

@@ -10,17 +10,13 @@ import { ConfigTrust } from "../trust.js"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Permission } from "../../permission.js"
+import { ManagedPolicy } from "../../managed-policy.js"
 import { ProjectTrust } from "../../project-trust.js"
-import type { FileAccess } from "../../file-access.js"
-import type { ReadTool } from "../../tool/plugin/read.js"
-import type { EditTool } from "../../tool/plugin/edit.js"
-import { ToolNames } from "../../tool/names.js"
+import { ConfigPermissionExpand } from "../expand-permissions.js"
 import { AgentFile } from "./agent-file.js"
 
 // Keep in sync with the scan patterns and the name-strip regex in agent-file.ts.
 const sourceDirectories = ["agent", "agents", "mode", "modes"] as const
-type PathAction = FileAccess.ExternalDirectoryAuthorization["action"] | typeof ReadTool.name | typeof EditTool.name
-const pathActions = ["external_directory", "Read", "Edit"] as const satisfies readonly PathAction[]
 
 export const Plugin = define({
   id: "orbit.config.agent",
@@ -29,6 +25,7 @@ export const Plugin = define({
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const trust = yield* ProjectTrust.Service
+    const managed = yield* ManagedPolicy.Service
     const loadEntry = Effect.fnUntraced(function* (entry: Entry) {
       if (entry.type === "document") return [entry]
       if (entry.type !== "directory") return []
@@ -69,9 +66,14 @@ export const Plugin = define({
     )
     loaded.documents = yield* load()
     yield* ctx.agent.transform((editor) => {
-      // Managed rules are enforced from ManagedPolicy, not by copying them into agents, so a managed document adds none.
-      const permissions = expandPermissions(
-        loaded.documents.flatMap((document) => (document.scope === "managed" ? [] : (document.info.permissions ?? []))),
+      // Managed rules are enforced from ManagedPolicy (Permission.evaluateInput), not by copying them into agents, so a
+      // managed document adds none. Under managed_permissions_only no document adds any: the agents keep only their
+      // built-in rules.
+      const only = managed.current().restrictions.managed_permissions_only === true
+      const permissions = ConfigPermissionExpand.expandPermissions(
+        loaded.documents.flatMap((document) =>
+          document.scope === "managed" || only ? [] : (document.info.permissions ?? []),
+        ),
         global.home,
       )
       const configuredDefault = Config.latest(loaded.documents, "default_agent")
@@ -107,8 +109,8 @@ export const Plugin = define({
             if (item.hidden !== undefined) agent.hidden = item.hidden
             if (item.color !== undefined) agent.color = item.color
             if (item.steps !== undefined) agent.steps = item.steps
-            if (item.permissions !== undefined && document.scope !== "managed") {
-              agent.permissions.push(...expandPermissions(item.permissions, global.home))
+            if (item.permissions !== undefined && document.scope !== "managed" && !only) {
+              agent.permissions.push(...ConfigPermissionExpand.expandPermissions(item.permissions, global.home))
             }
           })
         }
@@ -125,29 +127,6 @@ function isAgentSource(entries: Entry[], file: string) {
       entry.type === "directory" &&
       sourceDirectories.some((name) => FSUtil.contains(path.join(entry.path, name), file)),
   )
-}
-
-function expandPermissions(rules: Permission.Ruleset, home: string): Permission.Ruleset {
-  // Expand only resources tools resolve as filesystem paths. Bash resources are raw shell text:
-  // rewriting `$HOME/private/**` would miss `$HOME/private/key`, and safe expansion needs shell-aware parsing.
-  return rules.map((rule) =>
-    isPathAction(rule.action) ? { ...rule, resource: expandHome(rule.resource, home) } : rule,
-  )
-}
-
-function isPathAction(action: string) {
-  return pathActions.some((item) => item === ToolNames.canonical(action))
-}
-
-function expandHome(resource: string, home: string) {
-  if (resource === "~" || resource === "$HOME") return home
-  const relative = resource.startsWith("~/")
-    ? resource.slice(2)
-    : resource.startsWith("$HOME/") || resource.startsWith("$HOME\\")
-      ? resource.slice(6)
-      : undefined
-  if (relative !== undefined) return (path.posix.isAbsolute(home) ? path.posix : path.win32).join(home, relative)
-  return resource
 }
 
 // An agent file takes the scope of the directory that holds it. While that directory's folder is untrusted it is cut down

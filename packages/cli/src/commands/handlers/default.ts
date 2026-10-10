@@ -9,10 +9,12 @@ import { ServerConnection } from "../../services/server-connection"
 import { Npm } from "@orbit/util/npm"
 import { ORBIT_ARTIFACT, ORBIT_CHANNEL, ORBIT_VERSION } from "../../version"
 import { Env } from "../../env"
+import { ConfigOverlay } from "../../config-overlay"
 import { Service } from "@orbit/client/effect/service"
 import { Orbit } from "@orbit/client/promise"
 import { findSession } from "../../session-target"
 import { errorMessage } from "../../util/error"
+import { bypassRefusal } from "../../util/managed-bypass"
 
 export default Runtime.handler(Commands, (input) =>
   Effect.gen(function* () {
@@ -37,6 +39,14 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--fork requires --continue, --session or --resume"))
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
+    // A private server holds this run's --mcp-config and --agents; the file that carries them is removed on exit. They
+    // are read before the change of directory below: a relative file name means the folder the person typed it in, and
+    // the folder they start Orbit in may be a clone that ships a file of the same name.
+    const overlay = yield* ConfigOverlay.apply({
+      mcpConfig: input.mcpConfig,
+      agents: Option.getOrUndefined(input.agents),
+      server: requestedServer,
+    })
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
     const serviceStarts = yield* Queue.unbounded<{
       readonly reason: "missing" | "version-mismatch"
@@ -49,7 +59,7 @@ export default Runtime.handler(Commands, (input) =>
     )
     const server = yield* ServerConnection.resolve({
       server: requestedServer,
-      standalone: input.standalone,
+      standalone: input.standalone || overlay,
       mismatch: "replace",
       onStart: (reason, previousVersion) => {
         Queue.offerUnsafe(serviceStarts, { reason, previousVersion })
@@ -60,10 +70,25 @@ export default Runtime.handler(Commands, (input) =>
         )
       },
     })
+    // The private server has read its file by now; nothing the interface starts should inherit the variable.
+    yield* Effect.promise(() => ConfigOverlay.release())
     // A --resume value that is the ID of a session opens it, as --session does; anything else, including nothing, opens
     // the session list with the value typed into its search.
     const resumeID = resume !== undefined && /^ses\S*$/.test(resume) ? resume : undefined
-    const session = Option.getOrUndefined(input.session) ?? resumeID
+    const named = Option.getOrUndefined(input.session) ?? resumeID
+    // The session that --continue would open is asked about in the folder the interface opens (process.cwd(), after
+    // the change of directory above, which also settles a link or a trailing separator).
+    const checked = overlay
+      ? yield* ConfigOverlay.refuseActive({
+          client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+          session: named,
+          continue: input.continue,
+          fork: input.fork,
+          directory: process.cwd(),
+        })
+      : named
+    const session = checked ?? named
+    const continues = input.continue && session === undefined
     // A missing --session ID becomes the ID of the session the first prompt creates.
     const sessionExists =
       session !== undefined &&
@@ -78,6 +103,12 @@ export default Runtime.handler(Commands, (input) =>
     // Home sends --prompt to a new session as soon as it shows, which is not the session that the person picks.
     if (resumePicks && Option.isSome(input.prompt))
       return yield* Effect.fail(new Error("--prompt cannot be combined with a --resume that opens the session list"))
+    const bypass = yield* bypassRefusal(
+      Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+      process.cwd(),
+      input.auto || input.yolo || input.dangerouslySkipPermissions,
+    )
+    if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
     const config = yield* Config.Service
     const npm = yield* Npm.Service
     const fileSystem = yield* FileSystem.FileSystem
@@ -102,7 +133,7 @@ export default Runtime.handler(Commands, (input) =>
           : undefined,
       },
       args: {
-        continue: input.continue,
+        continue: continues,
         sessionID: sessionExists ? session : undefined,
         newSessionID: sessionExists ? undefined : Option.getOrUndefined(input.session),
         model: Option.getOrUndefined(input.model),

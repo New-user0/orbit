@@ -150,7 +150,7 @@ const mismatch = (input: typeof Input.Type, replacements: number) => {
 }
 
 const readOriginal = (files: Environment.Files, absolute: string, display: string) =>
-  FileMutation.readText(files, absolute).pipe(
+  FileMutation.readSnapshot(files, absolute).pipe(
     Effect.catchTag("Environment.NotFound", () =>
       Effect.fail(new ToolFailure({ message: `File not found: ${display}`, code: Tool.ErrorCode.FileNotFound })),
     ),
@@ -203,8 +203,13 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.file_path, kind: "file" })
               if (target.externalDirectory) return
               yield* Effect.gen(function* () {
-                yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
-                const original = yield* readOriginal(environment.files, target.absolute, input.file_path)
+                // An unread file is refused before any of it is loaded; the snapshot then tells a touched file from an edited one.
+                yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
+                const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
+                  Effect.tap((snapshot) =>
+                    ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot),
+                  ),
+                )
                 const mismatched = mismatch(input, plan(input, original.text).matches.length)
                 if (mismatched) return yield* mismatched
               }).pipe(fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]))
@@ -230,9 +235,12 @@ export const Plugin = {
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
-
-              const original = yield* readOriginal(environment.files, target.absolute, input.file_path)
+              yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
+              const original = yield* readOriginal(environment.files, target.absolute, input.file_path).pipe(
+                Effect.tap((snapshot) =>
+                  ledger.assertFresh(context.sessionID, target.absolute, input.file_path, snapshot),
+                ),
+              )
               const source = original.text
               const edit = plan(input, source)
               const replacements = edit.matches.length
@@ -264,12 +272,12 @@ export const Plugin = {
                 content: Bom.join(replaced, original.bom || replacementBom),
               })
               const bom = original.bom || replacementBom
-              const formatted = (yield* formatter.file(target.absolute))
-                ? yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-                : (yield* FileMutation.readText(environment.files, target.absolute)).text
-              yield* ledger.record(context.sessionID, target.absolute)
+              if (yield* formatter.file(target.absolute))
+                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
+              const final = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+              yield* ledger.recordWrite(context.sessionID, target.absolute, final)
               return {
-                files: [fileDiff(result.resource, source, formatted)],
+                files: [fileDiff(result.resource, source, final.text)],
                 replacements,
               } satisfies Output
             }).pipe(

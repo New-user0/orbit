@@ -10,6 +10,7 @@ import { Config } from "@orbit/core/config"
 import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
 import { ConfigSkillPlugin } from "@orbit/core/config/plugin/skill"
 import { Credential } from "@orbit/core/credential"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
@@ -66,6 +67,7 @@ function pluginLoader(folders: Folders) {
         FSUtil.node,
         Global.node,
         Location.node,
+        ManagedPolicy.node,
       ]),
       replacements(folders),
     ),
