@@ -2105,3 +2105,38 @@ config; the exit code of such a run does not change.
 
 **What to do:** Nothing. To allow search in a headless run, set `websearch` (for example `{ "provider": "random" }`) in your
 own Orbit config.
+
+### WebFetch follows same-site redirects only, checks every hop and caches pages for 15 minutes
+
+`WebFetch` used to let the HTTP client follow every redirect to any host, with one approval for the URL the model named.
+It now sends each request itself:
+
+- A redirect within the same site is followed: the same protocol (or `http:` to `https:`), the same port, no credentials
+  in the target, and the same host once one leading `www.` is dropped from each. A redirect to anything else is not
+  followed. The call succeeds with a note that names the URL that redirected, the target and the status, and says to call
+  `WebFetch` again with the target. Nothing is sent to the target, and the note is not cached. A 303 is a status error.
+  At most 10 redirects are followed; an 11th fails with "Too many redirects". (Tests: `WebFetchTool redirects` in
+  `packages/core/test/tool-webfetch.test.ts`.)
+- Every request is asked about, not only the first, so a rule written for a URL applies to a redirect target on the same
+  site. A hop from `example.com` to `www.example.com` is a different host, so it can prompt once. The approval of a hop
+  shows the hop's own method and URL, with the hop it came from in `redirect`. (Tests: "follows a same-host redirect" and
+  "follows a hop that only adds or drops a leading www.")
+- An `http:` URL is fetched over `https:`, and the approval shows the `https:` URL. A single-label host such as
+  `localhost` or an address keeps its scheme. A URL with a username or password, or one longer than 2000 characters, is
+  refused before anything is asked or sent. (Tests: `WebFetchTool URL checks`.)
+- After the permission for a request, the host is checked: a name that resolves to a loopback or private-network address
+  is refused unless `experimental.allow_local_fetch` is on, a link-local or cloud metadata address is always refused, and
+  so is a name that resolves to nothing. The request then connects to the address that was checked, with the name in
+  `Host` and in the TLS handshake. Fetching a local development server therefore needs `experimental.allow_local_fetch`,
+  which a repository cannot turn on. (Tests: `WebFetchTool address guard and pinning`.)
+- A response body may be up to 10 MiB, up from 5 MiB; an HTML page is still converted to Markdown within a 5 MiB budget.
+  (Tests: `WebFetchTool size cap`.)
+- A fetched page is cached for 15 minutes from the moment it is stored, up to 50 MiB in all, and shared by the sessions of
+  one project. A repeat call within that time sends no request, but still asks permission. A failure, a redirect note or a
+  timeout is never cached. (Tests: `WebFetchTool cache` and `tool-webfetch-cache.test.ts`.)
+
+**Affects:** people and scripts that fetch a local server or a private address with `WebFetch`, pages that redirect to
+another host, and anyone with `WebFetch` rules written for `http:` URLs, which now match the `https:` URL.
+
+**What to do:** To fetch local servers, set `experimental.allow_local_fetch` to `true` in your own configuration. Write
+rules for the `https:` form of a URL. When a note reports a redirect, call `WebFetch` again with the target it names.
