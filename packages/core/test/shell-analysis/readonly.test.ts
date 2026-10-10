@@ -310,7 +310,8 @@ describe("the allowlist shape", () => {
   })
   test("a flag value is taken from =, or from the next token when that is not a flag", () => {
     expect(bash("tree -L 2").readOnly).toBe(true)
-    expect(bash("tree -L=2").readOnly).toBe(true)
+    expect(bash("tree --filelimit=5").readOnly).toBe(true)
+    expect(bash("tree -L=2").readOnly).toBe(false)
     expect(bash("tree -L").readOnly).toBe(false)
     expect(bash("tree -L -a").readOnly).toBe(false)
     expect(bash("tree -L x").readOnly).toBe(false)

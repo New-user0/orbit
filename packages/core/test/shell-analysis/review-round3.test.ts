@@ -41,6 +41,11 @@ describe("file magic lists (classes 4 and 6)", () => {
     ["linux", "file -m 'a:/home/u/.ssh/id_rsa' x"],
     ["linux", "file --magic-file=a:/home/u/.ssh/id_rsa x"],
     ["linux", "file --magic-file a:/etc/x x"],
+    ["win32", "file -m='nothere.mgc://evil/share/m' x"],
+    ["linux", "file -m=a:/home/u/.ssh/id_rsa x"],
+    ["linux", "file -k -m=x:y x"],
+    ["linux", "file -mx:y x"],
+    ["linux", "file -km x:y x"],
   ])("%s: %s is not read-only", (platform, text) => {
     expect(bash(text, platform === "win32" ? windows() : linux()).readOnly).toBe(false)
   })

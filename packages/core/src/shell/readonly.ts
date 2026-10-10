@@ -381,6 +381,8 @@ function scanFlags(spec: Spec, args: string[]) {
     }
     const equals = token.indexOf("=")
     const name = equals < 0 ? token : token.slice(0, equals)
+    // A single-letter flag written `-m=x` hands the tool `=x`, not `x`, so the recorded read path is never what it opens.
+    if (table && equals >= 0 && !token.startsWith("--")) return undefined
     if (!table) {
       // Unknown options take no value; an extra operand only adds a read path.
       const count = equals < 0 ? (spec.values?.[name] ?? 0) : 0
@@ -447,7 +449,7 @@ export function expandHome(value: string, ctx: ShellAnalysis.Context) {
 // Anywhere in the word, so `--from-file=//host/share/x` counts. `scheme://` does not: a colon before the slashes.
 // `\??\UNC\host\share` is the NT spelling of the same share, in either separator. A host starts with a non-space, so
 // the jq operator in `.a // "x"` is not one.
-const UNC = /(?<!:)(?:\\\\|\/\/|\/\\|\\\/)[^\s\\/]|[\\/]\?\?[\\/]/
+const UNC = /\\\\[^\s\\/]|(?<!:)(?:\/\/|\/\\|\\\/)[^\s\\/]|[\\/]\?\?[\\/]/
 const WEBDAV = /@SSL@\d+|@\d+@SSL|DavWWWRoot/i
 
 /** A word that names a network share on Windows, or a WebDAV marker. */
@@ -555,8 +557,10 @@ function unquote(text: string) {
 }
 
 // The named providers, also module-qualified (`Microsoft.PowerShell.Core\Registry::HKLM`). Checked on every argument.
+// Any "Name::" is a provider-qualified path (FileSystem::\\host\share) in whatever position it stands.
 function namedProvider(text: string) {
-  return /^(?:env|hklm|hkcu|function|alias|variable|cert|wsman|registry):/i.test(unquote(text).replace(/^[\w.]+\\(?=[\w.]+:)/, ""))
+  const plain = unquote(text).replace(/^[\w.]+\\(?=[\w.]+:)/, "")
+  return /^(?:env|hklm|hkcu|function|alias|variable|cert|wsman|registry):/i.test(plain) || /^[\w.]+::/.test(plain)
 }
 
 // A UNC path or WebDAV marker, and on Windows the /proc/sys spelling. Checked on every argument.

