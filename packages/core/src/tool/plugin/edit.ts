@@ -136,7 +136,7 @@ const plan = (input: typeof Input.Type, source: string) => {
 
 /** The line `match` sits on, with its line break, when nothing but whitespace is on that line outside the match. */
 const wholeLine = (source: string, match: Match) => {
-  const start = source.lastIndexOf("\n", match.start - 1) + 1
+  const start = match.start === 0 ? 0 : source.lastIndexOf("\n", match.start - 1) + 1
   if (!/^[^\S\n]*$/.test(source.slice(start, match.start))) return
   const tail = /^[^\S\n]*(\n|$)/.exec(source.slice(match.end))
   if (!tail) return
@@ -148,13 +148,16 @@ const opening = new Set([" ", "\t", "\n", "\r", "(", "[", "{", "—", "–"])
 /**
  * Writes `text` in the quote style of the file text it replaces. A quote kind is restyled only when `slice` holds
  * that kind in curly form; detection and output cover U+2018, U+2019, U+201C and U+201D only. A straight quote
- * opens at the start of `text` or after whitespace, an opening bracket, or an en or em dash, and closes anywhere else.
+ * opens at the start of `text`, after a space, tab or line break, after `(`, `[` or `{`, or after an en or em dash, and closes anywhere else.
  */
 const restyleQuotes = (slice: string, text: string) => {
   const restyle = (value: string, straight: string, left: string, right: string) =>
-    Array.from(value, (char, index) =>
-      char !== straight ? char : index === 0 || opening.has(value[index - 1]) ? left : right,
-    ).join("")
+    // Index the code-point array being mapped: a string index drifts after any astral character.
+    Array.from(value)
+      .map((char, index, chars) =>
+        char !== straight ? char : index === 0 || opening.has(chars[index - 1]) ? left : right,
+      )
+      .join("")
   const doubled = /[“”]/.test(slice) ? restyle(text, '"', "“", "”") : text
   return /[‘’]/.test(slice) ? restyle(doubled, "'", "‘", "’") : doubled
 }

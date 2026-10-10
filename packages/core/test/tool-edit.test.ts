@@ -1190,6 +1190,10 @@ describe("EditTool fidelity", () => {
         [`"'n'"`, "“’n’”"],
         ['x\n"y"', "x\n“y”"],
         ['tab\t"t" nb "n"', "tab\t“t” nb ”n”"],
+        ['🚀 Launch "now"', "🚀 Launch “now”"],
+        ['😀 "x"', "😀 “x”"],
+        ["🙂 say 'hi'", "🙂 say ‘hi’"],
+        ['𝐱 a("b")', "𝐱 a(“b”)"],
         ["already “curly” and 'straight'", "already “curly” and ‘straight’"],
       ] as const
     ).map(([from, expected], index) => ({
@@ -1250,6 +1254,7 @@ describe("EditTool fidelity", () => {
     },
     { name: "D14 overlap guard", file: "x\n    \ny\n", old: "  ", all: true, expected: "x\n\ny\n", replacements: 2 },
     { name: "D15 CRLF trailing matcher", file: "a\r\nfoo  \r\nb\r\n", old: "foo   ", expected: "a\r\nb\r\n" },
+    { name: "D17 file starts with a line break", file: "\nfoo", old: "  \nfoo", expected: "" },
     { name: "D16 mixed endings", file: "a\r\nfoo\nb\r\n", old: "foo", expected: "a\r\nb\r\n" },
   ]
 
@@ -1269,6 +1274,13 @@ describe("EditTool fidelity", () => {
     { name: "D1", file: "a\n  foo\nb\n", old: "  foo", new: "" },
     { name: "D2", file: "a\r\n  foo\r\nb\r\n", old: "  foo", new: "" },
     { name: "D13", file: "foo\nbar foo baz\n", old: "foo", new: "", all: true },
+    {
+      name: "Q6",
+      file: `say “hi” 'yo'\nsay "hi" ‘yo’\n`,
+      old: `say "hi" 'yo'`,
+      new: `tell "hi" 'yo'`,
+      all: true,
+    },
   ]
   for (const row of approvalRows)
     it.live(`approval shows what runs ${row.name}`, () =>
