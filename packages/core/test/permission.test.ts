@@ -1676,6 +1676,18 @@ describe("Permission under managed network settings", () => {
     )
   }
 
+  // WebFetch asks the same gate for each same-site redirect hop (tool-webfetch.test.ts pins that every hop is asked), so a
+  // page on an allowed host cannot send the fetch onto a denied www. sibling.
+  it.effect("denies a same-site redirect hop onto a denied www host while the first URL is not denied", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["www.example.com"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("https://example.com/a"))).effect).toBe("ask")
+      expect((yield* service.ask(fetchOf("https://www.example.com/b"))).effect).toBe("deny")
+    }),
+  )
+
   const cases: ReadonlyArray<readonly [string, string, string, boolean]> = [
     ["an exact host", "example.com", "https://example.com/x", true],
     ["an exact host in another case with a trailing dot", "example.com", "https://EXAMPLE.com./x", true],
