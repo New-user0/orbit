@@ -1287,9 +1287,9 @@ function bashAnsiQuote(input: string, start: number) {
       if (!digits) value += `\\${escaped}`
       else {
         const octal = /[0-7]/.test(escaped)
-        // Bash keeps one byte of an octal escape (\456 is "."). From 0x80 up it writes a raw byte, which this decoder
-        // does not; for \u and \U the output also depends on the locale (the text itself under LC_ALL=C, surrogates as raw
-        // bytes, a \U above U+10FFFF as text). The word is dynamic either way.
+        // Bash keeps one byte of an octal escape (\456 is "."). From 0x80 up \x and octal write that raw byte in every
+        // locale; \u and \U write UTF-8 in a UTF-8 locale (a \U above U+10FFFF included) and keep the escape as text
+        // under C or with LANG unset. This decoder writes neither, so the word is marked undecoded.
         const point = octal ? parseInt(digits, 8) & 0xff : parseInt(digits, 16)
         if (point === 0 || point >= 0x80) undecoded = true
         value += point <= 0x10ffff ? String.fromCodePoint(point) : ""
