@@ -17,6 +17,7 @@ import { Session } from "@orbit/core/session"
 import { toSessionError } from "@orbit/core/session/to-session-error"
 import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
+import { fileDiff } from "@orbit/core/tool/plugin/file-diff"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
@@ -1102,4 +1103,215 @@ describe("EditTool", () => {
           ),
       ),
     )
+})
+
+// Runs one edit against a file holding `content` and returns the bytes left behind.
+const editFile = (content: string, input: Omit<typeof EditTool.Input.Type, "file_path">) =>
+  withTempDir((tmp) => {
+    const edit = makeEditFixture()
+    const target = path.join(tmp.path, "fidelity.txt")
+    return Effect.promise(() => fs.writeFile(target, content)).pipe(
+      Effect.andThen(
+        withTool(tmp.path, edit, (registry) =>
+          Effect.gen(function* () {
+            const settled = yield* executeTool(
+              registry,
+              call({
+                file_path: "fidelity.txt",
+                ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)),
+              } as typeof EditTool.Input.Type),
+            )
+            return {
+              settled,
+              text: yield* Effect.promise(() => fs.readFile(target, "utf8")),
+              assertions: edit.assertions,
+            }
+          }),
+        ),
+      ),
+    )
+  })
+
+describe("EditTool fidelity", () => {
+  const quoteRows: ReadonlyArray<{
+    name: string
+    file: string
+    old: string
+    new: string
+    all?: boolean
+    expected: string
+    replacements?: number
+  }> = [
+    {
+      name: "Q1",
+      file: "He said “hello”.\n",
+      old: 'He said "hello".',
+      new: 'He said "goodbye".',
+      expected: "He said “goodbye”.\n",
+    },
+    { name: "Q2", file: "It’s fine\n", old: "It's fine", new: "It's done", expected: "It’s done\n" },
+    {
+      name: "Q3 exact match stays straight",
+      file: 'a “b”\nc "d"\n',
+      old: 'c "d"',
+      new: 'c "e"',
+      expected: 'a “b”\nc "e"\n',
+    },
+    { name: "Q3b exact curly match", file: "a “b”\n", old: "“b”", new: '"c"', expected: 'a "c"\n' },
+    { name: "Q4 absent kind stays straight", file: "x “y”\n", old: 'x "y"', new: `x "it's"`, expected: "x “it's”\n" },
+    {
+      name: "Q6 each match from its own slice",
+      file: `say “hi” 'yo'\nsay "hi" ‘yo’\n`,
+      old: `say "hi" 'yo'`,
+      new: `tell "hi" 'yo'`,
+      all: true,
+      expected: `tell “hi” 'yo'\ntell "hi" ‘yo’\n`,
+      replacements: 2,
+    },
+    {
+      name: "Q7 trailing-whitespace matcher",
+      file: "He said “hi”.   \nnext\n",
+      old: 'He said "hi".\nnext',
+      new: 'He said "bye".\nnext',
+      expected: "He said “bye”.\nnext\n",
+    },
+    { name: "Q8 CRLF opens after break", file: "x\r\n“a”\r\n", old: 'x\n"a"', new: 'x\n"b"', expected: "x\r\n“b”\r\n" },
+    {
+      name: "Q10 trailing whitespace only keeps straight code quotes",
+      file: "const a = 'x'   \nconst msg = \"Don’t\"\n",
+      old: "const a = 'x'\nconst msg = \"Don’t\"",
+      new: "const a = 'y'\nconst msg = \"Don’t\"",
+      expected: "const a = 'y'\nconst msg = \"Don’t\"\n",
+    },
+    { name: "Q11 em dash only", file: 'x = “a” + "b"—c\n', old: 'x = “a” + "b"-c', new: 'x = “a” + "d"-c', expected: 'x = “a” + "d"-c\n' },
+    { name: "Q12 no-break space only", file: "\u2018a\u2019 <a k='b'\u00a0/>\n", old: "\u2018a\u2019 <a k='b' />", new: "\u2018a\u2019 <a k='c' />", expected: "\u2018a\u2019 <a k='c' />\n" },
+    { name: "Q13 dash differs, quotes curly in both", file: "a “b”—c\n", old: "a “b”-c", new: 'a "b"-c', expected: 'a "b"-c\n' },
+    { name: "Q9 low-9 quotes detect nothing", file: "x „y‟\n", old: 'x "y"', new: 'x "z"', expected: 'x "z"\n' },
+    ...(
+      [
+        ['He said "goodbye".', "He said “goodbye”."],
+        ["say 'go.'", "say ‘go.’"],
+        [`("x") ['y']`, "(“x”) [‘y’]"],
+        ['a—"b" a–"c" a-"d"', "a—“b” a–“c” a-”d”"],
+        ['""', "“”"],
+        ["rock 'n' roll", "rock ‘n’ roll"],
+        ["'90s", "‘90s"],
+        [`5'10"`, "5’10”"],
+        [`"'n'"`, "“’n’”"],
+        ['x\n"y"', "x\n“y”"],
+        ['tab\t"t" nb "n"', "tab\t“t” nb ”n”"],
+        ['🚀 Launch "now"', "🚀 Launch “now”"],
+        ['😀 "x"', "😀 “x”"],
+        ["🙂 say 'hi'", "🙂 say ‘hi’"],
+        ['𝐱 a("b")', "𝐱 a(“b”)"],
+        ["already “curly” and 'straight'", "already “curly” and ‘straight’"],
+      ] as const
+    ).map(([from, expected], index) => ({
+      name: `Q5.${index}`,
+      file: "“a” ‘b’\n",
+      old: `"a" 'b'`,
+      new: from,
+      expected: `${expected}\n`,
+    })),
+  ]
+
+  for (const row of quoteRows)
+    it.live(`quote style ${row.name}`, () =>
+      editFile(row.file, { old_string: row.old, new_string: row.new, replace_all: row.all }).pipe(
+        Effect.map((result) => {
+          expect(result.settled).toMatchObject({ status: "completed" })
+          expect(result.text).toBe(row.expected)
+          if (row.replacements) expect(result.settled).toMatchObject({ output: { replacements: row.replacements } })
+        }),
+      ),
+    )
+
+  const deleteRows: ReadonlyArray<{
+    name: string
+    file: string
+    old: string
+    expected: string
+    all?: boolean
+    replacements?: number
+  }> = [
+    { name: "D1", file: "a\n  foo\nb\n", old: "  foo", expected: "a\nb\n" },
+    { name: "D2 CRLF", file: "a\r\n  foo\r\nb\r\n", old: "  foo", expected: "a\r\nb\r\n" },
+    { name: "D3 indentation outside match", file: "a\n  foo\nb\n", old: "foo", expected: "a\nb\n" },
+    { name: "D4 trailing spaces", file: "a\nfoo  \nb\n", old: "foo", expected: "a\nb\n" },
+    { name: "D5 mid-line keeps break", file: "x = 1 // c\nb\n", old: " // c", expected: "x = 1\nb\n" },
+    { name: "D6 fragment", file: "ab\nc\n", old: "b", expected: "a\nc\n" },
+    { name: "D7 last line without break", file: "a\nfoo", old: "foo", expected: "a\n" },
+    { name: "D7b indented last line", file: "a\n  foo", old: "foo", expected: "a\n" },
+    { name: "D8 only line", file: "foo\n", old: "foo", expected: "" },
+    { name: "D9 multi-line", file: "a\nb\nc\nd\n", old: "b\nc", expected: "a\nd\n" },
+    { name: "D9 multi-line CRLF", file: "a\r\nb\r\nc\r\nd\r\n", old: "b\nc", expected: "a\r\nd\r\n" },
+    { name: "D10 old ends with break", file: "a\nfoo\n\nb\n", old: "foo\n", expected: "a\n\nb\n" },
+    { name: "D11 old starts with break", file: "a\n\nfoo\nb\n", old: "\nfoo", expected: "a\n\nb\n" },
+    {
+      name: "D11b leading break joins nothing",
+      file: "x()\n    foo()\ny()\n",
+      old: "\n    foo()",
+      expected: "x()\ny()\n",
+    },
+    { name: "D12 replace_all", file: "foo\nbar\nfoo\n", old: "foo", all: true, expected: "bar\n", replacements: 2 },
+    {
+      name: "D13 replace_all mid-line",
+      file: "foo\nbar foo baz\n",
+      old: "foo",
+      all: true,
+      expected: "bar  baz\n",
+      replacements: 2,
+    },
+    { name: "D14 overlap guard", file: "x\n    \ny\n", old: "  ", all: true, expected: "x\n\ny\n", replacements: 2 },
+    { name: "D15 CRLF trailing matcher", file: "a\r\nfoo  \r\nb\r\n", old: "foo   ", expected: "a\r\nb\r\n" },
+    { name: "D17 file starts with a line break", file: "\nfoo", old: "  \nfoo", expected: "" },
+    { name: "D16 mixed endings", file: "a\r\nfoo\nb\r\n", old: "foo", expected: "a\r\nb\r\n" },
+  ]
+
+  for (const row of deleteRows)
+    it.live(`deleting ${row.name}`, () =>
+      editFile(row.file, { old_string: row.old, new_string: "", replace_all: row.all }).pipe(
+        Effect.map((result) => {
+          expect(result.settled).toMatchObject({ status: "completed" })
+          expect(result.text).toBe(row.expected)
+          if (row.replacements) expect(result.settled).toMatchObject({ output: { replacements: row.replacements } })
+        }),
+      ),
+    )
+
+  const approvalRows = [
+    { name: "Q1", file: "He said “hello”.\n", old: 'He said "hello".', new: 'He said "goodbye".' },
+    { name: "D1", file: "a\n  foo\nb\n", old: "  foo", new: "" },
+    { name: "D2", file: "a\r\n  foo\r\nb\r\n", old: "  foo", new: "" },
+    { name: "D13", file: "foo\nbar foo baz\n", old: "foo", new: "", all: true },
+    {
+      name: "Q6",
+      file: `say “hi” 'yo'\nsay "hi" ‘yo’\n`,
+      old: `say "hi" 'yo'`,
+      new: `tell "hi" 'yo'`,
+      all: true,
+    },
+  ]
+  for (const row of approvalRows)
+    it.live(`approval shows what runs ${row.name}`, () =>
+      editFile(row.file, { old_string: row.old, new_string: row.new, replace_all: row.all }).pipe(
+        Effect.map((result) => {
+          expect(result.assertions).toHaveLength(1)
+          expect(result.assertions[0]?.metadata).toMatchObject({
+            files: [{ ...fileDiff(result.assertions[0]!.resources[0]!, row.file, result.text) }],
+          })
+        }),
+      ),
+    )
+
+  it.live("describes whole-line deletion", () =>
+    withTempDir((tmp) =>
+      withTool(tmp.path, makeEditFixture(), (registry) =>
+        Effect.gen(function* () {
+          const edit = (yield* toolDefinitions(registry)).find((tool) => tool.name === "Edit")
+          expect(edit?.description).toContain("To delete whole lines, set new_string to an empty string")
+        }),
+      ),
+    ),
+  )
 })
