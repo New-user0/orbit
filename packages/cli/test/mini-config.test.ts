@@ -40,6 +40,7 @@ async function runHandler(files: Record<string, string>, root: string) {
     await Effect.runPromise(
       handler({
         server: Option.some(server.url.toString()),
+        settings: [],
         standalone: false,
         continue: false,
         session: Option.none(),
