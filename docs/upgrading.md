@@ -1823,3 +1823,18 @@ edits in the terminal interface or Mini, and plugins or SDK callers that read `m
 permission request.
 
 **What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.
+
+## Shell sandbox
+
+### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
+
+With `sandbox.enabled` set, Orbit now recognises Windows Subsystem for Linux from the kernel release. WSL2 uses the same
+bubblewrap sandbox as Linux, and Orbit hides the WSL interop sockets (`/run/WSL`) from the sandboxed command, so a
+sandboxed command on WSL2 cannot start Windows programs such as `cmd.exe` or `powershell.exe`. WSL1 has no support for
+the namespaces bubblewrap needs, so a shell command there fails with a message saying so, instead of failing with
+bubblewrap's own namespace error.
+
+**Affects:** people who enable the shell sandbox inside a WSL1 or WSL2 distribution. On WSL2, commands that start a
+Windows program now fail.
+
+**What to do:** convert the distribution with `wsl --set-version <name> 2`, or turn the sandbox off.

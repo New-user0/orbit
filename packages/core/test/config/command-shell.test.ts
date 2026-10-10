@@ -341,6 +341,19 @@ describe("command template shell spans", () => {
     ),
   )
 
+  it.live("fails closed instead of running a span unsandboxed on WSL1", () =>
+    Effect.gen(function* () {
+      const previous = { ...ShellSandbox.host }
+      Object.assign(ShellSandbox.host, { platform: "linux", release: "4.4.0-19041-Microsoft", env: {} })
+      yield* Effect.addFinalizer(() => Effect.sync(() => Object.assign(ShellSandbox.host, previous)))
+      const probe = yield* install("Status: !`git status`", { sandbox: { enabled: true } })
+      const error = yield* probe.execute("").pipe(Effect.flip)
+      expect(error.message).toContain("WSL1")
+      expect(spawned).toEqual([])
+      expect(probe.prompts).toEqual([])
+    }).pipe(Effect.scoped),
+  )
+
   it.live("expands $1 and $ARGUMENTS in the prose around a span, but not in the span or its output", () =>
     Effect.gen(function* () {
       const probe = yield* install("Review $1 ($ARGUMENTS): !`git diff $1`")
