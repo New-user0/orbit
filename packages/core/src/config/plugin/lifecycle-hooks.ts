@@ -42,8 +42,9 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * This is the interim runner, and it honors less than the hooks schema describes. It warns once for each of these:
  * - Hooks of the other types (prompt, agent, http) are skipped.
  * - The `shell`, `async`, `async_rewake`, `once`, `if` and `status_message` settings of a command are ignored.
- * - The `disabled`, `managed_only` and `http` policies of a hooks block are not enforced. The organization's
- *   `managed_hooks_only` and `disable_hooks` restrictions are, through `HookSources.collect`.
+ * - The `http` policy of a hooks block, and `disabled` and `managed_only` outside the managed file, are not enforced.
+ *   The organization's `managed_hooks_only` and `disable_hooks` restrictions, and `hooks.disabled` and
+ *   `hooks.managed_only` of the managed file, are, through `HookSources.collect`.
  *
  * No warning covers these differences from the schema's descriptions:
  * - Only PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop and PreCompact fire; hooks under the other
@@ -115,6 +116,7 @@ export const Plugin = define({
           ? [
               {
                 hooks: entry.info.hooks,
+                managed: entry.scope === "managed",
                 foreign: CompatSettings.isForeign(entry.path),
                 directory: CompatSettings.projectDirectory(entry, location.directory),
               },
@@ -122,7 +124,13 @@ export const Plugin = define({
           : [],
       )
       yield* Effect.forEach(
-        documents.flatMap((document) => UNENFORCED_POLICIES.filter((policy) => document.hooks[policy])),
+        // The managed file's `disabled` and `managed_only` are enforced by `HookSources.collect`.
+        documents.flatMap((document) =>
+          UNENFORCED_POLICIES.filter(
+            (policy) =>
+              document.hooks[policy] && !(document.managed && (policy === "disabled" || policy === "managed_only")),
+          ),
+        ),
         (policy) =>
           warnOnce(`policy:${policy}`, "hook policy is not enforced yet and is ignored", {
             setting: `hooks.${policy}`,

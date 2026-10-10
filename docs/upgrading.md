@@ -299,13 +299,13 @@ no plugin can override it. In order of precedence: a configured deny (agent rule
 config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
 then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
 `managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
-upgrades an ask, but never lifts a deny or a place that a link in an untrusted folder leads out to. The rules that a
+upgrades an ask, but never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` like config rules do. The rules that a
 managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
 
 - `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
   approvals, drops allow rules from a session's own permissions, offers no "always" on a request, and treats an
   "always" reply as "once". The built-in rules of the agents stay.
-- `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings.
+- `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings. The managed file's own `hooks.disabled` and `hooks.managed_only` mean the same.
 - `disable_bypass_permissions` makes `orb`, `orb run`, `orb -p`, `orb loop`, `orb flow run`, `orb flow resume` and
   `orb eval` refuse `--auto`, `--yolo` and `--dangerously-skip-permissions`. A workflow or suite node whose
   `permissions` is `auto` (including a team member's) has its requests rejected, with the managed message as feedback.

@@ -44,6 +44,8 @@ export type Item =
       readonly sessionID: string
       readonly action: string
       readonly resources: ReadonlyArray<string>
+      /** Whether an "always" reply would save a grant; managed_permissions_only withholds it. */
+      readonly canSave: boolean
       readonly files: ReadonlyArray<FileChange>
       readonly status: "pending" | "once" | "always" | "reject"
     }

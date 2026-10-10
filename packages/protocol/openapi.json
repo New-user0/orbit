@@ -13505,10 +13505,10 @@
             },
             "required": ["bypass", "always"],
             "additionalProperties": false,
-            "description": "What organization-managed settings leave open about permission prompts."
+            "description": "What organization-managed settings leave open about permission prompts. Absent from a server that predates it, which clients read as bypass refused."
           }
         },
-        "required": ["compatibility", "permissions"],
+        "required": ["compatibility"],
         "additionalProperties": false,
         "description": "The settings that took effect for a location, as the server resolved them from every scope and its own environment. Clients read these instead of working them out from the documents, which do not show what the server's environment changed."
       },

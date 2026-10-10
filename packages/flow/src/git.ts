@@ -148,7 +148,7 @@ export async function diff(directory: string, base: string, limit = 40_000) {
 // name that differs only in case is the same place on Windows, which a string prefix test misses.
 function inside(folder: string, candidate: string) {
   const relative = path.relative(folder, candidate)
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  return relative !== "" && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
 }
 
 /** Remove a run's worktrees and branches; returns how many of each went. */

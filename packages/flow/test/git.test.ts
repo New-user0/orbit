@@ -74,15 +74,18 @@ test("a node named like a path stays inside the folder of its run, and a run is 
 
 // Git lists a worktree under the spelling of the folder as it is on disk, and the caller may spell the drive or a folder
 // name with other case. A string prefix test then leaves the run's worktrees behind.
-test.skipIf(process.platform !== "win32")("a run is cleaned up whatever case the repository path is spelled with", async () => {
-  const directory = await repository("spelling")
-  const base = await Git.head(directory)
-  const run = "run_20260101000005_0a1b2c"
-  await Git.worktree(directory, run, "build", base)
+test.skipIf(process.platform !== "win32")(
+  "a run is cleaned up whatever case the repository path is spelled with",
+  async () => {
+    const directory = await repository("spelling")
+    const base = await Git.head(directory)
+    const run = "run_20260101000005_0a1b2c"
+    await Git.worktree(directory, run, "build", base)
 
-  const respelled = directory.slice(0, 1).toLowerCase() + directory.slice(1).replace(/spelling$/, "SPELLING")
-  expect(await Git.clean(respelled, run)).toEqual({ worktrees: 1, branches: 1 })
-})
+    const respelled = directory.slice(0, 1).toLowerCase() + directory.slice(1).replace(/spelling$/, "SPELLING")
+    expect(await Git.clean(respelled, run)).toEqual({ worktrees: 1, branches: 1 })
+  },
+)
 
 test("a merge that would overwrite untracked files reports them and changes nothing", async () => {
   const directory = await repository("blocked")

@@ -10,7 +10,10 @@ const open = path.join(root, "managed-open")
 const project = path.join(root, "project")
 
 await Promise.all([
-  Bun.write(path.join(closed, "managed-settings.json"), JSON.stringify({ managed: { disable_bypass_permissions: true } })),
+  Bun.write(
+    path.join(closed, "managed-settings.json"),
+    JSON.stringify({ managed: { disable_bypass_permissions: true } }),
+  ),
   Bun.write(path.join(open, "managed-settings.json"), JSON.stringify({ managed: { organization: "Acme" } })),
   Bun.write(path.join(project, "workflow.ts"), `export default { name: "w", run: () => "done" }`),
   Bun.write(
@@ -43,6 +46,8 @@ const message = "turned off by your organization's managed settings"
 
 // Every door of the command line that can select the mode that skips permission prompts.
 const doors = {
+  "root --auto": ["--standalone", "--auto"],
+  "root --yolo": ["--standalone", "--yolo"],
   "run --auto": ["run", "--standalone", "--auto", "say ok"],
   "run --yolo": ["run", "--standalone", "--yolo", "say ok"],
   "run --dangerously-skip-permissions": ["run", "--standalone", "--dangerously-skip-permissions", "say ok"],

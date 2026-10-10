@@ -213,10 +213,11 @@ describe("Config.Effective", () => {
       })
   })
 
-  test("requires the switches to be present and booleans", () => {
+  test("requires compatibility, takes permissions only whole, and decodes a server that leaves them out", () => {
     const decode = Schema.decodeUnknownSync(Config.Effective)
     expect(() => decode({})).toThrow()
-    expect(() => decode({ compatibility: true })).toThrow()
+    // A server that predates the permissions answer leaves it out; clients read that as bypass refused.
+    expect(decode({ compatibility: true }).permissions).toBeUndefined()
     expect(() => decode({ compatibility: true, permissions: { bypass: true } })).toThrow()
     expect(() => decode({ compatibility: true, permissions: { bypass: "yes", always: true } })).toThrow()
     expect(() => decode({ compatibility: "yes", permissions })).toThrow()

@@ -1347,6 +1347,36 @@ describe("Permission under managed settings", () => {
     }),
   )
 
+  it.effect("a managed ask does not lift a hook's deny", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* hookSets("deny")
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+      yield* managed({ rules: [{ action: "bash", resource: "rm *", effect: "ask" }] })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  it.effect("a managed allow does not decide a place that a link leads out to", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* managed({ rules: [{ action: "external_directory", resource: "*", effect: "allow" }] })
+      const service = yield* Permission.Service
+      const outside = (escaped: boolean) =>
+        service.ask(
+          assertion({
+            ...next(),
+            action: "external_directory",
+            resources: ["/outside/*"],
+            ...(escaped ? { escaped: ["/outside/*"] } : {}),
+          }),
+        )
+      expect(yield* outside(false)).toMatchObject({ effect: "allow" })
+      expect(yield* outside(true)).toMatchObject({ effect: "ask" })
+    }),
+  )
+
   it.effect("the last managed rule that matches decides, and every resource must be covered to allow", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -1422,6 +1452,30 @@ describe("Permission under managed settings", () => {
         yield* sessionRules([{ action: "bash", resource: "ls", effect: "deny" }])
         expect(yield* service.ask(rm({ ...next(), resources: ["ls"] }))).toMatchObject({ effect: "deny" })
       }),
+    )
+
+    it.effect(
+      "treats an always reply as once for an ask that was made with a save before the restriction turned on",
+      () =>
+        Effect.gen(function* () {
+          yield* setup()
+          const first = yield* waitForRequest({ action: "bash", resources: ["pwd"], save: ["pwd"] })
+          expect(first.request.save).toEqual(["pwd"])
+          const second = yield* waitForRequest({
+            id: Permission.ID.create("per_second"),
+            action: "bash",
+            resources: ["pwd"],
+            save: ["pwd"],
+          })
+          yield* managed(only)
+          yield* first.service.reply({ requestID: first.request.id, reply: "always" })
+          yield* Fiber.join(first.fiber)
+          const { db } = yield* Database.Service
+          expect(
+            yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all(),
+          ).toEqual([])
+          expect(yield* first.service.get(second.request.id)).toBeDefined()
+        }),
     )
 
     it.effect("offers no save and treats always as once", () =>

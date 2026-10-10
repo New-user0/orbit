@@ -127,7 +127,14 @@ describe("LifecycleHooksPlugin", () => {
     { name: "managed_hooks_only", restrictions: { managed_hooks_only: true }, ran: ["managed"] },
     { name: "disable_hooks", restrictions: { disable_hooks: true }, ran: [] },
     { name: "both set", restrictions: { disable_hooks: true, managed_hooks_only: true }, ran: [] },
-  ]) {
+    {
+      name: "hooks.managed_only in the managed file",
+      restrictions: {},
+      managedHooks: { managed_only: true },
+      ran: ["managed"],
+    },
+    { name: "hooks.disabled in the managed file", restrictions: {}, managedHooks: { disabled: true }, ran: [] },
+  ] as { name: string; restrictions: object; managedHooks?: object; ran: string[] }[]) {
     it.live(`runs ${item.ran.length === 0 ? "no" : item.ran.join(" and ")} hooks with ${item.name}`, () =>
       Effect.gen(function* () {
         const registry = yield* PluginHooks.Service
@@ -138,7 +145,12 @@ describe("LifecycleHooksPlugin", () => {
           new Document({
             type: "document",
             scope,
-            info: decode({ hooks: { UserPromptSubmit: [command(`echo ${scope}-hook`)] } }),
+            info: decode({
+              hooks: {
+                UserPromptSubmit: [command(`echo ${scope}-hook`)],
+                ...(scope === "managed" ? item.managedHooks : {}),
+              },
+            }),
           })
         yield* config.setEntries([entry("user"), entry("managed")])
         yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))

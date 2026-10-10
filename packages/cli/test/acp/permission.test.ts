@@ -38,6 +38,26 @@ const unified = (file: string, before: string, after: string) =>
 const allowOnce = () => ({ outcome: { outcome: "selected", optionId: "once" } }) as const
 
 describe("acp permissions over the wire", () => {
+  test("offers no allow-always for a request that has nothing to save", async () => {
+    await using acp = await startSession({
+      onPrompt: ({ sessionID, id }) =>
+        turn(
+          sessionID,
+          id,
+          permissionAsked(sessionID, "perm_nosave", {
+            action: "shell",
+            save: [],
+            source: { type: "tool", messageID: "msg_allow", id: "call_nosave" },
+          }),
+        ),
+      permission: allowOnce,
+    })
+
+    await acp.prompt(acp.sessionId, "hello")
+
+    expect(acp.permissions[0]?.options.map((option) => option.optionId)).toEqual(["once", "reject"])
+  })
+
   test("forwards allow-once and allow-always selections to the server", async () => {
     await using acp = await startSession({
       onPrompt: ({ sessionID, id }) =>

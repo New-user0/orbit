@@ -231,7 +231,8 @@ const layer = Layer.effect(
       const subjects = [resource, ...(input.aliases?.[resource] ?? [])]
       return rules.findLast(
         (rule) =>
-          actionMatches(input.action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
+          actionMatches(input.action, rule.action) &&
+          subjects.some((subject) => Wildcard.match(subject, rule.resource)),
       )?.effect
     }
 
@@ -269,11 +270,23 @@ const layer = Layer.effect(
       })
       // The managed layer runs last and in core, so no plugin hook (nor a later classifier) can override it. Order:
       // configured deny > managed rule > plugin hooks > grants and config rules > default ask.
-      const layer = [...current.rules, ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? []))]
+      const layer = [
+        ...current.rules,
+        ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
+      ]
       const decided = input.resources.map((resource) => managedEffect(input, resource, layer))
-      const blocked = current.organization === undefined ? "Blocked by managed settings" : `Blocked by ${current.organization}'s managed settings`
+      const blocked =
+        current.organization === undefined
+          ? "Blocked by managed settings"
+          : `Blocked by ${current.organization}'s managed settings`
       if (decided.includes("deny")) return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
-      if (decided.includes("ask")) return { effect: "ask" as const, message: event.message, rules: all }
+      // A managed ask tightens an allow, never a hook's deny.
+      if (decided.includes("ask"))
+        return {
+          effect: event.effect === "deny" ? ("deny" as const) : ("ask" as const),
+          message: event.message,
+          rules: all,
+        }
       // A managed allow only lifts an ask. It never undoes a hook's deny, and it does not decide a place that a link in
       // an untrusted project leads out to.
       const lifted =
@@ -466,5 +479,14 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, Location.node, Agent.node, SessionStore.node, PermissionSaved.node, PluginHooks.node, ManagedPolicy.node, Global.node],
+  deps: [
+    Bus.node,
+    Location.node,
+    Agent.node,
+    SessionStore.node,
+    PermissionSaved.node,
+    PluginHooks.node,
+    ManagedPolicy.node,
+    Global.node,
+  ],
 })

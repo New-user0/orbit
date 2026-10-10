@@ -81,7 +81,6 @@ for (const scenario of [
         const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-config-trust-")))
         const global = path.join(tmp.path, "global")
         const project = path.join(tmp.path, "project")
-      const managedDirectory = path.join(tmp.path, "managed")
         const config = path.join(project, "orbit.json")
         yield* Effect.promise(() =>
           Promise.all([fs.mkdir(global, { recursive: true }), fs.mkdir(project, { recursive: true })]),
@@ -222,7 +221,9 @@ const effective = (
       const project = path.join(tmp.path, "project")
       const managedDirectory = path.join(tmp.path, "managed")
       yield* Effect.promise(() =>
-        Promise.all([home, global, project, managedDirectory].map((directory) => fs.mkdir(directory, { recursive: true }))),
+        Promise.all(
+          [home, global, project, managedDirectory].map((directory) => fs.mkdir(directory, { recursive: true })),
+        ),
       )
       const write = (file: string, value: unknown) =>
         value === undefined ? Effect.void : Effect.promise(() => fs.writeFile(file, JSON.stringify(value)))

@@ -7,8 +7,10 @@ import { Context, Effect, Layer, Option, PubSub, Schema, SchemaAST, Stream } fro
 import { Info } from "@orbit/schema/config"
 import { ConfigManaged } from "@orbit/schema/config/managed"
 import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { ManagedPath } from "@orbit/util/managed-path"
+import { ConfigPermissionExpand } from "./config/expand-permissions.js"
 import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigVariable } from "./config/variable.js"
 import { Watcher } from "./filesystem/watcher.js"
@@ -190,9 +192,7 @@ const loadFile = Effect.fnUntraced(function* (fs: FSUtil.Interface, source: stri
   // organization's setting off without a word. A path it already reported is not reported twice.
   const normalizedProblems = [
     ...reported,
-    ...unknownKeys(others).filter(
-      (item) => !reported.some((known) => item.path === known.path),
-    ),
+    ...unknownKeys(others).filter((item) => !reported.some((known) => item.path === known.path)),
   ].map((item) => problem(item.kind, item.path, item.message))
   return {
     source,
@@ -354,7 +354,10 @@ function merge(base: unknown, next: unknown, at: readonly string[] = []): unknow
   // A model selection is one value: a later file that names a model does not inherit the variant of an earlier one.
   if (isRecord(base) && isRecord(next) && !isSelection(next))
     return Object.fromEntries(
-      [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [key, merge(base[key], next[key], [...at, key])]),
+      [...new Set([...Object.keys(base), ...Object.keys(next)])].map((key) => [
+        key,
+        merge(base[key], next[key], [...at, key]),
+      ]),
     )
   return next
 }
@@ -394,6 +397,7 @@ export const layer = (options?: Options) =>
       const fs = yield* FSUtil.Service
       const watcher = yield* Watcher.Service
       const policy = yield* ManagedPolicy.Service
+      const global = yield* Global.Service
       const directory = yield* resolveDirectory(options?.directory)
       const changes = yield* PubSub.unbounded<Snapshot>()
       const reloads = yield* PubSub.sliding<void>(1)
@@ -402,10 +406,12 @@ export const layer = (options?: Options) =>
       const apply = (snapshot: Snapshot) =>
         policy.set("file", {
           statements: snapshot.info.experimental?.policies ?? [],
-          rules: snapshot.info.permissions ?? [],
+          rules: ConfigPermissionExpand.expandPermissions(snapshot.info.permissions ?? [], global.home),
           agentRules: Object.fromEntries(
             Object.entries(snapshot.info.agents ?? {}).flatMap(([id, agent]) =>
-              agent.permissions === undefined ? [] : [[id, agent.permissions]],
+              agent.permissions === undefined
+                ? []
+                : [[id, ConfigPermissionExpand.expandPermissions(agent.permissions, global.home)]],
             ),
           ),
           restrictions: snapshot.restrictions,
@@ -476,7 +482,7 @@ export function configured(options?: Options) {
   return makeGlobalNode({
     service: Service,
     layer: layer(options),
-    deps: [FSUtil.node, Watcher.node, ManagedPolicy.node],
+    deps: [FSUtil.node, Watcher.node, ManagedPolicy.node, Global.node],
   })
 }
 

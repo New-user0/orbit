@@ -40,7 +40,11 @@ export default Runtime.handler(Commands.commands.loop, (input) =>
       { grant: input.trust, session: Option.getOrUndefined(input.session) },
     )
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
-    const bypass = yield* bypassRefusal(client, directory(), input.auto || input.yolo || input.dangerouslySkipPermissions)
+    const bypass = yield* bypassRefusal(
+      client,
+      directory(),
+      input.auto || input.yolo || input.dangerouslySkipPermissions,
+    )
     if (bypass !== undefined) return yield* Effect.fail(new Error(bypass))
     // One session for the whole loop, so each run sees what the previous ones found.
     const session = Option.getOrElse(input.session, () => SessionID.create())

@@ -3,13 +3,19 @@ import type { OrbitClient } from "@orbit/client"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { loadWorkflow, workflowApprovals } from "../src/load"
 import { run } from "../src/runner"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-permissions-"))
 
 afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
 
-type Reply = { readonly sessionID?: string; readonly requestID?: string; readonly decision: string; readonly message?: string }
+type Reply = {
+  readonly sessionID?: string
+  readonly requestID?: string
+  readonly decision: string
+  readonly message?: string
+}
 
 /**
  * The part of the server a run talks to. `effective` is what `config.effective` answers; the agent's one action asks
@@ -91,7 +97,8 @@ for (const item of cases) {
 
       expect(result.status).toBe("succeeded")
       expect(replies).toHaveLength(1)
-      if (item.approved) return expect(replies[0]).toMatchObject({ sessionID: "ses_run", requestID: "per_1", decision: "once" })
+      if (item.approved)
+        return expect(replies[0]).toMatchObject({ sessionID: "ses_run", requestID: "per_1", decision: "once" })
       expect(replies[0]).toMatchObject({ decision: "reject" })
       expect(replies[0]?.message).toContain("managed settings")
     })
@@ -127,3 +134,55 @@ test("leaves a reject node as it was, with the unattended feedback and not the m
   expect(replies[0]).toMatchObject({ decision: "reject" })
   expect(replies[0]?.message).not.toContain("managed settings")
 })
+
+// Every node that `workflowApprovals` lists for a YAML file is one that the runner answers with `auto`, so each of them
+// must get the managed rejection when bypass is off. A node the list misses would be approved without the check.
+const yamlRows = [
+  {
+    id: "work",
+    file: ["name: w", "nodes:", "  - id: work", "    prompt: go", "    worktree: false", "    permissions: auto"],
+  },
+  {
+    id: "work",
+    file: [
+      "name: w",
+      "nodes:",
+      "  - id: work",
+      "    type: verify",
+      "    prompt: go",
+      "    worktree: false",
+      "    permissions: auto",
+      "    checks: []",
+    ],
+  },
+  {
+    id: "crew/lead",
+    file: [
+      "name: w",
+      "nodes:",
+      "  - id: crew",
+      "    type: team",
+      "    goal: go",
+      "    worktree: false",
+      "    maxRounds: 1",
+      "    members:",
+      "      lead:",
+      "        permissions: auto",
+    ],
+  },
+]
+
+for (const row of yamlRows) {
+  test(`gives ${row.id} of a YAML file the managed rejection when workflowApprovals lists it`, async () => {
+    const directory = await fs.mkdtemp(path.join(root, "run-"))
+    const file = path.join(directory, "workflow.yaml")
+    await Bun.write(file, row.file.join("\n") + "\n")
+    expect((await workflowApprovals(file)).map((item) => item.id)).toEqual([row.id])
+
+    const { client, replies } = server(async () => ({ permissions: { bypass: false } }))
+    await run({ client, directory, file, workflow: await loadWorkflow(file) })
+
+    expect(replies[0]).toMatchObject({ decision: "reject" })
+    expect(replies[0]?.message).toContain("managed settings")
+  })
+}

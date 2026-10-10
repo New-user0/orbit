@@ -514,6 +514,7 @@ export class Controller {
           sessionID: event.data.sessionID,
           action: event.data.action,
           resources: event.data.resources,
+          canSave: (event.data.save?.length ?? 0) > 0,
           files: changes(event.data.metadata),
           status: "pending",
         })
