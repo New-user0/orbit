@@ -229,6 +229,23 @@ describe("Ripgrep", () => {
     }),
   )
 
+  it.live("reports unclipped submatch offsets in UTF-16 characters, not bytes", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Bun.write(path.join(tmp.path, "mb.txt"), `${"é".repeat(10)}needle\n${"\u{1F600}".repeat(10)}needle\n`),
+      )
+      const ripgrep = yield* Ripgrep.Service
+      const [two, four] = yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 10 })
+      expect(two!.submatches).toEqual([{ text: "needle", start: 10, end: 16 }])
+      expect(four!.submatches).toEqual([{ text: "needle", start: 20, end: 26 }])
+      for (const row of [two!, four!]) {
+        const submatch = row.submatches[0]!
+        expect(row.text.slice(submatch.start, submatch.end)).toBe("needle")
+      }
+    }),
+  )
+
   it.live("keeps a single match longer than the window, cut at the window end", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

@@ -1941,7 +1941,7 @@ Changes to what the Grep and Glob tools return.
 Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
 a page in `content` mode also stops before its text passes about 25,000 tokens, so a call with a lot of `context` holds
 fewer. A truncated result says which matches it shows and the exact `offset` that continues it; paging from that
-offset skips nothing and repeats nothing. A line longer than 500 characters is cut to a window that starts about 100
+offset skips nothing and repeats nothing, because matches come in path order. A line longer than 500 characters is cut to a window that starts about 100
 characters before its first match, with ellipsis markers and a `[line truncated: N chars]` note, and the submatch offsets
 in the result index into the clipped text; a match that runs past the window is kept and cut at its end. Submatch `start`
 and `end` are now offsets in UTF-16 characters of the row's `text`, not UTF-8 bytes, on every line including unclipped

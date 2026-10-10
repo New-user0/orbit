@@ -327,6 +327,8 @@ const layer = Layer.effect(
           args: [
             ...searchArgs(input),
             "--json",
+            // Without a sort ripgrep searches files in parallel and the order changes per call, so an offset would page a different order.
+            "--sort=path",
             ...(input.before ? [`--before-context=${input.before}`] : []),
             ...(input.after ? [`--after-context=${input.after}`] : []),
             "--",

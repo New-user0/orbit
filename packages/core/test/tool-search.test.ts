@@ -205,6 +205,45 @@ describe("search tools", () => {
     }),
   )
 
+  for (const outputMode of ["content", "count"] as const) {
+    it.live(`${outputMode} pages across many folders in path order with no gaps or repeats`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const names = Array.from({ length: 8 }, (_, d) => d).flatMap((d) =>
+          Array.from({ length: 40 }, (_, f) => `d${d}/f${String(f).padStart(2, "0")}.txt`),
+        )
+        yield* Effect.promise(() =>
+          Promise.all(names.map((name) => Bun.write(path.join(tmp.path, name), "needle\n"))),
+        )
+        yield* withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const tail = (file: string) => file.replaceAll("\\", "/").split("/").slice(-2).join("/")
+            const paths = (result: { output?: unknown }) =>
+              outputMode === "content"
+                ? (result.output as { entry: { path: string } }[]).map((row) => tail(row.entry.path))
+                : (result.output as { counts: { path: string }[] }).counts.map((row) => tail(row.path))
+            const seen: string[] = []
+            let first: string[] = []
+            let offset = 0
+            while (true) {
+              const result = yield* executeTool(
+                registry,
+                call("Grep", { pattern: "needle", outputMode, offset, ...(outputMode === "count" ? { limit: 250 } : {}) }),
+              )
+              const page = paths(result)
+              if (offset === 0) first = page
+              seen.push(...page)
+              if (!(result.metadata as { truncated: boolean }).truncated) break
+              offset += page.length
+            }
+            expect(first).toEqual(names.toSorted().slice(0, 250))
+            expect(seen).toEqual(names.toSorted())
+          }),
+        )
+      }),
+    )
+  }
+
   for (const outputMode of ["files_with_matches", "count"] as const) {
     it.live(`${outputMode} names the exact next offset and paging from it neither skips nor repeats`, () =>
       Effect.gen(function* () {
