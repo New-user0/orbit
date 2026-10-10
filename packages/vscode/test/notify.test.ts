@@ -1,5 +1,25 @@
 import { describe, expect, test } from "bun:test"
-import { notice } from "../src/notify"
+import { createNoticeTracker, notice } from "../src/notify"
+
+describe("createNoticeTracker", () => {
+  test("a pending permission notices once per id", () => {
+    const tracker = createNoticeTracker()
+    expect(tracker.permission({ id: "per_1" })).toBe("permission")
+    expect(tracker.permission({ id: "per_1" })).toBeUndefined()
+    expect(tracker.permission({ id: "per_2" })).toBe("permission")
+  })
+
+  test("only the end of a busy period notices", () => {
+    const tracker = createNoticeTracker()
+    expect(tracker.busy(false)).toBeUndefined()
+    expect(tracker.busy(true)).toBeUndefined()
+    expect(tracker.busy(false)).toBe("done")
+    expect(tracker.busy(false)).toBeUndefined()
+    expect(tracker.busy(true)).toBeUndefined()
+    expect(tracker.busy(true)).toBeUndefined()
+    expect(tracker.busy(false)).toBe("done")
+  })
+})
 
 describe("notice", () => {
   test.each([

@@ -1650,6 +1650,78 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  test("hands a global form at the same location to the attention observer, and one elsewhere not", async () => {
+    const events = feed()
+    events.push(connected())
+    const client = sdk({ streams: [events], globalLocation: { directory: "/work" } })
+    const ui = footer()
+    const seen: string[] = []
+    const transport = await createSessionTransport({
+      sdk: client,
+      location: { directory: "/work" },
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+      onEvent: (event) => seen.push(`${event.type}:${(event.data as { id?: string }).id ?? ""}`),
+    })
+    const global = form("frm_mcp", "global")
+    events.push({
+      id: "evt_far",
+      created: 0,
+      type: "form.created",
+      location: { directory: "/other" },
+      data: { form: eventForm(form("frm_far", "global")) },
+    })
+    events.push({
+      id: "evt_near",
+      created: 1,
+      type: "form.created",
+      location: { directory: "/work" },
+      data: { form: eventForm(global) },
+    })
+    events.push({
+      id: "evt_done",
+      created: 2,
+      type: "form.cancelled",
+      location: { directory: "/work" },
+      data: { id: global.id, sessionID: "global" },
+    })
+    await Bun.sleep(20)
+    expect(seen).toEqual(["form.created:", "form.cancelled:frm_mcp"])
+    await transport.close()
+  })
+
+  test("hands the events of a known subagent to the attention observer, and not those of a stranger", async () => {
+    const events = feed()
+    events.push(connected())
+    const client = sdk({
+      streams: [events],
+      sessions: [{ id: "ses_child", parentID: "ses_1", title: "Child", time: { updated: 1 } }],
+    })
+    const ui = footer()
+    const seen: string[] = []
+    const transport = await createSessionTransport({
+      sdk: client,
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+      onEvent: (event) => seen.push(`${event.type}:${(event.data as { id?: string }).id ?? ""}`),
+    })
+    for (const [id, sessionID] of [
+      ["per_child", "ses_child"],
+      ["per_other", "ses_unrelated"],
+    ] as const)
+      events.push({
+        id: `evt_${id}`,
+        created: 0,
+        type: "permission.asked",
+        data: { id, sessionID, action: "read", resources: ["/tmp/file"] },
+      })
+    await Bun.sleep(20)
+    expect(seen).toEqual(["permission.asked:per_child"])
+    await transport.close()
+  })
+
   test("reconnects and hydrates without completing before session.wait", async () => {
     const first = feed()
     const second = feed()

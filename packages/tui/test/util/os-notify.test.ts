@@ -63,6 +63,7 @@ describe("systemCommand: the title and the message are data", () => {
       // The script lines are the same for every input, and the three words after them are the only variable part.
       expect(command.args.slice(0, -2)).toEqual(fixed)
       expect(command.args.slice(-3)).toEqual(["orbit", input.title, input.message])
+      expect(command.cwd).toBe(home)
       expect(command.args.filter((item) => item === "-e")).toHaveLength(MACOS_SCRIPT.length + (input.title === "-e" ? 1 : 0) + (input.message === "-e" ? 1 : 0))
       expect(command.args.indexOf("orbit")).toBe(MACOS_SCRIPT.length * 2)
     }
@@ -78,6 +79,7 @@ describe("systemCommand: the title and the message are data", () => {
       expect(command.args).toEqual(fixed)
       expect(command.args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"])
       expect(command.env).toEqual({ ORBIT_NOTIFY_TITLE: input.title, ORBIT_NOTIFY_MESSAGE: input.message })
+      expect(command.cwd).toBe(home)
       // Short texts such as -e occur in any script, so the constant script above is what pins them.
       if (text.length > 4) expect(Buffer.from(command.args[3], "base64").toString("utf16le")).not.toContain(text)
     }
@@ -218,7 +220,6 @@ describe("decoys in the working folder", () => {
   let cwd: string
   let path0: string | undefined
   let before: string
-  const guard = currentDirectoryOnPath()
 
   beforeEach(async () => {
     before = process.cwd()
@@ -259,7 +260,7 @@ describe("decoys in the working folder", () => {
   }
 
   test("a decoy in the working folder is never found or started", async () => {
-    using _ = guard
+    using _ = currentDirectoryOnPath()
     const ran = await decoys(cwd)
     process.chdir(cwd)
     process.env.PATH = bin
@@ -269,7 +270,7 @@ describe("decoys in the working folder", () => {
   }, 60_000)
 
   test("a relative PATH entry is not searched", async () => {
-    using _ = guard
+    using _ = currentDirectoryOnPath()
     const ran = await decoys(cwd)
     process.chdir(cwd)
     for (const entry of [".", ""]) {
@@ -281,7 +282,7 @@ describe("decoys in the working folder", () => {
   }, 60_000)
 
   test("control: the same decoy in a PATH directory is found and started", async () => {
-    using _ = guard
+    using _ = currentDirectoryOnPath()
     const ran = await decoys(bin)
     process.chdir(cwd)
     process.env.PATH = bin

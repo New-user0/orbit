@@ -5,7 +5,7 @@ import { ask, explain, fix, review, type Diagnostic, type Selection } from "./co
 import { Controller, type TrustAnswer, type Update } from "./controller.js"
 import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
-import { notice } from "./notify.js"
+import { createNoticeTracker, notice } from "./notify.js"
 import { proposed } from "./patch.js"
 import { configured, find, missing } from "./program.js"
 import type { Check, FromView, Item, Mode, Model, ToView, TrustView, Workspace } from "./protocol.js"
@@ -206,8 +206,7 @@ class Chat implements vscode.WebviewViewProvider {
   private controller: Promise<Controller> | undefined
   private readonly items: Item[] = []
   private busy = false
-  // Permission ids that already raised a notice, so an update to the same item does not raise another.
-  private readonly noticed = new Set<string>()
+  private readonly notices = createNoticeTracker()
   private models: ReadonlyArray<Model> = []
   private selected: string | undefined
   private mode: Mode = "build"
@@ -478,8 +477,8 @@ class Chat implements vscode.WebviewViewProvider {
         if (update.type === "log") return this.log.appendLine(update.text)
         if (update.type === "trust") return this.trusting(update)
         if (update.type === "busy") {
-          // Only the end of a busy period counts, so the first idle report after connecting says nothing.
-          if (this.busy && !update.busy) this.notice("done")
+          const done = this.notices.busy(update.busy)
+          if (done) this.notice(done)
           this.busy = update.busy
           this.paint()
           return this.post(update)
@@ -500,9 +499,9 @@ class Chat implements vscode.WebviewViewProvider {
           )
           return
         }
-        if (update.item.type === "permission" && update.item.status === "pending" && !this.noticed.has(update.item.id)) {
-          this.noticed.add(update.item.id)
-          this.notice("permission")
+        if (update.item.type === "permission" && update.item.status === "pending") {
+          const asked = this.notices.permission(update.item)
+          if (asked) this.notice(asked)
         }
         const index = this.items.findIndex((item) => item.id === update.item.id)
         if (index === -1) this.items.push(update.item)

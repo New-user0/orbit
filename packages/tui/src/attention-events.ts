@@ -1,4 +1,4 @@
-import { plain } from "@orbit/flow/plain"
+import { body, plain } from "@orbit/flow/plain"
 import type { Attention, AttentionSoundName } from "@orbit/plugin/tui/context"
 
 /** The events that can need a person, as the TUI and Mini both receive them. */
@@ -145,7 +145,7 @@ export function createAttentionEvents(input: {
           errored.add(sessionID)
           const message = plain(event.data.error.message)
           notify(sessionID, message, "error")
-          input.toast?.({ sessionID, title: "Session failed", message, variant: "error" })
+          input.toast?.({ sessionID, title: "Session failed", message: body(event.data.error.message), variant: "error" })
           ended(sessionID)
           return
         }

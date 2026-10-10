@@ -169,6 +169,20 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.toasts).toHaveLength(2)
   })
 
+  test("keeps the line breaks of a failure in the toast and flattens them in the notification", async () => {
+    const harness = await setup()
+    harness.emit(executionStarted("started"))
+    harness.emit({
+      id: "failed",
+      created: 0,
+      type: "session.execution.failed",
+      durable: durable("session"),
+      data: { sessionID: "session", error: { type: "unknown", message: "Provider error 500\nRetry later\x1b[2J" } },
+    } as unknown as OrbitEvent)
+    expect(harness.toasts.map((toast) => toast.message)).toEqual(["Provider error 500\nRetry later\\x1b[2J"])
+    expect(harness.notifications.map((item) => item.message).join("")).not.toContain("\n")
+  })
+
   test.each<Route>([{ type: "home" }, { type: "session", sessionID: "other" }])(
     "leaves routing of other sessions' failures to the session-scoped toast (%j)",
     async (route) => {
@@ -325,7 +339,8 @@ describe("internal notifications TUI plugin", () => {
     expect(shown.length).toBe(5)
     expect(shown.join("")).toContain("Approve")
     expect(shown.join("")).toContain("bad")
-    shown.forEach((text) => expect(text).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202e]/))
+    // The toast is a message body and keeps its line breaks; every other control is still written out.
+    shown.forEach((text) => expect((text ?? "").replaceAll("\n", "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202e]/))
   })
 
   test("notifies session errors once and suppresses the following idle done notification", async () => {

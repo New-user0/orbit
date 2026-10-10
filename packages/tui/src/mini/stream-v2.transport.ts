@@ -1020,6 +1020,8 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled")
     ) {
       if (!sameLocation(event.location, input.location)) return
+      // An MCP elicitation is a global form: the person hears about it as they do about a session's own form.
+      input.onEvent?.(event)
       if (event.type === "form.created") {
         if (!state.globalForms.some((item) => item.id === event.data.form.id))
           state.globalForms.push(globalForm(event.data.form, event.location!))

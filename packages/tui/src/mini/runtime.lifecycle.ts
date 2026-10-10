@@ -207,11 +207,13 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   if (mono) renderer.off(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
 
   const { RunFooter } = await footerTask
+  let sessionTitle = input.sessionTitle
   const attention = createTuiAttention({ renderer, config: tuiConfig })
   const attentionEvents = createAttentionEvents({
     attention,
     // Mini follows one session tree: the root, and the subagents it started.
-    session: (sessionID) => (sessionID === (input.getSessionID?.() ?? input.sessionID) ? {} : { parentID: "root" }),
+    session: (sessionID) =>
+      sessionID === (input.getSessionID?.() ?? input.sessionID) ? { title: sessionTitle } : { parentID: "root" },
   })
   renderer.keyInput.on("keypress", attentionEvents.keypress)
   let closed = false
@@ -365,7 +367,10 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     refreshTheme() {
       footer.refreshTheme()
     },
-    setTitle: title.setTitle,
+    setTitle(next) {
+      sessionTitle = next
+      title.setTitle(next)
+    },
     onResize(fn) {
       let width = renderer.terminalWidth
       let height = renderer.terminalHeight

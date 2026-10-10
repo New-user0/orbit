@@ -15,3 +15,25 @@ export function notice(input: {
     ? { level: "warning", text: "Orbit needs your review" }
     : { level: "info", text: "Orbit finished" }
 }
+
+/**
+ * Decides which events earn a notice, so each fires once. A pending permission notices the first time its id is seen,
+ * however often the item is updated. The end of a busy period notices; the first idle report after connecting does
+ * not, because it is not the end of anything.
+ */
+export function createNoticeTracker() {
+  const noticed = new Set<string>()
+  let busy = false
+  return {
+    permission(item: { id: string }): "permission" | undefined {
+      if (noticed.has(item.id)) return
+      noticed.add(item.id)
+      return "permission"
+    },
+    busy(next: boolean): "done" | undefined {
+      const ended = busy && !next
+      busy = next
+      return ended ? "done" : undefined
+    },
+  }
+}

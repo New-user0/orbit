@@ -167,6 +167,20 @@ describe("attention in Mini", () => {
     }
   })
 
+  test("titles the notification with the session title the footer last received", async () => {
+    const harness = await start("linux", "First", { notifications: true })
+    try {
+      harness.app.renderer.emit("blur")
+      harness.lifecycle.setTitle("Fix the build")
+      harness.lifecycle.observe?.(asked("perm_1"))
+      await Bun.sleep(20)
+      expect(harness.notified).toEqual([{ message: "Permission needs input", title: "Fix the build" }])
+    } finally {
+      harness.lifecycle.footer.destroy()
+      harness.app.renderer.destroy()
+    }
+  })
+
   test("the idle reminder fires once after the configured seconds and a keypress cancels it", async () => {
     const harness = await start("linux", undefined, { notifications: true, idle_reminder: 0.05 })
     try {
