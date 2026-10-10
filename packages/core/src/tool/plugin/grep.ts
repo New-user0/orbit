@@ -86,7 +86,7 @@ const pageContent = (lines: string[], next: number | undefined) =>
  * Format raw search matches into concise model content. Context rows carry no submatches and print with a `-`
  * separator; a gap between rows of the same file prints as `--`.
  */
-export const toModelContent = (matches: EncodedOutput, truncated: boolean | string = false) => {
+export const toModelContent = (matches: EncodedOutput, note?: string) => {
   const found = matches.filter((match) => match.submatches.length > 0).length
   const lines = found === 0 ? ["No matches found"] : [`Found ${found} matches`]
   let current = ""
@@ -100,13 +100,7 @@ export const toModelContent = (matches: EncodedOutput, truncated: boolean | stri
     previous = match.line
     lines.push(`  Line ${match.line}${match.submatches.length === 0 ? "-" : ":"} ${match.text.replace(/\r?\n$/, "")}`)
   }
-  if (truncated)
-    lines.push(
-      "",
-      typeof truncated === "string"
-        ? truncated
-        : `(Results are truncated: showing first ${matches.length} results. Consider using a more specific path or pattern.)`,
-    )
+  if (note) lines.push("", note)
   return lines.join("\n")
 }
 
@@ -260,18 +254,18 @@ export const Plugin = {
               const render = (count: number) => {
                 const rendered = absolute.slice(0, cuts[count - 1] ?? 0)
                 const more = count < cuts.length || total > offset + limit
-                return toModelContent(rendered, more ? note(count) : false)
+                return toModelContent(rendered, more ? note(count) : undefined)
               }
               // The largest number of matches whose rendered text fits the page budget; always at least one, so
               // paging advances.
               const fits = (count: number) => Token.estimate(render(count)) <= MAX_OUTPUT_TOKENS
-              const count = cuts.length === 0 ? 0 : fits(cuts.length) ? cuts.length : largest(cuts.length, fits)
+              const count = fits(cuts.length) ? cuts.length : largest(cuts.length, fits)
               const kept = absolute.slice(0, cuts[count - 1] ?? 0)
               const truncated = count < cuts.length || total > offset + limit
               const found = kept.filter((row) => row.submatches.length > 0).length
               return {
                 output: matches.slice(0, kept.length),
-                content: matches.length === 0 ? toModelContent([], false) : render(count),
+                content: matches.length === 0 ? toModelContent([]) : render(count),
                 metadata: { matches: found, truncated },
               }
             }).pipe(

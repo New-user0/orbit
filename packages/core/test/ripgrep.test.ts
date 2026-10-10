@@ -228,4 +228,50 @@ describe("Ripgrep", () => {
       expect(long!.text.slice(long!.submatches[0]!.start, long!.submatches[0]!.end)).toBe("needle")
     }),
   )
+
+  it.live("keeps a single match longer than the window, cut at the window end", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const line = "a".repeat(200) + "S" + "m".repeat(1_000) + "E" + "b".repeat(100)
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, "long.txt"), `${line}\n`))
+      const ripgrep = yield* Ripgrep.Service
+      const [row] = yield* ripgrep.grep({ cwd: tmp.path, pattern: "S.*E", limit: 10 })
+      expect(row!.submatches).toHaveLength(1)
+      const submatch = row!.submatches[0]!
+      // The window starts 100 characters before the match; the lead marker takes one.
+      expect(submatch.start).toBe(101)
+      expect(submatch.end).toBeGreaterThan(submatch.start + 300)
+      expect(submatch.text).toBe(row!.text.slice(submatch.start, submatch.end))
+    }),
+  )
+
+  for (const [name, prefix, suffix] of [
+    ["start edge", "\u{1F600}".repeat(3_000) + "x", "\u{1F600}".repeat(2_000)],
+    ["end edge", "a".repeat(200), "x" + "\u{1F600}".repeat(2_000)],
+  ] as const) {
+    it.live(`never splits a surrogate pair at the ${name} of the window`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* Effect.promise(() => Bun.write(path.join(tmp.path, "long.txt"), `${prefix}needle${suffix}\n`))
+        const ripgrep = yield* Ripgrep.Service
+        const [row] = yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 10 })
+        expect(row!.text).toContain("[line truncated: ")
+        expect(row!.text.isWellFormed()).toBe(true)
+        expect(row!.submatches).toHaveLength(1)
+        expect(row!.text.slice(row!.submatches[0]!.start, row!.submatches[0]!.end)).toBe("needle")
+      }),
+    )
+  }
+
+  it.live("clips an ASCII line so the first match starts 100 characters into the window", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Bun.write(path.join(tmp.path, "long.txt"), `${"a".repeat(800)}needle${"b".repeat(800)}\n`),
+      )
+      const ripgrep = yield* Ripgrep.Service
+      const [row] = yield* ripgrep.grep({ cwd: tmp.path, pattern: "needle", limit: 10 })
+      expect(row!.submatches).toEqual([{ text: "needle", start: 101, end: 107 }])
+    }),
+  )
 })

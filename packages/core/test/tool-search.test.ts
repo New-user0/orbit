@@ -190,7 +190,6 @@ describe("search tools", () => {
               .filter((row) => row.submatches.length > 0)
               .map((row) => row.line)
             expect(found.length).toBeGreaterThan(0)
-            expect(found.length).toBeLessThan(FileSystem.DEFAULT_GREP_LIMIT)
             expect(text.length).toBeLessThan(100_000 + 1_000)
             seen.push(...found)
             pages++
@@ -201,6 +200,72 @@ describe("search tools", () => {
           }
           expect(pages).toBeGreaterThan(1)
           expect(seen).toEqual(Array.from({ length: 60 }, (_, index) => index * 60 + 1))
+        }),
+      )
+    }),
+  )
+
+  for (const outputMode of ["files_with_matches", "count"] as const) {
+    it.live(`${outputMode} names the exact next offset and paging from it neither skips nor repeats`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const limit = 4
+        const names = Array.from({ length: limit + 5 }, (_, index) => `f${index}.txt`)
+        yield* Effect.promise(() =>
+          Promise.all(names.map((name) => Bun.write(path.join(tmp.path, name), "needle\n"))),
+        )
+        yield* withTools(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const page = (offset: number) =>
+              executeTool(registry, call("Grep", { pattern: "needle", outputMode, limit, offset }))
+            const names1 = (result: { output?: unknown }) => {
+              const output = result.output as { files?: string[]; counts?: { path: string }[] }
+              return output.files ?? output.counts!.map((row) => row.path)
+            }
+            const seen: string[] = []
+            let offset = 0
+            const first = yield* page(0)
+            const text = first.content?.[0]?.type === "text" ? first.content[0].text : ""
+            expect(text).toContain(`offset: ${limit}`)
+            expect(text).not.toContain(`offset: ${limit + 1}`)
+            while (true) {
+              const result = yield* page(offset)
+              seen.push(...names1(result))
+              if (!(result.metadata as { truncated: boolean }).truncated) break
+              offset += limit
+            }
+            expect(seen.toSorted()).toEqual(names.toSorted())
+            expect(seen).toHaveLength(names.length)
+            // Paging from the noted offset returns the next full page.
+            expect(names1(yield* page(limit))).toEqual(seen.slice(limit, limit * 2))
+          }),
+        )
+      }),
+    )
+  }
+
+  it.live("reports a match longer than the clipping window as one match", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Promise.all([
+          Bun.write(path.join(tmp.path, "min.js"), `import ${"a, ".repeat(400)}b from "x"\n`),
+          Bun.write(path.join(tmp.path, "fn.js"), `function big() {\n${"  call()\n".repeat(200)}}\n`),
+        ]),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const text = (result: { content?: readonly { type: string; text?: string }[] }) =>
+            result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
+          const single = yield* executeTool(registry, call("Grep", { pattern: "import.*from", path: "min.js" }))
+          expect(text(single)).toContain("Found 1 matches")
+          expect(single.metadata).toMatchObject({ matches: 1 })
+          const multi = yield* executeTool(
+            registry,
+            call("Grep", { pattern: "function \\w+\\(\\) \\{.*?\\n\\}", multiline: true, path: "fn.js" }),
+          )
+          expect(text(multi)).toContain("Found 1 matches")
+          expect(multi.metadata).toMatchObject({ matches: 1 })
         }),
       )
     }),

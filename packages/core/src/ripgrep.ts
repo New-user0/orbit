@@ -119,13 +119,7 @@ export const clipLine = (
   text: string,
   submatches: readonly { readonly match: { readonly text: string }; readonly start: number; readonly end: number }[],
 ) => {
-  const bytes = Buffer.from(text)
-  const characters = (offset: number) => (bytes.length === text.length ? offset : bytes.subarray(0, offset).toString().length)
-  const converted = submatches.map((submatch) => ({
-    text: submatch.match.text,
-    start: characters(submatch.start),
-    end: characters(submatch.end),
-  }))
+  const converted = toCharacters(text, submatches)
   const newline = /\r?\n$/u.exec(text)?.[0] ?? ""
   const body = text.slice(0, text.length - newline.length)
   if (body.length <= MAX_LINE_COLUMNS) return { text, submatches: converted }
@@ -139,16 +133,48 @@ export const clipLine = (
   const limit = Math.min(body.length, start + MAX_LINE_COLUMNS)
   const end = limit < body.length && isLowSurrogate(limit) ? limit - 1 : limit
   const lead = start > 0 ? "…" : ""
+  // A match that starts in the window stays, cut at the window end; the first one always starts in it.
+  const kept = converted.filter((submatch, index) => index === 0 || (submatch.start >= start && submatch.start < end))
   return {
     text: `${lead}${body.slice(start, end)}${end < body.length ? "…" : ""} [line truncated: ${body.length} chars]${newline}`,
-    submatches: converted
-      .filter((submatch) => submatch.start >= start && submatch.end <= end)
-      .map((submatch) => ({
-        ...submatch,
+    submatches: kept.map((submatch) => {
+      const last = Math.min(submatch.end, end)
+      return {
+        text: body.slice(submatch.start, last),
         start: submatch.start - start + lead.length,
-        end: submatch.end - start + lead.length,
-      })),
+        end: last - start + lead.length,
+      }
+    }),
   }
+}
+
+/** Converts ripgrep's UTF-8 byte offsets to character offsets of `text` in one forward pass. */
+const toCharacters = (
+  text: string,
+  submatches: readonly { readonly match: { readonly text: string }; readonly start: number; readonly end: number }[],
+) => {
+  if (submatches.length === 0) return []
+  const plain = Buffer.byteLength(text) === text.length
+  const wanted = plain
+    ? []
+    : [...new Set(submatches.flatMap((submatch) => [submatch.start, submatch.end]))].sort((x, y) => x - y)
+  const characters = new Map<number, number>()
+  let byte = 0
+  let character = 0
+  let next = 0
+  for (const point of plain ? [] : text) {
+    while (next < wanted.length && wanted[next]! <= byte) characters.set(wanted[next++]!, character)
+    if (next >= wanted.length) break
+    byte += Buffer.byteLength(point)
+    character += point.length
+  }
+  while (next < wanted.length) characters.set(wanted[next++]!, character)
+  const convert = (offset: number) => (plain ? offset : characters.get(offset)!)
+  return submatches.map((submatch) => ({
+    text: submatch.match.text,
+    start: convert(submatch.start),
+    end: convert(submatch.end),
+  }))
 }
 
 const failure = (message: string, cause?: unknown) => new Error({ message, cause })
@@ -359,7 +385,16 @@ const layer = Layer.effect(
       count: (input) =>
         run<FileCount>({
           ...input,
-          args: [...searchArgs(input), "--count-matches", "--with-filename", "--", input.pattern, input.file ?? "."],
+          // Sorted so that paging with an offset sees the same order on every call.
+          args: [
+            ...searchArgs(input),
+            "--count-matches",
+            "--with-filename",
+            "--sort=path",
+            "--",
+            input.pattern,
+            input.file ?? ".",
+          ],
           // Paths may contain colons; the count is always after the last one.
           parse: (line) => {
             const split = line.lastIndexOf(":")

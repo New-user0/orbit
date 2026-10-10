@@ -1943,7 +1943,9 @@ a page in `content` mode also stops before its text passes about 25,000 tokens, 
 fewer. A truncated result says which matches it shows and the exact `offset` that continues it; paging from that
 offset skips nothing and repeats nothing. A line longer than 500 characters is cut to a window that starts about 100
 characters before its first match, with ellipsis markers and a `[line truncated: N chars]` note, and the submatch offsets
-in the result index into the clipped text. Grep and Glob also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders, as
+in the result index into the clipped text; a match that runs past the window is kept and cut at its end. Submatch `start`
+and `end` are now offsets in UTF-16 characters of the row's `text`, not UTF-8 bytes, on every line including unclipped
+ones (a plugin reading `Ripgrep.Service` sees this too); `Match.offset` stays a byte offset. Grep and Glob also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders, as
 they already skipped `.git`. Glob still returns at most 100 files.
 
 **Affects:** people who read Grep results in scripts or plugins, and anyone who relied on a search entering one of
