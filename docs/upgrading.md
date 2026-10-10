@@ -1038,6 +1038,24 @@ approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini
 
 **What to do:** Nothing.
 
+### Terminal bell, idle reminder and a status in the window title
+
+`attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the
+terminal is blurred or its focus is unknown, between frames (right after the next frame while an animation keeps the
+renderer running). A subagent's permission or form rings it too, since a person must answer; a subagent finishing does
+not. `attention.idle_reminder` is a number of seconds (default 60, larger values are capped at 86400, 0 turns it off): once a top-level
+session has finished, the reminder "Orbit is waiting for your input" comes after that many seconds with no key
+pressed, no new run started and no permission or form pending. It is sent only while the terminal reports that it is
+blurred (never for a terminal whose focus is unknown), only when notifications, sound or the bell are on, and once per
+idle period. The window title was
+`OC | <title>`; it is now `Orbit · <title>`, with ` · working` while a session runs and ` · needs input` while a
+permission or form waits, including those of its subagents (in Mini, on Linux, as before).
+
+**Affects:** people who match the window title in a terminal multiplexer, window manager rule or script, and people who
+have notifications, sound or the bell on, who get the reminder.
+
+**What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -1932,6 +1950,7 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
 
+<<<<<<< HEAD
 ## Search tools
 
 Changes to what the Grep and Glob tools return.
@@ -1953,3 +1972,32 @@ those version-control folders.
 
 **What to do:** Nothing for most setups. Pass `limit` to keep the old page size, and follow the `offset` in the
 truncation note for more results.
+=======
+## Tools
+
+### Web search results start with a Sources reminder
+
+Before, the `WebSearch` tool returned only the results and its description did not mention how to cite them. Its
+description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown
+links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page
+also begin with a one-line reminder of that rule, ahead of the first result so that a result the session bounds (it
+keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
+unchanged.
+
+**Affects:** people who read `WebSearch` tool output in logs, ACP editor users and VS Code users who expand a WebSearch card, who see the reminder,
+and plugin or SDK code that compares the result text exactly.
+
+**What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.
+
+## Files and web tools
+
+Changes to the file tools and the web tools.
+
+### Read refuses devices and budgets its output by tokens
+
+The Read, Grep and Glob tools now refuse a device or stream path with a message that says it is a device or stream (the failure reaches a client as an ordinary tool error, with no dedicated error type), before anything is asked or opened: `/dev/zero`, `/dev/random`, `/dev/stdin`, `/dev/ptmx`, `/dev/tty*`, `/dev/cu.*`, `/dev/pts/*`, `/dev/fd/*` and `/proc/<self, thread-self or pid>/[task/<tid>/]fd/*` on Linux and macOS, and `CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`, `LPT1` to `LPT9` (also `COM¹`, `COM²`, `COM³` and the `LPT` forms), `CONIN$`, `CONOUT$` (with or without an extension) and the `\\.\` forms and the `\\?\` forms of these names on Windows (a `\\?\` drive path such as `\\?\C:\Windows\win.ini` is read as the plain drive path and goes through the usual approval). On Linux and macOS a path whose target, followed through links, exists and is neither a file nor a folder (a pipe, a socket, a device the list lacks, or a link of the repository to one) is refused the same way. The Windows names are refused on every Windows version, though Windows 11 itself opens `nul.txt` or `aux.c` as an ordinary file; rename such a file to read it. Files such as `console.log` still read. A read also returns at most about 25,000 tokens of rendered text (line numbers included) instead of 50 KB: a file of ordinary lines up to that size comes back whole where it was paged before, a file of more than 2,000 lines pages whatever its size, and a truncated read ends with the offset to continue from and a hint to use Grep. Notebooks page by the same budget.
+
+**Affects:** people and scripts that read very large files or device paths through the Read tool.
+
+**What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
+>>>>>>> origin/m3-integration

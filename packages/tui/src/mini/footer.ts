@@ -92,6 +92,8 @@ type RunFooterOptions = {
     update?: (change: MiniSettingChange) => Promise<MiniSettings>
   }
   onMonoChange?: (mono: boolean) => void
+  /** Reports what the footer is waiting on, for the terminal title. */
+  onActivity?: (activity: "working" | "needs input" | undefined) => void
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onFormReply: (input: FormReply) => void | Promise<void>
   onFormCancel: (input: FormCancel) => void | Promise<void>
@@ -568,6 +570,7 @@ export class RunFooter implements FooterApi {
     }
 
     this.setState(state)
+    this.reportActivity()
 
     if (prev.phase === "running" && state.phase === "idle") {
       this.flush()
@@ -590,7 +593,14 @@ export class RunFooter implements FooterApi {
 
     if (view.type !== "prompt") this.finishStartup()
     this.setView(view)
+    this.reportActivity()
     this.applyHeight()
+  }
+
+  private reportActivity(): void {
+    this.options.onActivity?.(
+      this.view().type !== "prompt" ? "needs input" : this.state().phase === "running" ? "working" : undefined,
+    )
   }
 
   // Queues a scrollback commit. Consecutive progress chunks for the same

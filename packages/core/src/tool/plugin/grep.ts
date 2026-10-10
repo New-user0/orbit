@@ -272,9 +272,11 @@ export const Plugin = {
               Effect.mapError((error) =>
                 error instanceof ToolFailure
                   ? error
-                  : error instanceof Ripgrep.InvalidPatternError
-                    ? new ToolFailure({ message: `Invalid regex pattern: ${error.message}` })
-                    : new ToolFailure({ message: `Unable to grep for ${input.pattern}`, error }),
+                  : error instanceof FileAccess.DeviceError
+                    ? new ToolFailure({ message: error.message })
+                    : error instanceof Ripgrep.InvalidPatternError
+                      ? new ToolFailure({ message: `Invalid regex pattern: ${error.message}` })
+                      : new ToolFailure({ message: `Unable to grep for ${input.pattern}`, error }),
               ),
             ),
         }),

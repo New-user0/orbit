@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { MarkdownRenderable, SyntaxStyle, TextRenderable, type CliRenderer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { bodyText, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
+import { bodyText, createMiniTitle, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
 
 // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
 // a model, a tool or a stored prompt can put into a message body.
@@ -72,9 +72,13 @@ test("draws ordinary Unicode, emoji and wide characters unchanged, and markdown 
 })
 
 test("builds the title of the terminal window from a session title and cuts a long one", () => {
-  expect(terminalTitle("Fix the build")).toBe("OC | Fix the build")
-  expect(terminalTitle("x".repeat(40))).toBe(`OC | ${"x".repeat(40)}`)
-  expect(terminalTitle("x".repeat(41))).toBe(`OC | ${"x".repeat(37)}…`)
+  expect(terminalTitle("Fix the build")).toBe("Orbit · Fix the build")
+  expect(terminalTitle("x".repeat(40))).toBe(`Orbit · ${"x".repeat(40)}`)
+  expect(terminalTitle("x".repeat(41))).toBe(`Orbit · ${"x".repeat(37)}…`)
+  expect(terminalTitle("Fix the build", "working")).toBe("Orbit · Fix the build · working")
+  expect(terminalTitle("Fix the build", "needs input")).toBe("Orbit · Fix the build · needs input")
+  expect(terminalTitle(undefined, "working")).toBe("Orbit · working")
+  expect(terminalTitle(undefined)).toBe("Orbit")
 })
 
 test("leaves the characters that act on a terminal out of the title of its window", () => {
@@ -82,8 +86,8 @@ test("leaves the characters that act on a terminal out of the title of its windo
   // follows is a sequence of its own. A title can come from a model, or from a workflow that an older release ran.
   const title = terminalTitle("work\u0007\u001b]0;pwned\u0007\u001b[2K\u009b\u{202e}done")
 
-  expect(title).toBe("OC | work]0;pwned[2Kdone")
-  expect(terminalTitle("a\r\nb\tc")).toBe("OC | abc")
+  expect(title).toBe("Orbit · work]0;pwned[2Kdone")
+  expect(terminalTitle("a\r\nb\tc")).toBe("Orbit · abc")
 })
 
 test("clears the terminal title before destroying the renderer", () => {
@@ -112,4 +116,37 @@ test("still clears the title after renderer destruction", () => {
     },
   })
   expect(calls).toEqual(["title:"])
+})
+
+// The Mini footer reports its activity; the window title follows it, and the session title is cleaned like the full
+// interface's.
+test("the Mini title follows the footer's activity and cleans the session title", () => {
+  const titles: string[] = []
+  const renderer = { isDestroyed: false, setTerminalTitle: (title: string) => titles.push(title) }
+  const mini = createMiniTitle(renderer, "linux", "Fix the build")
+  mini.setActivity("working")
+  mini.setActivity("working")
+  mini.setActivity("needs input")
+  mini.setActivity(undefined)
+  expect(titles).toEqual([
+    "Orbit · Fix the build",
+    "Orbit · Fix the build · working",
+    "Orbit · Fix the build · needs input",
+    "Orbit · Fix the build",
+  ])
+  mini.setTitle("work\u0007\u001b]0;pwned\u0007\u001b[2K\u009b\u{202e}done")
+  expect(titles.at(-1)).toBe("Orbit · work]0;pwned[2Kdone")
+  expect(titles.filter((title) => /\p{C}/u.test(title))).toEqual([])
+})
+
+test("the Mini title is written only on Linux, and not after the renderer is destroyed", () => {
+  const titles: string[] = []
+  const renderer = { isDestroyed: false, setTerminalTitle: (title: string) => titles.push(title) }
+  const other = createMiniTitle(renderer, "win32", "Fix the build")
+  other.setActivity("working")
+  expect(titles).toEqual([])
+  const linux = createMiniTitle(renderer, "linux", "Fix the build")
+  renderer.isDestroyed = true
+  linux.setActivity("working")
+  expect(titles).toEqual(["Orbit · Fix the build"])
 })
