@@ -69,6 +69,7 @@ import { SessionCompaction } from "../session/compaction.js"
 import { SessionInstructions } from "../session/instructions.js"
 import { SideQuery } from "../side-query.js"
 import { Shell } from "../shell.js"
+import { PowerShellParse } from "../shell/powershell-parse.js"
 import { ShellSelect } from "../shell/select.js"
 import { Snapshot } from "../snapshot.js"
 import { Skill } from "../skill.js"
@@ -164,6 +165,7 @@ const services = [
   SideQuery.Service,
   Shell.Service,
   ShellSelect.Service,
+  PowerShellParse.Service,
   Snapshot.Service,
   Skill.Service,
   SkillDiscovery.Service,
@@ -221,6 +223,7 @@ export const requirements = LayerNode.group([
   SideQuery.node,
   Shell.node,
   ShellSelect.node,
+  PowerShellParse.node,
   Snapshot.node,
   Skill.node,
   SkillDiscovery.node,

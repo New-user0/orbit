@@ -222,6 +222,7 @@ export function normalize(input: unknown): Result {
     snapshots: Info.fields.snapshots,
     compatibility: Info.fields.compatibility,
     media: Info.fields.media,
+    shell_tool: Info.fields.shell_tool,
     tool_output: Info.fields.tool_output,
     tool_execution: Info.fields.tool_execution,
     websearch: Info.fields.websearch,

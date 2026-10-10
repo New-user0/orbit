@@ -22,6 +22,7 @@ import { ConfigSandbox } from "./config/sandbox.js"
 import { ConfigWebFetch } from "./config/webfetch.js"
 import { ConfigWebSearch } from "./config/websearch.js"
 import { ConfigToolExecution } from "./config/tool-execution.js"
+import { ConfigShellTool } from "./config/shell-tool.js"
 import { ConfigToolOutput } from "./config/tool-output.js"
 import { ConfigWatcher } from "./config/watcher.js"
 import { ConfigWarming } from "./config/warming.js"
@@ -95,6 +96,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   sandbox: ConfigSandbox.Info.pipe(optional).annotate({
     description: "Run shell commands in an operating system sandbox",
+  }),
+  shell_tool: ConfigShellTool.Info.pipe(optional).annotate({
+    description: "Shell command timeouts",
   }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
     description: "Tool output truncation thresholds",

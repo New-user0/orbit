@@ -23,6 +23,7 @@ import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Agent } from "@orbit/core/agent"
 import { Job } from "@orbit/core/job"
+import { KV } from "@orbit/core/kv"
 import { Session } from "@orbit/core/session"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
@@ -36,6 +37,7 @@ import { Shell } from "@orbit/core/shell"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { define } from "@orbit/plugin/effect/plugin"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
 import { ID } from "@orbit/schema/shell"
@@ -147,6 +149,7 @@ const shellPluginSupervisor = makeLocationNode({
     Job.node,
     Shell.node,
     ShellSelect.node,
+    PowerShellParse.node,
     Tool.node,
   ],
 })
@@ -187,6 +190,33 @@ const permissionIt = testEffect(
     Global.node.replace(tempGlobalLayer),
     PluginSupervisor.node.replace(shellPluginSupervisor),
     offlineModels,
+  ]),
+)
+
+// The real job registry, with `block` and `cancel` held back for a set time, so a test can land the deadline in the window
+// between a job settling and the call looking at it.
+const slow = { block: 0, cancel: 0 }
+const slowJobs = makeGlobalNode({
+  service: Job.Service,
+  layer: Layer.effect(
+    Job.Service,
+    Job.make.pipe(
+      Effect.map((jobs) =>
+        Job.Service.of({
+          ...jobs,
+          block: (input) => jobs.block(input).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.block)))),
+          cancel: (id) => jobs.cancel(id).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.cancel)))),
+        }),
+      ),
+    ),
+  ),
+  deps: [KV.node],
+})
+const slowIt = testEffect(
+  AppNodeBuilder.build(nodes, [
+    ...replacements,
+    Job.node.replace(slowJobs),
+    PluginSupervisor.node.replace(shellPluginSupervisor),
   ]),
 )
 
@@ -2353,5 +2383,463 @@ describe("ShellTool", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
       ),
     { timeout: 15_000 },
+  )
+})
+
+// The deadline: a foreground command that outlives it moves to the background, except one made only of sleeps.
+describe("ShellTool timeouts", () => {
+  const releaseLoop = (release: string) =>
+    isWindows
+      ? `while (-not (Test-Path -LiteralPath '${release}')) { Start-Sleep -Milliseconds 50 }`
+      : `while [ ! -f '${release}' ]; do sleep 0.05; done`
+  const sleepThenWork = (release: string) =>
+    isWindows ? `Start-Sleep -Milliseconds 100; ${releaseLoop(release)}` : `sleep 0.1 && ${releaseLoop(release)}`
+  const briefThenDone = (milliseconds: number) =>
+    isWindows
+      ? `Start-Sleep -Milliseconds ${milliseconds}; [Console]::Out.Write('done')`
+      : `sleep ${milliseconds / 1000}; printf done`
+
+  const text = (settled: { content?: ReadonlyArray<{ type: string; text?: string }> }) =>
+    (settled.content ?? []).map((part) => part.text ?? "").join("\n")
+
+  /** A scratch folder whose orbit.json holds `config`, with the synthetic notifications of the session collected. */
+  const inFolder = <A, E, R>(
+    config: object | undefined,
+    body: (input: {
+      registry: Tool.Interface
+      folder: string
+      release: string
+      notifications: () => ReadonlyArray<{ shellID: unknown; state: unknown }>
+    }) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        // Written before the session, which reads the config as its location starts.
+        return Effect.promise(() =>
+          config ? Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify(config)) : Promise.resolve(0),
+        ).pipe(Effect.andThen(inSession(tmp.path, body)))
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    )
+
+  const inSession = <A, E, R>(
+    directory: string,
+    body: (input: {
+      registry: Tool.Interface
+      folder: string
+      release: string
+      notifications: () => ReadonlyArray<{ shellID: unknown; state: unknown }>
+    }) => Effect.Effect<A, E, R>,
+  ) =>
+    withSession(directory, (registry) =>
+      Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        const seen: Array<{ shellID: unknown; state: unknown }> = []
+        yield* bus.subscribe(SessionEvent.InboxEnqueued).pipe(
+          Stream.filter((event) => event.data.sessionID === sessionID && event.data.item.type === "synthetic"),
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              const metadata = (event.data.item.payload as { metadata?: Record<string, unknown> }).metadata
+              seen.push({ shellID: metadata?.shellID, state: metadata?.state })
+            }),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
+        )
+        return yield* body({
+          registry,
+          folder: directory,
+          release: path.join(directory, "release"),
+          notifications: () => seen,
+        })
+      }),
+    )
+
+  const untilNotified = (
+    notifications: () => ReadonlyArray<unknown>,
+    count: number,
+    remaining = 3000,
+  ): Effect.Effect<void, Error> =>
+    Effect.gen(function* () {
+      if (notifications().length >= count) return
+      if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the notification"))
+      yield* Effect.promise(() => Bun.sleep(5))
+      return yield* untilNotified(notifications, count, remaining - 1)
+    })
+
+  const pending = Effect.gen(function* () {
+    const jobs = yield* Job.Service
+    return yield* jobs.pendingBackground
+  })
+
+  it.live(
+    "moves a foreground command that outlives its timeout to the background and notifies once",
+    () =>
+      inFolder(undefined, ({ registry, release, notifications }) =>
+        Effect.gen(function* () {
+          const shell = yield* Shell.Service
+          const settled = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 200 }))
+          const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : undefined
+          expect(shellID).toStartWith("sh_")
+          expect(settled.metadata).toMatchObject({ status: "running" })
+          expect(settled.metadata).not.toHaveProperty("error")
+          expect(settled.metadata).not.toHaveProperty("timeout")
+          expect(text(settled)).toStartWith("The command was still running after 200 ms")
+          expect(text(settled)).toContain("Command moved to the background")
+          if (!shellID) return
+          expect((yield* shell.get(ID.make(shellID))).status).toBe("running")
+          expect(notifications()).toEqual([])
+
+          yield* Effect.promise(() => Bun.write(release, ""))
+          yield* untilNotified(notifications, 1)
+          yield* Effect.promise(() => Bun.sleep(300))
+          expect(notifications()).toEqual([{ shellID, state: "completed" }])
+          expect(yield* pending).toEqual([])
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "still kills a command made only of sleeps at its timeout",
+    () =>
+      inFolder(undefined, ({ registry, notifications }) =>
+        Effect.gen(function* () {
+          const settled = yield* executeTool(registry, call({ command: idleCommand, timeout: 200 }))
+          expect(settled.metadata).toMatchObject({ timeout: true, error: true })
+          expect(text(settled)).toContain("Command exceeded timeout of 200 ms")
+          yield* Effect.promise(() => Bun.sleep(300))
+          expect(notifications()).toEqual([])
+          expect(yield* pending).toEqual([])
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "moves a sleep that is followed by other work",
+    () =>
+      inFolder(undefined, ({ registry, release, notifications }) =>
+        Effect.gen(function* () {
+          const settled = yield* executeTool(registry, call({ command: sleepThenWork(release), timeout: 400 }))
+          expect(settled.metadata).toMatchObject({ status: "running" })
+          expect(settled.metadata).not.toHaveProperty("timeout")
+          yield* Effect.promise(() => Bun.write(release, ""))
+          yield* untilNotified(notifications, 1)
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  // [config, input timeout, the budget the kill text reports]
+  const budgets: ReadonlyArray<readonly [object, number | undefined, number]> = [
+    [{ shell_tool: { timeout: 200, max_timeout: 300 } }, 5000, 300],
+    [{ shell_tool: { timeout: 200, max_timeout: 300 } }, undefined, 200],
+    [{ shell_tool: { timeout: 200, max_timeout: 300 } }, 0, 200],
+    // The maximum is never below the default.
+    [{ shell_tool: { timeout: 400, max_timeout: 300 } }, 5000, 400],
+  ]
+  for (const [config, timeout, expected] of budgets) {
+    it.live(
+      `waits ${expected} ms for ${JSON.stringify(config)} with a timeout of ${timeout}`,
+      () =>
+        inFolder(config, ({ registry }) =>
+          Effect.gen(function* () {
+            const settled = yield* executeTool(
+              registry,
+              call({ command: idleCommand, ...(timeout === undefined ? {} : { timeout }) }),
+            )
+            expect(text(settled)).toContain(`Command exceeded timeout of ${expected} ms`)
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+  }
+
+  const shared = Object.freeze({
+    type: "object",
+    properties: Object.freeze({ timeout: Object.freeze({ type: "integer", minimum: 0 }) }),
+  })
+  const advertised = (config: object | undefined) =>
+    inFolder(config, () =>
+      Effect.gen(function* () {
+        const hooks = yield* PluginHooks.Service
+        const event = yield* hooks.trigger("session", "context", {
+          sessionID,
+          model: sessionModel,
+          system: [],
+          messages: [],
+          options: {},
+          agent: toolIdentity.agent,
+          tools: { Bash: { description: "", input: shared } },
+        } as never)
+        // The tool is renamed when the session shell is PowerShell.
+        const tool = event.tools.Bash ?? event.tools.PowerShell
+        return { tool, input: tool?.input as { properties: { timeout: { maximum?: number; description: string } } } }
+      }),
+    )
+
+  productionIt.live("advertises the configured default and maximum, for either tool name", () =>
+    advertised({ shell_tool: { timeout: 90_000, max_timeout: 300_000 } }).pipe(
+      Effect.tap((configured) =>
+        Effect.sync(() => {
+          expect(configured.input.properties.timeout.maximum).toBe(300_000)
+          expect(configured.input.properties.timeout.description).toContain("300000")
+          expect(configured.tool?.description).toContain("up to 300000 ms (5 minutes)")
+          expect(configured.tool?.description).toContain("waits 90000 ms (1.5 minutes)")
+        }),
+      ),
+    ),
+  )
+
+  productionIt.live("advertises the built-in numbers without config, and leaves the shared input alone", () =>
+    advertised(undefined).pipe(
+      Effect.tap((defaults) =>
+        Effect.sync(() => {
+          expect(defaults.input.properties.timeout.maximum).toBe(600_000)
+          expect(defaults.tool?.description).toContain("up to 600000 ms (10 minutes)")
+          expect(defaults.tool?.description).toContain("waits 120000 ms (2 minutes)")
+          expect(shared.properties.timeout).not.toHaveProperty("maximum")
+        }),
+      ),
+    ),
+  )
+
+  it.live("keeps the registry schema static", () =>
+    inFolder(undefined, ({ registry }) =>
+      Effect.gen(function* () {
+        const definition = (yield* toolDefinitions(registry)).find((tool) => tool.name === "Bash")
+        expect(definition?.inputSchema).not.toHaveProperty("properties.timeout.maximum")
+      }),
+    ),
+  )
+
+  it.live(
+    "delivers a command that finishes near its deadline exactly once",
+    () =>
+      inFolder(undefined, ({ registry, notifications }) =>
+        Effect.gen(function* () {
+          const jobs = yield* Job.Service
+          for (let index = 0; index < 20; index++) {
+            const before = notifications().length
+            const settled = yield* executeTool(
+              registry,
+              call({ command: briefThenDone(185 + index * 3), timeout: 200 }, `call-race-${index}`),
+            )
+            const inline = settled.metadata?.status === "completed"
+            if (!inline) yield* untilNotified(notifications, before + 1)
+            yield* Effect.promise(() => Bun.sleep(300))
+            expect((inline ? 1 : 0) + notifications().length - before).toBe(1)
+            expect(yield* jobs.pendingBackground).toEqual([])
+          }
+        }),
+      ),
+    { timeout: 120_000 },
+  )
+
+  slowIt.live(
+    "returns a command that exits as the deadline passes inline, with no notification and no marker",
+    () =>
+      inFolder(undefined, ({ registry, notifications }) =>
+        Effect.gen(function* () {
+          slow.block = 1500
+          slow.cancel = 0
+          const settled = yield* executeTool(registry, call({ command: briefThenDone(50), timeout: 200 }))
+          expect(settled.metadata).toMatchObject({ status: "completed" })
+          expect(text(settled)).toBe("done")
+          yield* Effect.promise(() => Bun.sleep(500))
+          expect(notifications()).toEqual([])
+          expect(yield* pending).toEqual([])
+        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.block = 0)))),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "moves rather than stops a command it cannot read",
+    () =>
+      inFolder(undefined, ({ registry, release }) =>
+        Effect.gen(function* () {
+          const settled = yield* executeTool(
+            registry,
+            call({ command: `${releaseLoop(release)} # ${"x".repeat(12_000)}`, timeout: 300 }),
+          )
+          expect(settled.metadata).toMatchObject({ status: "running" })
+          yield* Effect.promise(() => Bun.write(release, ""))
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "returns a command that finishes before its deadline inline, with no notification and no marker",
+    () =>
+      inFolder(undefined, ({ registry, notifications }) =>
+        Effect.gen(function* () {
+          const settled = yield* executeTool(registry, call({ command: briefThenDone(50), timeout: 20_000 }))
+          expect(settled.metadata).toMatchObject({ status: "completed", exit: 0 })
+          expect(text(settled)).toBe("done")
+          yield* Effect.promise(() => Bun.sleep(500))
+          expect(notifications()).toEqual([])
+          expect(yield* pending).toEqual([])
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  slowIt.live(
+    "cancels an interrupted call before its deadline and leaves nothing to deliver",
+    () =>
+      inFolder(undefined, ({ registry, release, notifications }) =>
+        Effect.gen(function* () {
+          const shell = yield* Shell.Service
+          const jobs = yield* Job.Service
+          slow.block = 0
+          slow.cancel = 1000
+          const running = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 300 })).pipe(
+            Effect.forkChild({ startImmediately: true }),
+          )
+          // Interrupt only once the job exists, so the interrupt reaches the wait on the job and not the spawn.
+          const started = (remaining = 3000): Effect.Effect<void, Error> =>
+            Effect.gen(function* () {
+              const id = (yield* shell.list())[0]?.id
+              if (id && (yield* jobs.get(id))) return
+              if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the job"))
+              yield* Effect.promise(() => Bun.sleep(5))
+              return yield* started(remaining - 1)
+            })
+          yield* started()
+          yield* Effect.promise(() => Bun.sleep(20))
+          yield* Fiber.interrupt(running)
+          // The cancel outlasts the deadline: a timer that was not stopped first would move the cancelled job.
+          yield* Effect.promise(() => Bun.sleep(500))
+          expect(notifications()).toEqual([])
+          expect(yield* pending).toEqual([])
+        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.cancel = 0)))),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "does not move a command the user already moved",
+    () =>
+      inFolder(undefined, ({ registry, release, notifications }) =>
+        Effect.gen(function* () {
+          const jobs = yield* Job.Service
+          const scope = yield* Scope.Scope
+          const waiting = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 20_000 })).pipe(
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+          const moveWhenReady = (remaining = 3000): Effect.Effect<void, Error> =>
+            Effect.gen(function* () {
+              if ((yield* jobs.backgroundAll({ sessionID })).length > 0) return
+              if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the foreground job"))
+              yield* Effect.promise(() => Bun.sleep(5))
+              return yield* moveWhenReady(remaining - 1)
+            })
+          yield* moveWhenReady()
+          const settled = yield* Fiber.join(waiting)
+          expect(settled.metadata).toMatchObject({ status: "running" })
+          expect(text(settled)).not.toContain("still running after")
+          expect(notifications()).toEqual([])
+          yield* Effect.promise(() => Bun.write(release, ""))
+          yield* untilNotified(notifications, 1)
+          yield* Effect.promise(() => Bun.sleep(300))
+          expect(notifications()).toHaveLength(1)
+          expect(yield* pending).toEqual([])
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "caps the kill deadline of a background command at the maximum",
+    () =>
+      inFolder({ shell_tool: { timeout: 300, max_timeout: 300 } }, ({ registry }) =>
+        Effect.gen(function* () {
+          const shell = yield* Shell.Service
+          const started = Date.now()
+          const settled = yield* executeTool(
+            registry,
+            call({ command: idleCommand, timeout: 5000, run_in_background: true }),
+          )
+          const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : undefined
+          if (!shellID) throw new Error("Expected a shell ID")
+          expect((yield* shell.wait(ID.make(shellID)).pipe(Effect.timeout("4 seconds"))).status).toBe("timeout")
+          expect(Date.now() - started).toBeLessThan(4000)
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "decides what a sleep is after the create hooks have run",
+    () =>
+      inFolder(undefined, ({ registry, release }) =>
+        Effect.gen(function* () {
+          const hooks = yield* PluginHooks.Service
+          yield* hooks.register("shell", "create.before", (event) =>
+            Effect.sync(() => {
+              event.command = idleCommand
+            }),
+          )
+          const settled = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 200 }))
+          expect(settled.metadata).toMatchObject({ timeout: true, error: true })
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "uses the deadline a create hook sets",
+    () =>
+      inFolder(undefined, ({ registry }) =>
+        Effect.gen(function* () {
+          const hooks = yield* PluginHooks.Service
+          yield* hooks.register("shell", "create.before", (event) =>
+            Effect.sync(() => {
+              event.timeout = 150
+            }),
+          )
+          const settled = yield* executeTool(registry, call({ command: idleCommand, timeout: 5000 }))
+          expect(text(settled)).toContain("Command exceeded timeout of 150 ms")
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "moves a command run through Code Mode at its deadline",
+    () =>
+      inFolder(undefined, ({ registry, release, notifications }) =>
+        Effect.gen(function* () {
+          yield* registry.transform((editor) =>
+            editor.update("Bash", (tool) => {
+              tool.options = { ...tool.options, codemode: true }
+            }),
+          )
+          const input = JSON.stringify({ command: releaseLoop(release), timeout: 200 })
+          const result = yield* executeTool(registry, {
+            sessionID,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-codemode-deadline",
+              name: "Execute",
+              input: { code: `return await tools.Bash(${input})` },
+            },
+          })
+          expect(result.status).toBe("completed")
+          if (result.status !== "completed") return
+          expect(JSON.parse(result.output.output)).toMatchObject({
+            status: "running",
+            shellID: expect.stringMatching(/^sh_/),
+          })
+          yield* Effect.promise(() => Bun.write(release, ""))
+          yield* untilNotified(notifications, 1)
+        }),
+      ),
+    { timeout: 30_000 },
   )
 })

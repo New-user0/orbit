@@ -6,7 +6,10 @@ import type { SessionHooks } from "@orbit/plugin/effect/session"
 import type { ShellCreateBefore } from "@orbit/plugin/effect/shell"
 import type { Tool } from "@orbit/schema/tool"
 import { AppProcess } from "@orbit/util/process"
-import { Deferred, Effect, Schema, Scope } from "effect"
+import { ConfigShellTool } from "@orbit/schema/config/shell-tool"
+import { Deferred, Duration, Effect, Fiber, Ref, Schema, Scope } from "effect"
+import os from "node:os"
+import path from "node:path"
 import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
 import { Job } from "../../job.js"
@@ -18,12 +21,31 @@ import { SessionSchema } from "../../session/schema.js"
 import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
+import { ShellAnalysis } from "../../shell/analysis.js"
 import { ShellParse } from "../../shell/parse.js"
+import { PowerShellParse } from "../../shell/powershell-parse.js"
 import { ShellSelect } from "../../shell/select.js"
 import { ShellResult } from "../../shell/result.js"
 
 export const name = "Bash"
-export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
+
+/** The default and the largest timeout of a call. The largest is never below the default. */
+export function limits(configured?: ConfigShellTool.Info) {
+  const timeout = configured?.timeout ?? ConfigShellTool.DEFAULT_TIMEOUT
+  return { timeout, max: Math.max(configured?.max_timeout ?? ConfigShellTool.DEFAULT_MAX_TIMEOUT, timeout) }
+}
+
+/**
+ * How long a call waits. A foreground call that gives no timeout, or 0, waits the default. A background call with
+ * no timeout, or 0, has no deadline. Anything given is capped at the maximum.
+ */
+export function budget(
+  input: Pick<typeof Input.Type, "timeout" | "run_in_background">,
+  limit: ReturnType<typeof limits>,
+) {
+  if (input.run_in_background === true) return input.timeout ? Math.min(input.timeout, limit.max) : 0
+  return Math.min(input.timeout || limit.timeout, limit.max)
+}
 
 const BACKGROUND_INSTRUCTION =
   "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
@@ -35,7 +57,11 @@ const OS =
       : process.platform === "linux"
         ? "Linux"
         : process.platform
-const description = (shell?: string) =>
+const duration = (ms: number) => {
+  const minutes = Number((ms / 60_000).toFixed(2))
+  return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
+}
+const description = (shell: string | undefined, limit: ReturnType<typeof limits>) =>
   [
     "Execute a shell command and return its output.",
     ...(shell ? [`Commands run on ${OS} using ${shell}.`] : []),
@@ -43,7 +69,9 @@ const description = (shell?: string) =>
     "Prefer dedicated tools over shell commands when possible.",
     "When output is large, the full result is saved to a file and a truncated preview is returned.",
     "Rely on automatic truncation unless filtering the output is more useful.",
-    "Commands accept an optional timeout, background commands have no timeout by default.",
+    `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
+    "A foreground command still running at its timeout is not stopped: it moves to the background and you are notified when it finishes. A command made only of sleeps is stopped instead.",
+    "Background commands have no timeout unless one is given.",
     "Background commands return immediately, and you will be notified when they complete.",
   ].join(" ")
 
@@ -58,7 +86,8 @@ export const Input = Schema.Struct({
       "Working directory to execute the command in. Defaults to the current working directory. When possible, avoid changing directories in the command and set the working directory here instead.",
   }),
   timeout: Schema.optionalKey(NonNegativeInt).annotate({
-    description: `Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to ${DEFAULT_TIMEOUT_MS} for foreground commands. Background commands have no timeout by default.`,
+    description:
+      "Timeout in milliseconds for a foreground command. The tool description gives the default and the maximum. Background commands have no timeout unless one is given.",
   }),
   run_in_background: Schema.optionalKey(Schema.Boolean).annotate({
     description:
@@ -101,8 +130,8 @@ const toolResult = (output: Output) => {
   }
 }
 
-const backgroundResult = (shellID: string, file: string) => ({
-  output: `Command moved to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
+const backgroundResult = (shellID: string, file: string, deadline?: number) => ({
+  output: `${deadline === undefined ? "" : ShellResult.deadlineNotice(deadline) + "\n"}Command moved to the background (shell ID: ${shellID}).\nOutput is streaming to: ${file}`,
   shellID,
   truncated: false,
   status: "running" as const,
@@ -121,8 +150,13 @@ export const Plugin = {
     const compatibleShell = shellSelect.resolve({ priority: "compat" })
     const permission = yield* Permission.Service
     const config = yield* Config.Service
+    const powershellParse = yield* PowerShellParse.Service
 
-    const prepare = Effect.fn("ShellTool.prepare")(function* (invocation: ShellCreateBefore, context: Tool.Context) {
+    const prepare = Effect.fn("ShellTool.prepare")(function* (
+      invocation: ShellCreateBefore,
+      context: Tool.Context,
+      foreground: boolean,
+    ) {
       const source = {
         type: "tool" as const,
         messageID: context.messageID,
@@ -132,7 +166,6 @@ export const Plugin = {
       invocation.cwd = target.absolute
       // The folder as resolved, before anything is asked, so a client names where the command runs even when no rule asks.
       yield* context.progress({ places: [target.place] })
-      const timeout = invocation.timeout
       const portable = Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
       const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, { portable })
       const directories = yield* Effect.forEach(parsed.directories, (directory) =>
@@ -161,6 +194,21 @@ export const Plugin = {
           agent: context.agent,
           source,
         })
+      // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
+      // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
+      // be analysed counts as not sleep-led, so it is moved and never killed.
+      const deadline = invocation.timeout
+      const analysis =
+        foreground && deadline > 0
+          ? yield* ShellAnalysis.inspect(invocation.command, {
+              shell: invocation.shell,
+              platform: process.platform,
+              path: process.platform === "win32" ? path.win32 : path.posix,
+              home: os.homedir(),
+              cwd: target.absolute,
+              env: invocation.env,
+            }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
+          : undefined
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
         Effect.catchTag("Environment.NotFound", () =>
@@ -169,7 +217,9 @@ export const Plugin = {
       )
       if (workdir !== "directory")
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
-      return timeout
+      if (!analysis || analysis.sleepLed) return { budget: deadline, autoBackground: false }
+      invocation.timeout = 0
+      return { budget: deadline, autoBackground: true }
     })
 
     const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(
@@ -212,14 +262,15 @@ export const Plugin = {
           name,
           options: { authorizes: true, codemode: false },
           traits: { cancelSiblingsOnFailure: true },
-          description: description(),
+          description: description(undefined, limits()),
           input: Input,
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
-              const timeout =
-                input.run_in_background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
+              // Read at call time, so a config change applies to the next call.
+              const timeout = budget(input, limits(Config.latest(yield* config.entries(), "shell_tool")))
               let finalTimeout = timeout
+              let autoBackground = false
               const info = yield* shell.create(
                 {
                   command: input.command,
@@ -234,7 +285,9 @@ export const Plugin = {
                     invocation.env.ORBIT = "1"
                     invocation.env.AI_AGENT ||= "orbit"
                     invocation.env.ORBIT_SESSION_ID = context.sessionID
-                    finalTimeout = yield* prepare(invocation, context)
+                    const prepared = yield* prepare(invocation, context, input.run_in_background !== true)
+                    finalTimeout = prepared.budget
+                    autoBackground = prepared.autoBackground
                   }),
               )
               yield* context.progress({ shellID: info.id })
@@ -277,14 +330,44 @@ export const Plugin = {
                 return backgroundResult(info.id, info.file)
               }
 
-              const result = yield* jobs
-                .block({ id: job.id, sessionID: context.sessionID })
-                .pipe(Effect.onInterrupt(() => jobs.cancel(job.id).pipe(Effect.ignore)))
-              if (result?.type === "backgrounded") {
-                yield* shell.timeout(info.id, 0)
+              // The deadline of a command that is not killed on a timer. Measured from just after the spawn. It moves the
+              // job uninterruptibly, so once it is interrupted and joined, `moved` says for certain whether it did.
+              const moved = yield* Ref.make<Job.Info | undefined>(undefined)
+              const timer = autoBackground
+                ? yield* Effect.sleep(Duration.millis(finalTimeout)).pipe(
+                    Effect.andThen(
+                      Effect.uninterruptible(
+                        jobs.background(job.id).pipe(Effect.flatMap((backgrounded) => Ref.set(moved, backgrounded))),
+                      ),
+                    ),
+                    Effect.forkChild({ startImmediately: true }),
+                  )
+                : undefined
+              const stopTimer = Effect.gen(function* () {
+                if (timer) yield* Fiber.interrupt(timer)
+                return yield* Ref.get(moved)
+              })
+              const result = yield* jobs.block({ id: job.id, sessionID: context.sessionID }).pipe(
+                Effect.onInterrupt(() =>
+                  Effect.gen(function* () {
+                    // Stop the timer before cancelling, or it could move a job that was just cancelled and leave a marker
+                    // that only a restart would deliver.
+                    if (yield* stopTimer)
+                      return yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                    yield* jobs.cancel(job.id)
+                  }).pipe(Effect.ignore),
+                ),
+              )
+              const timerMoved = yield* stopTimer
+              // A command that exits before the call has seen it move is reported as finished, once: its marker is cleared
+              // and no notification follows.
+              const notificationID = result?.info.notificationID ?? timerMoved?.notificationID
+              if (result?.type === "backgrounded" && !(yield* Deferred.isDone(settled))) {
+                if (!timerMoved) yield* shell.timeout(info.id, 0)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
-                return backgroundResult(info.id, info.file)
+                return backgroundResult(info.id, info.file, timerMoved ? finalTimeout : undefined)
               }
+              if (notificationID) yield* jobs.completeBackground(notificationID)
               if (result?.info.status === "error")
                 return yield* new ToolFailure({
                   message: result.info.error ?? "Command failed",
@@ -318,7 +401,23 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
-        tool.description = description(ShellSelect.name(yield* compatibleShell))
+        const limit = limits(Config.latest(yield* config.entries(), "shell_tool"))
+        tool.description = description(ShellSelect.name(yield* compatibleShell), limit)
+        // The inputs are shared shallow copies, so this assigns a new object rather than changing the shared one.
+        const properties = tool.input.properties
+        tool.input = {
+          ...tool.input,
+          properties: {
+            ...(typeof properties === "object" && properties !== null ? properties : {}),
+            timeout: {
+              ...(typeof properties === "object" && properties !== null && "timeout" in properties
+                ? (properties.timeout as object)
+                : {}),
+              maximum: limit.max,
+              description: `Timeout in milliseconds for a foreground command, at most ${limit.max}. A foreground command that is still running then moves to the background. Background commands have no timeout unless one is given.`,
+            },
+          },
+        }
       })
     yield* ctx.session.hook("context", hook)
     yield* ctx.session.hook("compaction", hook)

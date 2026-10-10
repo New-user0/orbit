@@ -33,6 +33,11 @@ export function notice(output: Pick<Output, "exit" | "signal" | "timeout">) {
   if (output.exit !== undefined && output.exit !== 0) return `Exited with code ${output.exit}`
 }
 
+/** Why a foreground command that was still running came back as a background one. Holds only a number. */
+export function deadlineNotice(budget: number) {
+  return `The command was still running after ${budget} ms, so it keeps running in the background instead of being stopped. Use TaskStop with this shell ID to stop it.`
+}
+
 export function metadata(output: Output) {
   return {
     truncated: output.truncated,

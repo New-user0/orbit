@@ -906,7 +906,8 @@ runs" is a permission.
   step allowance. The owner decided this: `model` (top-level, in every agent, so also `title`, which
   receives a migrated `small_model`, and `side`, and in every command) and an agent's `steps` are
   `withhold("providers")`.
-  `fallback_model` and `output_token_cap` are withheld the same way (`test/config/trust.test.ts` pins each row). Never
+  `fallback_model`, `output_token_cap` and `shell_tool` (its timeouts are a budget; `test/config/shell-tool.test.ts` pins it)
+  are withheld the same way (`test/config/trust.test.ts` pins each of the others). Never
   classify such a field as inert.
 - Ask whose rules come last, and make sure that an untrusted source cannot be last. When a switch that guards gets
   enforced, as `hooks.disabled` has yet to be, read it in policy-authority order and not by value precedence, or a
