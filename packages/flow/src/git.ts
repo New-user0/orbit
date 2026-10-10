@@ -144,13 +144,20 @@ export async function diff(directory: string, base: string, limit = 40_000) {
   return text.length > limit ? `${text.slice(0, limit)}\n… diff cut at ${limit} characters` : text
 }
 
+// Whether `candidate` is a folder under `folder`, judged the way the platform compares paths: a drive letter or a folder
+// name that differs only in case is the same place on Windows, which a string prefix test misses.
+function inside(folder: string, candidate: string) {
+  const relative = path.relative(folder, candidate)
+  return relative !== "" && relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative)
+}
+
 /** Remove a run's worktrees and branches; returns how many of each went. */
 export async function clean(repository: string, run: string) {
   const prefix = runFolder(repository, run)
   const listed = (await ok(repository, ["worktree", "list", "--porcelain"]))
     .split("\n")
     .flatMap((line) => (line.startsWith("worktree ") ? [path.resolve(line.slice("worktree ".length))] : []))
-    .filter((directory) => directory.startsWith(prefix + path.sep))
+    .filter((directory) => inside(prefix, directory))
   for (const directory of listed) await ok(repository, ["worktree", "remove", "--force", directory])
   await ok(repository, ["worktree", "prune"])
   await rm(prefix, { recursive: true, force: true })

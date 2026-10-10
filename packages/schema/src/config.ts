@@ -149,6 +149,21 @@ export const Effective = Schema.Struct({
     description:
       "Whether Orbit reads other agent products' settings, skills, output styles and instruction files. Only your own config, ORBIT_CONFIG or ORBIT_CONFIG_CONTENT, organization-managed settings and ORBIT_DISABLE_COMPAT in the server's environment decide this; a repository's files cannot.",
   }),
+  permissions: Schema.optionalKey(
+    Schema.Struct({
+      bypass: Schema.Boolean.annotate({
+        description:
+          "Whether the mode that skips permission prompts may be selected. False when organization-managed settings set disable_bypass_permissions.",
+      }),
+      always: Schema.Boolean.annotate({
+        description:
+          "Whether an 'always' reply may save a grant. False when organization-managed settings set managed_permissions_only.",
+      }),
+    }).annotate({
+      description:
+        "What organization-managed settings leave open about permission prompts. Absent from a server that predates it, which clients read as bypass refused.",
+    }),
+  ),
 }).annotate({
   identifier: "Config.Effective",
   description:

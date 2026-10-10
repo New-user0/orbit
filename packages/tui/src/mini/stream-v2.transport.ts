@@ -53,6 +53,8 @@ type StreamInput = {
   footer: FooterApi
   onCommit?: (commit: StreamCommit) => void
   onSessionTitle?: (title: string) => void
+  /** Sees every live event of the session tree, for attention notifications. */
+  onEvent?: (event: RunV2Event) => void
   trace?: Trace
   signal?: AbortSignal
   onCatalogRefresh?: (signal?: AbortSignal) => unknown | Promise<unknown>
@@ -1018,6 +1020,8 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       (event.type === "form.created" || event.type === "form.replied" || event.type === "form.cancelled")
     ) {
       if (!sameLocation(event.location, input.location)) return
+      // An MCP elicitation is a global form: the person hears about it as they do about a session's own form.
+      input.onEvent?.(event)
       if (event.type === "form.created") {
         if (!state.globalForms.some((item) => item.id === event.data.form.id))
           state.globalForms.push(globalForm(event.data.form, event.location!))
@@ -1028,10 +1032,14 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       return
     }
     if (source !== input.sessionID) {
-      if (source) subagents.foreign(client, source, event, attempt.signal)
+      if (source) {
+        if (subagents.knows(source)) input.onEvent?.(event)
+        subagents.foreign(client, source, event, attempt.signal)
+      }
       return
     }
     input.trace?.write("recv.event", event)
+    input.onEvent?.(event)
     subagents.main(client, event, attempt.signal)
     if (event.type === "session.renamed") {
       input.onSessionTitle?.(event.data.title)

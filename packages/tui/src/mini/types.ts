@@ -395,7 +395,7 @@ export type FormCancel = {
 
 export type RunTuiConfig = Pick<
   Config.Resolved,
-  "keybinds" | "leader" | "theme" | "mini" | "prompt" | "session" | "cursor" | "animations"
+  "keybinds" | "leader" | "theme" | "mini" | "prompt" | "session" | "cursor" | "animations" | "attention"
 >
 
 export type MiniSettings = {

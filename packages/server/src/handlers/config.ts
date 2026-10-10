@@ -1,4 +1,5 @@
 import { Config } from "@orbit/core/config"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -11,7 +12,15 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
       "config.effective",
       Effect.fn(function* () {
         const config = yield* Config.Service
-        return { compatibility: yield* config.compatEnabled() }
+        const managed = yield* ManagedPolicy.Service
+        const restrictions = managed.current().restrictions
+        return {
+          compatibility: yield* config.compatEnabled(),
+          permissions: {
+            bypass: restrictions.disable_bypass_permissions !== true,
+            always: restrictions.managed_permissions_only !== true,
+          },
+        }
       }),
     )
     .handle(

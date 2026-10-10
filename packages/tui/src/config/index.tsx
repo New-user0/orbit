@@ -99,7 +99,13 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Scrolling behavior" }),
   attention: Schema.optional(
     Schema.Struct({
-      notifications: Schema.optional(Schema.Boolean).annotate({ description: "Show system notifications" }),
+      notifications: Schema.optional(Schema.Boolean).annotate({
+        description: "Show a notification when Orbit needs you and the terminal is blurred, through the chosen backend",
+      }),
+      backend: Schema.optional(Schema.Literals(["terminal", "system"])).annotate({
+        description:
+          "Where notifications appear: 'terminal' asks the terminal to show them; 'system' uses the operating system's notifications (notify-send on Linux, Notification Center on macOS, a toast on Windows), and falls back to the terminal when that fails",
+      }),
       sound: Schema.optional(Schema.Boolean).annotate({ description: "Play attention sounds" }),
       bell: Schema.optional(Schema.Boolean).annotate({
         description:
@@ -284,6 +290,7 @@ export type Info = Schema.Schema.Type<typeof Info>
 export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader" | "mouse" | "session" | "tabs"> & {
   attention: {
     notifications: boolean
+    backend: "terminal" | "system"
     sound: boolean
     bell: boolean
     idle_reminder: number
@@ -345,6 +352,7 @@ export function resolve(
     ...input,
     attention: {
       notifications: input.attention?.notifications ?? false,
+      backend: input.attention?.backend ?? "terminal",
       sound: input.attention?.sound ?? false,
       bell: input.attention?.bell ?? false,
       idle_reminder: Math.min(input.attention?.idle_reminder ?? 60, 86400),
