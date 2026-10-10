@@ -1106,7 +1106,7 @@ anything starts: a missing file, a folder, a device, a file over 4 MiB, JSON tha
 repeated flag are each refused before anything starts; `-p` and `run` print one line, and the interface, `loop`, `mini`
 and `debug config` print the error with a stack trace. A file saved as UTF-16 (Windows PowerShell 5.1 does this for `>`) is refused
 with a request to save it as UTF-8; an empty file is accepted, and an inherited `ORBIT_CONFIG` then still applies. Fields that do not fit the config schema are judged by the
-server, which logs them and drops the document; `orb debug config --settings ...` shows whether it arrived.
+server, which logs them and leaves them out (the whole document is dropped only when final validation fails); `orb debug config --settings ...` shows whether it arrived.
 
 A run with `--settings` uses a private server, like `--mcp-config`, so it starts a little slower, runs nothing on the
 background service, and cannot be combined with `--server`. With `--continue`, `--session` or `--resume` it stops when the

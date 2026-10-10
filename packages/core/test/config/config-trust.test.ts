@@ -1,4 +1,6 @@
+import nodeFs from "fs"
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Stream } from "effect"
@@ -509,7 +511,8 @@ describe("Config under workspace trust", () => {
       const above = path.join(folders.work, "orbit.json")
       yield* Effect.promise(() => write(above, { shell: "above-shell" }))
       yield* Effect.gen(function* () {
-        const entries = yield* (yield* Config.Service).entries()
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
         expect(entries.filter((entry) => entry.trusted !== undefined)).toEqual([])
         expect(named(entries, above)?.info.shell).toBe("above-shell")
       }).pipe(Effect.provide(loader(folders, { implicit: true })))
@@ -586,7 +589,8 @@ describe("Config explicit file", () => {
       const spellings = [project, ...(process.platform === "win32" ? [project.toUpperCase()] : [])]
       yield* Effect.forEach(spellings, (file) =>
         Effect.gen(function* () {
-          const entries = yield* (yield* Config.Service).entries()
+          const config = yield* Config.Service
+          const entries = yield* config.entries()
           expect(documents(entries).filter((entry) => entry.path === AbsolutePath.make(project))).toHaveLength(1)
           expect(named(entries, project)).toMatchObject({ scope: "project", trusted: false })
           expect(documents(entries).filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
@@ -599,46 +603,75 @@ describe("Config explicit file", () => {
 
   // Class 4 spellings of the project's own file that are not its lexical path: the 8.3 short name (Windows) and a link.
   // Each must still count as the file discovery loaded. The short folder is the CLI end-to-end row.
+  const shortOf = (target: string) =>
+    Bun.spawnSync(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "(New-Object -ComObject Scripting.FileSystemObject).GetFile($env:SHORT_OF).ShortPath",
+      ],
+      { env: { ...process.env, SHORT_OF: target } },
+    )
+      .stdout.toString()
+      .trim()
+  // Decided once at load, so a row that cannot run is reported as skipped and not as a pass.
+  const probe = nodeFs.mkdtempSync(path.join(os.tmpdir(), "orbit-probe-"))
+  const probeFile = path.join(probe, "a-long-file-name-for-probe.json")
+  nodeFs.writeFileSync(probeFile, "{}")
+  const hasShortNames = process.platform === "win32" && shortOf(probeFile) !== probeFile
+  const hasLinks = (() => {
+    try {
+      nodeFs.symlinkSync(probeFile, path.join(probe, "link.json"))
+      return true
+    } catch {
+      return false // unelevated Windows cannot make links
+    }
+  })()
+  nodeFs.rmSync(probe, { recursive: true, force: true })
+
   const spellings = [
-    ["the 8.3 short name of the file", "file"],
-    ["a link to the file", "link"],
+    ["the 8.3 short name of the file", "file", hasShortNames],
+    ["a link to the file", "link", hasLinks],
   ] as const
-  spellings.forEach(([name, kind]) =>
-    it.live(`does not load the project's own file a second time, unstamped, as ${name}`, () =>
+  spellings.forEach(([name, kind, available]) =>
+    describe.skipIf(!available)(name, () =>
+      it.live(`does not load the project's own file a second time, unstamped`, () =>
+        Effect.gen(function* () {
+          const folders = yield* layout
+          const project = path.join(folders.repo, "orbit.json")
+          const link = path.join(folders.work, "link.json")
+          if (kind === "link") yield* Effect.promise(() => fs.symlink(project, link))
+          const file = kind === "file" ? shortOf(project) : link
+          yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+            expect(documents(entries).filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
+            expect(JSON.stringify(entries.filter((entry) => entry.scope === "flag"))).not.toContain("echo project")
+          }).pipe(Effect.provide(loader(folders, { file })))
+        }),
+      ),
+    ),
+  )
+
+  // An explicit file whose folder cannot be searched must be skipped, as before, and not kill the load: its real path
+  // cannot be read, so the identity falls back to the lexical path. Needs POSIX modes and a non-root user.
+  describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)("unsearchable folder", () =>
+    it.live("skips an explicit file in a folder that cannot be searched and still loads the project", () =>
       Effect.gen(function* () {
         const folders = yield* layout
-        const project = path.join(folders.repo, "orbit.json")
-        const short = (target: string) =>
-          Bun.spawnSync(
-            [
-              "powershell.exe",
-              "-NoProfile",
-              "-Command",
-              "(New-Object -ComObject Scripting.FileSystemObject).GetFile($env:SHORT_OF).ShortPath",
-            ],
-            { env: { ...process.env, SHORT_OF: target } },
-          )
-            .stdout.toString()
-            .trim()
-        // Short names exist on Windows volumes that make them; elsewhere the row has nothing to test.
-        const shortFile = process.platform === "win32" ? short(project) : project
-        if (kind === "file" && shortFile === project) return
-        const link = path.join(folders.work, "link.json")
-        if (kind === "link") {
-          const made = yield* Effect.promise(() =>
-            fs.symlink(project, link).then(
-              () => true,
-              () => false, // unelevated Windows cannot make links
-            ),
-          )
-          if (!made) return
-        }
-        const file = kind === "file" ? shortFile : kind === "link" ? link : project
+        const locked = path.join(folders.work, "locked")
+        yield* Effect.promise(() => write(path.join(locked, "orbit.json"), { username: "hidden" }))
+        yield* Effect.promise(() => fs.chmod(locked, 0))
         yield* Effect.gen(function* () {
-          const entries = yield* (yield* Config.Service).entries()
-          expect(documents(entries).filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
-          expect(JSON.stringify(entries.filter((entry) => entry.scope === "flag"))).not.toContain("echo project")
-        }).pipe(Effect.provide(loader(folders, { file })))
+          const config = yield* Config.Service
+          const entries = yield* config.entries()
+          expect(named(entries, path.join(folders.repo, "orbit.json"))).toMatchObject({ scope: "project" })
+          expect(JSON.stringify(entries)).not.toContain("hidden")
+        }).pipe(
+          Effect.provide(loader(folders, { file: path.join(locked, "orbit.json") })),
+          Effect.ensuring(Effect.promise(() => fs.chmod(locked, 0o755))),
+        )
       }),
     ),
   )
@@ -649,14 +682,16 @@ describe("Config explicit file", () => {
       const other = path.join(folders.work, "team.json")
       yield* Effect.promise(() => write(other, { model: "team/model" }))
       yield* Effect.gen(function* () {
-        const entries = yield* (yield* Config.Service).entries()
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
         expect(named(entries, other)).toMatchObject({ scope: "flag" })
         expect(named(entries, other)?.trusted).toBeUndefined()
         expect(named(entries, other)?.info.model).toMatchObject({ providerID: "team", model: "model" })
       }).pipe(Effect.provide(loader(folders, { file: other })))
       const user = path.join(folders.globalConfig, "orbit.json")
       yield* Effect.gen(function* () {
-        const entries = yield* (yield* Config.Service).entries()
+        const config = yield* Config.Service
+        const entries = yield* config.entries()
         expect(documents(entries).filter((entry) => entry.path === AbsolutePath.make(user))).toMatchObject([
           { scope: "user" },
         ])

@@ -490,14 +490,18 @@ describe("what the private server loads", () => {
     return short === "" || short.toLowerCase() === target.toLowerCase() ? undefined : short
   }
 
-  test("the folder's own file, named from a folder spelled by its 8.3 short name, still loads once and withheld", async () => {
-    const short = shortName(project)
-    if (short === undefined) return
-    const list = await entries(["--settings", "./orbit.json"], { ORBIT_TRUST_PROJECT: undefined }, short)
-    expect(list.filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
-    expect(JSON.stringify(list.filter((entry) => entry.scope === "flag"))).not.toContain("project-shell")
-    expect(list.filter((entry) => entry.scope === "project")).toMatchObject([{ trusted: false }])
-  })
+  // Decided at load so a volume without short names reports a skip and not a pass.
+  const projectShort = shortName(project)
+  test.skipIf(projectShort === undefined)(
+    "the folder's own file, named from a folder spelled by its 8.3 short name, still loads once and withheld",
+    async () => {
+      const short = projectShort!
+      const list = await entries(["--settings", "./orbit.json"], { ORBIT_TRUST_PROJECT: undefined }, short)
+      expect(list.filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
+      expect(JSON.stringify(list.filter((entry) => entry.scope === "flag"))).not.toContain("project-shell")
+      expect(list.filter((entry) => entry.scope === "project")).toMatchObject([{ trusted: false }])
+    },
+  )
 
   // `orb <folder> --settings s.json` opens the interface in <folder>, but the name is the one typed where the command
   // was typed. The folder it opens holds a file of that name that does not parse, so reading it would be refused. The
@@ -527,6 +531,17 @@ describe("what the private server loads", () => {
     )
     expect(result.code).toBe(1)
     expect(result.stdout + result.stderr).toMatch(/trust/i)
+  })
+
+  // The parser accepts any count; the handler names the bound. Run as a process so restoring a parser bound of 2 fails.
+  test("a third --settings reaches the handler through the real command, in one line", async () => {
+    const result = await orb(
+      ["debug", "config", "--settings", "a.json", "--settings", "b.json", "--settings", "c.json"],
+      base,
+      project,
+    )
+    expect(result.code).not.toBe(0)
+    expect(result.stderr + result.stdout).toContain("--settings was given 3 times; give one file or one JSON value")
   })
 })
 

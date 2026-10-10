@@ -364,25 +364,29 @@ export const layer = (options?: Options) =>
         // not load it a second time, unstamped, in the flag scope, where an untrusted folder's trust no longer applies.
         // Compared by real path, folding case where the file system does. On Windows the runtime's own link resolution
         // leaves an 8.3 short name (PROGRA~1) as typed, so the native real path, which expands it, is taken as well.
+        // A real path that cannot be read (a folder without search permission) falls back to the lexical path: the read
+        // that follows fails the same way and is skipped, so nothing loads twice and nothing dies here.
         const identity = (file: string) =>
-          fs
-            .resolve(file)
-            .pipe(
-              Effect.map((real) => (process.platform === "win32" ? FSUtil.normalizePath(real).toLowerCase() : real)),
-            )
-        const claimed = yield* Effect.forEach(
-          [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
-            entries ? [...entries.base, ...entries.local] : [],
-          ),
-          (entry) => (entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined)),
-        )
-        const explicit =
-          sources.explicit && !claimed.includes(yield* identity(sources.explicit))
-            ? yield* loadFile(sources.explicit, "flag").pipe(
+          fs.resolve(file).pipe(
+            Effect.catch(() => Effect.succeed(path.resolve(file))),
+            Effect.map((real) => (process.platform === "win32" ? FSUtil.normalizePath(real).toLowerCase() : real)),
+          )
+        const explicit = sources.explicit
+          ? yield* Effect.gen(function* () {
+              const explicitIdentity = yield* identity(sources.explicit!)
+              const claimed = yield* Effect.forEach(
+                [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
+                  entries ? [...entries.base, ...entries.local] : [],
+                ),
+                (entry) => (entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined)),
+              )
+              if (claimed.includes(explicitIdentity)) return []
+              return yield* loadFile(sources.explicit!, "flag").pipe(
                 Effect.map((config) => (config ? [config] : [])),
                 Effect.orDie,
               )
-            : []
+            })
+          : []
         const content =
           options?.content !== undefined
             ? yield* ConfigVariable.substitute({
