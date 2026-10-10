@@ -490,7 +490,11 @@ describe("ShellScan.inspect cost", () => {
         stderr: "ignore",
         timeout: 8000,
       })
-      return Number(await new Response(child.stdout).text())
+      const elapsed = Number(await new Response(child.stdout).text())
+      // A child killed at its deadline prints nothing, which would read as zero and pass the ratio.
+      expect(await child.exited).toBe(0)
+      expect(Number.isFinite(elapsed) && elapsed > 0).toBe(true)
+      return elapsed
     }
     const small = await time(15000)
     const large = await time(60000)

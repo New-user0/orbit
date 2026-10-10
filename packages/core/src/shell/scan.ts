@@ -876,8 +876,6 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
   return { kind: "scanned", commands, roots, features }
 }
 
-const BRACKET_ELEMENT = /\[[^\]\s]*\]\+?=/y
-
 // Flags of the values in an array assignment, read lexically so a nested substitution is scanned only once, by
 // addSubstitutions. It mirrors the word loop for the expansions bash performs on array values (parameter, command,
 // arithmetic, process, glob with extglob, brace and tilde) and can over-report inside a substitution, which costs only
@@ -889,9 +887,8 @@ function arrayValueFlags(source: string) {
   let wordStart = true
   // The unquoted character just before this one, for extglob patterns such as !(x).
   let last = ""
-  // Where the current element starts, and whether it is a subscripted one ([1]=value), which expands ~ after = and :.
-  let elementStart = 0
-  let subscripted: boolean | undefined
+  // Whether the current element is a subscripted one ([1]=value), which expands ~ after = and :.
+  let subscripted = false
   // Same states as the bracket matcher of the word loop.
   let bracket = 0
   for (let index = 0; index < source.length; index++) {
@@ -905,14 +902,24 @@ function arrayValueFlags(source: string) {
     }
     const quoted = quote === "double"
     if (wordStart && !quoted && !/\s/.test(char)) {
-      elementStart = index
-      subscripted = undefined
+      // An element that opens with [ is subscripted, whatever the subscript holds; this only over-reports.
+      subscripted = char === "["
     }
     if (char === "\\") {
       index++
       wordStart = false
       if (bracket) bracket = 3
       continue
+    }
+    if (char === "$" && !quoted && source[index + 1] === "'") {
+      const literal = bashAnsiQuote(source, index + 1)
+      if (literal) {
+        if (literal.undecoded) flags.undecoded = true
+        index = literal.end
+        wordStart = false
+        if (bracket) bracket = 3
+        continue
+      }
     }
     if (char === "$" || char === "`") {
       const next = source[index + 1] ?? ""
@@ -943,11 +950,7 @@ function arrayValueFlags(source: string) {
     }
     if (!quoted && char === "~") {
       if (wordStart) flags.tilde = true
-      else if (before === "=" || before === ":") {
-        BRACKET_ELEMENT.lastIndex = elementStart
-        subscripted ??= BRACKET_ELEMENT.test(source)
-        if (subscripted) flags.tilde = true
-      }
+      else if ((before === "=" || before === ":") && subscripted) flags.tilde = true
     }
     if (!quoted && (char === "<" || char === ">") && source[index + 1] === "(") flags.process = true
     if (!quoted && char === "(" && "?*+@!".includes(before) && before) flags.glob = true
@@ -1224,7 +1227,8 @@ function bashExpansion(
 }
 
 // `undecoded` is set when bash reads an escape differently from this decoder: \x{..}, an escape that makes NUL (bash ends
-// the string there) and \c? (DEL). The value stays as scan() has always read it; inspect() treats the word as dynamic.
+// the string there), \c? (DEL), and a numeric escape of 0x80 or more (bash writes a raw byte) or above U+10FFFF. The
+// value stays as scan() has always read it; inspect() treats the word as dynamic and a heredoc delimiter is refused.
 function bashAnsiQuote(input: string, start: number) {
   let value = ""
   let undecoded = false
@@ -1252,12 +1256,21 @@ function bashAnsiQuote(input: string, start: number) {
     }
     if (escaped in simple) value += simple[escaped]
     else if (escaped === "c" && index + 1 < input.length) {
+      // Bash's lexer ends the string at the first quote no backslash escapes, so \c' closes it and bash keeps \c.
+      if (input[index + 1] === "'") {
+        value += "\\c"
+        continue
+      }
       const control = input[++index]
-      // Bash pairs the backslashes of \c\\ first, so the quote after them closes the string.
-      if (control === "\\" && index + 1 < input.length) index++
+      // A backslash control character swallows the next character in the lexer; the decoder drops it only when it is
+      // a second backslash (\c\\ is one 0x1c) and otherwise keeps it as plain text.
       const code = control.toUpperCase().charCodeAt(0) & 31
       if (control === "?" || code === 0) undecoded = true
       value += String.fromCharCode(code)
+      if (control === "\\" && index + 1 < input.length) {
+        index++
+        if (input[index] !== "\\") value += input[index]
+      }
     } else {
       if (escaped === "x" && input[index + 1] === "{") undecoded = true
       const digits =
@@ -1273,8 +1286,10 @@ function bashAnsiQuote(input: string, start: number) {
       if (!digits) value += `\\${escaped}`
       else {
         const octal = /[0-7]/.test(escaped)
-        const point = parseInt(digits, octal ? 8 : 16)
-        if (point === 0) undecoded = true
+        // Bash keeps one byte of an octal escape (\456 is "."), writes a raw byte for 0x80 and above, and keeps a
+        // \U above U+10FFFF as text; none of those is a code point here, so the word is dynamic.
+        const point = octal ? parseInt(digits, 8) & 0xff : parseInt(digits, 16)
+        if (point === 0 || point > 0x10ffff || (point >= 0x80 && escaped !== "u" && escaped !== "U")) undecoded = true
         value += point <= 0x10ffff ? String.fromCodePoint(point) : ""
         index += digits.length - (octal ? 1 : 0)
       }
@@ -1296,7 +1311,8 @@ function bashHeredocDelimiter(input: string, start: number) {
     if (!quote && /[ \t\n;&|()<>]/.test(char)) return started ? { delimiter, quoted, tabs, end } : undefined
     if (!quote && input.startsWith("$'", index)) {
       const literal = bashAnsiQuote(input, index + 1)
-      if (!literal) return
+      // A delimiter bash decodes differently would end the heredoc at the wrong line and hide the commands after it.
+      if (!literal || literal.undecoded) return
       delimiter += literal.value
       quoted = true
       started = true
