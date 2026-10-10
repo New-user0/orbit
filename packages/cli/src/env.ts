@@ -12,11 +12,19 @@ export const password = Config.redacted("ORBIT_PASSWORD").pipe(
   Config.withDefault(undefined),
 )
 
+// Server credentials, and the run's config overlay, which can hold MCP server settings and headers that tools in a
+// session's shell have no business reading.
+const withheld = new Set([
+  "ORBIT_PASSWORD",
+  "ORBIT_SERVER_PASSWORD",
+  "ORBIT_CONFIG_CONTENT",
+  "ORBIT_CONFIG_CONTENT_FILE",
+])
+
 export function session() {
   return Object.fromEntries(
     Object.entries(process.env).filter(
-      (entry): entry is [string, string] =>
-        entry[1] !== undefined && entry[0] !== "ORBIT_PASSWORD" && entry[0] !== "ORBIT_SERVER_PASSWORD",
+      (entry): entry is [string, string] => entry[1] !== undefined && !withheld.has(entry[0]),
     ),
   )
 }

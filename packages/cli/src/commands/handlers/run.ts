@@ -6,6 +6,7 @@ import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
 import { findResumeSession } from "../../session-target"
+import { ConfigOverlay } from "../../config-overlay"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -16,6 +17,8 @@ type HeadlessInput = {
   readonly standalone: boolean
   readonly trust: boolean
   readonly bare: boolean
+  readonly mcpConfig: ReadonlyArray<string>
+  readonly agents: Option.Option<string>
   readonly message: ReadonlyArray<string>
   readonly continue: boolean
   readonly session: Option.Option<string>
@@ -58,9 +61,15 @@ export function headlessInput(input: HeadlessInput) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
       process.env.ORBIT_DISABLE_INSTRUCTIONS = "1"
     }
+    // --mcp-config and --agents reach the private server through ORBIT_CONFIG_CONTENT_FILE, set here for the same reason.
+    const overlay = yield* ConfigOverlay.apply({
+      mcpConfig: input.mcpConfig,
+      agents: Option.getOrUndefined(input.agents),
+      server: Option.getOrUndefined(input.server),
+    })
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
-      standalone: input.standalone || input.bare,
+      standalone: input.standalone || input.bare || overlay,
       trust: input.trust,
     })
     const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
@@ -81,12 +90,23 @@ export function headlessInput(input: HeadlessInput) {
           }).pipe(Effect.catch((error) => Effect.succeed(error)))
     if (resumed instanceof Error) return reportRunError({ format, envelope: input.envelope }, resumed.message)
     const session = resumed?.id ?? Option.getOrUndefined(input.session)
+    if (overlay) {
+      const refused = yield* ConfigOverlay.refuseActive({
+        client,
+        session,
+        continue: input.continue,
+        directory: directory(),
+      }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
+      if (refused !== undefined) return reportRunError({ format, envelope: input.envelope }, refused)
+    }
     // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
     // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
     // script that asked for JSON gets JSON.
-    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session, strict: input.strict }).pipe(
-      Effect.catch((error) => Effect.succeed(errorMessage(error))),
-    )
+    const stopped = yield* trustRefusal(client, directory(), {
+      grant: input.trust,
+      session,
+      strict: input.strict,
+    }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
     if (stopped !== undefined) return reportRunError({ format, envelope: input.envelope }, stopped)
     yield* Effect.promise(() =>
       runNonInteractive({

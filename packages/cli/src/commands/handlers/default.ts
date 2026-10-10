@@ -9,6 +9,7 @@ import { ServerConnection } from "../../services/server-connection"
 import { Npm } from "@orbit/util/npm"
 import { ORBIT_ARTIFACT, ORBIT_CHANNEL, ORBIT_VERSION } from "../../version"
 import { Env } from "../../env"
+import { ConfigOverlay } from "../../config-overlay"
 import { Service } from "@orbit/client/effect/service"
 import { Orbit } from "@orbit/client/promise"
 import { findSession } from "../../session-target"
@@ -47,9 +48,15 @@ export default Runtime.handler(Commands, (input) =>
       Effect.forever,
       Effect.forkScoped,
     )
+    // A private server holds this run's --mcp-config and --agents; the file that carries them is removed on exit.
+    const overlay = yield* ConfigOverlay.apply({
+      mcpConfig: input.mcpConfig,
+      agents: Option.getOrUndefined(input.agents),
+      server: requestedServer,
+    })
     const server = yield* ServerConnection.resolve({
       server: requestedServer,
-      standalone: input.standalone,
+      standalone: input.standalone || overlay,
       mismatch: "replace",
       onStart: (reason, previousVersion) => {
         Queue.offerUnsafe(serviceStarts, { reason, previousVersion })
@@ -64,6 +71,13 @@ export default Runtime.handler(Commands, (input) =>
     // the session list with the value typed into its search.
     const resumeID = resume !== undefined && /^ses\S*$/.test(resume) ? resume : undefined
     const session = Option.getOrUndefined(input.session) ?? resumeID
+    if (overlay)
+      yield* ConfigOverlay.refuseActive({
+        client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+        session,
+        continue: input.continue,
+        directory: process.cwd(),
+      })
     // A missing --session ID becomes the ID of the session the first prompt creates.
     const sessionExists =
       session !== undefined &&

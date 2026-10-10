@@ -114,6 +114,22 @@ const PrintParams = {
   ),
 }
 
+// Config for this run only, which the interface takes as well as `orb -p` and `orb run`. They start a private server.
+const OverlayParams = {
+  mcpConfig: Flag.string("mcp-config").pipe(
+    Flag.withDescription(
+      'MCP servers for this run only: a JSON file, or the JSON itself, shaped {"servers": {"<name>": {"type": "local", "command": ["<program>"]}}}. Repeat the flag to add more. Relative program and cwd paths in a file are taken from that file\'s folder. Runs on a private server and cannot be combined with --server',
+    ),
+    Flag.atMost(20),
+  ),
+  agents: Flag.string("agents").pipe(
+    Flag.withDescription(
+      'Agents for this run only: a JSON file, or the JSON itself, shaped {"<name>": {"system": "...", "description": "..."}}, applied over the config. Runs on a private server and cannot be combined with --server',
+    ),
+    Flag.optional,
+  ),
+}
+
 // What the interface takes as well as `orb -p`, so a plain `orb` run does not refuse them.
 const ModelParams = {
   model: Flag.string("model").pipe(
@@ -190,6 +206,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
     ...SessionParams,
     ...PrintParams,
     ...ModelParams,
+    ...OverlayParams,
     prompt: Flag.string("prompt").pipe(Flag.withDescription("Prompt to use"), Flag.optional),
   },
   commands: [
@@ -718,6 +735,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           Flag.withDefault("default"),
         ),
         ...HeadlessParams,
+        ...OverlayParams,
         ...PermissionParams,
       },
     }),
@@ -896,6 +914,7 @@ export const Print = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NA
     ...HeadlessResumeParams,
     ...PrintParams,
     ...ModelParams,
+    ...OverlayParams,
     print: PrintFlag,
     message: Argument.string("message").pipe(
       Argument.withDescription("Message to send"),
@@ -913,6 +932,8 @@ export const RootValueFlags = {
     "prompt",
     "model",
     "agent",
+    "mcp-config",
+    "agents",
     "output-format",
     "json-schema",
     "max-steps",

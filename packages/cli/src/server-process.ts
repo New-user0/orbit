@@ -82,6 +82,21 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             : randomBytes(32).toString("base64url")
       if (!password) return yield* Effect.fail(new Error("Missing server password"))
       const instanceID = randomUUID()
+      // The CLI hands a private server its run-scoped config as a file, because the environment is size limited; the
+      // file wins over ORBIT_CONFIG_CONTENT, which the CLI has already merged into it. The shared service never reads
+      // one: a variable that happened to be set when it started must not shape every client's config.
+      const overlayFile = process.env.ORBIT_CONFIG_CONTENT_FILE
+      delete process.env.ORBIT_CONFIG_CONTENT_FILE
+      const overlay =
+        overlayFile === undefined || options.mode === "service"
+          ? undefined
+          : yield* Effect.tryPromise({
+              try: async () => {
+                const { ConfigOverlay } = await import("./config-overlay")
+                return ConfigOverlay.consume(overlayFile)
+              },
+              catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+            })
       const server = yield* start(
         {
           app: {
@@ -105,11 +120,9 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           },
           config: {
             directory: process.env.ORBIT_CONFIG_DIR,
-            project: !truthy(
-              process.env.ORBIT_CONFIG_PROJECT_DISABLE ?? process.env.ORBIT_DISABLE_PROJECT_CONFIG,
-            ),
+            project: !truthy(process.env.ORBIT_CONFIG_PROJECT_DISABLE ?? process.env.ORBIT_DISABLE_PROJECT_CONFIG),
             file: process.env.ORBIT_CONFIG,
-            content: process.env.ORBIT_CONFIG_CONTENT,
+            content: overlay ?? process.env.ORBIT_CONFIG_CONTENT,
           },
           trust: trustOptions(options.mode, process.env),
           windows: {

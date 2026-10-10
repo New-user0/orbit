@@ -1007,6 +1007,27 @@ approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini
 
 **What to do:** Nothing.
 
+### `--mcp-config` and `--agents` add MCP servers and agents for one run
+
+`orb`, `orb run` and `orb -p` take `--mcp-config` (repeatable) and `--agents`. Each value is a JSON file or the JSON
+itself (comments and trailing commas are allowed). `--mcp-config` takes `{"servers": {"<name>": {"type": "local",
+"command": ["<program>"]}}}`, the shape of the `mcp` key, and `--agents` takes a map from agent name to the same fields as
+the `agents` key. A relative program or `cwd` in a file means the folder of that file. Another product's `mcpServers` map
+is refused with a hint. The values are checked before anything starts, an error names the flag and the path inside the
+value, and the merged document may not pass 4 MiB. They layer over `ORBIT_CONFIG_CONTENT`, then `--mcp-config` in order,
+then `--agents`.
+
+A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not touch the
+background service. The config reaches that server in a file in Orbit's temporary folder that only your user can open,
+which the server deletes when it has read it. The environment that `orb` hands to a session no longer carries
+`ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
+the run stops when the background service reports that session as running, because two servers would run it at once;
+an `orb` that opens the session list cannot tell, and does not check.
+
+**Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
