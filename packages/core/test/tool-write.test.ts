@@ -325,6 +325,33 @@ describe("WriteTool", () => {
     ),
   )
 
+  it.live("Write to a symlink loop fails as a tool error", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (active) => {
+        const fixture = makeWriteFixture()
+        return Effect.promise(() =>
+          fs
+            .symlink("loopb", path.join(active.path, "loopa"))
+            .then(() => fs.symlink("loopa", path.join(active.path, "loopb")))
+            .then(
+              () => true,
+              () => false,
+            ),
+        ).pipe(
+          Effect.flatMap((linked) =>
+            !linked
+              ? Effect.void
+              : withTool(active.path, fixture, (registry) =>
+                  executeTool(registry, call({ file_path: "loopa", content: "x" })),
+                ).pipe(Effect.tap((result) => Effect.sync(() => expect(result.status).toBe("error")))),
+          ),
+        )
+      },
+      (active) => Effect.promise(() => active[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("approves an explicit external absolute path before edit", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),

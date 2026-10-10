@@ -104,6 +104,16 @@ export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
   return synced.text
 })
 
+// The key is the file's long name (for a file that exists; a new file keeps the spelling it is given) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock. A path that cannot be resolved keeps its lexical key.
+function lockKey(target: string) {
+  const lexical = FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target)))
+  try {
+    return FSUtil.resolve(lexical)
+  } catch {
+    return lexical
+  }
+}
+
 /** Share transaction locks across Location graphs that address the same file. */
 const transactionLocks = KeyedMutex.makeUnsafe<string>()
 
@@ -117,14 +127,12 @@ const layer = Layer.effect(
     const environment = yield* Environment.Service
     const locks = KeyedMutex.makeUnsafe<string>()
     const withLock: Interface["withLock"] = (targets) => (effect) =>
-      // The key is the file's long name (for a file that exists; a new file keeps the spelling it is given) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock.
-      [
-        ...new Set(
-          targets.map((target) => FSUtil.resolve(FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target))))),
-        ),
-      ]
-        .sort()
-        .reduceRight((result, target) => transactionLocks.withLock(target)(result), effect)
+      // Keys are computed inside the effect: a path that cannot be resolved (a link loop, no access) must reach the tool as its own error, not a defect.
+      Effect.suspend(() =>
+        [...new Set(targets.map(lockKey))]
+          .sort()
+          .reduceRight((result, target) => transactionLocks.withLock(target)(result), effect),
+      )
     const withTargetLock =
       (target: Target) =>
       <A, E, R>(effect: Effect.Effect<A, E, R>) =>

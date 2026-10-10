@@ -7,6 +7,7 @@ import { FileDiff } from "@orbit/schema/file-diff"
 import { Effect, Result, Schema } from "effect"
 import { Bom } from "@orbit/util/bom"
 import { FSUtil } from "@orbit/util/fs-util"
+import { statSync } from "fs"
 import path from "path"
 import { Environment } from "../../environment/index.js"
 import { Formatter } from "../../formatter.js"
@@ -420,13 +421,26 @@ export const Plugin = {
 }
 
 /**
- * One name per file: links followed, the parent's real path for a file that does not exist yet, and case folded where
- * the file system ignores case, so two spellings of a file never look like two files.
+ * One name per file. A file that exists is its device and inode, so two spellings (letter case on any case-insensitive
+ * file system, links, hard links) are one file. A file that does not exist yet is its parent's real path plus its name,
+ * folded where the platform ignores case.
  */
 function fileIdentity(absolute: string) {
   const full = FSUtil.resolve(absolute)
+  const stat = existing(full)
+  if (stat && stat.ino !== 0n) return `${stat.dev}:${stat.ino}`
   const identity = path.join(FSUtil.resolve(path.dirname(full)), path.basename(full))
   return process.platform === "win32" || process.platform === "darwin" ? identity.toLowerCase() : identity
+}
+
+/** ENOENT and ENOTDIR mean the file is not there yet; any other error is a refusal. */
+function existing(full: string) {
+  try {
+    return statSync(full, { bigint: true })
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return
+    throw error
+  }
 }
 
 function errorMessage(error: unknown) {

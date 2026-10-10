@@ -587,6 +587,16 @@ describe("PatchTool", () => {
       patch: "*** Begin Patch\n*** Update File: s.txt\n@@\n-src\n+SRC\n*** Delete File: S.TXT\n*** End Patch",
     },
     {
+      name: "Move to a hard link of the source",
+      needs: "hardlink",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n*** Move to: hard.txt\n@@\n-src\n+SRC\n*** End Patch",
+    },
+    {
+      name: "Add File by two case spellings of a name that does not exist",
+      needs: "fold",
+      patch: "*** Begin Patch\n*** Add File: n.txt\n+a\n*** Add File: N.TXT\n+b\n*** End Patch",
+    },
+    {
       name: "Add File by a link, Delete File by the real name",
       needs: "link",
       patch: "*** Begin Patch\n*** Add File: link.txt\n+new\n*** Delete File: s.txt\n*** End Patch",
@@ -599,6 +609,16 @@ describe("PatchTool", () => {
           const source = path.join(directory, "s.txt")
           yield* Effect.promise(() => fs.writeFile(source, "src\n"))
           if (row.needs === "case" && !(yield* exists(path.join(directory, "S.TXT")))) return
+          if (row.needs === "fold" && process.platform !== "win32" && process.platform !== "darwin") return
+          if (row.needs === "hardlink") {
+            const linked = yield* Effect.promise(() =>
+              fs.link(source, path.join(directory, "hard.txt")).then(
+                () => true,
+                () => false,
+              ),
+            )
+            if (!linked) return
+          }
           if (row.needs === "link") {
             const linked = yield* Effect.promise(() =>
               fs.symlink(source, path.join(directory, "link.txt")).then(

@@ -1411,7 +1411,7 @@ have been read by the session and unchanged since, as an `Add File` target must:
 `file.unread` or `file.stale` and nothing is written.
 
 `patch` now also refuses, before anything is asked, a patch that reaches one file under two names: a `Move to` that
-names its own source (the same path, another letter case on a case-insensitive file system, or a link to it), or two
+names its own source (the same path, another letter case on any case-insensitive file system, or a link or hard link to it), or two
 hunks that name one file by different spellings. Such a patch used to delete the file. Rename a file's letter case with
 the shell instead. An `Add File` over an existing file now keeps that file's byte-order mark, as `write` does.
 
