@@ -37,7 +37,13 @@ describe("ShellScan.inspect powershell redirects", () => {
     const command = only(`Get-Date ${merge}`)
     expect(command.words).toEqual(["Get-Date"])
     expect(command.redirects).toHaveLength(1)
-    expect(command.redirects[0]).toMatchObject({ operator: ">&", write: false, dynamic: false, nullSink: false })
+    expect(command.redirects[0]).toMatchObject({
+      operator: ">&",
+      raw: merge.slice(-1),
+      write: false,
+      dynamic: false,
+      nullSink: false,
+    })
     expect(command.redirects[0].target).toBeUndefined()
   })
 
@@ -65,18 +71,55 @@ describe("ShellScan.inspect powershell redirects", () => {
     expect(commands.map((command) => command.redirects.map((redirect) => redirect.target))).toEqual([["a"], [], ["c"]])
   })
 
+  // Windows PowerShell 5.1 ends an expression token at ">" and does not end a generic argument there:
+  // `Write-Output a>f` prints "a>f" and creates no file, while `$v>f` writes f.
   test.each([
-    ["Write-Output a>f", "f"],
-    ["Write-Output a>>f", "f"],
-    ["Write-Output a> f", "f"],
-    ['Write-Output a>"f g"', "f g"],
-  ])("a > glued to a token still redirects: %s", (input, target) => {
-    expect(only(input).redirects.map((redirect) => [redirect.target, redirect.write])).toEqual([[target, true]])
+    ["$v>f", ">", "f"],
+    ["$v>>f", ">>", "f"],
+    ["${v}>f", ">", "f"],
+    ["$(Get-Date)>f", ">", "f"],
+    ["@(1)>f", ">", "f"],
+    ["$x.Length>f", ">", "f"],
+    ["$x[0]>f", ">", "f"],
+    ["$v>'f g'", ">", "f g"],
+    ['$v>"f g"', ">", "f g"],
+  ])("a > ends an expression token: %s", (input, operator, target) => {
+    const result = scanned(input)
+    expect(result.statements.flatMap((item) => item.redirects)).toMatchObject([{ operator, target, write: true }])
   })
 
-  test("a > glued to a token cannot hide a computed target", () => {
-    expect(only("Write-Output a>$p").redirects[0]).toMatchObject({ target: "$p", dynamic: true })
-    expect(only("Write-Output a>(Join-Path a b)").redirects[0].dynamic).toBe(true)
+  // Each row wrote a file outside the working folder in Windows PowerShell 5.1. The glued target must read the
+  // same as the spaced one, which decodes escapes and flags expansions.
+  test.each([
+    [String.raw`$v>${"$"}{env:R74}\escape-env.txt`, String.raw`${"$"}{env:R74}\escape-env.txt`, true],
+    ["$v>.`.`/escape-backtick.txt", "../escape-backtick.txt", false],
+    ["$v>..`\\escape-backslash.txt", "..\\escape-backslash.txt", false],
+    [String.raw`$(Get-Date)>${"$"}{HOME}\.ssh\authorized_keys`, String.raw`${"$"}{HOME}\.ssh\authorized_keys`, true],
+    ["$v>$HOME/f", "$HOME/f", true],
+    ["$v>(Join-Path a b)", "(Join-Path a b)", true],
+    ["$v>*.log", "*.log", true],
+    ["$v>~/f", "~/f", true],
+    ["$v>$null", "$null", false],
+  ])("a glued target reads like a spaced one: %s", (glued, target, dynamic) => {
+    const spaced = glued.replace(">", " > ")
+    for (const input of [glued, spaced]) {
+      const redirects = scanned(input).statements.flatMap((item) => item.redirects)
+      expect(redirects).toHaveLength(1)
+      expect(redirects[0].dynamic).toBe(target === "$null" ? false : dynamic)
+      expect(redirects[0].target).toBe(target)
+    }
+  })
+
+  test.each([
+    "Write-Output a>f",
+    "Write-Output a>>f",
+    "Write-Output a> f",
+    'Write-Output a>"f g"',
+    "Write-Output a>$p",
+    "Write-Output a$env:OS>f",
+    "Write-Output a<#b#> x",
+  ])("a > inside a generic argument is text: %s", (input) => {
+    expect(only(input).redirects).toEqual([])
   })
 
   test("a missing target is opaque syntax", () => {
@@ -114,9 +157,22 @@ describe("ShellScan.inspect powershell expression statements", () => {
     expect(result.commands.map((item) => item.redirects.map((redirect) => redirect.target))).toEqual([["b"]])
   })
 
-  test("an expression with nothing to report is not a statement entry", () => {
-    expect(scanned("$x.Length").statements).toEqual([])
-    expect(scanned("'x'").statements).toEqual([])
+  test.each(["$x.Length", "'x'", "[Environment]::CurrentDirectory", "$(1)", "(1)", "@{a=1}", "5", "[int]"])(
+    "an expression statement with nothing to report is still an entry: %s",
+    (input) => {
+      const result = scanned(input)
+      expect(result.commands).toEqual([])
+      // A subexpression's own expression statements follow the outer one.
+      expect(result.statements.length).toBeGreaterThanOrEqual(1)
+      expect(result.statements[0]).toMatchObject({ redirects: [], invocations: [] })
+      expect(result.statements[0].origin).toBeUndefined()
+    },
+  )
+
+  test("a command or a compound statement is not an expression entry", () => {
+    expect(scanned("Get-Date").statements).toEqual([])
+    expect(scanned("if ($x) { Get-Date }").statements.filter((item) => !item.origin)).toEqual([])
+    expect(scanned("$x = Get-Date").statements).toEqual([])
   })
 
   test("the grouped command of an expression statement stays nested", () => {
@@ -188,7 +244,7 @@ describe("ShellScan.inspect powershell invocations", () => {
   })
 
   test("a static property read is not an invocation", () => {
-    expect(scanned("[Environment]::CurrentDirectory").statements).toEqual([])
+    expect(scanned("[Environment]::CurrentDirectory").statements[0].invocations).toEqual([])
   })
 
   test("an instance call reports the member", () => {
@@ -202,7 +258,7 @@ describe("ShellScan.inspect powershell invocations", () => {
   })
 
   test("a property read reports none", () => {
-    expect(scanned("$x.Length").statements).toEqual([])
+    expect(statement("$x.Length").invocations).toEqual([])
     expect(only("Write-Output $x.Length").invocations).toEqual([])
     expect(only("Write-Output 1..3 .5 a.b").invocations).toEqual([])
   })
@@ -236,6 +292,29 @@ describe("ShellScan.inspect powershell invocations", () => {
     expect(only("Write-Output ${env:Path}").invocations).toEqual([{ kind: "env", name: "Path" }])
     expect(only('Write-Output "$env:HOME/x"').invocations).toEqual([{ kind: "env", name: "HOME" }])
     expect(only("Write-Output '$env:HOME'").invocations).toEqual([])
+  })
+
+  test.each([
+    ['Write-Output @"\n$env:R74S\n"@', ["R74S"]],
+    ['Write-Output @"\na ${env:R74S} b $env:Path\n"@', ["R74S", "Path"]],
+    ['@"\n$env:R74S\n"@ > f', ["R74S"]],
+    ['Write-Output @"\n$($env:Inner)\n"@', []],
+    ['Write-Output @"\n`$env:Escaped\n"@', []],
+    ["Write-Output @'\n$env:R74S\n'@", []],
+    ["cmd --% /c echo %R74S% %Path%", ["R74S", "Path"]],
+  ])("env reads in here-strings and after --%%: %j", (input, names) => {
+    const result = scanned(input)
+    const invocations = [...result.commands, ...result.statements].flatMap((item) => item.invocations)
+    expect(invocations.flatMap((item) => (item.kind === "env" ? [item.name] : []))).toEqual(names)
+  })
+
+  test.each<[string, ShellScan.Invocation]>([
+    ["[Array]::Empty[int]()", { kind: "static", type: "Array", member: "Empty" }],
+    ["[Array]::Empty[System.Collections.Generic.List[int]]()", { kind: "static", type: "Array", member: "Empty" }],
+    ["$list.ConvertAll[string]({ $_ })", { kind: "instance", member: "ConvertAll" }],
+    ["$t::Make[int]()", { kind: "static", type: "$t", member: "Make", dynamic: true }],
+  ])("a generic method call is reported: %s", (input, invocation) => {
+    expect(scanned(input).statements[0].invocations).toContainEqual(invocation)
   })
 
   test("the method call on the right of an assignment is reported", () => {
@@ -371,4 +450,189 @@ describe("ShellScan.inspect powershell opaque classes", () => {
   test("scanPowerShell keeps reporting the reason", () => {
     expect(ShellScan.scanPowerShell("Get-Date 7> out")).toEqual({ kind: "opaque", reason: "invalid-redirect" })
   })
+})
+
+// Each row ran .NET code or defined a command in Windows PowerShell 5.1 with nothing reported before.
+describe("ShellScan.inspect powershell .NET statements", () => {
+  test.each<[string, ShellScan.Invocation]>([
+    ["[IO.StreamWriter]'victim.txt'", { kind: "conversion", type: "IO.StreamWriter" }],
+    ['[IO.FileStream]"victim.txt"', { kind: "conversion", type: "IO.FileStream" }],
+    ["[IO.StreamWriter] 'victim.txt'", { kind: "conversion", type: "IO.StreamWriter" }],
+    ["[IO.StreamWriter]$path", { kind: "conversion", type: "IO.StreamWriter" }],
+    ["[IO.StreamWriter]($path)", { kind: "conversion", type: "IO.StreamWriter" }],
+    ["$w = [IO.StreamWriter]'victim.txt'", { kind: "conversion", type: "IO.StreamWriter" }],
+    ["[IO.StreamWriter]$w = 'victim.txt'", { kind: "conversion", type: "IO.StreamWriter" }],
+    ["'victim.txt' -as [IO.StreamWriter]", { kind: "conversion", type: "IO.StreamWriter" }],
+    ["$x = $p -AS [IO.FileInfo]", { kind: "conversion", type: "IO.FileInfo" }],
+  ])("a conversion is an invocation: %s", (input, invocation) => {
+    expect(scanned(input).statements.flatMap((item) => item.invocations)).toContainEqual(invocation)
+  })
+
+  test.each(["[IO.File]", "$a[0]", "[int].Name", "$h[$k]", "Write-Output 5"])("no conversion in %s", (input) => {
+    const result = scanned(input)
+    expect([...result.commands, ...result.statements].flatMap((item) => item.invocations)).toEqual([])
+  })
+
+  test.each<[string, ShellScan.Invocation]>([
+    ["(Get-Item a).IsReadOnly=$true", { kind: "setter", member: "IsReadOnly" }],
+    ["$f.IsReadOnly = $true", { kind: "setter", member: "IsReadOnly" }],
+    ["$f.Length += 1", { kind: "setter", member: "Length" }],
+    ["$w.AutoFlush = $true", { kind: "setter", member: "AutoFlush" }],
+    ["$f.$name = 1", { kind: "setter", member: "", dynamic: true }],
+    ["$f.'Name' = 1", { kind: "setter", member: "", dynamic: true }],
+    ["[Environment]::CurrentDirectory = 'x'", { kind: "setter", type: "Environment", member: "CurrentDirectory" }],
+    ["$t::Prop = 1", { kind: "setter", type: "$t", member: "Prop", dynamic: true }],
+    ["$x = Get-Item a; $x.Attributes = 'Hidden'", { kind: "setter", member: "Attributes" }],
+  ])("a member assignment is a setter: %s", (input, invocation) => {
+    const result = scanned(input)
+    expect([...result.commands, ...result.statements].flatMap((item) => item.invocations)).toContainEqual(invocation)
+  })
+
+  test("a member name before = outside an assignment is text", () => {
+    expect(only("Write-Output a.b=c").invocations).toEqual([])
+    expect(statement("$x -eq $y.Name").invocations).toEqual([])
+    expect(scanned("$x = $y.Name").statements.flatMap((item) => item.invocations)).toEqual([])
+  })
+
+  // Member access goes on over a line break after . or :: in an expression, so the next line is not a command.
+  test.each<[string, ShellScan.Invocation[] | undefined]>([
+    ["$f.\nDelete()", [{ kind: "instance", member: "Delete" }]],
+    ["$f.\r\nDelete()", [{ kind: "instance", member: "Delete" }]],
+    ["$f. \n  Delete()", [{ kind: "instance", member: "Delete" }]],
+    ["[IO.File]::\nDelete('x')", [{ kind: "static", type: "IO.File", member: "Delete" }]],
+    ["[IO.File]::\r\nDelete('x')", [{ kind: "static", type: "IO.File", member: "Delete" }]],
+    ["$t::\nDelete('x')", [{ kind: "static", type: "$t", member: "Delete", dynamic: true }]],
+    ["(Get-Item a).\nDelete()", [{ kind: "instance", member: "Delete" }]],
+    ["Write-Output (1).\nDelete()", [{ kind: "instance", member: "Delete" }]],
+    ["$w = [IO.StreamWriter]'victim-chain.txt'; $w.AutoFlush = $true; $w.\nWrite('payload')", undefined],
+  ])("a line break after . or :: continues the statement: %j", (input, invocations) => {
+    const result = scanned(input)
+    if (!invocations) {
+      expect(result.commands.map((command) => command.words[0])).not.toContain("Write")
+      expect(result.statements.flatMap((item) => item.invocations)).toEqual([
+        { kind: "conversion", type: "IO.StreamWriter" },
+        { kind: "setter", member: "AutoFlush" },
+        { kind: "instance", member: "Write" },
+      ])
+      return
+    }
+    expect(result.commands.map((command) => command.words[0])).not.toContain("Delete")
+    expect([...result.commands, ...result.statements].flatMap((item) => item.invocations)).toEqual(invocations)
+  })
+
+  test("a line break after a number, a path or a variable argument still ends the statement", () => {
+    for (const input of ["$x = 1.\nRemove-Item a", "cd .\nRemove-Item a", "cd ..\nRemove-Item a", "Write-Output $f.\nRemove-Item a"]) {
+      expect(scanned(input).commands.map((command) => command.words[0])).toContain("Remove-Item")
+    }
+  })
+})
+
+describe("ShellScan.inspect powershell command definitions", () => {
+  const features = (input: string) => scanned(input).features
+  test.each([
+    "${alias:Get-Content} = 'Remove-Item'; Get-Content victim.txt",
+    "$alias:gc = 'Remove-Item'",
+    "${ALIAS:gc}='Remove-Item'",
+    "[string]$alias:gc = 'Remove-Item'",
+    "Microsoft.PowerShell.Utility\\Set-Alias Get-Content Remove-Item; Get-Content victim.txt",
+    "microsoft.powershell.utility\\sal gc ri",
+    "Set-Item alias:gc Remove-Item",
+    "Set-Item -Path alias:gc -Value Remove-Item",
+    "New-Item -Path alias:gc -Value Remove-Item",
+  ])("an alias definition: %s", (input) => {
+    expect(features(input).aliasDefinition).toBe(true)
+  })
+
+  test.each([
+    "${function:Get-Content} = 'Remove-Item victim.txt'; Get-Content x",
+    "$function:f = { Remove-Item x }",
+    "${FUNCTION:f}='x'",
+    "Set-Item function:f { Remove-Item x }",
+    "New-Item -Path function:f -Value { Remove-Item x }",
+    "Set-Content function:f 'Remove-Item x'",
+  ])("a function definition: %s", (input) => {
+    expect(features(input).functionDefinition).toBe(true)
+  })
+
+  test.each(["Get-Item alias:gc", "Get-Content function:f", "$x = $alias:gc", "$x = $function:f", "Get-Alias gc", "Write-Output alias:gc"])(
+    "reading is not a definition: %s",
+    (input) => {
+      expect(features(input)).toMatchObject({ aliasDefinition: false, functionDefinition: false })
+    },
+  )
+})
+
+describe("ShellScan.inspect powershell types", () => {
+  test("the inspect overloads accept a dialect chosen at run time", () => {
+    const shell = (Math.random() > 2 ? "bash" : "powershell") as "bash" | "powershell"
+    expect(ShellScan.inspect("Get-Date", shell).kind).toBe("scanned")
+  })
+})
+
+describe("ShellScan.inspect powershell cost", () => {
+  // Each input ran in quadratic or worse time in the first version. A child process lets the deadline fire.
+  const hostile: Array<[string, string]> = [
+    ["receivers", `"Write-Output " + "a".repeat(30000) + " ::".repeat(20)`],
+    ["open type literals", `"Write-Output x" + "[a".repeat(30000)`],
+    ["open brackets", `"[".repeat(60000)`],
+    ["long receiver", `"a".repeat(60000) + " ::M()"`],
+    ["many receivers", `"x::y ".repeat(12000)`],
+    ["many members", `"$a.b ".repeat(12000)`],
+    ["many dots", `"a.b.c.d.e.".repeat(6000)`],
+    ["many casts", `"[int]1 ".repeat(8000)`],
+    ["many setters", `"$a.b = 1;".repeat(7000)`],
+    ["many env reads", `"$env:A ".repeat(12000)`],
+    ["here-string env reads", `'@"\\n' + "$env:A ".repeat(9000) + '\\n"@'`],
+    ["continued members", `"$a.\\n".repeat(15000)`],
+    ["many generics", `"$a.b[".repeat(12000)`],
+  ]
+  test.each(hostile)(
+    "%s finish under a deadline",
+    async (_name, expression) => {
+      const source = new URL("../../src/shell/scan.ts", import.meta.url).href
+      const child = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "-e",
+          `const { ShellScan } = await import(${JSON.stringify(source)}); ShellScan.inspect(${expression}, "powershell")`,
+        ],
+        stdout: "ignore",
+        stderr: "ignore",
+        timeout: 8000,
+      })
+      expect(await child.exited).toBe(0)
+    },
+    15000,
+  )
+
+  test.each([
+    ["receivers", (count: number) => `"Write-Output " + "a".repeat(${count}) + " ::".repeat(20)`],
+    ["open type literals", (count: number) => `"Write-Output x" + "[a".repeat(${count})`],
+    ["many receivers", (count: number) => `"x::y ".repeat(${count})`],
+  ])("%s grow linearly", async (_name, build) => {
+    const source = new URL("../../src/shell/scan.ts", import.meta.url).href
+    const time = async (count: number) => {
+      const child = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "-e",
+          `const { ShellScan } = await import(${JSON.stringify(source)});
+           const input = ${build(count)}; ShellScan.inspect(input, "powershell");
+           const start = performance.now(); for (let run = 0; run < 10; run++) ShellScan.inspect(input, "powershell"); console.log(performance.now() - start)`,
+        ],
+        stdout: "pipe",
+        stderr: "ignore",
+        timeout: 8000,
+      })
+      const elapsed = Number(await new Response(child.stdout).text())
+      // A child killed at its deadline prints nothing, which would read as zero and pass the ratio.
+      expect(await child.exited).toBe(0)
+      expect(Number.isFinite(elapsed) && elapsed > 0).toBe(true)
+      return elapsed
+    }
+    const small = await time(5000)
+    const large = await time(20000)
+    // Four times the input: linear is about 4x, quadratic is about 16x.
+    expect(large / small).toBeLessThan(10)
+  }, 30000)
 })
