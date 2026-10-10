@@ -302,7 +302,7 @@ describe("PatchTool", () => {
                     },
                   },
                 ])
-                expect(readsBeforeEditApproval).toBe(2)
+                expect(readsBeforeEditApproval).toBe(3)
                 expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "nested/new.txt"), "utf8"))).toBe(
                   "created\n",
                 )
@@ -1297,27 +1297,109 @@ describe("PatchTool", () => {
     ),
   )
 
-  it.live("overwrites an add target that appears during permission approval", () =>
-    Effect.acquireUseRelease(
-      Effect.promise(() => tmpdir()),
-      (tmp) => {
-        reset()
-        const target = path.join(tmp.path, "appeared.txt")
-        afterEditApproval = () => Effect.promise(() => fs.writeFile(target, "winner\n")).pipe(Effect.orDie)
-        return withTool(tmp.path, (registry) =>
+  it.live("fails edit.stale for an add target that appears during permission approval", () =>
+    withTempTool((directory, registry) => {
+      const target = path.join(directory, "appeared.txt")
+      afterEditApproval = () => Effect.promise(() => fs.writeFile(target, "winner\n")).pipe(Effect.orDie)
+      return Effect.gen(function* () {
+        expect(
+          yield* executeTool(registry, call("*** Begin Patch\n*** Add File: appeared.txt\n+replacement\n*** End Patch")),
+        ).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+        expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("winner\n")
+      })
+    }),
+  )
+
+  it.live("an update target changed during approval fails edit.stale and leaves every other path alone", () =>
+    withTempTool((directory, registry) => {
+      const b = path.join(directory, "b.txt")
+      afterEditApproval = () => Effect.promise(() => fs.writeFile(b, "external\n")).pipe(Effect.orDie)
+      return Effect.promise(() =>
+        Promise.all([fs.writeFile(b, "one\n"), fs.writeFile(path.join(directory, "c.txt"), "keep\n")]),
+      ).pipe(
+        Effect.andThen(
+          executeTool(
+            registry,
+            call(
+              "*** Begin Patch\n*** Add File: a.txt\n+new\n*** Update File: b.txt\n@@\n-one\n+ONE\n*** Delete File: c.txt\n*** End Patch",
+            ),
+          ),
+        ),
+        Effect.andThen((result) =>
           Effect.gen(function* () {
-            expect(
-              yield* executeTool(
-                registry,
-                call("*** Begin Patch\n*** Add File: appeared.txt\n+replacement\n*** End Patch"),
-              ),
-            ).toMatchObject({ status: "completed" })
-            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("replacement\n")
+            expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+            if (result.status !== "error") return
+            expect(result.error?.message).toContain("b.txt")
+            expect(result.error?.message).not.toContain("Completed before failure")
+            expect(yield* Effect.promise(() => fs.readFile(b, "utf8"))).toBe("external\n")
+            expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "c.txt"), "utf8"))).toBe("keep\n")
+            expect(yield* Effect.promise(() => fs.stat(path.join(directory, "a.txt")).catch(() => undefined))).toBe(
+              undefined,
+            )
           }),
+        ),
+      )
+    }),
+  )
+
+  it.live("a delete target changed during approval fails edit.stale and is not removed", () =>
+    withTempTool((directory, registry) => {
+      const target = path.join(directory, "doomed.txt")
+      afterEditApproval = () => Effect.promise(() => fs.writeFile(target, "external\n")).pipe(Effect.orDie)
+      return Effect.promise(() => fs.writeFile(target, "old\n")).pipe(
+        Effect.andThen(executeTool(registry, call("*** Begin Patch\n*** Delete File: doomed.txt\n*** End Patch"))),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("external\n")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("a move destination that appears during approval fails edit.stale and moves nothing", () =>
+    withTempTool((directory, registry) => {
+      const source = path.join(directory, "from.txt")
+      const destination = path.join(directory, "to.txt")
+      afterEditApproval = () => Effect.promise(() => fs.writeFile(destination, "winner\n")).pipe(Effect.orDie)
+      return Effect.promise(() => fs.writeFile(source, "one\n")).pipe(
+        Effect.andThen(
+          executeTool(
+            registry,
+            call("*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n-one\n+ONE\n*** End Patch"),
+          ),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+            expect(yield* Effect.promise(() => fs.readFile(source, "utf8"))).toBe("one\n")
+            expect(yield* Effect.promise(() => fs.readFile(destination, "utf8"))).toBe("winner\n")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("an update target touched during approval completes", () =>
+    withTempTool((directory, registry) => {
+      const target = path.join(directory, "touched.txt")
+      afterEditApproval = () =>
+        Effect.promise(() => fs.utimes(target, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000))).pipe(
+          Effect.orDie,
         )
-      },
-      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
+      return Effect.promise(() => fs.writeFile(target, "one\n")).pipe(
+        Effect.andThen(
+          executeTool(registry, call("*** Begin Patch\n*** Update File: touched.txt\n@@\n-one\n+ONE\n*** End Patch")),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result.status).toBe("completed")
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("ONE\n")
+          }),
+        ),
+      )
+    }),
   )
 
   it.live("preserves a later commit defect after earlier sequential applications", () =>

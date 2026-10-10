@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { FileMutation } from "@orbit/core/file-mutation"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { readNow } from "./fixture/ledger"
@@ -35,6 +35,7 @@ const writeToolNode = makeLocationNode({
     FileMutation.node,
     Environment.node,
     Formatter.node,
+    Location.node,
     Permission.node,
   ],
 })
@@ -45,16 +46,20 @@ const makeWriteFixture = () => {
     assertions: Permission.AssertInput[]
     writes: string[]
     denyAction?: string
+    // Runs inside the Edit permission assert, so it stands for a write that lands while the person is deciding.
+    afterApproval: () => Effect.Effect<void>
     formatFile: (target: string) => Effect.Effect<boolean>
   } = {
     assertions: [],
     writes: [],
+    afterApproval: () => Effect.void,
     formatFile: () => Effect.succeed(false),
   }
 
   const permission = permissionLayer({
     assert: (input) =>
       Effect.sync(() => fixture.assertions.push(input)).pipe(
+        Effect.andThen(input.action === "Edit" ? Effect.suspend(() => fixture.afterApproval()) : Effect.void),
         Effect.andThen(
           input.action === fixture.denyAction
             ? Effect.fail(
@@ -575,6 +580,95 @@ describe("WriteTool", () => {
             false,
             "real",
           ),
+        ),
+      )
+    }),
+  )
+
+  // An external write while the person decides. Whatever the other writer left must stay.
+  const stale: ReadonlyArray<{
+    readonly name: string
+    readonly before: string | undefined
+    readonly during: (target: string) => Promise<unknown>
+    readonly bytes: string | undefined
+  }> = [
+    { name: "an existing file changes", before: "old", during: (t) => fs.writeFile(t, "external"), bytes: "external" },
+    { name: "a new file appears", before: undefined, during: (t) => fs.writeFile(t, "external"), bytes: "external" },
+    { name: "an existing file is deleted", before: "old", during: (t) => fs.rm(t), bytes: undefined },
+  ]
+  for (const item of stale)
+    it.live(`fails edit.stale and writes nothing when ${item.name} during approval`, () =>
+      withTempDir((tmp) => {
+        const fixture = makeWriteFixture()
+        const target = path.join(tmp.path, "target.txt")
+        fixture.afterApproval = () => Effect.promise(() => item.during(target))
+        return Effect.promise(async () => item.before !== undefined && fs.writeFile(target, item.before)).pipe(
+          Effect.andThen(
+            withTool(tmp.path, fixture, (registry) =>
+              executeTool(registry, call({ file_path: "target.txt", content: "mine" })),
+            ),
+          ),
+          Effect.andThen((result) =>
+            Effect.gen(function* () {
+              expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+              expect(fixture.writes).toEqual([])
+              expect(yield* Effect.promise(() => fs.readFile(target, "utf8").catch(() => undefined))).toBe(item.bytes)
+            }),
+          ),
+        )
+      }),
+    )
+
+  it.live("completes when the file is touched during approval", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "target.txt")
+      fixture.afterApproval = () =>
+        Effect.promise(() => fs.utimes(target, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000)))
+      return Effect.promise(() => fs.writeFile(target, "old")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            executeTool(registry, call({ file_path: "target.txt", content: "mine" })),
+          ),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "completed" })
+            expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("mine")
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("holds the transaction lock, so a second write waits for the first one's approval", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      return Effect.gen(function* () {
+        const release = yield* Deferred.make<void>()
+        fixture.afterApproval = () => (fixture.assertions.length === 1 ? Deferred.await(release) : Effect.void)
+        return yield* withTool(tmp.path, fixture, (registry) =>
+          Effect.gen(function* () {
+            const first = yield* executeTool(registry, call({ file_path: "f.txt", content: "first" }, "call-1")).pipe(
+              Effect.forkChild,
+            )
+            yield* Effect.sleep("100 millis")
+            const second = yield* executeTool(registry, call({ file_path: "f.txt", content: "second" }, "call-2")).pipe(
+              Effect.forkChild,
+            )
+            yield* Effect.sleep("200 millis")
+            const waiting = fixture.assertions.length
+            yield* Deferred.succeed(release, undefined)
+            return { waiting, results: [yield* Fiber.join(first), yield* Fiber.join(second)] }
+          }),
+        )
+      }).pipe(
+        Effect.andThen((outcome) =>
+          Effect.gen(function* () {
+            expect(outcome.waiting).toBe(1)
+            expect(outcome.results.map((result) => result.status)).toEqual(["completed", "completed"])
+            expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "f.txt"), "utf8"))).toBe("second")
+          }),
         ),
       )
     }),

@@ -312,6 +312,7 @@ export const Plugin = {
                 source: permissionSource,
               })
               const replacementBom = replaced.startsWith("\uFEFF")
+              yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, original)
               const result = yield* fileMutation.write({
                 target,
                 content: Bom.join(replaced, original.bom || replacementBom),

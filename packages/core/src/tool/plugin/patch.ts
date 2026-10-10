@@ -132,6 +132,23 @@ export const Plugin = {
               const prepared: Prepared[] = []
               const updates = new Map<string, string>()
               const places: string[] = []
+              // Each path's state when it was first read, before anyone is asked: absent, or the snapshot. Rechecked after approval.
+              const states = new Map<string, { display: string; snapshot: FileMutation.Snapshot | undefined }>()
+              const probe = (target: { readonly absolute: string }, display: string) =>
+                FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                  Effect.catchTag("Environment.NotFound", () => Effect.undefined),
+                  Effect.mapError(
+                    (error) =>
+                      new ToolFailure({
+                        message: `patch verification failed: Failed to read ${target.absolute}: ${errorMessage(error)}`,
+                      }),
+                  ),
+                  Effect.tap((snapshot) =>
+                    Effect.sync(() => {
+                      if (!states.has(target.absolute)) states.set(target.absolute, { display, snapshot })
+                    }),
+                  ),
+                )
               const resolveTarget = Effect.fnUntraced(function* (value: string) {
                 const target = yield* access.resolve({ path: value, kind: "file" })
                 // Every file the patch reaches so far, a move's source and destination included, before anything is asked.
@@ -148,7 +165,9 @@ export const Plugin = {
                 yield* Effect.gen(function* () {
                   const target = yield* resolveTarget(hunk.path)
                   if (hunk.type === "add") {
-                    yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path)
+                    yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
+                    const existing = yield* probe(target, hunk.path)
+                    yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, existing)
                     const content =
                       hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
                     prepared.push({
@@ -177,7 +196,10 @@ export const Plugin = {
                           ),
                         )
                       : undefined
-                  if (snapshot) yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, snapshot)
+                  if (snapshot) {
+                    yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, snapshot)
+                    if (!states.has(target.absolute)) states.set(target.absolute, { display: hunk.path, snapshot })
+                  }
                   if (hunk.type === "delete") {
                     prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
                     return
@@ -189,6 +211,7 @@ export const Plugin = {
                     catch: (error) => new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                   })
                   const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                  if (moveTarget && hunk.movePath) yield* probe(moveTarget, hunk.movePath)
                   prepared.push({
                     ...hunk,
                     target,
@@ -232,6 +255,14 @@ export const Plugin = {
                 agent: context.agent,
                 source,
               })
+
+              // Every path before the first write, so a stale one leaves no partial patch.
+              yield* Effect.forEach(
+                states,
+                ([absolute, state]) =>
+                  FileMutation.assertUnchanged(environment.files, absolute, state.display, state.snapshot),
+                { discard: true },
+              )
 
               yield* Effect.forEach(
                 prepared,

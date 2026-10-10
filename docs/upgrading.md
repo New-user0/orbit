@@ -858,6 +858,24 @@ message is not affected.
 **What to do:** Nothing for code that does not read the type. If you match on `tool.execution`, also match the types
 above, or match the type of the failure you care about.
 
+### A file that changes while its edit waits for approval is not overwritten
+
+`edit`, `write`, `patch` and `notebook_edit` used to write the bytes they had prepared even when the file changed while
+the person was deciding. They now read every file they will write once more after approval, and write nothing if any of
+them differs from what was shown: the call fails with the error type `edit.stale`. The file keeps the other writer's
+content, and a file that appeared or vanished in the meantime counts as changed. For `patch` this covers every path, the
+destination of a move included, and no path is written when one is stale. Only content counts: a file that was touched
+or rewritten with the same bytes is not stale, but a change of line endings alone or of a leading byte-order mark is.
+
+`write` now also waits for any other Orbit change to the same file, as `edit` already did. A file that cannot be read
+after approval counts as changed. `edit.stale` differs from `file.stale`: the first means the file changed during the
+approval, the second that it changed since the session last read it. After either, read the file again and retry.
+
+**Affects:** code that reads a failed tool call's `error.type`, and anyone whose editor, formatter or script writes a file
+while a change to it is waiting for approval: the change now fails instead of overwriting.
+
+**What to do:** Read the file again and repeat the change. Nothing for code that does not read the type.
+
 ### Messages say how they were delivered, and a prompt can carry turn options
 
 A `user` message and a `synthetic` message now carry a `delivery` field, `steer` or `queue`: the delivery that the input

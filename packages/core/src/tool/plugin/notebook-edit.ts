@@ -93,6 +93,7 @@ export const Plugin = {
                 source: { type: "tool" as const, messageID: context.messageID, id: context.id },
               })
               // Notebooks skip the formatter: reformatting JSON would rewrite every line of the file.
+              yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.notebook_path, original)
               const result = yield* fileMutation.write({ target, content: after })
               yield* ledger.recordWrite(
                 context.sessionID,

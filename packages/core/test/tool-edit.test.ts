@@ -53,6 +53,8 @@ const makeEditFixture = () => {
     // Makes every read fail the way a file system does.
     failReads: boolean
     afterRead: () => Effect.Effect<void>
+    // Runs inside the Edit permission assert, so it stands for a write that lands while the person is deciding.
+    afterApproval: () => Effect.Effect<void>
     formatFile: (target: string) => Effect.Effect<boolean>
   } = {
     assertions: [],
@@ -60,12 +62,14 @@ const makeEditFixture = () => {
     reads: 0,
     failReads: false,
     afterRead: () => Effect.void,
+    afterApproval: () => Effect.void,
     formatFile: () => Effect.succeed(false),
   }
 
   const permission = permissionLayer({
     assert: (input) =>
       Effect.sync(() => fixture.assertions.push(input)).pipe(
+        Effect.andThen(input.action === "Edit" ? Effect.suspend(() => fixture.afterApproval()) : Effect.void),
         Effect.andThen(
           input.action === fixture.denyAction
             ? Effect.fail(
@@ -965,12 +969,74 @@ describe("EditTool", () => {
     }),
   )
 
-  it.live("applies the edit when content changes after matching", () =>
+  // An external write while the person decides. Each of these must leave whatever the other writer left.
+  const staleCases: ReadonlyArray<{
+    readonly name: string
+    readonly during: (target: string) => Promise<unknown>
+    readonly bytes: string | undefined
+  }> = [
+    { name: "content changes", during: (target) => fs.writeFile(target, "newer\n"), bytes: "newer\n" },
+    {
+      name: "only the line endings change",
+      during: (target) => fs.writeFile(target, "before\r\n"),
+      bytes: "before\r\n",
+    },
+    { name: "a BOM is added", during: (target) => fs.writeFile(target, "﻿before\n"), bytes: "﻿before\n" },
+    { name: "the file is deleted", during: (target) => fs.rm(target), bytes: undefined },
+  ]
+  for (const stale of staleCases)
+    it.live(`fails edit.stale and writes nothing when ${stale.name} during approval`, () =>
+      withTempDir((tmp) => {
+        const edit = makeEditFixture()
+        const target = path.join(tmp.path, "concurrent.txt")
+        edit.afterApproval = () => Effect.promise(() => stale.during(target))
+        return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, edit, (registry) =>
+              executeTool(registry, call({ file_path: "concurrent.txt", old_string: "before", new_string: "after" })),
+            ),
+          ),
+          Effect.andThen((result) =>
+            Effect.gen(function* () {
+              expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+              expect(edit.writes).toEqual([])
+              expect(yield* Effect.promise(() => fs.readFile(target, "utf8").catch(() => undefined))).toBe(stale.bytes)
+            }),
+          ),
+        )
+      }),
+    )
+
+  it.live("fails edit.stale when a read fails after approval", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()
       const target = path.join(tmp.path, "concurrent.txt")
-      // The first read is validate's. The file changes after the one that `execute` matched on.
-      edit.afterRead = () => (edit.reads === 2 ? Effect.promise(() => fs.writeFile(target, "newer\n")) : Effect.void)
+      edit.afterApproval = () => Effect.sync(() => void (edit.failReads = true))
+      return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, edit, (registry) =>
+            executeTool(registry, call({ file_path: "concurrent.txt", old_string: "before", new_string: "after" })),
+          ),
+        ),
+        Effect.andThen((result) =>
+          Effect.gen(function* () {
+            expect(result).toMatchObject({ status: "error", error: { type: "edit.stale" } })
+            expect(edit.writes).toEqual([])
+          }),
+        ),
+      )
+    }),
+  )
+
+  it.live("completes when the file is rewritten with the same bytes and a newer time during approval", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "concurrent.txt")
+      edit.afterApproval = () =>
+        Effect.promise(async () => {
+          await fs.writeFile(target, "before\n")
+          await fs.utimes(target, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000))
+        })
       return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
         Effect.andThen(
           withTool(tmp.path, edit, (registry) =>
@@ -981,8 +1047,49 @@ describe("EditTool", () => {
           Effect.gen(function* () {
             expect(result).toMatchObject({ status: "completed", output: { replacements: 1 } })
             expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after\n")
-            expect(edit.writes).toEqual([target])
           }),
+        ),
+      )
+    }),
+  )
+
+  it.live("a stale edit retried without a Read fails file.stale, and after a Read it completes", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "concurrent.txt")
+      let external = true
+      edit.afterApproval = () => (external ? Effect.promise(() => fs.writeFile(target, "newer\n")) : Effect.void)
+      return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            edit,
+            (registry) =>
+              Effect.gen(function* () {
+                // The record's time is a minute behind the external write that follows, whatever the clock's grain.
+                yield* Effect.promise(() =>
+                  fs.utimes(target, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000)),
+                )
+                yield* readNow(sessionID, target)
+                const first = { file_path: "concurrent.txt", old_string: "before", new_string: "after" }
+                expect(yield* executeTool(registry, call(first))).toMatchObject({
+                  status: "error",
+                  error: { type: "edit.stale" },
+                })
+                external = false
+                const retry = { file_path: "concurrent.txt", old_string: "newer", new_string: "after" }
+                expect(yield* executeTool(registry, call(retry, "call-retry"))).toMatchObject({
+                  status: "error",
+                  error: { type: "file.stale" },
+                })
+                yield* readNow(sessionID, target)
+                expect(yield* executeTool(registry, call(retry, "call-retry-2"))).toMatchObject({
+                  status: "completed",
+                })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after\n")
+              }),
+            { ledger: "real" },
+          ),
         ),
       )
     }),

@@ -15,6 +15,7 @@ import { FileMutation } from "../../file-mutation.js"
 import { FileLedger } from "../../file-ledger.js"
 import { Formatter } from "../../formatter.js"
 import { FileAccess } from "../../file-access.js"
+import { Location } from "../../location.js"
 import { Permission } from "../../permission.js"
 import { fileDiff } from "./file-diff.js"
 
@@ -51,6 +52,7 @@ export const Plugin = {
     const ledger = yield* FileLedger.Service
     const environment = yield* Environment.Service
     const formatter = yield* Formatter.Service
+    const location = yield* Location.Service
     const permission = yield* Permission.Service
 
     yield* ctx.tool
@@ -92,6 +94,7 @@ export const Plugin = {
                 agent: context.agent,
                 source,
               })
+              yield* FileMutation.assertUnchanged(environment.files, target.absolute, input.file_path, current)
               const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
               const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
               const final = (yield* formatter.file(target.absolute))
@@ -102,6 +105,7 @@ export const Plugin = {
               yield* ledger.recordWrite(context.sessionID, target.absolute, final)
               return result
             }).pipe(
+              fileMutation.withLock([FileAccess.resolvePath(location.directory, input.file_path)]),
               Effect.map((output) => ({ output, content: toModelContent(output) })),
               Effect.mapError((error) =>
                 error instanceof ToolFailure

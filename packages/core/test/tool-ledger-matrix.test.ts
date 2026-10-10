@@ -90,6 +90,7 @@ const writeNode = makeLocationNode({
     FileMutation.node,
     Environment.node,
     Formatter.node,
+    Location.node,
     Permission.node,
   ],
 })
