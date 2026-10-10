@@ -1,6 +1,7 @@
 export * as ShellSandbox from "./sandbox.js"
 
 import type { ConfigSandbox } from "@orbit/schema/config/sandbox"
+import { SandboxPlatform } from "@orbit/util/sandbox-platform"
 
 /**
  * Wraps a shell command in the operating system's sandbox so it can read the whole filesystem but write only where it
@@ -10,6 +11,9 @@ import type { ConfigSandbox } from "@orbit/schema/config/sandbox"
 
 export interface Input {
   readonly platform: NodeJS.Platform
+  /** `os.release()`; tells WSL1 and WSL2 apart on Linux. */
+  readonly release?: string
+  readonly env?: Readonly<Record<string, string | undefined>>
   readonly settings: ConfigSandbox.Info
   readonly shell: string
   readonly args: readonly string[]
@@ -24,11 +28,18 @@ export type Result =
   | { readonly type: "wrapped"; readonly command: string; readonly args: readonly string[] }
   | { readonly type: "unwrapped" }
   | { readonly type: "missing"; readonly tool: string }
+  | { readonly type: "unsupported"; readonly reason: string }
 
 export const TOOL: Partial<Record<NodeJS.Platform, string>> = { linux: "bwrap", darwin: "sandbox-exec" }
 
 export function wrap(input: Input): Result {
   if (!input.settings.enabled) return { type: "unwrapped" }
+  // WSL1 has no namespaces, so bubblewrap cannot work there; WSL2 is a real Linux kernel and takes the Linux path.
+  if (SandboxPlatform.platform({ platform: input.platform, release: input.release ?? "", env: input.env ?? {} }) === "wsl1")
+    return {
+      type: "unsupported",
+      reason: "Shell sandboxing is enabled but WSL1 cannot sandbox commands. Upgrade the distribution to WSL2 (wsl --set-version) or turn the sandbox off",
+    }
   const tool = TOOL[input.platform]
   if (!tool) return { type: "unwrapped" }
   if (!input.tool) return { type: "missing", tool }

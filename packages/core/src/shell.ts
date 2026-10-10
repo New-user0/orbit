@@ -24,7 +24,7 @@ import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
 import { ShellSandbox } from "./shell/sandbox.js"
 import { which } from "./util/which.js"
-import { tmpdir } from "node:os"
+import { release, tmpdir } from "node:os"
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Shell.NotFoundError", {
   id: Shell.ID,
@@ -290,6 +290,8 @@ const layer = () =>
         const sandboxTool = ShellSandbox.TOOL[process.platform]
         const sandboxed = ShellSandbox.wrap({
           platform: process.platform,
+          release: release(),
+          env: process.env,
           settings: sandbox ?? {},
           shell: invocation.shell,
           args,
@@ -302,6 +304,11 @@ const layer = () =>
           return yield* new AppProcess.AppProcessError({
             command: invocation.command,
             cause: new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`),
+          })
+        if (sandboxed.type === "unsupported")
+          return yield* new AppProcess.AppProcessError({
+            command: invocation.command,
+            cause: new Error(sandboxed.reason),
           })
         const file = path.join(outputDir, `${id}.out`)
 

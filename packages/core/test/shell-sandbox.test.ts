@@ -75,6 +75,21 @@ describe("ShellSandbox.wrap", () => {
     expect(online.type === "wrapped" && online.args.includes("--unshare-net")).toBe(false)
   })
 
+  test("fails closed on WSL1 and takes the Linux path on WSL2", () => {
+    const wsl1 = { ...base, platform: "linux" as const, release: "4.4.0-19041-Microsoft", tool: "/usr/bin/bwrap" }
+    const result = ShellSandbox.wrap({ ...wsl1, settings: { enabled: true } })
+    expect(result.type).toBe("unsupported")
+    // Even a present bwrap, and even a WSL_DISTRO_NAME, must not turn WSL1 into a wrapped command.
+    expect(ShellSandbox.wrap({ ...wsl1, env: { WSL_DISTRO_NAME: "Ubuntu" }, settings: { enabled: true } }).type).toBe(
+      "unsupported",
+    )
+    expect(ShellSandbox.wrap({ ...wsl1, settings: {} })).toEqual({ type: "unwrapped" })
+
+    const wsl2 = { ...base, platform: "linux" as const, release: "5.15.153.1-microsoft-standard-WSL2" }
+    expect(ShellSandbox.wrap({ ...wsl2, settings: { enabled: true }, tool: "/usr/bin/bwrap" }).type).toBe("wrapped")
+    expect(ShellSandbox.wrap({ ...wsl2, settings: { enabled: true } })).toEqual({ type: "missing", tool: "bwrap" })
+  })
+
   test("generates a sandbox-exec profile on macOS that only allows the writable directories", () => {
     const result = ShellSandbox.wrap({
       ...base,
