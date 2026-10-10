@@ -189,17 +189,22 @@ test.each([
 }, 120_000)
 
 // The overlay adds a private server; it must not add trust. A folder that is not trusted stops `orb -p` whatever flags
-// it carries, and --trust is what lets it run.
-test("an overlay run in a folder that is not trusted is refused, and --trust runs it", async () => {
+// it carries. The controls: --trust gets past the check (what the model does afterwards is not this test's concern: a
+// grant reloads the config, and the scripted model's discovery can lag behind it), and a server that is told to trust
+// its folders runs the same flags.
+test("an overlay run in a folder that is not trusted is refused, and --trust and a trusting server get past the check", async () => {
   const untrusted = { ORBIT_TRUST_PROJECT: undefined }
+  const flags = ["--model", model.model, "--agents", "{}", "say ok"]
 
-  const refused = await orb(["-p", "--model", model.model, "--agents", "{}", "say ok"], untrusted)
-  const trusted = await orb(["-p", "--trust", "--model", model.model, "--agents", "{}", "say ok"], untrusted)
+  const refused = await orb(["-p", ...flags], untrusted)
+  const granted = await orb(["-p", "--trust", ...flags], untrusted)
+  const trusting = await orb(["-p", ...flags])
 
   expect(refused.code).toBe(1)
   expect(refused.stdout + refused.stderr).toContain("is not trusted")
-  expect({ code: trusted.code, stderr: trusted.code === 0 ? "" : trusted.stderr }).toEqual({ code: 0, stderr: "" })
-  expect(trusted.stdout).toContain("ok")
+  expect(granted.stdout + granted.stderr).not.toContain("is not trusted")
+  expect({ code: trusting.code, stderr: trusting.code === 0 ? "" : trusting.stderr }).toEqual({ code: 0, stderr: "" })
+  expect(trusting.stdout).toContain("ok")
 }, 240_000)
 
 // On the root path the person's start folder is the one that holds their files; the folder they ask Orbit to open may be
