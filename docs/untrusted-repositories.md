@@ -1739,6 +1739,8 @@ fixes it or asks.
   first with the person's deny and with a trusted control. What remains: a share named in a shell command's text
   directly, which is asked about as the shell asks, or in a path that a loader other than the file tools reads, such
   as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
+  The file tools (Write, NotebookEdit, Patch) take a file's lock only after `FileAccess` has checked the path, because the lock key
+  resolves the path on disk; `tool-share-lock.test.ts` pins it twice: its share rows pin the three share spellings across those tools, and its link rows (a repository link whose real place is a share, in an untrusted project) pin the lock order.
 - **Other spellings of the project folder (closed for the file tools by `permissions-23`).** A path that named the
   project through another spelling of its own folder (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`,
   or a link to the project) was decided as outside the project by its spelling, so a repository link inside it was not

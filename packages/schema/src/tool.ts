@@ -207,6 +207,8 @@ export const ErrorCode = {
   FileUnread: "file.unread",
   /** The file changed since the session last read it. */
   FileStale: "file.stale",
+  /** The file changed, appeared or disappeared while the change was waiting for approval, so nothing was written; read it again before retrying. */
+  EditStale: "edit.stale",
   /**
    * On Windows, the path names an NTFS data stream (`name::$DATA`, `name:stream`), or an 8.3 short name whose long name
    * cannot be found: spellings that a rule written for the file would not see.

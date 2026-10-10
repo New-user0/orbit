@@ -1474,6 +1474,35 @@ the scanner treats the word as dynamic. Such a command is now seen as two comman
 
 **What to do:** Nothing; write the character itself instead of the escape if a command is refused.
 
+### A file that changes while its edit waits for approval is not overwritten
+
+`edit`, `write`, `patch` and `notebook_edit` used to write the bytes they had prepared even when the file changed while
+the person was deciding. They now read every file they will write once more after approval, and write nothing if any of
+them differs from what was shown: the call fails with the error type `edit.stale`. The file keeps the other writer's
+content, and a file that appeared or vanished in the meantime counts as changed. For `patch` this covers every path, the
+destination of a move included, and no path is written when one is stale. Only content counts: a file that was touched
+or rewritten with the same bytes is not stale, but a change of line endings alone or of a leading byte-order mark is.
+
+`write` now also waits for another `write` to the same file. A file that cannot be read
+after approval counts as changed. `edit.stale` differs from `file.stale`: the first means the file changed during the
+approval, the second that it changed since the session last read it. After either, read the file again and retry.
+
+`patch` now shows what it replaces. An `Add File` hunk on a file that already exists is listed as `modified` with the
+old lines as removed, not as `added`, and a move onto an existing file lists the destination as a second entry in
+`metadata.files` (and in the result) with its current text as removed. A move destination that already exists must now
+have been read by the session and unchanged since, as an `Add File` target must: otherwise the call fails with
+`file.unread` or `file.stale` and nothing is written.
+
+`patch` now also refuses, before anything is asked, a patch that reaches one file under two names: a `Move to` that
+names its own source (the same path, another letter case on any case-insensitive file system, or a link or hard link to it), or two
+hunks that name one existing file by different spellings (for a new file, letter case is compared on Windows and macOS). Such a patch used to delete the file. Rename a file's letter case with
+the shell instead. An `Add File` over an existing file now keeps that file's byte-order mark, as `write` does.
+
+**Affects:** code that reads a failed tool call's `error.type`, and anyone whose editor, formatter or script writes a file
+while a change to it is waiting for approval: the change now fails instead of overwriting.
+
+**What to do:** Read the file again and repeat the change. Nothing for code that does not read the type.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
