@@ -177,7 +177,8 @@ describe("ShellScan heredoc delimiter in $'...'", () => {
     "cat <<$'E\\xffF'\nbody\nEÿF\ntouch pwned\n",
     "cat <<$'E\\777F'\nbody\nEÿF\ntouch pwned\n",
     "cat <<$'E\\U110000F'\nbody\nEF\ntouch pwned\n",
-    // Under LANG unset bash keeps these as text, in a UTF-8 locale it writes other bytes; either way the line below
+    // Under LANG unset bash keeps \u and \U as text, in a UTF-8 locale it writes other bytes (\c is the same in every
+    // locale); either way the line below
     // is the one the decoder would match, so cat <<$'\u00e9' must not hide touch.
     "cat <<$'\\u00e9'\nbody\né\ntouch pwned\n",
     "cat <<$'\\ud800'\nbody\n\ud800\ntouch pwned\n",

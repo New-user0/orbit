@@ -1228,7 +1228,7 @@ function bashExpansion(
 
 // `undecoded` is set when bash reads an escape differently from this decoder: \x{..}, an escape that makes NUL (bash ends
 // the string there), \c? (DEL), \c before a non-ASCII character (bash masks its first UTF-8 byte), and a numeric escape of
-// 0x80 or more, \u and \U included (the bytes depend on the locale). The
+// 0x80 or more (the bytes of \u and \U depend on the locale; the other forms write a raw byte). The
 // value stays as scan() has always read it; inspect() treats the word as dynamic and a heredoc delimiter is refused.
 function bashAnsiQuote(input: string, start: number) {
   let value = ""
@@ -1287,8 +1287,9 @@ function bashAnsiQuote(input: string, start: number) {
       if (!digits) value += `\\${escaped}`
       else {
         const octal = /[0-7]/.test(escaped)
-        // Bash keeps one byte of an octal escape (\456 is "."). From 0x80 up its output depends on the locale (a raw
-        // byte, the text itself under LC_ALL=C, surrogates as raw bytes, a \U above U+10FFFF as text), so the word is dynamic.
+        // Bash keeps one byte of an octal escape (\456 is "."). From 0x80 up it writes a raw byte, which this decoder
+        // does not; for \u and \U the output also depends on the locale (the text itself under LC_ALL=C, surrogates as raw
+        // bytes, a \U above U+10FFFF as text). The word is dynamic either way.
         const point = octal ? parseInt(digits, 8) & 0xff : parseInt(digits, 16)
         if (point === 0 || point >= 0x80) undecoded = true
         value += point <= 0x10ffff ? String.fromCodePoint(point) : ""

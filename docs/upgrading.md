@@ -1231,8 +1231,8 @@ The command scanner decoded some `$'...'` escapes differently from bash, so a co
 ends `$'\c'` at its quote, keeps the character after `\c\` (`$'\c\/'` is 0x1c then `/`), keeps one byte of an octal
 escape (`\456` is `.`), and refuses a heredoc delimiter written with an escape it cannot decode (`\x{..}`, a NUL, a
 byte or code point of 0x80 or more written with `\x`, `\u`, `\U` or octal, a `\c` before a non-ASCII character, a
-code point above U+10FFFF). Bash writes different bytes for these in a UTF-8 locale and under `LC_ALL=C`, so the
-scanner treats the word as dynamic. Such a command is now seen as two commands, or is refused.
+code point above U+10FFFF). Bash writes a raw byte for the `\x`, octal and `\c` forms, and bytes that depend on the locale for `\u` and `\U`, so
+the scanner treats the word as dynamic. Such a command is now seen as two commands, or is refused.
 
 **Affects:** people whose shell commands use these escapes; an approval may ask where it did not before.
 
