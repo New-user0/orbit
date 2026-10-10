@@ -25,7 +25,10 @@ const questionInput = {
     {
       question: "Continue?",
       header: "Continue",
-      options: [{ label: "Yes", description: "Continue" }],
+      options: [
+        { label: "Yes", description: "Continue" },
+        { label: "No", description: "Stop" },
+      ],
     },
   ],
 }
@@ -147,18 +150,27 @@ describe("QuestionTool", () => {
         {
           question: "What should happen?",
           header: "Action",
-          options: [{ label: "Build", description: "Build it" }],
+          options: [
+            { label: "Build", description: "Build it" },
+            { label: "Skip", description: "Skip it" },
+          ],
         },
         {
           question: "Which environment?",
           header: "Environment",
-          options: [{ label: "Dev", description: "Development" }],
+          options: [
+            { label: "Dev", description: "Development" },
+            { label: "Prod", description: "Production" },
+          ],
           multiple: true,
         },
         {
           question: "Anything else?",
           header: "Optional",
-          options: [],
+          options: [
+            { label: "Nothing", description: "No more" },
+            { label: "More", description: "Some more" },
+          ],
         },
       ]
 
@@ -190,7 +202,10 @@ describe("QuestionTool", () => {
             key: "q0",
             title: "Action",
             description: "What should happen?",
-            options: [{ value: "Build", label: "Build", description: "Build it" }],
+            options: [
+              { value: "Build", label: "Build", description: "Build it" },
+              { value: "Skip", label: "Skip", description: "Skip it" },
+            ],
             custom: true,
             type: "string",
           },
@@ -198,7 +213,10 @@ describe("QuestionTool", () => {
             key: "q1",
             title: "Environment",
             description: "Which environment?",
-            options: [{ value: "Dev", label: "Dev", description: "Development" }],
+            options: [
+              { value: "Dev", label: "Dev", description: "Development" },
+              { value: "Prod", label: "Prod", description: "Production" },
+            ],
             custom: true,
             type: "multiselect",
           },
@@ -206,7 +224,10 @@ describe("QuestionTool", () => {
             key: "q2",
             title: "Optional",
             description: "Anything else?",
-            options: [],
+            options: [
+              { value: "Nothing", label: "Nothing", description: "No more" },
+              { value: "More", label: "More", description: "Some more" },
+            ],
             custom: true,
             type: "string",
           },
@@ -236,7 +257,10 @@ describe("QuestionTool", () => {
             key: "q0",
             title: "Continue",
             description: "Continue?",
-            options: [{ value: "Yes", label: "Yes", description: "Continue" }],
+            options: [
+              { value: "Yes", label: "Yes", description: "Continue" },
+              { value: "No", label: "No", description: "Stop" },
+            ],
             custom: true,
             type: "string",
           },
@@ -264,6 +288,159 @@ describe("QuestionTool", () => {
         expect(error).toBeInstanceOf(QuestionTool.CancelledError)
         expect(error).toHaveProperty("message", "The user dismissed this question")
       }
+    }),
+  )
+
+  const pair = (label: string, extra: object = {}) => ({ label, description: label, ...extra })
+  const question = (text: string, labels: string[], extra: object = {}) => ({
+    question: text,
+    header: text.slice(0, 12),
+    options: labels.map((label) => pair(label)),
+    ...extra,
+  })
+  const run = (registry: Tool.Interface, questions: unknown[]) =>
+    executeTool(registry, {
+      sessionID,
+      ...toolIdentity,
+      call: { type: "tool-call", id: "call-question-limits", name: QuestionTool.name, input: { questions } },
+    })
+
+  it.effect("states the count limits in the tool JSON Schema and the optional preview", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const schema = (yield* toolDefinitions(registry)).find((tool) => tool.name === QuestionTool.name)?.inputSchema as any
+      const find = (node: any, key: string): any => {
+        if (node === null || typeof node !== "object") return undefined
+        if (key in node) return node[key]
+        return Object.values(node)
+          .map((child) => find(child, key))
+          .find((hit) => hit !== undefined)
+      }
+      expect(schema.properties.questions).toMatchObject({ minItems: 1, maxItems: 4 })
+      expect(find(schema, "options")).toMatchObject({ minItems: 2, maxItems: 4 })
+      expect(find(schema, "preview")).toHaveProperty("type", "string")
+      expect(JSON.stringify(schema)).not.toMatch(/"required":\[[^\]]*"preview"/)
+    }),
+  )
+
+  it.effect("rejects question and option counts outside the limits before any form is created", () =>
+    Effect.gen(function* () {
+      reject = false
+      deny = false
+      const registry = yield* Tool.Service
+      const valid = (n: number) => question(`Question ${n}?`, ["A", "B"])
+      const bad = [
+        [],
+        [valid(1), valid(2), valid(3), valid(4), valid(5)],
+        [question("Zero?", [])],
+        [question("One?", ["A"])],
+        [question("Five?", ["A", "B", "C", "D", "E"])],
+      ]
+      for (const questions of bad) {
+        captured = undefined
+        expect(yield* run(registry, questions)).toMatchObject({ status: "error", error: { type: "tool.input-invalid" } })
+        expect(capturedInput()).toBeUndefined()
+      }
+      for (const questions of [
+        [valid(1)],
+        [valid(1), valid(2), valid(3), valid(4)],
+        [question("Four?", ["A", "B", "C", "D"])],
+      ]) {
+        captured = undefined
+        expect(yield* run(registry, questions)).toMatchObject({ status: "completed" })
+        expect(capturedInput()).toBeDefined()
+      }
+    }),
+  )
+
+  it.effect("requires unique question texts and unique option labels per question (exact compare)", () =>
+    Effect.gen(function* () {
+      reject = false
+      deny = false
+      const registry = yield* Tool.Service
+      const rejected = [
+        [question("Same?", ["Yes", "Yes"])],
+        [question("Same?", ["A", "B"]), question("Same?", ["C", "D"])],
+      ]
+      for (const questions of rejected) {
+        captured = undefined
+        expect(yield* run(registry, questions)).toMatchObject({ status: "error", error: { type: "tool.input-invalid" } })
+        expect(capturedInput()).toBeUndefined()
+      }
+      const accepted = [
+        [question("First?", ["Yes", "No"]), question("Second?", ["Yes", "No"])],
+        [question("Case?", ["Yes", "yes"])],
+        [question("One?", ["A", "B"], { header: "Shared" }), question("Two?", ["A", "B"], { header: "Shared" })],
+      ]
+      for (const questions of accepted) {
+        captured = undefined
+        expect(yield* run(registry, questions)).toMatchObject({ status: "completed" })
+        expect(capturedInput()).toBeDefined()
+      }
+    }),
+  )
+
+  it.effect("copies previews to single-select form options only", () =>
+    Effect.gen(function* () {
+      captured = undefined
+      reject = false
+      deny = false
+      const registry = yield* Tool.Service
+      yield* run(registry, [
+        {
+          question: "Layout?",
+          header: "Layout",
+          options: [pair("Wide", { preview: "+----+\n|    |\n+----+" }), pair("Narrow"), pair("Empty", { preview: "" })],
+        },
+        {
+          question: "Extras?",
+          header: "Extras",
+          multiple: true,
+          options: [pair("Dev", { preview: "dev preview" }), pair("Prod")],
+        },
+      ])
+      const fields = capturedInput()?.fields ?? []
+      expect(fields.map((field) => ("custom" in field ? field.custom : undefined))).toEqual([true, true])
+      expect(fields[0]).toHaveProperty("type", "string")
+      expect(fields[1]).toHaveProperty("type", "multiselect")
+      expect((fields[0] as { options: ReadonlyArray<object> }).options).toEqual([
+        { value: "Wide", label: "Wide", description: "Wide", preview: "+----+\n|    |\n+----+" },
+        { value: "Narrow", label: "Narrow", description: "Narrow" },
+        { value: "Empty", label: "Empty", description: "Empty" },
+      ])
+      expect((fields[1] as { options: ReadonlyArray<object> }).options).toEqual([
+        { value: "Dev", label: "Dev", description: "Dev" },
+        { value: "Prod", label: "Prod", description: "Prod" },
+      ])
+    }),
+  )
+
+  it.effect("echoes the chosen preview only for a single-select label with a preview", () =>
+    Effect.sync(() => {
+      const previewed = {
+        question: "Layout?",
+        header: "Layout",
+        options: [pair("Wide", { preview: "WIDE-SKETCH" }), pair("Narrow")],
+      }
+      const chosen = QuestionTool.toModelContent([previewed], [["Wide"]])
+      expect(chosen).toContain('"Layout?"="Wide"')
+      expect(chosen.indexOf("WIDE-SKETCH")).toBeGreaterThan(chosen.indexOf('"Layout?"="Wide"'))
+      expect(QuestionTool.toModelContent([previewed], [["Something else"]])).not.toContain("WIDE-SKETCH")
+      expect(QuestionTool.toModelContent([previewed], [["Narrow"]])).toBe(
+        'User has answered your questions: "Layout?"="Narrow". You can now continue with the user\'s answers in mind.',
+      )
+      expect(QuestionTool.toModelContent([{ ...previewed, multiple: true }], [["Wide"]])).not.toContain("WIDE-SKETCH")
+      expect(QuestionTool.toModelContent([previewed], [["Wide", "Narrow"]])).not.toContain("WIDE-SKETCH")
+    }),
+  )
+
+  it.effect("declares a result cap and a description that states the contract without a product name", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      expect(yield* toolTraits(registry, "AskUserQuestion")).toMatchObject({ maxResultChars: 100000 })
+      for (const needle of ["1 to 4", "2 to 4", "multiple", "preview", "Type your own answer", "ExitPlanMode"])
+        expect(QuestionTool.description).toContain(needle)
+      expect(QuestionTool.description).not.toMatch(/claude|anthropic/i)
     }),
   )
 })

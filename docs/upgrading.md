@@ -2293,3 +2293,11 @@ always shown, and a folder that is not a repository hides nothing.
 git-ignored folders such as `node_modules`.
 
 **What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.
+
+### The question tool has limits and option previews
+
+The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any count was accepted. An option can also carry a `preview`, markdown that clients show while the option is focused. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and its results are capped at 100,000 characters.
+
+**Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with one option or more than four.
+
+**What to do:** Nothing for most setups. Clients that do not draw previews keep working because the field is optional.

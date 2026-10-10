@@ -15523,6 +15523,9 @@
           },
           "description": {
             "type": "string"
+          },
+          "preview": {
+            "type": "string"
           }
         },
         "required": ["value", "label"],

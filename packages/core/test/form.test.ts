@@ -79,6 +79,30 @@ describe("Form", () => {
     }),
   )
 
+  it.effect("carries an option preview through create and get without affecting answer validation", () =>
+    Effect.gen(function* () {
+      const service = yield* Form.Service
+      const options = [
+        { value: "wide", label: "Wide", preview: "+--+\n|  |\n+--+" },
+        { value: "narrow", label: "Narrow" },
+      ]
+      const created = yield* service.create({
+        sessionID: "global",
+        title: "Preview form",
+        fields: [{ key: "layout", type: "string", options }],
+      })
+      expect(created.fields[0]).toMatchObject({ options })
+      expect((yield* service.get(created.id)).fields[0]).toMatchObject({ options })
+
+      const byPreview = yield* service
+        .reply({ id: created.id, answer: { layout: "+--+\n|  |\n+--+" } })
+        .pipe(Effect.flip)
+      expect(byPreview._tag).toBe("Form.InvalidAnswerError")
+      yield* service.reply({ id: created.id, answer: { layout: "wide" } })
+      expect(yield* service.state(created.id)).toEqual({ status: "answered", answer: { layout: "wide" } })
+    }),
+  )
+
   it.effect("gates required fields and rejects inactive answers via when", () =>
     Effect.gen(function* () {
       const service = yield* Form.Service
