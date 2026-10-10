@@ -720,7 +720,7 @@ class BashWalk {
     if (body !== undefined) {
       this.feature.heredoc = true
       const trimmed = body.replace(/\n+$/, "")
-      if (/\/proc\/[^/]*\/environ|system\(/.test(trimmed)) fail("heredoc:content")
+      if (/\/proc\/.*\/environ/.test(trimmed) || /\bsystem\s*\(/.test(trimmed)) fail("heredoc:content")
       return trimmed.includes("\n") ? "" : trimmed
     }
     this.substitution(node, scope)

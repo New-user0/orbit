@@ -439,7 +439,8 @@ export function expandHome(value: string, ctx: ShellAnalysis.Context) {
 }
 
 // Anywhere in the word, so `--from-file=//host/share/x` counts. `scheme://` does not: a colon before the slashes.
-const UNC = /(?<!:)(?:\\\\|\/\/|\/\\|\\\/)[^\\/]/
+// `\??\UNC\host\share` is the NT spelling of the same share, and Windows opens it as one.
+const UNC = /(?<!:)(?:\\\\|\/\/|\/\\|\\\/)[^\\/]|\\\?\?\\/
 const WEBDAV = /@SSL@\d+|@\d+@SSL|DavWWWRoot/i
 
 /** A word that names a network share on Windows, or a WebDAV marker. */
@@ -552,6 +553,8 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       pending = undefined
       if (bound && !(CONSTANT.has(bound.kind) && bound.value !== undefined)) return refuse("bound")
       const name = (arg.parameter ?? "").toLowerCase()
+      // The value of any colon-bound parameter is an argument like the rest: a share or provider path is refused here.
+      if (bound?.value !== undefined && provider(bound.value)) return refuse("provider")
       if (spec.native) {
         // `-s:host` is the flag `-s` with a value (tasklist and getmac take a remote system that way), so the name is
         // checked bound or not.
@@ -563,7 +566,6 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       if (spec.flags !== "any" && !spec.flags.has(name) && !COMMON.has(name)) return refuse("flag")
       if (spec.paths?.has(name)) {
         if (bound?.value === undefined) pending = "path"
-        else if (provider(bound.value)) return refuse("provider")
         else reads.push(bound.value)
       } else if (!bound && (spec.other?.has(name) || COMMON_VALUED.has(name))) pending = "other"
       continue

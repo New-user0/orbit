@@ -94,6 +94,29 @@ describe("PowerShell arrays, shares and bound native flags", () => {
   })
 })
 
+// Class 6 matrix: the NT spelling `\??\UNC\host\share` x bash (word, flag value, redirect target, wc and diff file lists)
+// x PowerShell (positional, bound path, bound non-path value), on win32.
+describe("the NT spelling of a share (class 6)", () => {
+  test.each([
+    "cat '\\??\\UNC\\evil\\share\\x'",
+    "cat < '\\??\\UNC\\evil\\share\\x'",
+    "tail -n 5 '\\??\\UNC\\evil\\share\\x'",
+    "diff --from-file='\\??\\UNC\\evil\\share\\x' a",
+    "wc --files0-from='\\??\\UNC\\evil\\share\\x'",
+  ])("%s is not read-only on win32", (text) => {
+    expect(bash(text, windows()).readOnly).toBe(false)
+  })
+  test("it is an ordinary word elsewhere", () => {
+    expect(bash("cat '\\??\\UNC\\evil\\share\\x'", linux()).readOnly).toBe(true)
+  })
+})
+
+describe("a heredoc body is checked like the reference (class 6)", () => {
+  test.each(["echo \"$(cat <<'E'\n/proc/self//environ\nE\n)\"", "echo \"$(cat <<'E'\nsystem (1)\nE\n)\""])("%j", (text) => {
+    expect(bash(text).readOnly).toBe(false)
+  })
+})
+
 describe("/proc environ in any spelling", () => {
   test.each([
     "cat /proc/self//environ",

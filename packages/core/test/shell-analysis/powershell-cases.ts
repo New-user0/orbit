@@ -108,6 +108,14 @@ export const arrayAndNetwork = [
   "getmac -s:evilhost",
   "getmac /s:evilhost",
   "getmac /s evilhost",
+  "Get-Module -ListAvailable -Name:\\\\evil\\share\\m",
+  "Get-Module -ListAvailable -FullyQualifiedName:\\\\evil\\share\\m",
+  "Get-Module -ListAvailable -Name \\\\evil\\share\\m",
+  "Select-Object -Property:\\\\evil\\s",
+  "Get-Content \\??\\UNC\\evil\\share\\x",
+  "Get-Content -Path:\\??\\UNC\\evil\\share\\x",
+  "Get-Content -Path \\??\\UNC\\evil\\share\\x",
+  "Get-Process -Name:\\??\\UNC\\evil\\s",
 ]
 
 export const arrayAndNetworkOk = ["Get-Process -Name a,b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
