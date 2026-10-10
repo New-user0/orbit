@@ -806,6 +806,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         replayLimit: input.replayLimit,
         footer,
         onCommit: rememberLocal,
+        onEvent: (event) => shell.observe?.(event),
         onSessionTitle: (title) => {
           state.sessionTitle = title
           shell.setTitle(title)

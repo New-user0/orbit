@@ -26,6 +26,7 @@ async function setup(
     subagent: session("subagent", "Subagent session", "session"),
     abort: session("abort", "Abort session"),
     timeout: session("timeout", "Timeout session"),
+    hostile: session("hostile", "Fix‮evil\x1b]0;x\x07 build"),
   }
 
   await Notifications.setup({
@@ -169,6 +170,20 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.toasts).toHaveLength(2)
   })
 
+  test("keeps the line breaks of a failure in the toast and flattens them in the notification", async () => {
+    const harness = await setup()
+    harness.emit(executionStarted("started"))
+    harness.emit({
+      id: "failed",
+      created: 0,
+      type: "session.execution.failed",
+      durable: durable("session"),
+      data: { sessionID: "session", error: { type: "unknown", message: "Provider error 500\nRetry later\x1b[2J" } },
+    } as unknown as OrbitEvent)
+    expect(harness.toasts.map((toast) => toast.message)).toEqual(["Provider error 500\nRetry later\\x1b[2J"])
+    expect(harness.notifications.map((item) => item.message).join("")).not.toContain("\n")
+  })
+
   test.each<Route>([{ type: "home" }, { type: "session", sessionID: "other" }])(
     "leaves routing of other sessions' failures to the session-scoped toast (%j)",
     async (route) => {
@@ -262,7 +277,7 @@ describe("internal notifications TUI plugin", () => {
     ])
   })
 
-  test("uses sound-only notifications and subagent_done sound for subagent sessions", async () => {
+  test("notifies a subagent's form and permission like a root's, and keeps its completion silent", async () => {
     const harness = await setup()
 
     harness.emit({
@@ -278,8 +293,7 @@ describe("internal notifications TUI plugin", () => {
       {
         title: "Questions",
         message: "Input needs response",
-        notification: false,
-        bell: {},
+        notification: { when: "blurred" },
         sound: { name: "question", when: "always" },
       },
       {
@@ -289,6 +303,53 @@ describe("internal notifications TUI plugin", () => {
         sound: { name: "subagent_done", when: "always" },
       },
     ])
+  })
+
+  test("a subagent's permission request notifies like a root's", async () => {
+    const harness = await setup()
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1", "subagent") })
+    expect(harness.notifications).toEqual([
+      {
+        title: "Subagent session",
+        message: "Permission needs input",
+        notification: { when: "blurred" },
+        sound: { name: "permission", when: "always" },
+      },
+    ])
+  })
+
+  test("cleans a form title and a failure message before they reach a notification", async () => {
+    const harness = await setup()
+    const hostile = (text: string) => `${text}\u202e\x1b]0;x\x07\nmore`
+    harness.emit({
+      id: "event-1",
+      created: 0,
+      type: "form.created",
+      data: { form: { ...form("form-1"), title: hostile("Approve") } },
+    })
+    harness.emit(executionStarted("event-2"))
+    harness.emit({
+      id: "event-3",
+      created: 0,
+      type: "session.execution.failed",
+      durable: durable("session"),
+      data: { sessionID: "session", error: { type: "unknown", message: hostile("bad") } },
+    } as unknown as OrbitEvent)
+    // `plain` writes a control or format character out as text, so none reaches the notification as itself.
+    const shown = [...harness.notifications.flatMap((item) => [item.title, item.message]), ...harness.toasts.map((toast) => toast.message)]
+    expect(shown.length).toBe(5)
+    expect(shown.join("")).toContain("Approve")
+    expect(shown.join("")).toContain("bad")
+    // The toast is a message body and keeps its line breaks; every other control is still written out.
+    shown.forEach((text) => expect((text ?? "").replaceAll("\n", "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202e]/))
+  })
+
+  test("cleans a session title before it reaches a notification", async () => {
+    const harness = await setup()
+    harness.emit({ id: "event-1", created: 0, type: "permission.asked", data: permission("permission-1", "hostile") })
+    expect(harness.notifications.length).toBe(1)
+    expect(harness.notifications[0].title).toContain("build")
+    expect(harness.notifications[0].title ?? "").not.toMatch(/[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/)
   })
 
   test("notifies session errors once and suppresses the following idle done notification", async () => {
@@ -409,6 +470,7 @@ describe("terminal bell for subagents", () => {
       config: {
         attention: {
           notifications: false,
+          backend: "terminal",
           sound: false,
           bell: true,
           idle_reminder: 0,
@@ -446,6 +508,7 @@ describe("idle reminder through the real host", () => {
       config: {
         attention: {
           notifications: false,
+          backend: "terminal",
           sound: false,
           bell: true,
           idle_reminder: 0.05,

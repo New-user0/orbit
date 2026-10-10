@@ -242,6 +242,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the path it found, in the folder of the file. Proof: `test/config-v2.test.tsx` (the file is read from beside cli.json
   only, with a control), `test/keybindings-file.test.ts` (the hostile names and keys), `test/editor.test.ts` (the Windows
   decoy test, with a control).
+- The operating system notification programs (`notify-send`, `osascript`, Windows PowerShell), started when
+  `attention.backend` is `"system"`: found with `which` over absolute `PATH` entries only, started through
+  `CrossSpawnSpawner` (`AppProcess`) in the person's home folder with a script that is a constant of the module, and the
+  title and message passed as separate arguments (Linux, macOS) or environment values (Windows), after the host removed
+  control characters and the session title, the form title and the failure message went through `plain`. `cli.json` is read from the global folder only,
+  so a project cannot choose the backend. Proof: `test/util/os-notify.test.ts` (a message that breaks quoting, run against
+  the real Windows PowerShell with a dry-run switch; decoys in the working folder and a relative `PATH` entry, with a
+  control).
 
 **VS Code extension** (`packages/vscode`, which runs in VS Code's extension host: not an Orbit process, and shared with
 every other extension):

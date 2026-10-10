@@ -18,17 +18,28 @@ import { RipgrepBinary } from "./ripgrep/binary.js"
 
 const ERROR_BYTES = 8 * 1024
 const MAX_SUBMATCHES = 100
+/** Longest line text returned for a row; longer lines are cut to a window around the first match. */
+export const MAX_LINE_COLUMNS = 500
+const LINE_LEAD_COLUMNS = 100
+/** Most characters one match record (a multiline match) keeps; later lines are summarized. */
+export const MAX_RECORD_CHARS = 20_000
+/** Version-control folders that no search or listing reaches into. */
+export const VCS_DIRECTORIES = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const
+// A bare name excludes the folder and any file of that name (a worktree's `.git` pointer), at any depth.
+const vcsGlobs = VCS_DIRECTORIES.map((dir) => `--glob=!**/${dir}`)
+
+// ripgrep gives {bytes} (base64) instead of {text} for anything that is not valid UTF-8.
+const RawText = Schema.Union([Schema.Struct({ text: Schema.String }), Schema.Struct({ bytes: Schema.String })])
 
 const RawMatch = Schema.Struct({
   type: Schema.Literals(["match", "context"]),
   data: Schema.Struct({
-    path: Schema.Struct({ text: Schema.String }),
-    lines: Schema.Struct({ text: Schema.String }),
+    path: RawText,
+    lines: RawText,
     line_number: PositiveInt,
     absolute_offset: NonNegativeInt,
     submatches: Schema.Array(
       Schema.Struct({
-        match: Schema.Struct({ text: Schema.String }),
         start: NonNegativeInt,
         end: NonNegativeInt,
       }),
@@ -37,7 +48,13 @@ const RawMatch = Schema.Struct({
 })
 const decodeJsonRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))
 
-type RawMatchData = (typeof RawMatch.Type)["data"]
+type GrepRow = {
+  readonly path: string
+  readonly line_number: number
+  readonly absolute_offset: number
+  readonly text: string
+  readonly submatches: readonly Span[]
+}
 
 export class Error extends Schema.TaggedError<Error>()("Ripgrep.Error", {
   message: Schema.String,
@@ -103,6 +120,113 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Ripgrep") {}
+
+type Span = { readonly start: number; readonly end: number }
+
+/**
+ * ripgrep ignores `--max-columns` with `--json`, so long lines are cut here. `submatches` are in characters of `text`.
+ * Every physical line of the record is measured on its own, so a multiline match of short lines comes back whole. The
+ * line holding the first submatch gets a window that starts shortly before it; other long lines are cut from their
+ * start. Submatches that start in a cut part are dropped, and one that runs into a cut ends there. A record past
+ * MAX_RECORD_CHARS keeps its first lines and ends with a marker.
+ */
+export const clipLine = (text: string, submatches: readonly Span[]) => {
+  const first = submatches[0]?.start ?? 0
+  const isLowSurrogate = (line: string, index: number) => {
+    const code = line.charCodeAt(index)
+    return code >= 0xdc00 && code <= 0xdfff
+  }
+  // Pieces of the record that come through unchanged, with where they start in the output.
+  const pieces: { from: number; to: number; at: number }[] = []
+  let out = ""
+  let position = 0
+  let dropped = 0
+  while (position < text.length) {
+    if (out.length > MAX_RECORD_CHARS) {
+      dropped = text.slice(position).split("\n").length - (text.endsWith("\n") ? 1 : 0)
+      break
+    }
+    const newline = text.indexOf("\n", position)
+    const lineEnd = newline < 0 ? text.length : newline + 1
+    const separator = newline < 0 ? "" : newline > position && text[newline - 1] === "\r" ? "\r\n" : "\n"
+    const line = text.slice(position, lineEnd - separator.length)
+    if (line.length <= MAX_LINE_COLUMNS) {
+      const last = pieces.at(-1)
+      if (last && last.to === position && last.at + (last.to - last.from) === out.length) last.to = lineEnd
+      else pieces.push({ from: position, to: lineEnd, at: out.length })
+      out += line + separator
+      position = lineEnd
+      continue
+    }
+    const lead = first >= position && first < lineEnd ? Math.max(0, first - position - LINE_LEAD_COLUMNS) : 0
+    // Never start or end inside a surrogate pair.
+    const start = lead > 0 && isLowSurrogate(line, lead) ? lead - 1 : lead
+    const limit = Math.min(line.length, start + MAX_LINE_COLUMNS)
+    const end = limit < line.length && isLowSurrogate(line, limit) ? limit - 1 : limit
+    out += start > 0 ? "…" : ""
+    const last = pieces.at(-1)
+    // A line cut only at its end continues the piece before it.
+    if (start === 0 && last && last.to === position && last.at + (last.to - last.from) === out.length) last.to = position + end
+    else pieces.push({ from: position + start, to: position + end, at: out.length })
+    out += `${line.slice(start, end)}${end < line.length ? "…" : ""} [line truncated: ${line.length} chars]${separator}`
+    position = lineEnd
+  }
+  if (dropped > 0) out += `${out.endsWith("\n") ? "" : "\n"}[match continues for ${dropped} more lines]\n`
+  return {
+    text: out,
+    submatches: submatches.flatMap((submatch) => {
+      const piece = pieces.find((candidate) => submatch.start >= candidate.from && submatch.start <= candidate.to)
+      if (!piece) return []
+      const start = piece.at + submatch.start - piece.from
+      const end = piece.at + Math.min(submatch.end, piece.to) - piece.from
+      return [{ text: out.slice(start, end), start, end }]
+    }),
+  }
+}
+
+/** Converts ripgrep's UTF-8 byte offsets (into the UTF-8 form of `text`) to character offsets. */
+const toCharacters = (text: string, submatches: readonly Span[]) => {
+  if (submatches.length === 0) return []
+  if (Buffer.byteLength(text) === text.length) return submatches
+  const wanted = [...new Set(submatches.flatMap((submatch) => [submatch.start, submatch.end]))].sort((x, y) => x - y)
+  const characters = new Map<number, number>()
+  let byte = 0
+  let character = 0
+  let next = 0
+  for (const point of text) {
+    while (next < wanted.length && wanted[next]! <= byte) characters.set(wanted[next++]!, character)
+    if (next >= wanted.length) break
+    byte += Buffer.byteLength(point)
+    character += point.length
+  }
+  while (next < wanted.length) characters.set(wanted[next++]!, character)
+  return submatches.map((submatch) => ({ start: characters.get(submatch.start)!, end: characters.get(submatch.end)! }))
+}
+
+/**
+ * Text of a ripgrep field. Bytes that are not valid UTF-8 become U+FFFD. The submatch offsets count the raw bytes (a
+ * U+FFFD is 3 bytes for a bad byte of 1), so they are converted by decoding the segments between them.
+ */
+const decodeText = (field: typeof RawText.Type, submatches: readonly Span[] = []) => {
+  if ("text" in field) return { text: field.text, submatches: toCharacters(field.text, submatches) }
+  const raw = Buffer.from(field.bytes, "base64")
+  const bounds = [...new Set([0, raw.length, ...submatches.flatMap((x) => [x.start, x.end])])]
+    .filter((offset) => offset <= raw.length)
+    .sort((x, y) => x - y)
+  const decoder = new TextDecoder()
+  const characters = new Map<number, number>()
+  const text = bounds.reduce((joined, offset, index) => {
+    characters.set(offset, joined.length)
+    return index === bounds.length - 1 ? joined : joined + decoder.decode(raw.subarray(offset, bounds[index + 1]))
+  }, "")
+  return {
+    text,
+    submatches: submatches.map((x) => ({
+      start: characters.get(Math.min(x.start, raw.length))!,
+      end: characters.get(Math.min(x.end, raw.length))!,
+    })),
+  }
+}
 
 const failure = (message: string, cause?: unknown) => new Error({ message, cause })
 
@@ -186,7 +310,7 @@ const layer = Layer.effect(
       ...(input.multiline ? ["--multiline", "--multiline-dotall"] : []),
       ...(input.type ? [`--type=${input.type}`] : []),
       ...(input.include ? [`--glob=${input.include}`] : []),
-      "--glob=!**/.git/**",
+      ...vcsGlobs,
     ]
 
     return Service.of({
@@ -205,7 +329,7 @@ const layer = Layer.effect(
             `--glob=${input.pattern}`,
             // Positive globs override rg's hidden-file filter; exclude before applying the result limit.
             ...(input.hidden ? [] : ["--glob=!**/.*"]),
-            "--glob=!**/.git/**",
+            ...vcsGlobs,
             ".",
           ],
           parse: (line) => Effect.succeed(normalizePath(line)),
@@ -232,7 +356,7 @@ const layer = Layer.effect(
             ...(input.follow ? ["--follow"] : []),
             ...(input.pattern === "*" ? [] : [`--glob=${input.pattern}`]),
             ...(input.exclude ?? []).map((pattern) => `--glob=!${pattern}`),
-            "--glob=!**/.git/**",
+            ...vcsGlobs,
             ".",
           ],
           parse: (line) => {
@@ -247,13 +371,15 @@ const layer = Layer.effect(
           onItem: input.onEntry,
         }).pipe(Effect.catchTag("Ripgrep.InvalidPatternError", (cause) => Effect.fail(failure(cause.message, cause)))),
       grep: (input) =>
-        run<RawMatchData>({
+        run<GrepRow>({
           ...input,
           // Context rows count toward the row limit too, so leave room for them around every match.
           limit: input.limit * (1 + (input.before ?? 0) + (input.after ?? 0)),
           args: [
             ...searchArgs(input),
             "--json",
+            // Without a sort ripgrep searches files in parallel and the order changes per call, so an offset would page a different order.
+            "--sort=path",
             ...(input.before ? [`--before-context=${input.before}`] : []),
             ...(input.after ? [`--after-context=${input.after}`] : []),
             "--",
@@ -271,13 +397,23 @@ const layer = Layer.effect(
                   (json.type !== "match" && json.type !== "context")
                 )
                   return Effect.undefined
+                // One record that cannot be decoded costs only itself.
                 return Schema.decodeUnknownEffect(RawMatch)(json).pipe(
-                  Effect.map((match) => ({
-                    ...match.data,
-                    path: { text: normalizePath(match.data.path.text) },
-                    submatches: match.data.submatches.slice(0, MAX_SUBMATCHES),
-                  })),
-                  Effect.mapError((cause) => failure("Invalid ripgrep match output", cause)),
+                  Effect.map((match) => {
+                    const lines = decodeText(match.data.lines, match.data.submatches.slice(0, MAX_SUBMATCHES))
+                    return {
+                      path: normalizePath(decodeText(match.data.path).text),
+                      line_number: match.data.line_number,
+                      absolute_offset: match.data.absolute_offset,
+                      text: lines.text,
+                      submatches: lines.submatches,
+                    }
+                  }),
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Skipping a ripgrep record that could not be decoded", cause).pipe(
+                      Effect.as(undefined),
+                    ),
+                  ),
                 )
               }),
             ),
@@ -286,17 +422,12 @@ const layer = Layer.effect(
             result.map((match) =>
               Match.make({
                 entry: Entry.make({
-                  path: RelativePath.make(match.path.text),
+                  path: RelativePath.make(match.path),
                   type: "file",
                 }),
                 line: match.line_number,
                 offset: match.absolute_offset,
-                text: match.lines.text.length > 2_000 ? match.lines.text.slice(0, 2_000) + "..." : match.lines.text,
-                submatches: match.submatches.map((submatch) => ({
-                  text: submatch.match.text,
-                  start: submatch.start,
-                  end: submatch.end,
-                })),
+                ...clipLine(match.text, match.submatches),
               }),
             ),
           ),
@@ -317,7 +448,16 @@ const layer = Layer.effect(
       count: (input) =>
         run<FileCount>({
           ...input,
-          args: [...searchArgs(input), "--count-matches", "--with-filename", "--", input.pattern, input.file ?? "."],
+          // Sorted so that paging with an offset sees the same order on every call.
+          args: [
+            ...searchArgs(input),
+            "--count-matches",
+            "--with-filename",
+            "--sort=path",
+            "--",
+            input.pattern,
+            input.file ?? ".",
+          ],
           // Paths may contain colons; the count is always after the last one.
           parse: (line) => {
             const split = line.lastIndexOf(":")
