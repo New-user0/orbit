@@ -63,10 +63,10 @@ describe("shell_tool under trust", () => {
   const place = { roots: [repo], directory: repo }
 
   test("is classified as a withheld shell setting", () => {
-    expect(ConfigTrust.classification.info.shell_tool).toEqual({ type: "withhold", kind: "shell" })
+    expect(ConfigTrust.classification.info.shell_tool).toEqual({ type: "withhold", kind: "providers" })
     const result = ConfigTrust.sanitize(Schema.decodeUnknownSync(Info)({ shell_tool: { timeout: 1 } }), place)
     expect(result.info).not.toHaveProperty("shell_tool")
-    expect(result.withheld).toEqual(["shell"])
+    expect(result.withheld).toEqual(["providers"])
   })
 
   const it = testEffect(Layer.empty)

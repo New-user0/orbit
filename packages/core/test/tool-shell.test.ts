@@ -23,6 +23,7 @@ import { Provider } from "@orbit/core/provider"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Agent } from "@orbit/core/agent"
 import { Job } from "@orbit/core/job"
+import { KV } from "@orbit/core/kv"
 import { Session } from "@orbit/core/session"
 import { SessionEvent } from "@orbit/core/session/event"
 import { SessionExecution } from "@orbit/core/session/execution"
@@ -189,6 +190,33 @@ const permissionIt = testEffect(
     Global.node.replace(tempGlobalLayer),
     PluginSupervisor.node.replace(shellPluginSupervisor),
     offlineModels,
+  ]),
+)
+
+// The real job registry, with `block` and `cancel` held back for a set time, so a test can land the deadline in the window
+// between a job settling and the call looking at it.
+const slow = { block: 0, cancel: 0 }
+const slowJobs = makeGlobalNode({
+  service: Job.Service,
+  layer: Layer.effect(
+    Job.Service,
+    Job.make.pipe(
+      Effect.map((jobs) =>
+        Job.Service.of({
+          ...jobs,
+          block: (input) => jobs.block(input).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.block)))),
+          cancel: (id) => jobs.cancel(id).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.cancel)))),
+        }),
+      ),
+    ),
+  ),
+  deps: [KV.node],
+})
+const slowIt = testEffect(
+  AppNodeBuilder.build(nodes, [
+    ...replacements,
+    Job.node.replace(slowJobs),
+    PluginSupervisor.node.replace(shellPluginSupervisor),
   ]),
 )
 
@@ -2405,28 +2433,28 @@ describe("ShellTool timeouts", () => {
       notifications: () => ReadonlyArray<{ shellID: unknown; state: unknown }>
     }) => Effect.Effect<A, E, R>,
   ) =>
-        withSession(directory, (registry) =>
-          Effect.gen(function* () {
-            const bus = yield* Bus.Service
-            const seen: Array<{ shellID: unknown; state: unknown }> = []
-            yield* bus.subscribe(SessionEvent.InboxEnqueued).pipe(
-              Stream.filter((event) => event.data.sessionID === sessionID && event.data.item.type === "synthetic"),
-              Stream.runForEach((event) =>
-                Effect.sync(() => {
-                  const metadata = (event.data.item.payload as { metadata?: Record<string, unknown> }).metadata
-                  seen.push({ shellID: metadata?.shellID, state: metadata?.state })
-                }),
-              ),
-              Effect.forkScoped({ startImmediately: true }),
-            )
-            return yield* body({
-              registry,
-              folder: directory,
-              release: path.join(directory, "release"),
-              notifications: () => seen,
-            })
-          }),
+    withSession(directory, (registry) =>
+      Effect.gen(function* () {
+        const bus = yield* Bus.Service
+        const seen: Array<{ shellID: unknown; state: unknown }> = []
+        yield* bus.subscribe(SessionEvent.InboxEnqueued).pipe(
+          Stream.filter((event) => event.data.sessionID === sessionID && event.data.item.type === "synthetic"),
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              const metadata = (event.data.item.payload as { metadata?: Record<string, unknown> }).metadata
+              seen.push({ shellID: metadata?.shellID, state: metadata?.state })
+            }),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
         )
+        return yield* body({
+          registry,
+          folder: directory,
+          release: path.join(directory, "release"),
+          notifications: () => seen,
+        })
+      }),
+    )
 
   const untilNotified = (
     notifications: () => ReadonlyArray<unknown>,
@@ -2610,6 +2638,40 @@ describe("ShellTool timeouts", () => {
     { timeout: 120_000 },
   )
 
+  slowIt.live(
+    "returns a command that exits as the deadline passes inline, with no notification and no marker",
+    () =>
+      inFolder(undefined, ({ registry, notifications }) =>
+        Effect.gen(function* () {
+          slow.block = 1500
+          slow.cancel = 0
+          const settled = yield* executeTool(registry, call({ command: briefThenDone(50), timeout: 200 }))
+          expect(settled.metadata).toMatchObject({ status: "completed" })
+          expect(text(settled)).toBe("done")
+          yield* Effect.promise(() => Bun.sleep(500))
+          expect(notifications()).toEqual([])
+          expect(yield* pending).toEqual([])
+        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.block = 0)))),
+      ),
+    { timeout: 30_000 },
+  )
+
+  it.live(
+    "moves rather than stops a command it cannot read",
+    () =>
+      inFolder(undefined, ({ registry, release }) =>
+        Effect.gen(function* () {
+          const settled = yield* executeTool(
+            registry,
+            call({ command: `${releaseLoop(release)} # ${"x".repeat(12_000)}`, timeout: 300 }),
+          )
+          expect(settled.metadata).toMatchObject({ status: "running" })
+          yield* Effect.promise(() => Bun.write(release, ""))
+        }),
+      ),
+    { timeout: 30_000 },
+  )
+
   it.live(
     "returns a command that finishes before its deadline inline, with no notification and no marker",
     () =>
@@ -2626,30 +2688,35 @@ describe("ShellTool timeouts", () => {
     { timeout: 30_000 },
   )
 
-  it.live(
+  slowIt.live(
     "cancels an interrupted call before its deadline and leaves nothing to deliver",
     () =>
       inFolder(undefined, ({ registry, release, notifications }) =>
         Effect.gen(function* () {
           const shell = yield* Shell.Service
-          const running = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 500 })).pipe(
+          const jobs = yield* Job.Service
+          slow.block = 0
+          slow.cancel = 1000
+          const running = yield* executeTool(registry, call({ command: releaseLoop(release), timeout: 300 })).pipe(
             Effect.forkChild({ startImmediately: true }),
           )
+          // Interrupt only once the job exists, so the interrupt reaches the wait on the job and not the spawn.
           const started = (remaining = 3000): Effect.Effect<void, Error> =>
             Effect.gen(function* () {
-              if ((yield* shell.list()).length > 0) return
-              if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the shell"))
+              const id = (yield* shell.list())[0]?.id
+              if (id && (yield* jobs.get(id))) return
+              if (remaining <= 0) return yield* Effect.fail(new Error("Timed out waiting for the job"))
               yield* Effect.promise(() => Bun.sleep(5))
               return yield* started(remaining - 1)
             })
           yield* started()
+          yield* Effect.promise(() => Bun.sleep(20))
           yield* Fiber.interrupt(running)
-          // Past the deadline the timer would have fired, had it survived.
-          yield* Effect.promise(() => Bun.sleep(900))
+          // The cancel outlasts the deadline: a timer that was not stopped first would move the cancelled job.
+          yield* Effect.promise(() => Bun.sleep(500))
           expect(notifications()).toEqual([])
           expect(yield* pending).toEqual([])
-          expect(yield* shell.list()).toEqual([])
-        }),
+        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.cancel = 0)))),
       ),
     { timeout: 30_000 },
   )

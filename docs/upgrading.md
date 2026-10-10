@@ -327,7 +327,9 @@ Bypass is refused by the clients until a durable permission mode in the server r
 A foreground shell command that is still running at its timeout is no longer killed. It keeps running as a background
 shell job, the call returns its shell ID and output file, and one notification follows when it finishes. A command made
 only of sleeps (`sleep 60`, `Start-Sleep 60`) is still stopped at its timeout. Anything else is moved, including a
-command Orbit cannot read, and a sleep followed by other work. A command that exits before the call has seen it move is returned inline, as if nothing had happened, with no notification.
+command Orbit cannot read, and a sleep followed by other work.
+A command that exits before the call has seen it move is returned inline, as if nothing had happened, with no
+notification.
 
 A foreground `timeout` of `0` no longer means "never time out": it means the default, like leaving it out. A timeout
 above the maximum is lowered to the maximum in every shell, and for a background command too, whose kill deadline is
@@ -341,7 +343,8 @@ folder to be trusted, like the other budget settings; yours applies everywhere.
 **Affects:** scripts and agents that relied on a long command being killed at its timeout, or on `timeout: 0` to wait
 without limit, and SDK callers that read `shell_tool` from the config schema.
 
-**What to do:** Stop a command you no longer want with `TaskStop`. Raise `shell_tool.timeout` and `shell_tool.max_timeout` if a command should be waited
+**What to do:** Stop a command you no longer want with `TaskStop`.
+Raise `shell_tool.timeout` and `shell_tool.max_timeout` if a command should be waited
 for longer before it moves.
 
 ## Clients

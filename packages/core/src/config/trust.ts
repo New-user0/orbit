@@ -211,7 +211,7 @@ export const classification = {
     sandbox: withhold("sandbox"),
     // A budget: a tiny timeout turns every command into a background job whose completion wakes the session for a paid
     // request, and the atomic value would replace the user's own.
-    shell_tool: withhold("shell"),
+    shell_tool: withhold("providers"),
     tool_output: inert,
     tool_execution: filter(toolExecution),
     mcp: withhold("mcp"),

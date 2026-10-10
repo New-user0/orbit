@@ -39,7 +39,10 @@ export function limits(configured?: ConfigShellTool.Info) {
  * How long a call waits. A foreground call that gives no timeout, or 0, waits the default. A background call with
  * no timeout, or 0, has no deadline. Anything given is capped at the maximum.
  */
-export function budget(input: Pick<typeof Input.Type, "timeout" | "run_in_background">, limit: ReturnType<typeof limits>) {
+export function budget(
+  input: Pick<typeof Input.Type, "timeout" | "run_in_background">,
+  limit: ReturnType<typeof limits>,
+) {
   if (input.run_in_background === true) return input.timeout ? Math.min(input.timeout, limit.max) : 0
   return Math.min(input.timeout || limit.timeout, limit.max)
 }
@@ -54,7 +57,10 @@ const OS =
       : process.platform === "linux"
         ? "Linux"
         : process.platform
-const duration = (ms: number) => `${ms} ms (${Number((ms / 60_000).toFixed(2))} minutes)`
+const duration = (ms: number) => {
+  const minutes = Number((ms / 60_000).toFixed(2))
+  return minutes < 1 ? `${ms} ms` : `${ms} ms (${minutes} ${minutes === 1 ? "minute" : "minutes"})`
+}
 const description = (shell: string | undefined, limit: ReturnType<typeof limits>) =>
   [
     "Execute a shell command and return its output.",
@@ -188,6 +194,21 @@ export const Plugin = {
           agent: context.agent,
           source,
         })
+      // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
+      // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
+      // be analysed counts as not sleep-led, so it is moved and never killed.
+      const deadline = invocation.timeout
+      const analysis =
+        foreground && deadline > 0
+          ? yield* ShellAnalysis.inspect(invocation.command, {
+              shell: invocation.shell,
+              platform: process.platform,
+              path: process.platform === "win32" ? path.win32 : path.posix,
+              home: os.homedir(),
+              cwd: target.absolute,
+              env: invocation.env,
+            }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
+          : undefined
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
         Effect.catchTag("Environment.NotFound", () =>
@@ -196,20 +217,7 @@ export const Plugin = {
       )
       if (workdir !== "directory")
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
-      // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
-      // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
-      // be analysed counts as not sleep-led, so it is moved and never killed.
-      const deadline = invocation.timeout
-      if (!foreground || deadline <= 0) return { budget: deadline, autoBackground: false }
-      const analysis = yield* ShellAnalysis.inspect(invocation.command, {
-        shell: invocation.shell,
-        platform: process.platform,
-        path: process.platform === "win32" ? path.win32 : path.posix,
-        home: os.homedir(),
-        cwd: target.absolute,
-        env: invocation.env,
-      }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
-      if (analysis.sleepLed) return { budget: deadline, autoBackground: false }
+      if (!analysis || analysis.sleepLed) return { budget: deadline, autoBackground: false }
       invocation.timeout = 0
       return { budget: deadline, autoBackground: true }
     })
@@ -344,7 +352,8 @@ export const Plugin = {
                   Effect.gen(function* () {
                     // Stop the timer before cancelling, or it could move a job that was just cancelled and leave a marker
                     // that only a restart would deliver.
-                    if (yield* stopTimer) return yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                    if (yield* stopTimer)
+                      return yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
                     yield* jobs.cancel(job.id)
                   }).pipe(Effect.ignore),
                 ),
