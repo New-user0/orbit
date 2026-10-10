@@ -420,3 +420,56 @@ describe("FileAccess in a project that is not trusted", () => {
     })
   })
 })
+
+// Class matrix: what refuses a device is what the target is, not only the name it was given. Spellings of the listed
+// devices, a device the list lacks, a pipe, and a link of the repository to a device (decided from the `place` half of
+// the check), each in a trusted and in an untrusted project, with nothing asked and the error type DeviceError.
+describe.skipIf(process.platform !== "linux")("FileAccess.authorizeRead refuses what is not a file", () => {
+  const provideProject = (directory: string, requests: Permission.AssertInput[], trusted: boolean) =>
+    Effect.provide(
+      AppNodeBuilder.build(LayerNode.group([FileAccess.node, Location.node, ProjectTrust.node]), [
+        Location.node.replace(
+          Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+        ),
+        Permission.node.replace(permissionLayer({ assert: (input) => Effect.sync(() => void requests.push(input)) })),
+        ...(trusted ? [] : untrustedProjectNodes),
+      ]),
+    )
+
+  for (const trusted of [true, false])
+    it.live(`refuses every spelling, device link and pipe (${trusted ? "trusted" : "untrusted"})`, () => {
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const project = (yield* tmpdirScoped()).path
+        yield* Effect.promise(async () => {
+          await fs.symlink("/dev/zero", path.join(project, "zero-link"))
+          await fs.symlink("/proc/self/fd/0", path.join(project, "fd-link"))
+          await fs.symlink("/dev/stdin", path.join(project, "stdin-link"))
+          await fs.writeFile(path.join(project, "plain.txt"), "plain")
+          const made = Bun.spawnSync(["mkfifo", path.join(project, "pipe")])
+          expect(made.exitCode).toBe(0)
+        })
+        const refused = [
+          "/proc/thread-self/fd/0",
+          `/proc/self/task/${process.pid}/fd/0`,
+          `/proc/${process.pid}/task/${process.pid}/fd/0`,
+          "/dev/ptmx",
+          "zero-link",
+          "fd-link",
+          "stdin-link",
+          "pipe",
+        ]
+        yield* Effect.gen(function* () {
+          const access = yield* FileAccess.Service
+          for (const file of refused) {
+            const error = yield* access.authorizeRead(file, invocation).pipe(Effect.flip)
+            expect(error).toBeInstanceOf(FileAccess.DeviceError)
+          }
+          expect(requests).toEqual([])
+          // A plain file still goes through, so the refusals above are not a broken harness.
+          yield* access.authorizeRead("plain.txt", invocation)
+          expect(requests.map((request) => request.action)).toEqual(["Read"])
+        }).pipe(provideProject(project, requests, trusted))
+      })
+    })
+})

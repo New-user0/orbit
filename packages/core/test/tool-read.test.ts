@@ -2,8 +2,10 @@ import { beforeEach, describe, expect } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { pathToFileURL } from "url"
 import { Effect, Exit, Layer, Result } from "effect"
+import { ChildProcessSpawner } from "effect/unstable/process"
+import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
+import { LayerNodePlatform } from "@orbit/util/effect/app-node-platform"
 import { Config } from "@orbit/core/config"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -261,6 +263,25 @@ describe("ReadTool", () => {
     }),
   )
 
+  it.effect("reads a notebook from its first line when offset and limit are 0", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const execution = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-read-notebook-zero",
+          name: "Read",
+          input: { file_path: "test/fixtures/notebook/sample.ipynb", offset: 0, limit: 0 },
+        },
+      })
+      expect(execution.status).toBe("completed")
+      if (execution.status !== "completed") return
+      expect(execution.output).toMatchObject({ type: "text-page", offset: 1 })
+    }),
+  )
+
   it.effect("pages a notebook with huge outputs within the budget", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
@@ -290,40 +311,45 @@ describe("ReadTool", () => {
           }),
         ),
       )
-      readResult = {
-        type: "file",
-        uri: pathToFileURL(file).href,
-        name: "big.ipynb",
-        content: "{}",
-        encoding: "utf8",
-        mime: "application/json",
+      // The real reader, so that the paging of the raw JSON (a few lines) and of the rendering (thousands) are both real.
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
+      readOverride = (input, resource, page) => ReadToolFileSystem.read(environment, input, resource, page)
+
+      // Page to the end: each page stays within the budget and starts where the one before said to continue.
+      const starts: number[] = []
+      let offset: number | undefined
+      let finished = false
+      for (let index = 0; index < 20 && !finished; index++) {
+        const page = yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: {
+            type: "tool-call",
+            id: `call-big-notebook-${index}`,
+            name: "Read",
+            input: offset === undefined ? { file_path: file } : { file_path: file, offset },
+          },
+        })
+        if (page.status !== "completed" || page.output.type !== "text-page") throw new Error("expected a page")
+        const text = page.content?.[0]?.type === "text" ? page.content?.[0].text : ""
+        expect(Token.estimate(text)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS + 100)
+        starts.push(page.output.offset)
+        if (page.output.next === undefined) finished = true
+        else {
+          expect(page.output.next).toBeGreaterThan(page.output.offset)
+          expect(text).toContain(`Continue reading with offset: ${page.output.next}`)
+          offset = page.output.next
+        }
       }
-
-      const first = yield* executeTool(registry, {
-        sessionID,
-        ...toolIdentity,
-        call: { type: "tool-call", id: "call-big-notebook", name: "Read", input: { file_path: file } },
-      })
-      if (first.status !== "completed") throw new Error("expected the first page")
-      const text = first.content?.[0]?.type === "text" ? first.content?.[0].text : ""
-      expect(first.output).toMatchObject({ type: "text-page", truncated: true })
-      // The page ends before the output passes the budget, and says where to go on.
-      expect(Token.estimate(text)).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS + 100)
-      const next = first.output.type === "text-page" ? first.output.next : undefined
-      expect(next).toBeGreaterThan(1)
-      expect(text).toContain(`Continue reading with offset: ${next}`)
-
-      // The giant line is clamped, so a page that holds it stays within the budget too.
-      const last = yield* executeTool(registry, {
-        sessionID,
-        ...toolIdentity,
-        call: { type: "tool-call", id: "call-big-notebook-2", name: "Read", input: { file_path: file, offset: next } },
-      })
-      if (last.status !== "completed") throw new Error("expected the next page")
-      expect(Token.estimate(last.content?.[0]?.type === "text" ? last.content?.[0].text : "")).toBeLessThanOrEqual(
-        ReadToolFileSystem.MAX_READ_TOKENS + 100,
-      )
-    }).pipe(Effect.scoped),
+      // More than one page, chained to the last: the offsets are lines of the rendering, not of the JSON.
+      expect(starts.length).toBeGreaterThan(1)
+      expect(starts[0]).toBe(1)
+      expect(finished).toBe(true)
+    }).pipe(
+      Effect.provide(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem]))),
+      Effect.scoped,
+    ),
   )
 
   it.effect("asks for external_directory approval before reading an external absolute path", () =>

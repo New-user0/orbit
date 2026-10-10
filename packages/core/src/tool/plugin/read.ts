@@ -54,11 +54,10 @@ export const Plugin = {
           output: Output,
           execute: (input, context) => {
             return Effect.gen(function* () {
-              const read = (target: FileAccess.Target) =>
-                reader.read(target.absolute, target.resource, {
-                  offset: input.offset,
-                  limit: input.limit,
-                })
+              // A notebook is paged by its rendered cells, so its raw JSON is read whole: the offset of a page is a line
+              // of the rendering, which the JSON may not have.
+              const read = (target: FileAccess.Target, paged = !Notebook.isNotebook(target.absolute)) =>
+                reader.read(target.absolute, target.resource, paged ? { offset: input.offset, limit: input.limit } : {})
 
               const requested = yield* access.authorizeRead(input.file_path, context)
               const result = yield* read(requested).pipe(
@@ -123,6 +122,8 @@ export const Plugin = {
               if (result.content.type !== "list-page" && Notebook.isNotebook(result.target.absolute)) {
                 const notebook = yield* readNotebook(result.target.absolute, input.offset, input.limit)
                 if (notebook) return { output: notebook, path: result.path }
+                // Not a notebook after all: read it as the text it is, from the offset asked for.
+                return { output: yield* read(result.target, true), path: result.path }
               }
               return { output: result.content, path: result.path }
             }).pipe(

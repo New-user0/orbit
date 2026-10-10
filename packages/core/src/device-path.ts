@@ -12,8 +12,11 @@ const UNIX_DEVICES = new Set([
   "/dev/stdout",
   "/dev/stderr",
   "/dev/console",
+  "/dev/ptmx",
 ])
-const UNIX_PREFIXES = ["/dev/tty", "/dev/pts/", "/dev/fd/", "/proc/self/fd/"]
+// `self`, `thread-self` or a process id, directly or through one of its tasks.
+const PROC_FD = /^\/proc\/(self|thread-self|[0-9]+)\/(task\/[0-9]+\/)?fd\//
+const UNIX_PREFIXES = ["/dev/tty", "/dev/pts/", "/dev/fd/", "/dev/cu."]
 
 /**
  * Whether an absolute path names a device or stream that never ends or blocks: reading one hangs the tool or fills
@@ -26,11 +29,7 @@ export function blocked(absolute: string, platform: NodeJS.Platform = process.pl
 
 function unix(absolute: string) {
   const file = path.posix.normalize(absolute)
-  return (
-    UNIX_DEVICES.has(file) ||
-    UNIX_PREFIXES.some((prefix) => file.startsWith(prefix)) ||
-    /^\/proc\/[0-9]+\/fd\//.test(file)
-  )
+  return UNIX_DEVICES.has(file) || UNIX_PREFIXES.some((prefix) => file.startsWith(prefix)) || PROC_FD.test(file)
 }
 
 function windows(absolute: string) {

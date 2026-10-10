@@ -37,14 +37,16 @@ describe("ReadTool text serialization", () => {
       content: "alpha\n\nomega\n",
       page: { offset: 1, limit: 2 },
       output: { type: "text-page", content: "alpha\n", offset: 1, truncated: true, next: 3 },
-      model: "Read file lines.txt, lines 1-2\n1: alpha\n2: \n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 3, or use Grep to find specific content.]",
+      model:
+        "Read file lines.txt, lines 1-2\n1: alpha\n2: \n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 3, or use Grep to find specific content.]",
     },
     {
       name: "preserves multiple selected trailing blank lines at a noninitial offset",
       content: "before\nalpha\n\n\nomega\n",
       page: { offset: 2, limit: 3 },
       output: { type: "text-page", content: "alpha\n\n", offset: 2, truncated: true, next: 5 },
-      model: "Read file lines.txt, lines 2-4\n2: alpha\n3: \n4: \n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 5, or use Grep to find specific content.]",
+      model:
+        "Read file lines.txt, lines 2-4\n2: alpha\n3: \n4: \n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 5, or use Grep to find specific content.]",
     },
     {
       name: "preserves a selected trailing blank line at EOF",
@@ -65,7 +67,8 @@ describe("ReadTool text serialization", () => {
       content: "alpha\n\nomega\n",
       page: { limit: 1 },
       output: { type: "text-page", content: "alpha", offset: 1, truncated: true, next: 2 },
-      model: "Read file lines.txt, lines 1-1\n1: alpha\n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 2, or use Grep to find specific content.]",
+      model:
+        "Read file lines.txt, lines 1-1\n1: alpha\n[Output truncated: one read returns at most 2000 lines or about 25000 tokens. Continue reading with offset: 2, or use Grep to find specific content.]",
     },
     {
       name: "strips only the terminal file newline in a whole-file read",
@@ -308,11 +311,27 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 
+  it.effect("pages a file of more than 2,000 lines even when it fits the token budget", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "tiny.txt")
+      // About 5 KB: far under the budget, over the line limit.
+      yield* files.writeFileString(file, Array.from({ length: 2_500 }, () => "x").join("\n"))
+
+      const result = yield* ReadToolFileSystem.read(environment, absolute(file), "tiny.txt")
+
+      expect(result).toMatchObject({ type: "text-page", offset: 1, truncated: true, next: 2_001 })
+    }),
+  )
+
   it.effect("pages a 95 KB file of short lines at 2,000 lines", () =>
     Effect.gen(function* () {
       const { environment, files, directory } = yield* fixture
       const file = path.join(directory, "short.txt")
-      yield* files.writeFileString(file, Array.from({ length: 9_500 }, (_, index) => String(index).padStart(9, "0")).join("\n"))
+      yield* files.writeFileString(
+        file,
+        Array.from({ length: 9_500 }, (_, index) => String(index).padStart(9, "0")).join("\n"),
+      )
 
       const result = yield* ReadToolFileSystem.read(environment, absolute(file), "short.txt")
 
@@ -343,7 +362,10 @@ describe("ReadToolFileSystem", () => {
       const { environment, files, directory } = yield* fixture
       const file = path.join(directory, "big.txt")
       // Longer than the 256 KB first chunk, so pages after the first start in the middle of the file.
-      yield* files.writeFileString(file, Array.from({ length: 3_000 }, (_, index) => `${index}${"x".repeat(97)}`).join("\n"))
+      yield* files.writeFileString(
+        file,
+        Array.from({ length: 3_000 }, (_, index) => `${index}${"x".repeat(97)}`).join("\n"),
+      )
 
       const seen: string[] = []
       let offset: number | undefined

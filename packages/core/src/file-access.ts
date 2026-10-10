@@ -21,7 +21,11 @@ export class DeviceError extends Schema.TaggedError<DeviceError>()("FileAccess.D
   resource: Schema.String,
 }) {
   override get message() {
-    return `${this.resource} is a device or stream, not a file, and reading it would never finish. Name a regular file instead.`
+    return `${this.resource} is a device or stream, not a file, and reading it would never finish. Name a regular file instead.${
+      process.platform === "win32"
+        ? " NUL, CON, PRN, AUX, COM1 to COM9 and LPT1 to LPT9 are reserved Windows device names, with or without an extension."
+        : ""
+    }`
   }
 }
 
@@ -300,14 +304,29 @@ const layer = Layer.effect(
       })
     })
 
+    // Whether the place exists and, followed through links, is neither a file nor a folder. A stat opens nothing.
+    const isSpecial = (place: string) =>
+      fs.stat(place).pipe(
+        Effect.map((info) => info.type !== "File" && info.type !== "Directory"),
+        Effect.orElseSucceed(() => false),
+      )
+
     const authorizeRead = Effect.fn("FileAccess.authorizeRead")(function* (
       file: string,
       context: Invocation,
       options?: ReadOptions,
     ) {
+      // Before any disk is read: resolving a path stats every part of it, and a stat of a device can block.
+      if (DevicePath.blocked(resolvePath(location.directory, file))) return yield* new DeviceError({ resource: file })
       const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
-      // Before anything is asked or opened: a device is no place for a question, and a stat of one can block.
-      if (DevicePath.blocked(target.absolute) || DevicePath.blocked(target.place))
+      // Before anything is asked or opened: a device is no place for a question. The listed names are the Windows rule;
+      // elsewhere what the place really is decides, so a spelling the list lacks, a link to a device or a pipe is
+      // refused too.
+      if (
+        DevicePath.blocked(target.absolute) ||
+        DevicePath.blocked(target.place) ||
+        (process.platform !== "win32" && (yield* isSpecial(target.place)))
+      )
         return yield* new DeviceError({ resource: file })
       const sibling =
         options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
