@@ -147,6 +147,13 @@ export const arrayAndNetwork = [
   "Get-Process -Name a, $x",
   "Get-Process -Name a, (1)",
   'Get-Process -Name a, "$x"',
+  // A comma list given to a native program: later elements can be separate arguments, so none is decided (class 6).
+  "tasklist /fo:csv, /s:evilhost",
+  "tasklist x, /s:evilhost",
+  "tasklist /fo:csv,<#c#>/s:evilhost",
+  "tasklist /fo:csv,/s:evilhost",
+  "getmac /fo:csv, /s:evilhost",
+  "systeminfo /fo:csv, /s:evilhost",
   "Get-Process -Name a, $(1)",
   "Get-Process -Name a, @(1)",
 ]

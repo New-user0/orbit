@@ -616,6 +616,8 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       continue
     }
     if (arg.kind === "ArrayLiteralAst") {
+      // A native program may receive the elements as separate arguments (whitespace or a comment after a comma), so a flag in a later element would escape the flag rules.
+      if (spec.native) return refuse("array:native")
       // Decided from the parser's elements, never from the array's text: a space, comment or continuation after a comma hides an element from a split.
       if (!arg.elements?.length || arg.elements.some((item) => !CONSTANT.has(item.kind) || item.value === undefined)) return refuse("argument")
       // The reads of an array in a path position cannot be told apart from one relative path, so they are not validated.
