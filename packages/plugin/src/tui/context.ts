@@ -303,6 +303,12 @@ export interface AttentionNotifyOptions {
   readonly message: string
   readonly notification?: AttentionNotification
   readonly sound?: AttentionSound
+  /**
+   * When the terminal bell may ring; defaults to blurred or unknown focus. Only matters when the bell is on. An object
+   * rings the bell even when `notification` is false (a subagent's permission still needs a person); when absent, the
+   * bell follows `notification !== false`.
+   */
+  readonly bell?: { readonly when?: AttentionWhen }
 }
 
 export type AttentionNotifySkipReason =
@@ -317,10 +323,14 @@ export interface AttentionNotifyResult {
   readonly ok: boolean
   readonly notification: boolean
   readonly sound: boolean
+  /** True when the terminal bell rang; absent from hosts that predate the bell. */
+  readonly bell?: boolean
   readonly skipped?: AttentionNotifySkipReason
 }
 
 export interface Attention {
+  /** Seconds a finished session waits for a keypress before a reminder; 0 turns the reminder off. */
+  readonly idleReminder?: number
   notify(options: AttentionNotifyOptions): Promise<AttentionNotifyResult>
 }
 

@@ -1038,6 +1038,24 @@ approvals for Code Mode fetches and workflow agents, in the terminal UI and Mini
 
 **What to do:** Nothing.
 
+### Terminal bell, idle reminder and a status in the window title
+
+`attention.bell` in the terminal UI's `cli.json` (default off) rings the terminal bell for an attention event while the
+terminal is blurred or its focus is unknown, between frames (right after the next frame while an animation keeps the
+renderer running). A subagent's permission or form rings it too, since a person must answer; a subagent finishing does
+not. `attention.idle_reminder` is a number of seconds (default 60, larger values are capped at 86400, 0 turns it off): once a top-level
+session has finished, the reminder "Orbit is waiting for your input" comes after that many seconds with no key
+pressed, no new run started and no permission or form pending. It is sent only while the terminal reports that it is
+blurred (never for a terminal whose focus is unknown), only when notifications, sound or the bell are on, and once per
+idle period. The window title was
+`OC | <title>`; it is now `Orbit · <title>`, with ` · working` while a session runs and ` · needs input` while a
+permission or form waits, including those of its subagents (in Mini, on Linux, as before).
+
+**Affects:** people who match the window title in a terminal multiplexer, window manager rule or script, and people who
+have notifications, sound or the bell on, who get the reminder.
+
+**What to do:** Match `Orbit · ` instead of `OC | `. Set `attention.idle_reminder` to 0 to turn the reminder off.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

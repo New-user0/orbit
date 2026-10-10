@@ -11,6 +11,7 @@ import { Config } from "./config"
 import { Schema } from "effect"
 import stripAnsi from "strip-ansi"
 import * as TuiAudio from "./audio"
+import { ringTerminalBell } from "./util/terminal-bell"
 import {
   defaultSoundPath,
   questionSoundPath,
@@ -23,9 +24,11 @@ type FocusState = "unknown" | "focused" | "blurred"
 
 type AttentionRenderer = {
   readonly isDestroyed: boolean
-  on(event: "focus" | "blur", listener: () => void): unknown
-  off(event: "focus" | "blur", listener: () => void): unknown
   triggerNotification(message: string, title?: string): boolean
+  idle(): Promise<void>
+  readonly isRunning?: boolean
+  on(event: "focus" | "blur" | "frame", listener: () => void): unknown
+  off(event: "focus" | "blur" | "frame", listener: () => void): unknown
 }
 
 type AttentionHost = Attention & {
@@ -86,6 +89,8 @@ export function createTuiAttention(input: {
   renderer: AttentionRenderer
   config: Pick<Config.Resolved, "attention">
   audio?: Pick<typeof TuiAudio, "loadSoundFile" | "play">
+  /** Where the bell byte goes; defaults to the process stdout. */
+  writeBell?: (text: string) => unknown
 }): AttentionHost {
   let focus: FocusState = "unknown"
   let disposed = false
@@ -126,9 +131,13 @@ export function createTuiAttention(input: {
   }
 
   return {
+    get idleReminder() {
+      return input.config.attention.idle_reminder
+    },
     async notify(request) {
       try {
-        if (!input.config.attention.notifications && !input.config.attention.sound) return skipped("attention_disabled")
+        if (!input.config.attention.notifications && !input.config.attention.sound && !input.config.attention.bell)
+          return skipped("attention_disabled")
         if (disposed || input.renderer.isDestroyed) return skipped("renderer_destroyed")
 
         const message = normalizeText(request.message, "", MESSAGE_LIMIT)
@@ -160,15 +169,26 @@ export function createTuiAttention(input: {
             : "default"
         const sound = volume === undefined || soundSkip ? false : await playSound(soundName, volume)
 
-        if (!notification && !sound) {
+        // By default the bell also fires when focus is unknown; a request can ask for blurred only.
+        const bellWhen = request.bell?.when
+        const bellSkip =
+          bellWhen === undefined ? (focus === "focused" ? "focused" : undefined) : focusSkip(bellWhen, focus)
+        const bell =
+          input.config.attention.bell && (request.bell !== undefined || request.notification !== false) && !bellSkip
+            ? await ringTerminalBell(input.renderer, input.writeBell)
+            : false
+
+        if (!notification && !sound && !bell) {
           if (notificationRequested && notificationSkip) return skipped(notificationSkip)
           if (soundSkip) return skipped(soundSkip)
+          if (input.config.attention.bell && bellSkip) return skipped(bellSkip)
         }
 
         return {
-          ok: notification || sound,
+          ok: notification || sound || bell,
           notification,
           sound,
+          bell,
         }
       } catch (error) {
         console.debug("failed to handle attention notification", { error })
