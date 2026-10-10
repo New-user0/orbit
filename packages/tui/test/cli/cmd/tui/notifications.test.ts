@@ -362,6 +362,14 @@ describe("idle reminder", () => {
     expect(waiting(harness)).toEqual([])
   })
 
+  test("a subagent finishing leaves a root's pending reminder alone", async () => {
+    const harness = await setup(undefined, 0.05)
+    harness.emit(executionSucceeded("d"))
+    harness.emit(executionSucceeded("d2", "subagent"))
+    await Bun.sleep(150)
+    expect(waiting(harness)).toEqual([reminder])
+  })
+
   test("does not start while a permission is already pending", async () => {
     const harness = await setup(undefined, 0.05)
     harness.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-1") })
@@ -375,8 +383,18 @@ describe("idle reminder", () => {
 describe("terminal bell for subagents", () => {
   test.each([
     ["root permission", () => permissionAsked("per-1", "session"), true],
+    [
+      "root form",
+      () => ({ id: "f0", created: 0, type: "form.created", data: { form: form("form-0", "session") } }) as OrbitEvent,
+      true,
+    ],
+    ["root Session done", () => executionSucceeded("d0"), true],
     ["subagent permission", () => permissionAsked("per-2", "subagent"), true],
-    ["subagent form", () => ({ id: "f", created: 0, type: "form.created", data: { form: form("form-2", "subagent") } }) as OrbitEvent, true],
+    [
+      "subagent form",
+      () => ({ id: "f", created: 0, type: "form.created", data: { form: form("form-2", "subagent") } }) as OrbitEvent,
+      true,
+    ],
     ["subagent Session done", () => executionSucceeded("d1", "subagent"), false],
   ] as const)("%s rings: %p", async (_name, event, rings) => {
     const written: string[] = []
@@ -405,6 +423,44 @@ describe("terminal bell for subagents", () => {
     harness.emit(event())
     await Bun.sleep(20)
     expect(written).toEqual(rings ? ["\x07"] : [])
+    attention.dispose()
+  })
+})
+
+// The real plugin reads the reminder delay from the real host, which reads it from config: pin the whole link.
+describe("idle reminder through the real host", () => {
+  test.each([
+    ["blurred", true, 2],
+    ["focus unknown", false, 1],
+  ])("%s", async (_name, blurred, bells) => {
+    const written: string[] = []
+    const listeners = new Map<string, () => void>()
+    const attention = createTuiAttention({
+      renderer: {
+        isDestroyed: false,
+        on: (event, listener) => listeners.set(event, listener),
+        off: () => {},
+        triggerNotification: () => true,
+        idle: async () => {},
+      },
+      config: {
+        attention: {
+          notifications: false,
+          sound: false,
+          bell: true,
+          idle_reminder: 0.05,
+          volume: 0.4,
+          sound_pack: "orbit.default",
+          sounds: {},
+        },
+      },
+      writeBell: (text) => written.push(text),
+    })
+    if (blurred) listeners.get("blur")?.()
+    const harness = await setup(undefined, 0, attention)
+    harness.emit(executionSucceeded("d"))
+    await Bun.sleep(200)
+    expect(written).toEqual(Array<string>(bells).fill("\x07"))
     attention.dispose()
   })
 })

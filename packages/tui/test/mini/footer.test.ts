@@ -430,7 +430,15 @@ test("footer reports working and needs-input activity for the terminal title", a
     app.footer.event({ type: "stream.patch", patch: { phase: "running" } })
     app.footer.event({
       type: "stream.view",
-      view: { type: "form", request: { id: "form_1", sessionID: "ses_1", title: "Question", fields: [{ key: "authorization", type: "external", url: "https://example.com" }] } },
+      view: {
+        type: "form",
+        request: {
+          id: "form_1",
+          sessionID: "ses_1",
+          title: "Question",
+          fields: [{ key: "authorization", type: "external", url: "https://example.com" }],
+        },
+      },
     })
     app.footer.event({ type: "stream.view", view: { type: "prompt" } })
     app.footer.event({ type: "stream.patch", patch: { phase: "idle" } })

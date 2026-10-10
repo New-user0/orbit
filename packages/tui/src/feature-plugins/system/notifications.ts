@@ -37,9 +37,11 @@ export default Plugin.define({
     }
     // One reminder per idle period: a keypress, a new execution or a pending request ends the period.
     const scheduleReminder = (sessionID: string) => {
+      // A subagent finishing says nothing about whether the person is idle, so it leaves a root's reminder alone.
+      if (context.data.session.get(sessionID)?.parentID !== undefined) return
       cancelReminder()
       const seconds = context.attention.idleReminder ?? 0
-      if (seconds <= 0 || context.data.session.get(sessionID)?.parentID !== undefined) return
+      if (seconds <= 0) return
       if (forms.size + permissions.size > 0) return
       reminder = setTimeout(() => {
         reminder = undefined
@@ -99,7 +101,12 @@ export default Plugin.define({
         }
         errored.add(sessionID)
         notify(context, sessionID, event.data.error.message, "error")
-        context.ui.toast.show({ sessionID, title: "Session failed", message: event.data.error.message, variant: "error" })
+        context.ui.toast.show({
+          sessionID,
+          title: "Session failed",
+          message: event.data.error.message,
+          variant: "error",
+        })
         ended(sessionID)
       }),
     ]

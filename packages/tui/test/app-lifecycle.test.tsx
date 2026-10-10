@@ -375,7 +375,14 @@ test.each<[string, OrbitEvent]>([
       id: "evt_child_permission",
       created: 3,
       type: "permission.asked",
-      data: { id: "per_child", sessionID: "child", action: "bash", resources: ["rm -rf build"], metadata: {}, save: [] },
+      data: {
+        id: "per_child",
+        sessionID: "child",
+        action: "bash",
+        resources: ["rm -rf build"],
+        metadata: {},
+        save: [],
+      },
     },
   ],
   [
@@ -435,7 +442,8 @@ test.each<[string, OrbitEvent]>([
   const pendingForms: unknown[] = []
   const calls = createFetch((url) => {
     const formList = url.pathname.match(/^\/api\/session\/(dummy|child)\/form$/)
-    if (formList) return json({ data: pendingForms.filter((form) => (form as { sessionID: string }).sessionID === formList[1]) })
+    if (formList)
+      return json({ data: pendingForms.filter((form) => (form as { sessionID: string }).sessionID === formList[1]) })
     if (url.pathname === "/api/session") return json({ data: [root, child], cursor: {} })
     if (url.pathname === "/api/session/dummy") return json({ data: root })
     if (url.pathname === "/api/session/child") return json({ data: child })

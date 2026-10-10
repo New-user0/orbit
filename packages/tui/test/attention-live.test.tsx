@@ -2,6 +2,7 @@
 import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
+import { createSignal } from "solid-js"
 import { createTuiAttention } from "../src/attention"
 
 const config = {
@@ -47,6 +48,31 @@ test("the bell rings between frames while a live tab pulse keeps the renderer ru
     const started = Date.now()
     const result = await attention.notify({ message: "Permission needs input" })
     expect(result).toMatchObject({ ok: true, bell: true })
+    expect(written).toEqual(["\x07"])
+    expect(Date.now() - started).toBeLessThan(1000)
+    attention.dispose()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+// A frame is pending when a live animation starts: idle() would never resolve, so the next frame must end the wait.
+test("the bell rings when a pending frame starts a live animation", async () => {
+  const { TabPulse } = await import("../src/component/tab-pulse")
+  const [active, setActive] = createSignal(false)
+  const app = await testRender(
+    () => <TabPulse active={active()} color={RGBA.fromHex("#ffcc00")} backgroundColor={RGBA.fromHex("#101010")} />,
+    { width: 8, height: 1 },
+  )
+  try {
+    await app.renderOnce()
+    const written: string[] = []
+    const attention = createTuiAttention({ renderer: app.renderer, config, writeBell: (text) => written.push(text) })
+    app.renderer.requestRender()
+    const result = attention.notify({ message: "Permission needs input" })
+    setActive(true)
+    const started = Date.now()
+    await result
     expect(written).toEqual(["\x07"])
     expect(Date.now() - started).toBeLessThan(1000)
     attention.dispose()

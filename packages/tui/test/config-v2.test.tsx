@@ -478,7 +478,9 @@ test("reloads the keybindings file when it changes, and a broken one does not di
     // Mending it brings the keys back, and an update to cli.json keeps them.
     await writeFile(folder.keybindings, '{ "bindings": { "session.new": "ctrl+alt+m" } }')
     await until(
-      () => current().keybindings.diagnostics.length === 0 && current().keybinds.get("session.new")[0]?.key === "ctrl+alt+m",
+      () =>
+        current().keybindings.diagnostics.length === 0 &&
+        current().keybinds.get("session.new")[0]?.key === "ctrl+alt+m",
     )
     await context.update((draft) => {
       draft.mouse = true
@@ -495,10 +497,17 @@ test("attention defaults: the bell is off and the idle reminder waits 60 seconds
   expect(attention.idle_reminder).toBe(60)
 })
 
-test("idle_reminder is bounded to a day so the timer cannot overflow", () => {
-  expect(decodeInfo({ attention: { idle_reminder: 86400 } })).toEqual({ attention: { idle_reminder: 86400 } })
+// The CLI decodes cli.json all or nothing, so a large value must decode and be capped on resolve instead.
+test("idle_reminder decodes any non-negative value and resolves to at most a day", () => {
+  expect(decodeInfo({ attention: { idle_reminder: 172800 } })).toEqual({ attention: { idle_reminder: 172800 } })
   expect(decodeInfo({ attention: { idle_reminder: 0 } })).toEqual({ attention: { idle_reminder: 0 } })
-  expect(() => decodeInfo({ attention: { idle_reminder: 86401 } })).toThrow()
-  expect(() => decodeInfo({ attention: { idle_reminder: 3e6 } })).toThrow()
   expect(() => decodeInfo({ attention: { idle_reminder: -1 } })).toThrow()
+  expect(resolve({ attention: { idle_reminder: 172800 } }, { terminalSuspend: true }).attention.idle_reminder).toBe(
+    86400,
+  )
+  expect(resolve({ attention: { idle_reminder: 3e6 } }, { terminalSuspend: true }).attention.idle_reminder).toBe(86400)
+  expect(resolve({ attention: { idle_reminder: 86400 } }, { terminalSuspend: true }).attention.idle_reminder).toBe(
+    86400,
+  )
+  expect(resolve({ attention: { idle_reminder: 0 } }, { terminalSuspend: true }).attention.idle_reminder).toBe(0)
 })
