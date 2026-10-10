@@ -414,6 +414,8 @@ test.each([
 
     const run = await orb(["session", "list", "--standalone"], { ORBIT_CONFIG_CONTENT_FILE: file })
 
+    await fs.rm(folder, { recursive: true, force: true })
+
     expect(run.code).toBe(code)
     if (code !== 0) expect(run.stderr).toContain("Standalone server exited before reporting readiness")
   },
