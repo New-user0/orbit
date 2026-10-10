@@ -347,6 +347,22 @@ without limit, and SDK callers that read `shell_tool` from the config schema.
 Raise `shell_tool.timeout` and `shell_tool.max_timeout` if a command should be waited
 for longer before it moves.
 
+### A background shell command that stops at a prompt is reported once
+
+Orbit now watches every shell command that runs in the background (asked for, moved at its deadline, or moved by a
+client). It looks at the size of the command's output every 5 seconds. After 45 to 50 seconds without new output, it reads
+the last 1024 bytes. If the last line looks like a question the model could answer (`(y/n)`, `[Y/n]`, `(yes/no)`, "Do you
+...?", "Are you sure ...?", "Press any key", "Press Enter", "Continue?", "Overwrite?"), the session gets one notice with
+state `waiting`, the end of its output, and advice to stop the command with `TaskStop` and run it again with the answer supplied.
+Password, passphrase and token prompts are not matched. A command that is only slow or quiet gets no notice. There is at
+most one notice per command, it does not end the job, and the completion notice still follows. Commands still run with no
+input, and a foreground command is not watched until its deadline moves it to the background.
+
+**Affects:** clients and scripts that read the synthetic shell notices of a session: `metadata.state` can now be
+`waiting`, which is not an end of the job.
+
+**What to do:** Treat `waiting` as progress. Take the end of a job from the job and shell events.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
