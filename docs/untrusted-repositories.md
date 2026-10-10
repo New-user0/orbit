@@ -981,6 +981,12 @@ repository text.
   sequences are removed, and `outputText` writes out what it leaves, such as a lone ESC, BEL and backspace. A new place
   that draws such text calls `bodyText` or `outputText`, and a new row goes into the test of the component that draws
   it, with a trusted control row.
+- The output of the status line command passes `printable` (`@orbit/util/plain`, used by `ansiSpans` in
+  `packages/tui/src/util/ansi-spans.ts`). It writes out control characters as control pictures, lone surrogates and
+  every format character, and keeps two things that `plain` would write out: the Private Use Area (Co glyphs,
+  where Powerline and Nerd Font put theirs) and U+200D (an emoji sequence). Neither reorders or hides text, and the
+  command is the person's own setting. `ansi-spans.test.ts` and `prompt-status-line.test.tsx` pin both exceptions, next
+  to the U+202E, U+200B and U+2066 rows.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
   the Mini splash (`packages/tui/src/mini/splash.ts`), and `DialogFlowRuns` passes every store string through `plain`
@@ -1072,9 +1078,9 @@ ran through Bun's spawn, which reads the variable from the process that starts t
 tests had planted `.bat` decoys only, which `cmd.exe` finds through the child's environment, so they said nothing about
 an `.exe`. The fix is `ProgramLookup` (#22, `9b79fd1`): every Orbit process installs the variable in its own environment
 first, and the spawner installs it again and gives it to every child. It is half of the answer again for a plain
-`Bun.spawn`, which hands its child the environment that the process started with, so the `cmd.exe` of the terminal UI's
-status line still has no variable (Known gaps). The earlier holes took four fix commits in three rounds, and the
-executables three more.
+`Bun.spawn`, which hands its child the environment that the process started with, so the terminal UI's status line
+starts `cmd.exe` by its full path and passes `ProgramLookup.environment(undefined)`, and a test plants a decoy for it,
+with a control run. The earlier holes took four fix commits in three rounds, and the executables three more.
 
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust
@@ -1142,9 +1148,9 @@ kind in turn.
   on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
-- Two members of the class are still open: a relative `PATH` entry and the terminal UI's status line. Three more rest
-  on `ProgramLookup.install()` alone, with no test of their own: the language server client, the bare `git` fallback and
-  the terminal UI's external editor. Known gaps lists each with its task. A change must not widen one.
+- One member of the class is still open: a relative `PATH` entry. Three more rest on `ProgramLookup.install()` alone,
+  with no test of their own: the language server client, the bare `git` fallback and the terminal UI's external editor.
+  Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -1587,16 +1593,6 @@ fixes it or asks.
   against the working folder with `path.resolve`, so it still finds the `git.exe` or `rg.exe` that a repository ships.
   It needs the person's own `PATH` to name a relative folder, which is rare, so it is a follow-up and not a blocker
   (task `foundations-17`).
-- **The terminal UI's status line.** `createStatusLine` in `packages/tui/src/util/status-line.ts` runs the user's
-  `status_line.command` as `cmd /c <command>` on Windows every few seconds (5 by default), in the working folder of the
-  terminal UI and outside the spawner, with a plain `Bun.spawn`. The `orb` process has set
-  `NoDefaultCurrentDirectoryInExePath`, which stops Bun from finding a `cmd.exe` of that folder, but `Bun.spawn` hands its
-  child the environment that the process started with, so the `cmd.exe` that runs the command has no variable and still
-  looks in the folder first: a `.bat`, `.cmd` or `.exe` there that is named after the head of the command runs instead
-  (measured with Bun 1.4.2 on Windows, and no test pins it yet). Its `firstLine` strips color codes only, so any other
-  escape sequence that the command prints reaches the screen (class 9). The command is the user's own setting. Pass
-  `env: ProgramLookup.environment(undefined)` or start it through the spawner, and plant a decoy in the test (task
-  `clients-ux-10`).
 - **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
   on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
   `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a
