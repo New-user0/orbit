@@ -145,7 +145,8 @@ export const Plugin = {
       return yield* attempt(0)
     })
 
-    // The Cloudflare challenge retry applies to each request of the chain, to the same checked addresses.
+    // The Cloudflare challenge retry applies to each request of the chain. It is sent again to the name, which is checked
+    // and resolved again for it.
     const hop = (url: URL, format: Format) =>
       send(url, format, orbitUserAgent).pipe(
         Effect.flatMap((response) =>
@@ -189,28 +190,57 @@ export const Plugin = {
               // raw input.
               yield* assertWeb(web, { ...input, method: web.metadata.method, url: web.metadata.url })
 
-              // Only after the permission above: a hit must not skip it.
+              // The timeout is for the network, not for the person: it wraps each request and each body read, and never an
+              // ask, which can wait as long as the person takes.
+              const timed = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+                effect.pipe(
+                  Effect.timeoutOrElse({
+                    duration: Duration.seconds(input.timeout ?? DEFAULT_TIMEOUT_SECONDS),
+                    orElse: () => Effect.fail(new Error("Request timed out")),
+                  }),
+                )
+
+              // Every hop is asked about, so a redirect cannot step around a rule written for another URL.
+              const assertHop = Effect.fnUntraced(function* (from: string, to: string, status: number) {
+                const hopWeb = yield* Effect.try({
+                  try: () => PermissionWeb.request(to, "GET"),
+                  catch: (error) => error,
+                })
+                yield* assertWeb(hopWeb, {
+                  method: hopWeb.metadata.method,
+                  url: hopWeb.metadata.url,
+                  redirect: { from, status },
+                })
+              })
+
+              // Only after the permission above: a hit must not skip it. It also asks about each hop the page was reached
+              // through, in order, so a rule written for a hop applies to a cached page as to a live one.
               const key = `${input.format}\n${web.metadata.url}`
               const cached = yield* cache.get(key)
+              if (cached) for (const item of cached.hops) yield* assertHop(item.from, item.to, item.status)
 
               const follow = (
                 url: URL,
-                redirects: number,
+                hops: ReadonlyArray<WebFetchCache.Hop>,
               ): Effect.Effect<
-                | { readonly response: HttpClientResponse.HttpClientResponse; readonly url: URL }
+                | {
+                    readonly response: HttpClientResponse.HttpClientResponse
+                    readonly url: URL
+                    readonly hops: ReadonlyArray<WebFetchCache.Hop>
+                  }
                 | { readonly redirect: { readonly from: URL; readonly to: URL; readonly status: number } },
                 unknown
               > =>
                 Effect.gen(function* () {
-                  const response = yield* hop(url, input.format)
+                  const response = yield* timed(hop(url, input.format))
                   if (!REDIRECT_STATUSES.has(response.status)) {
                     // Named by the URL that was asked for: the request itself went to an address.
                     if (response.status < 200 || response.status >= 300)
                       return yield* Effect.fail(new Error(`Request failed with status ${response.status} (GET ${url.href})`))
-                    return { response, url }
+                    return { response, url, hops }
                   }
                   // Only the headers of a redirect matter: its body is released without being read.
-                  yield* Stream.runDrain(Stream.take(response.stream, 0)).pipe(Effect.ignore)
+                  yield* timed(Stream.runDrain(Stream.take(response.stream, 0))).pipe(Effect.ignore)
                   const location = response.headers.location
                   if (!location) return yield* Effect.fail(new Error("Redirect response has no Location header"))
                   const next = yield* Effect.try({
@@ -218,25 +248,16 @@ export const Plugin = {
                     catch: () => new Error("Redirect Location is not a valid URL"),
                   })
                   if (!sameSite(url, next)) return { redirect: { from: url, to: next, status: response.status } }
-                  if (redirects === MAX_REDIRECTS)
+                  if (hops.length === MAX_REDIRECTS)
                     return yield* Effect.fail(new Error(`Too many redirects (more than ${MAX_REDIRECTS})`))
-                  // Every request is asked about, so a redirect cannot step around a rule written for another URL.
-                  const nextWeb = yield* Effect.try({
-                    try: () => PermissionWeb.request(next.href, "GET"),
-                    catch: (error) => error,
-                  })
-                  yield* assertWeb(nextWeb, {
-                    method: nextWeb.metadata.method,
-                    url: nextWeb.metadata.url,
-                    redirect: { from: url.href, status: response.status },
-                  })
-                  return yield* follow(next, redirects + 1)
+                  yield* assertHop(url.href, next.href, response.status)
+                  return yield* follow(next, [...hops, { from: url.href, to: next.href, status: response.status }])
                 })
 
               const fetched = cached
                 ? { contentType: cached.contentType, output: cached.content }
                 : yield* Effect.gen(function* () {
-                    const chain = yield* follow(start, 0)
+                    const chain = yield* follow(start, [])
                     if ("redirect" in chain) return chain
                     const contentType = chain.response.headers["content-type"] || ""
                     const mime = mimeFrom(contentType)
@@ -244,10 +265,12 @@ export const Plugin = {
                       return yield* Effect.fail(new Error(`Unsupported fetched image content type: ${mime}`))
                     if (!isTextualMime(mime))
                       return yield* Effect.fail(new Error(`Unsupported fetched file content type: ${mime}`))
-                    const body = yield* collectBoundedResponseBody(
-                      chain.response,
-                      MAX_RESPONSE_BYTES,
-                      () => new Error(`Response too large (exceeds ${MAX_RESPONSE_BYTES} byte limit)`),
+                    const body = yield* timed(
+                      collectBoundedResponseBody(
+                        chain.response,
+                        MAX_RESPONSE_BYTES,
+                        () => new Error(`Response too large (exceeds ${MAX_RESPONSE_BYTES} byte limit)`),
+                      ),
                     )
                     const output = yield* Effect.try({
                       try: () => convert(new TextDecoder().decode(body), contentType, input.format),
@@ -259,14 +282,10 @@ export const Plugin = {
                       contentType,
                       content: output,
                       bytes: body.byteLength,
+                      hops: chain.hops,
                     })
                     return { contentType, output }
-                  }).pipe(
-                    Effect.timeoutOrElse({
-                      duration: Duration.seconds(input.timeout ?? DEFAULT_TIMEOUT_SECONDS),
-                      orElse: () => Effect.fail(new Error("Request timed out")),
-                    }),
-                  )
+                  })
 
               if ("redirect" in fetched) {
                 // Nothing was sent to the target: no lookup, no permission request, no connection. The note is neither

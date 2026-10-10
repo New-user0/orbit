@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Context, Duration, Effect, Exit, Fiber, Layer, Schema } from "effect"
-import * as TestClock from "effect/testing/TestClock"
+import { TestClock } from "effect/testing"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { MAX_MARKDOWN_BYTES } from "../src/tool/html-markdown"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -89,10 +89,18 @@ const http = Layer.succeed(
   ),
 )
 let denying = false
+// A URL whose ask is declined, and a URL whose ask takes this long to answer.
+let denyUrl: string | undefined
+let slow: { readonly url: string; readonly by: Duration.Duration } | undefined
 const permission = permissionLayer({
   assert: (input) =>
     Effect.sync(() => assertions.push(input)).pipe(
-      Effect.andThen(denying ? Effect.die(new Error("declined")) : Effect.void),
+      Effect.andThen(slow !== undefined && input.metadata?.url === slow.url ? Effect.sleep(slow.by) : Effect.void),
+      Effect.andThen(
+        denying || (denyUrl !== undefined && input.metadata?.url === denyUrl)
+          ? Effect.die(new Error("declined"))
+          : Effect.void,
+      ),
     ),
 })
 const toolLayer = (replacements: LayerNode.Replacements = []) =>
@@ -105,6 +113,8 @@ const it = testEffect(toolLayer([LayerNodePlatform.httpClient.replace(http)]))
 const live = testEffect(toolLayer())
 
 const reset = () => {
+  denyUrl = undefined
+  slow = undefined
   requests.length = 0
   assertions.length = 0
   lookups.length = 0
@@ -916,6 +926,15 @@ describe("WebFetchTool redirects", () => {
       expect(requested()).toEqual(["example.com/a", "example.com/b"])
       expect(requests.map((request) => new URL(request.url).hostname)).toEqual([publicAddress, publicAddress])
       expect(assertions[1]?.metadata).toMatchObject({ redirect: { from: "https://example.com/a", status: 301 } })
+      // The approval of a hop is the request the clients draw from: its URL is the hop's, not the call's raw input.
+      const rows: Array<{ id: string; request: { action: string; resources: string[]; metadata: Record<string, unknown> } }> = yield* Effect.promise(() =>
+        Bun.file(new URL("./fixture/approval-matrix-pinned.json", import.meta.url)).json(),
+      )
+      expect({
+        action: assertions[1]?.action,
+        resources: assertions[1]?.resources,
+        metadata: assertions[1]?.metadata,
+      }).toEqual(rows.find((item) => item.id === "WebFetch/redirect-hop")!.request)
     }),
   )
 
@@ -923,20 +942,22 @@ describe("WebFetchTool redirects", () => {
     Effect.gen(function* () {
       reset()
       route({
-        "example.com/x/y/start": () => redirect(302, "../mid/"),
-        "example.com/x/mid/": () => redirect(302, "../c?x=1"),
-        "example.com/x/c?x=1": () => text("done"),
+        "example.com/x/y/start": () => redirect(302, "/p/q/"),
+        "example.com/p/q/": () => redirect(302, "r"),
+        "example.com/p/q/r": () => text("done"),
+        // Where a relative target would go if it were resolved against the first URL.
+        "example.com/x/y/r": () => text("wrong base"),
       })
       const registry = yield* Tool.Service
 
       expect(yield* run(registry, { url: "https://example.com/x/y/start", format: "text" })).toMatchObject({
         content: [{ type: "text", text: "done" }],
       })
-      // Against the first URL the second hop would have gone to /x/c?x=1 as well, so the middle hop pins the base.
+      // Against the first URL the last hop would have gone to /x/y/r, so the middle hop pins the base.
       expect(asked()).toEqual([
         "https://example.com/x/y/start",
-        "https://example.com/x/mid/",
-        "https://example.com/x/c?x=1",
+        "https://example.com/p/q/",
+        "https://example.com/p/q/r",
       ])
     }),
   )
@@ -1092,23 +1113,30 @@ describe("WebFetchTool redirects", () => {
   it.effect("does not read the body of a redirect", () =>
     Effect.gen(function* () {
       reset()
+      let pulled = false
       route({
         "example.com/a": () =>
           new Response(
-            new ReadableStream({
-              pull() {
-                throw new Error("the redirect body was read")
+            // Nothing is pulled until a reader asks, and the body never ends: reading it in full would hang the call.
+            new ReadableStream(
+              {
+                pull(controller) {
+                  pulled = true
+                  controller.enqueue(new Uint8Array(1024))
+                },
               },
-            }),
+              { highWaterMark: 0 },
+            ),
             { status: 302, headers: { location: "/b" } },
           ),
         "example.com/b": () => text("b"),
       })
       const registry = yield* Tool.Service
 
-      expect(yield* run(registry, { url: "https://example.com/a", format: "text" })).toMatchObject({
+      expect(yield* run(registry, { url: "https://example.com/a", format: "text", timeout: 5 })).toMatchObject({
         content: [{ type: "text", text: "b" }],
       })
+      expect(pulled).toBe(false)
     }),
   )
 })
@@ -1249,6 +1277,7 @@ describe("WebFetchTool URL checks", () => {
       const url = (length: number) => "https://example.com/" + "a".repeat(length - "https://example.com/".length)
 
       expect((yield* run(registry, { url: url(2001), format: "text" })).status).toBe("error")
+      expect(assertions).toEqual([])
       expect(requests).toEqual([])
       expect((yield* run(registry, { url: url(2000), format: "text" })).status).toBe("completed")
     }),
@@ -1291,7 +1320,82 @@ describe("WebFetchTool size cap", () => {
   )
 })
 
+describe("WebFetchTool timeout", () => {
+  it.effect("does not count the time a person takes to answer the ask for a hop", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/a": () => redirect(301, "https://www.example.com/a"), "www.example.com/a": () => text("www") })
+      slow = { url: "https://www.example.com/a", by: Duration.seconds(40) }
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", format: "text", timeout: 30 }).pipe(
+        Effect.forkChild,
+      )
+      yield* TestClock.adjust(Duration.seconds(40))
+
+      expect(yield* Fiber.join(fiber)).toMatchObject({ status: "completed", content: [{ type: "text", text: "www" }] })
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
+  it.effect("still times out a stalled hop", () =>
+    Effect.gen(function* () {
+      reset()
+      respond = (request) =>
+        new URL(request.url).pathname === "/a" ? Effect.succeed(redirect(301, "/b")) : Effect.never
+      const fiber = yield* run(yield* Tool.Service, { url: "https://example.com/a", format: "text", timeout: 1 }).pipe(
+        Effect.forkChild,
+      )
+      yield* TestClock.adjust(Duration.seconds(2))
+
+      expect(yield* Fiber.join(fiber)).toEqual(failed("Request timed out"))
+      expect(requests).toHaveLength(2)
+    }),
+  )
+})
+
 describe("WebFetchTool cache", () => {
+  test("bounds the cache at 50 MiB and keeps a page for 15 minutes", () => {
+    expect(WebFetchTool.CACHE_MAX_BYTES).toBe(50 * 1024 * 1024)
+    expect(WebFetchTool.CACHE_TTL_MS).toBe(15 * 60 * 1000)
+  })
+
+  it.effect("does not cache a timeout", () =>
+    Effect.gen(function* () {
+      reset()
+      let count = 0
+      respond = () => (++count === 1 ? Effect.never : Effect.succeed(text("fine")))
+      const registry = yield* Tool.Service
+      const input = { url: "https://example.com/p", format: "text", timeout: 1 } as const
+      const fiber = yield* run(registry, input).pipe(Effect.forkChild)
+      yield* TestClock.adjust(Duration.seconds(1))
+
+      expect(yield* Fiber.join(fiber)).toEqual(failed("Request timed out"))
+      expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "fine" }] })
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
+  it.effect("asks about each hop of a cached page, and refuses it when a hop is denied", () =>
+    Effect.gen(function* () {
+      reset()
+      route({ "example.com/a": () => redirect(301, "/admin"), "example.com/admin": () => text("secret") })
+      const registry = yield* Tool.Service
+      const input = { url: "https://example.com/a", format: "text" } as const
+
+      expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "secret" }] })
+      expect(requests).toHaveLength(2)
+
+      assertions.length = 0
+      expect(yield* run(registry, input)).toMatchObject({ content: [{ type: "text", text: "secret" }] })
+      expect(asked()).toEqual(["https://example.com/a", "https://example.com/admin"])
+      expect(assertions[1]?.metadata).toMatchObject({ redirect: { from: "https://example.com/a", status: 301 } })
+
+      denyUrl = "https://example.com/admin"
+      const exit = yield* Effect.exit(run(registry, input))
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests).toHaveLength(2)
+    }),
+  )
+
   const pageCalls = (count: () => number) => {
     respond = () => Effect.sync(() => text(`page ${count()}`))
   }

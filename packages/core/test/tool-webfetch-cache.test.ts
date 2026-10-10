@@ -1,11 +1,11 @@
 import { describe, expect } from "bun:test"
 import { Duration, Effect } from "effect"
-import * as TestClock from "effect/testing/TestClock"
+import { TestClock } from "effect/testing"
 import { WebFetchCache } from "../src/tool/webfetch-cache"
 import { it } from "./lib/effect"
 
 const ttl = Duration.toMillis(Duration.minutes(15))
-const page = (content: string) => ({ finalUrl: "https://example.com/", contentType: "text/plain", content, bytes: content.length })
+const page = (content: string) => ({ finalUrl: "https://example.com/", contentType: "text/plain", content, bytes: content.length, hops: [] })
 
 describe("WebFetchCache", () => {
   it.effect("evicts the least recently used entry first, and a read makes an entry recent", () =>

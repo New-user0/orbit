@@ -85,6 +85,31 @@
     "truth": { "method": "GET", "url": "https://docs.example/page" }
   },
   {
+    "id": "WebFetch/redirect-hop",
+    "tool": "WebFetch",
+    "pinnedBy": "tool-webfetch.test.ts",
+    "input": {
+      "path": "DECOY/path",
+      "cwd": "DECOY/cwd",
+      "workdir": "DECOY/workdir",
+      "url": "https://decoy.example/page",
+      "method": "POST",
+      "redirect": { "from": "https://decoy.example/from", "status": 999 },
+      "files": [{ "file": "DECOY/files.txt", "patch": "--- DECOY\n+++ DECOY\n@@ -1 +1 @@\n-a\n+b\n" }],
+      "format": "text"
+    },
+    "request": {
+      "action": "WebFetch",
+      "resources": ["https://example.com/b"],
+      "metadata": {
+        "method": "GET",
+        "url": "https://example.com/b",
+        "redirect": { "from": "https://example.com/a", "status": 301 }
+      }
+    },
+    "truth": { "method": "GET", "url": "https://example.com/b" }
+  },
+  {
     "id": "WebFetch/code-mode-post",
     "tool": "Execute",
     "pinnedBy": "codemode.test.ts",

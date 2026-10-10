@@ -2,6 +2,13 @@ export * as WebFetchCache from "./webfetch-cache.js"
 
 import { Clock, Effect } from "effect"
 
+/** One followed redirect: the URL that answered, the URL it pointed to and its status. */
+export interface Hop {
+  readonly from: string
+  readonly to: string
+  readonly status: number
+}
+
 export interface Entry {
   /** The URL of the last hop, which is where the content came from. */
   readonly finalUrl: string
@@ -10,6 +17,8 @@ export interface Entry {
   readonly content: string
   /** The size of the raw body. */
   readonly bytes: number
+  /** The redirects that were followed to reach the page, in order, so a hit can be asked about as a live call is. */
+  readonly hops: ReadonlyArray<Hop>
   readonly storedAt: number
 }
 
