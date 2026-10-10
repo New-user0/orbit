@@ -2190,3 +2190,13 @@ When Edit finds `old_string` only after matching typography (curly quotes, dashe
 **Affects:** people and scripts that rely on the exact bytes Edit writes.
 
 **What to do:** Nothing.
+
+### WebFetch answers a question about the page
+
+WebFetch used to return the page as text, Markdown or HTML, and answered a question only when you passed an optional `prompt`. Now `prompt` is required and `format` is gone (a stale `format` is ignored). A small model reads the page, with nothing else from the conversation and no tools, and WebFetch returns only its answer. HTML is converted to Markdown first, and a page longer than 100,000 characters is cut, with a note that it was. If no answer can be produced, WebFetch returns a short note that says so, and never the page. The page stays cached for 15 minutes, so trying again costs only the answer.
+
+A new key, `webfetch.verbatim_hosts`, lists hosts (`docs.example.com`, `*.example.com`, or `example.com/guides` for a path prefix) whose Markdown pages under 100,000 characters are returned whole instead of answered. Write a non-ASCII host in its ASCII form and an IPv6 address in brackets. The default is none. Listing a host grants no permission to fetch it, and a project that is not yet trusted cannot set a non-empty list.
+
+**Affects:** prompts, scripts and plugins that called WebFetch without a `prompt`, or relied on it returning the raw page or HTML.
+
+**What to do:** Ask for what you need in `prompt`. To read a documentation site whole, list its host in `webfetch.verbatim_hosts` in your own configuration.

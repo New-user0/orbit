@@ -96,6 +96,7 @@ const layout = Effect.gen(function* () {
         model: "project/model",
         shell: "project-shell",
         websearch: { provider: "random" },
+        webfetch: { verbatim_hosts: ["docs.example.com"] },
         hooks: { PreToolUse: [hook("echo project")] },
         mcp: { servers: { docs: { type: "local", command: ["docs-server"] } } },
         permissions: [
@@ -144,7 +145,7 @@ describe("Config under workspace trust", () => {
         const mcp = named(entries, path.join(folders.repo, CompatNames.mcp))
 
         expect(project).toMatchObject({ scope: "project", trusted: false })
-        expect(project?.withheld).toEqual(["hooks", "mcp", "permissions", "providers", "shell", "network"])
+        expect(project?.withheld).toEqual(["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"])
         expect(project?.info.hooks).toBeUndefined()
         expect(project?.info.mcp).toBeUndefined()
         expect(project?.info.shell).toBeUndefined()
@@ -187,6 +188,9 @@ describe("Config under workspace trust", () => {
         expect(Config.latest(entries, "sandbox")).toEqual({ enabled: true })
         // A repository cannot turn on the keyless search pool over a user who turned search off.
         expect(Config.latest(entries, "websearch")).toBe(false)
+        // Nor can it list a host whose pages reach the model unanswered.
+        expect(project?.info.webfetch).toBeUndefined()
+        expect(Config.latest(entries, "webfetch")).toBeUndefined()
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
@@ -221,6 +225,7 @@ describe("Config under workspace trust", () => {
         expect(after.filter((entry) => entry.type === "directory" && entry.trusted === false)).toEqual([])
         // The project outranks the user again, and now so does its choice of web search.
         expect<unknown>(Config.latest(after, "websearch")).toEqual({ provider: "random" })
+        expect(Config.latest(after, "webfetch")?.verbatim_hosts).toEqual(["docs.example.com"])
         expect(Config.latest(after, "shell")).toBe("flag-shell")
 
         const revoked = yield* nextUpdate
@@ -229,7 +234,7 @@ describe("Config under workspace trust", () => {
         const withheld = named(yield* config.entries(), project)
         expect(withheld).toMatchObject({
           trusted: false,
-          withheld: ["hooks", "mcp", "permissions", "providers", "shell", "network"],
+          withheld: ["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"],
         })
         expect(withheld?.info.hooks).toBeUndefined()
         expect(Config.latest(yield* config.entries(), "websearch")).toBe(false)
@@ -271,7 +276,7 @@ describe("Config under workspace trust", () => {
         expect<unknown>(untrusted.withheld).toEqual([
           { path: files.vendor, kinds: ["hooks"] },
           { path: files.mcp, kinds: ["mcp"] },
-          { path: files.project, kinds: ["hooks", "mcp", "permissions", "providers", "shell", "network"] },
+          { path: files.project, kinds: ["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"] },
           { path: files.local, kinds: ["plugins"] },
         ])
 
@@ -328,7 +333,7 @@ describe("Config under workspace trust", () => {
         expect(revoked.withheld.map((item) => [path.relative(folders.repo, item.path), item.kinds])).toEqual([
           [path.join(CompatNames.vendor.directory, "settings.json"), ["hooks"]],
           [CompatNames.mcp, ["mcp"]],
-          ["orbit.json", ["hooks", "mcp", "permissions", "providers", "shell", "network"]],
+          ["orbit.json", ["hooks", "mcp", "permissions", "providers", "shell", "network", "settings"]],
           ["orbit.local.json", ["plugins"]],
         ])
         // It is the answer the loaded config gives once it has caught up.

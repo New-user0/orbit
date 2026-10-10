@@ -336,6 +336,19 @@ describe("ConfigTrust.sanitize", () => {
     expect(ConfigTrust.sanitize(off, place).info.websearch).toBe(false)
   })
 
+  test("withholds a list of verbatim hosts and keeps an empty one", () => {
+    for (const hosts of [["docs.example.com"], ["*"], ["example.com/org", "*.example.com"]]) {
+      const result = sanitize({ webfetch: { verbatim_hosts: hosts }, username: "dev" })
+      expect(result.info).not.toHaveProperty("webfetch")
+      expect(result.info.username).toBe("dev")
+      expect(result.withheld).toEqual(["settings"])
+    }
+    for (const kept of [{}, { verbatim_hosts: [] }]) {
+      const value = decode({ webfetch: kept })
+      expect(ConfigTrust.sanitize(value, place)).toEqual({ info: value, withheld: [] })
+    }
+  })
+
   test("keeps keep-alive requests off and withholds every other selection, whatever its interval", () => {
     for (const selection of [true, {}, { interval: "1 millis", duration: "1000 hours", prompt: "again" }]) {
       const result = sanitize({ warming: selection, username: "dev" })

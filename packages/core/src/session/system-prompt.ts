@@ -89,7 +89,7 @@ const GUIDANCE = [
   {
     tool: "WebFetch",
     lines: [
-      "- Use WebFetch to read a specific URL. Do not guess URLs; use ones the user gave you or ones you found in the project or search results.",
+      "- Use WebFetch to ask a question about a specific URL, and put exactly what you need from the page in its prompt. Do not guess URLs; use ones the user gave you or ones you found in the project or search results.",
     ],
   },
   {
