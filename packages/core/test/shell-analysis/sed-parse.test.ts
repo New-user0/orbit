@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { SedScript } from "../../src/shell/sed"
 
 const line = (n: number) => ({ kind: "line", line: n }) as const
@@ -108,10 +109,17 @@ describe("sed tokenizer", () => {
       if (!result.ok) expect(result.reason).toMatch(/^sed:[a-z-]+$/)
     }
   })
-  test("a long script is linear", () => {
-    const start = performance.now()
-    SedScript.parse("s/" + "\\".repeat(5000) + "/b/")
-    SedScript.parse("1p;".repeat(3000) + "p")
-    expect(performance.now() - start).toBeLessThan(500)
-  })
+  // Run in a child process with a deadline: a tokenizer that loops would hang the runner, not fail it.
+  test("long and adversarial scripts finish inside a deadline", async () => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "sed-limits-child.ts")], {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: path.join(import.meta.dir, "..", ".."),
+    })
+    const timer = setTimeout(() => child.kill(), 10_000)
+    const output = await new Response(child.stdout).text()
+    clearTimeout(timer)
+    expect(await child.exited).toBe(0)
+    expect(JSON.parse(output)).toHaveLength(7)
+  }, 15_000)
 })

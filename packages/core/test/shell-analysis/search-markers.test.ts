@@ -10,6 +10,9 @@ import { bash, pwsh, powershell } from "./helper"
 
 const bashPath = which("bash")
 const windows = process.platform === "win32"
+const rg = which("rg")
+// A missing tool or platform shows as a skip. A precondition that fails inside a test is a failure, never a silent pass.
+const withBash = test.skipIf(!bashPath)
 const dirs: string[] = []
 
 function project() {
@@ -42,16 +45,11 @@ process.on("exit", () => {
 })
 
 describe("xargs splits a name at a blank", () => {
-  test("a directory named `a ` plus an absolute path reads the outside marker", () => {
-    if (!bashPath) return
+  withBash.skipIf(windows)("a directory named `a ` plus an absolute path reads the outside marker", () => {
     const { outside, inside } = project()
     // `./a <outside>/x.txt` splits into `./a` and `<outside>/x.txt`.
     const planted = path.join(inside, `a ${outside}`)
-    try {
-      fs.mkdirSync(planted, { recursive: true })
-    } catch {
-      return
-    }
+    fs.mkdirSync(planted, { recursive: true })
     fs.writeFileSync(path.join(planted, "marker.txt"), "INSIDE\n")
     fs.writeFileSync(path.join(outside, "marker.txt"), "OUTSIDE_MARKER\n")
     const unsafe = "find . -type f | xargs head"
@@ -68,30 +66,26 @@ describe("xargs splits a name at a blank", () => {
 })
 
 describe("recursion that follows a link", () => {
-  test("grep -R reads through a link and grep -r does not", () => {
-    if (!bashPath) return
+  withBash("grep -R reads through a link and grep -r does not", () => {
     const { outside, inside } = project()
-    if (!link(outside, path.join(inside, "docs"))) return
+    expect(link(outside, path.join(inside, "docs"))).toBe(true)
     const control = run(inside, "grep -R OUTSIDE_MARKER .")
-    // A grep that does not follow the link in this environment gives nothing to compare against.
-    if (!control.includes("OUTSIDE_MARKER")) return
+    expect(control).toContain("OUTSIDE_MARKER")
     expect(run(inside, "grep -r OUTSIDE_MARKER .")).not.toContain("OUTSIDE_MARKER")
     expect(bash("grep -R OUTSIDE_MARKER .").readOnly).toBe(false)
     expect(bash("grep -r OUTSIDE_MARKER .").readOnly).toBe(true)
   })
-  test("rg -L reads through a link and rg does not", () => {
-    if (!bashPath || !which("rg")) return
+  test.skipIf(!bashPath || !rg)("rg -L reads through a link and rg does not", () => {
     const { outside, inside } = project()
-    if (!link(outside, path.join(inside, "docs"))) return
+    expect(link(outside, path.join(inside, "docs"))).toBe(true)
     expect(run(inside, "rg -L OUTSIDE_MARKER")).toContain("OUTSIDE_MARKER")
     expect(run(inside, "rg OUTSIDE_MARKER")).not.toContain("OUTSIDE_MARKER")
     expect(bash("rg -L OUTSIDE_MARKER").readOnly).toBe(false)
     expect(bash("rg OUTSIDE_MARKER").readOnly).toBe(true)
   })
-  test("findstr /S reads through a junction, so it is not on the list", () => {
-    if (!windows) return
+  test.skipIf(!windows)("findstr /S reads through a junction, so it is not on the list", () => {
     const { outside, inside } = project()
-    if (!link(outside, path.join(inside, "docs"))) return
+    expect(link(outside, path.join(inside, "docs"))).toBe(true)
     const result = Bun.spawnSync(["findstr", "/S", "/M", "OUTSIDE_MARKER", "*"], { cwd: inside })
     expect(result.stdout.toString()).toContain("marker.txt")
     expect(powershell("findstr /S foo *.ts", pwsh()).readOnly).toBe(false)
@@ -100,8 +94,7 @@ describe("recursion that follows a link", () => {
 })
 
 describe("the program a search starts", () => {
-  test("rg --pre runs a program per file, and the verdict refuses it", () => {
-    if (!bashPath || !which("rg") || windows) return
+  test.skipIf(!bashPath || !rg || windows)("rg --pre runs a program per file, and the verdict refuses it", () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "hello\n")
     fs.writeFileSync(path.join(inside, "pre.sh"), "#!/bin/sh\necho PRE_RAN > ran.txt\ncat \"$1\"\n", { mode: 0o755 })
@@ -109,21 +102,39 @@ describe("the program a search starts", () => {
     expect(fs.existsSync(path.join(inside, "ran.txt"))).toBe(true)
     expect(bash("rg --pre ./pre.sh hello a.txt").readOnly).toBe(false)
   })
-  test("find -exec writes a file, and the verdict refuses it", () => {
-    if (!bashPath) return
+  withBash("find -exec writes a file, and the verdict refuses it", () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "x\n")
     run(inside, "find . -name a.txt -exec touch made.txt ';'")
     expect(fs.existsSync(path.join(inside, "made.txt"))).toBe(true)
     expect(bash("find . -name a.txt -exec touch made.txt ';'").readOnly).toBe(false)
   })
-  test("sed w writes a file, and the verdict refuses it", () => {
-    if (!bashPath) return
+  withBash("sed w writes a file, and the verdict refuses it", () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "x\n")
     run(inside, "sed -n 'w copy.txt' a.txt")
     expect(fs.existsSync(path.join(inside, "copy.txt"))).toBe(true)
     expect(bash("sed -n 'w copy.txt' a.txt").readOnly).toBe(false)
     expect(bash("sed -n 1p a.txt").readOnly).toBe(true)
+  })
+})
+
+describe("a path operand that a joined folder does not change (class 4)", () => {
+  test.skipIf(!windows)("findstr /D: with an absolute outside file prints the marker, and the reads hold that file", () => {
+    const { outside, inside } = project()
+    fs.mkdirSync(path.join(inside, "sub"))
+    const file = path.join(outside, "marker.txt")
+    const result = Bun.spawnSync(["findstr", "/D:sub", "OUTSIDE_MARKER", file], { cwd: inside })
+    expect(result.stdout.toString()).toContain("OUTSIDE_MARKER")
+    // The analysis reads PowerShell's recorded answer for the same shape, since the temporary path is not recorded.
+    expect(powershell("findstr /D:sub foo C:\\x\\f", pwsh()).readPaths).toContain("C:\\x\\f")
+  })
+  const fd = which("fd") ?? which("fdfind")
+  test.skipIf(!bashPath || !fd)("fd with a repeated --base-directory uses the last one, so the verdict refuses", () => {
+    const { inside } = project()
+    fs.mkdirSync(path.join(inside, "src"))
+    const text = `${path.basename(fd!, path.extname(fd!))} --base-directory src --base-directory .. -t f .`
+    expect(run(inside, text)).toContain("outside")
+    expect(bash(text).readOnly).toBe(false)
   })
 })

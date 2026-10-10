@@ -551,6 +551,12 @@ describe("search read paths", () => {
     ["fd --search-path /etc foo", ["/etc"]],
     ["fd --base-directory /srv foo sub", ["/srv", "/srv/sub"]],
     ["fd --base-directory /srv foo", ["/srv", "/srv"]],
+    ["find . ')' -print", [".", ")"]],
+    ["find . ',' -print", [".", ","]],
+    ["find . '(' -name x ')'", ["."]],
+    ["diff -X/etc/x -r a b", ["/etc/x", "a", "b"]],
+    ["diff -rX /etc/x a b", ["/etc/x", "a", "b"]],
+    ["du -X/etc/x .", ["/etc/x", "."]],
     ["fd --ignore-file /etc/ign foo", ["/etc/ign", "."]],
     ["fd --hyperlink pat /etc", ["/etc"]],
     ["fd", ["."]],
@@ -603,7 +609,51 @@ describe("PowerShell search read paths (pwsh on win32)", () => {
   test.each(rows)("%s", (text, expected) => {
     expect(powershell(text, pwsh()).readPaths).toEqual(expected)
   })
-  test("findstr /D: joins each folder onto each file", () => {
-    expect(powershell("findstr '/D:x;y' foo f", pwsh()).readPaths.toSorted()).toEqual(["x", "x\\f", "y", "y\\f"])
+  test("findstr /D: joins each folder onto each file, and reads the file as written too", () => {
+    expect(powershell("findstr '/D:x;y' foo f", pwsh()).readPaths.toSorted()).toEqual(["f", "x", "x\\f", "y", "y\\f"])
+  })
+  // findstr opens a file with a drive or a root as written, whatever /D: says (class 4).
+  test.each(["C:\\x\\f", "\\x\\f", "C:x"])("findstr /D:sub foo %s reads the file as written", (file) => {
+    expect(powershell(`findstr /D:sub foo ${file}`, pwsh()).readPaths).toContain(file)
+  })
+})
+
+// Option-shape class (class 4): an option that takes no value, or only an attached one, must not swallow the next word,
+// because the word is then a file that is read and never recorded. Each row is a GNU spelling that was seen to read.
+describe("an option with no value or an attached value leaves the next word to be read", () => {
+  const rows: Array<[string, string[]]> = [
+    ["fmt -s /etc/x", ["/etc/x"]],
+    ["fmt -t /etc/x", ["/etc/x"]],
+    ["od -w /etc/x", ["/etc/x"]],
+    ["od --width /etc/x", ["/etc/x"]],
+    ["pr -s /etc/x", ["/etc/x"]],
+    ["diff --unified /etc/x a", ["/etc/x", "a"]],
+    ["diff --context /etc/x a", ["/etc/x", "a"]],
+    ["ls --color /etc", ["/etc"]],
+    ["stat -t /etc/x", ["/etc/x"]],
+    ["df --output /etc/x", ["/etc/x"]],
+    ["hexdump -C -L /etc/x", ["/etc/x"]],
+  ]
+  test.each(rows)("%s", (text, expected) => {
+    const verdict = bash(text)
+    expect(verdict.readOnly).toBe(true)
+    expect(verdict.readPaths).toEqual(expected)
+  })
+  // uniq takes no file operand here, so the word after an optional-value option makes it ask instead of being skipped.
+  test.each(["uniq --group /etc/x", "uniq --all-repeated /etc/x"])("%s asks", (text) => {
+    expect(bash(text).readOnly).toBe(false)
+  })
+  test.each(["date --iso-8601 0101000025", "date --iso-8601 -u 0101000025", "date -I 0101000025"])("%s sets the clock, so it asks", (text) => {
+    expect(bash(text).readOnly).toBe(false)
+  })
+  test("date --iso-8601=seconds and +FORMAT stay read-only", () => {
+    expect(bash("date --iso-8601=seconds").readOnly).toBe(true)
+    expect(bash("date --iso-8601 +%s").readOnly).toBe(true)
+  })
+  test("a second --base-directory asks, whichever order", () => {
+    expect(bash("fd --base-directory src --base-directory .. -t f .").readOnly).toBe(false)
+    expect(bash("fdfind --base-directory .. --base-directory src x").readOnly).toBe(false)
+    expect(bash("fd --base-directory=src --base-directory .. x").readOnly).toBe(false)
+    expect(bash("fd --base-directory src x").readOnly).toBe(true)
   })
 })

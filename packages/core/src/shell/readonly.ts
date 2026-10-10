@@ -72,10 +72,10 @@ const BASH: Record<string, Spec> = {
   head: { flags: "any", values: values("-n -c --lines --bytes"), operands: reading },
   tail: { flags: "any", values: values("-n -c --lines --bytes --pid -s --sleep-interval"), operands: reading },
   wc: { flags: "any", operands: reading },
-  stat: { flags: "any", values: values("-c --format --printf -t"), operands: reading },
+  stat: { flags: "any", values: values("-c --format --printf"), operands: reading },
   strings: { flags: "any", values: values("-n --bytes -t --radix -e --encoding -T --target"), operands: reading },
-  hexdump: { flags: "any", values: values("-A -j -N -t -e -n -s -L"), operands: reading },
-  od: { flags: "any", values: values("-A -j -N -t -S -w --width --skip-bytes --read-bytes --format --address-radix"), operands: reading },
+  hexdump: { flags: "any", values: values("-A -j -N -t -e -n -s"), operands: reading },
+  od: { flags: "any", values: values("-A -j -N -t -S --skip-bytes --read-bytes --format --address-radix"), operands: reading },
   nl: { flags: "any", values: values("-s -w -v -i -b -f -h -l -n -d"), operands: reading },
   cut: { flags: "any", values: values("-d -f -b -c --delimiter --fields --bytes --characters --output-delimiter"), operands: reading },
   paste: { flags: "any", values: values("-d --delimiters"), operands: reading },
@@ -85,15 +85,15 @@ const BASH: Record<string, Spec> = {
   fold: { flags: "any", values: values("-w --width"), operands: reading },
   expand: { flags: "any", values: values("-t --tabs"), operands: reading },
   unexpand: { flags: "any", values: values("-t --tabs"), operands: reading },
-  fmt: { flags: "any", values: values("-w -p -s -t --width --prefix"), operands: reading },
+  fmt: { flags: "any", values: values("-w -p --width --prefix"), operands: reading },
   comm: { flags: "any", values: values("--output-delimiter"), operands: reading },
   cmp: { flags: "any", values: values("-i -n --ignore-initial --bytes"), operands: reading },
-  diff: { flags: "any", values: values("-U -C -L --label --unified --context -W --width -x --exclude"), filePaths: ["-X", "--exclude-from", "--from-file", "--to-file"], operands: reading },
+  diff: { flags: "any", values: values("-U -C -L --label -W --width -x --exclude"), filePaths: ["-X", "--exclude-from", "--from-file", "--to-file"], operands: reading },
   tsort: { flags: "any", operands: reading },
-  pr: { flags: "any", values: values("-h -l -w -o -N -s --header --length --width"), operands: reading },
-  df: { flags: "any", values: values("-t -x --type --exclude-type --output -B --block-size"), operands: reading },
+  pr: { flags: "any", values: values("-h -l -w -o -N --header --length --width"), operands: reading },
+  df: { flags: "any", values: values("-t -x --type --exclude-type -B --block-size"), operands: reading },
   du: { flags: "any", values: values("-d --max-depth -B --block-size -t --threshold --exclude"), filePaths: ["-X", "--exclude-from"], operands: { read: true, default: "." } },
-  ls: { flags: "any", values: values("-w --width -T --tabsize -I --ignore --hide --block-size --color --sort --time --format --indicator-style"), operands: { read: true, default: "." } },
+  ls: { flags: "any", values: values("-w --width -T --tabsize -I --ignore --hide --block-size --sort --time --format --indicator-style"), operands: { read: true, default: "." } },
   realpath: { flags: "any", values: values("--relative-to --relative-base"), operands: reading },
   readlink: { flags: "any", operands: reading },
   test: { flags: "any", operands: reading, check: (args) => args.some((arg) => arg === "-v" || arg === "-R") },
@@ -121,7 +121,7 @@ const BASH: Record<string, Spec> = {
   pwd: { flags: "any", exact: true },
   whoami: { flags: "any", exact: true },
   alias: { flags: "any", exact: true },
-  uniq: { flags: "any", values: values("-f -s -w --skip-fields --skip-chars --check-chars --group --all-repeated"), operands: { max: 0 } },
+  uniq: { flags: "any", values: values("-f -s -w --skip-fields --skip-chars --check-chars"), operands: { max: 0 } },
   history: { flags: "any", operands: { max: 1, read: false }, check: (args) => args.some((arg) => !/^\d+$/.test(arg)) },
   arch: { flags: table("-h --help"), operands: { max: 0 } },
   ifconfig: { flags: table(""), operands: { max: 1, read: false }, check: (args) => args.some((arg) => !/^[A-Za-z]/.test(arg)) },
@@ -198,11 +198,11 @@ const BASH: Record<string, Spec> = {
   },
   date: {
     flags: table(
-      "-d= --date= -r=path --reference=path -u --utc --universal -I -Idate -Ihours -Iminutes -Iseconds -Ins --iso-8601= -R --rfc-email --rfc-3339= --debug --help --version",
+      "-d= --date= -r=path --reference=path -u --utc --universal -I -Idate -Ihours -Iminutes -Iseconds -Ins --iso-8601=optional -R --rfc-email --rfc-3339= --debug --help --version",
     ),
     operands: { read: false },
     // MMDDhhmm sets the clock, so every positional must be a +FORMAT.
-    check: (args) => positionals(args, table("-d= -r= --date= --reference= --iso-8601= --rfc-3339=")).some((arg) => !arg.startsWith("+")),
+    check: (args) => positionals(args, table("-d= -r= --date= --reference= --rfc-3339=")).some((arg) => !arg.startsWith("+")),
   },
   hostname: {
     flags: table("-f --fqdn --long -s --short -i --ip-address -I --all-ip-addresses -a --alias -d --domain -A --all-fqdns -v --verbose -h --help -V --version"),
@@ -410,7 +410,7 @@ function positionals(args: string[], valued: Record<string, Value | "">) {
       ends = true
       continue
     }
-    if (!token.includes("=") && valued[token]) index++
+    if (!token.includes("=") && valued[token] && valued[token] !== "optional") index++
   }
   return result
 }
@@ -463,6 +463,17 @@ function scanFlags(spec: Spec, args: string[]) {
     if (!table) {
       // GNU tools take any unambiguous prefix of a long option, so `--files0` is `--files0-from`: a list of files read.
       if (name.length > 2 && "--files0-from".startsWith(name)) return undefined
+      // A short option may be attached (`-X/etc/x`) or end a bundle (`-rX file`); the value is read either way.
+      const short = spec.filePaths?.find((option) => !option.startsWith("--") && !token.startsWith("--") && token.indexOf(option[1], 1) > 0)
+      if (short) {
+        const at = token.indexOf(short[1], 1)
+        const attached = token.slice(at + 1)
+        const value = attached || args[index + 1]
+        if (value === undefined) return undefined
+        if (!attached) index++
+        reads.push(value)
+        continue
+      }
       const files = spec.filePaths?.some((option) => option === name || (option.startsWith("--") && !spec.values?.[name] && name.startsWith("--") && name.length > 2 && option.startsWith(name)))
       if (files) {
         const value = inline ?? args[index + 1]
@@ -637,6 +648,8 @@ function tool(head: string, args: string[], ctx: ShellAnalysis.Context, command?
   const scanned = scanFlags(spec, args)
   if (!scanned) return refuse("flag")
   if (spec.check?.(args)) return refuse("check")
+  // fd uses the last --base-directory, and a path joined onto the first would be wrong, so a second one asks.
+  if (spec.search === "fd" && scanned.seen.filter((item) => item.name === "--base-directory").length > 1) return refuse("fd:base")
   if (spec.search) return { ok: true, reads: searched(spec.search, scanned, ctx).map((path) => expandHome(path, ctx)) }
   const limits = spec.operands
   if (limits?.max !== undefined && scanned.operands.length > limits.max) return refuse("operands")
@@ -705,7 +718,8 @@ function findParse(args: string[]): Find | undefined {
   const starts: string[] = []
   for (; index < args.length; index++) {
     const arg = args[index]
-    if ((arg.length > 1 && arg.startsWith("-")) || FIND_OPERATORS.has(arg)) break
+    // GNU find ends the start points at `(`, `!` or a dash word; `)` and `,` are file names there.
+    if ((arg.length > 1 && arg.startsWith("-")) || arg === "(" || arg === "!") break
     starts.push(arg)
   }
   const expression: Find["expression"] = []
@@ -969,9 +983,10 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
     if (role === "path") reads.push(text)
   }
   if (spec.findstr) {
-    // With /C: or /G: every word is a file; otherwise the first word is the search text. A /D: list is each file's base.
+    // With /C: or /G: every word is a file; otherwise the first word is the search text. A /D: list is each file's base, but findstr
+    // opens a file with a drive or a root as written, so the file itself is read too.
     const files = found.search ? words : words.slice(1)
-    reads.push(...found.files, ...found.directories, ...files.flatMap((item) => (found.directories.length > 0 ? found.directories.map((dir) => ctx.path.join(dir, item)) : [item])))
+    reads.push(...found.files, ...found.directories, ...files.flatMap((item) => (found.directories.length > 0 ? [item, ...found.directories.map((dir) => ctx.path.join(dir, item))] : [item])))
   }
   if (spec.first && positional === 0) return refuse("positional")
   if (spec.reads && reads.length === 0 && spec.default) reads.push(spec.default)

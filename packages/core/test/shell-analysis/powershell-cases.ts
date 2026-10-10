@@ -46,6 +46,9 @@ export const readOnly = [
   "findstr /C:foo a b",
   "findstr /G:pats.txt a",
   "findstr '/D:x;y' foo f",
+  "findstr /D:sub foo C:\\x\\f",
+  "findstr /D:sub foo \\x\\f",
+  "findstr /D:sub foo C:x",
 ]
 
 export const notReadOnly = [
@@ -126,6 +129,8 @@ export const platform = ["ps e", "sleep 60", "Start-Sleep 60", "sleep 5; npm run
 // Network and array rows (class 6 and 10): a path in an array, a share in any position, and a colon-bound flag on a
 // native program that names a remote system.
 export const arrayAndNetwork = [
+  // A bound value that ends in a backslash and holds a blank splits into more words on 5.1.
+  "arp -a:'x y\\' 'p -d *'",
   "Get-Content ab:\\x",
   "Get-Content -Path:ab:\\x",
   "Get-Process -Name env:x",
