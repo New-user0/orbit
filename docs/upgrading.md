@@ -2065,8 +2065,9 @@ The `LSP` tool never saves.
 
 Language servers and formatters now also decide per file. A file outside the project is served only when the folder that
 owns it (the nearest folder above it with a `.git` or `.hg`, else its own folder) is trusted too; trusting the project
-is no longer enough for an edit that reaches into another folder. Each skipped file logs a warning and the tool
-result stays as it was. A server is started through Orbit's process spawner: a bare program name is found on `PATH`
+is no longer enough for an edit that reaches into another folder. A link is decided twice, by the spelling it was
+given and by where it really leads, and the stricter answer wins: a link in an untrusted folder that leads into a trusted
+one is refused. A skipped file leaves the tool result as it was. A server is started through Orbit's process spawner: a bare program name is found on `PATH`
 only.
 
 **Affects:** people with a language server configured or on `PATH`, mostly Rust users.

@@ -91,6 +91,11 @@ describe("language servers and formatters for a file outside the project", () =>
       yield* Effect.promise(async () => {
         await fs.symlink(untrusted, path.join(project, "link-untrusted"), "junction")
         await fs.symlink(trusted, path.join(project, "link-trusted"), "junction")
+        // Links in other folders: the spelling is under one owner and the real path under another.
+        await fs.symlink(trusted, path.join(untrusted, "to-trusted"), "junction")
+        await fs.symlink(project, path.join(untrusted, "to-project"), "junction")
+        await fs.symlink(untrusted, path.join(trusted, "to-untrusted"), "junction")
+        await fs.symlink(path.join(project, "sub"), path.join(trusted, "to-project"), "junction")
         if (!canLinkFile) return
         await fs.symlink(path.join(untrusted, "new.fake"), path.join(project, "dangling-untrusted.fake"))
         await fs.symlink(path.join(trusted, "new.fake"), path.join(project, "dangling-trusted.fake"))
@@ -108,6 +113,10 @@ describe("language servers and formatters for a file outside the project", () =>
         ["outside, trusted, spelled with ..", `${project}${path.sep}..${path.sep}trusted${path.sep}a.fake`, true],
         ["a folder link that leads to an untrusted folder", path.join(project, "link-untrusted", "a.fake"), false],
         ["a folder link that leads to a trusted folder", path.join(project, "link-trusted", "a.fake"), true],
+        ["a link in an untrusted folder that leads into a trusted folder", path.join(untrusted, "to-trusted", "a.fake"), false],
+        ["a link in an untrusted folder that leads into the project", path.join(untrusted, "to-project", "sub", "a.fake"), false],
+        ["a link in a trusted folder that leads into an untrusted folder", path.join(trusted, "to-untrusted", "a.fake"), false],
+        ["a link in a trusted folder that leads into the project (control)", path.join(trusted, "to-project", "a.fake"), true],
         ["a folder with no marker, beside the project", path.join(root, "a.fake"), false],
         ...(canLinkFile
           ? ([
@@ -142,15 +151,19 @@ describe("language servers and formatters for a file outside the project", () =>
       const worktree = path.join(root, "linked")
       yield* Effect.promise(async () => {
         await fs.mkdir(repo, { recursive: true })
-        const git = (...args: string[]) =>
-          Bun.spawn(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-            cwd: repo,
-            stdout: "ignore",
-            stderr: "ignore",
-          }).exited
+        const git = async (...args: string[]) =>
+          expect(
+            await Bun.spawn(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
+              cwd: repo,
+              stdout: "ignore",
+              stderr: "ignore",
+            }).exited,
+          ).toBe(0)
         await git("init", "-q")
         await git("commit", "-q", "--allow-empty", "-m", "init")
         await git("worktree", "add", "-q", worktree)
+        // A worktree's .git is a file; without it the rows below would pass for a missing folder.
+        expect((await fs.stat(path.join(worktree, ".git"))).isFile()).toBe(true)
       })
       yield* trust.grant(repo, { persist: false, via: "test" })
       const ask = (file: string) =>
@@ -197,6 +210,38 @@ describe("language servers and formatters for a file outside the project", () =>
       expect(text).toContain("in.fake")
       expect(text).toContain("ok.fake")
       expect(text).not.toContain("out.fake")
+    }),
+  )
+
+  // Prettier and others load a config script found by walking up from the file they are given. The marker formatter does
+  // the same, so a spelling under an untrusted folder reaches that folder's script even when the real file is elsewhere.
+  it.live("Formatter.file runs no config from an untrusted folder through a link, and does from a trusted one", () =>
+    Effect.gen(function* () {
+      const { root, untrusted, trusted, services } = yield* layout
+      const ran = path.join(root, "config-ran.txt")
+      const script = `require('fs').appendFileSync(${JSON.stringify(ran)}, 'ran ')`
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(trusted, "dir"), { recursive: true })
+        await fs.mkdir(path.join(untrusted, "dir"), { recursive: true })
+        await Bun.write(path.join(untrusted, "config.cjs"), script)
+        await Bun.write(path.join(trusted, "config.cjs"), script)
+        await fs.symlink(path.join(trusted, "dir"), path.join(untrusted, "tlink"), "junction")
+        await fs.symlink(path.join(trusted, "dir"), path.join(trusted, "tlink"), "junction")
+      })
+      const walk = `let d = require('path').dirname(process.argv.at(-1)); for (;;) { const c = require('path').join(d, 'config.cjs'); if (require('fs').existsSync(c)) { require(c); break } const n = require('path').dirname(d); if (n === d) break; d = n }`
+      const run = (file: string) =>
+        Effect.gen(function* () {
+          const formatter = yield* Formatter.Service
+          yield* formatter.transform((editor) =>
+            editor.set({ name: "walker", extensions: [".fake"], enabled: Effect.succeed([process.execPath, "-e", walk, "$FILE"]) }),
+          )
+          return yield* formatter.file(file)
+        }).pipe(Effect.provide(services))
+      const ranCount = () => Effect.promise(async () => ((await Bun.file(ran).exists()) ? (await Bun.file(ran).text()).length : 0))
+      expect(yield* run(path.join(untrusted, "tlink", "t.fake"))).toBe(false)
+      expect(yield* ranCount()).toBe(0)
+      expect(yield* run(path.join(trusted, "tlink", "t.fake"))).toBe(true)
+      expect(yield* ranCount()).toBeGreaterThan(0)
     }),
   )
 

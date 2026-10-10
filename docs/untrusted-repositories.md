@@ -140,9 +140,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/tool-write.test.ts`.
 - Language servers and formatters: `ProjectTrust.trustedAt(file)` per file in `Lsp.diagnostics`, `Lsp.request` and
   `Formatter.file`. It needs the Location's project trusted, and a file outside the project's folders also needs the
-  folder that owns it (found as `Project.root` finds one, from the real folder of the file) to be trusted. It decides on
-  real paths, so a link that leads out, a dangling link, `..` and the Windows case of a name are decided by where the file
-  really is. A refused file is skipped with one warning. Proof: `test/lsp.test.ts`, `test/lsp-trust.test.ts`,
+  folder that owns it (found as `Project.root` finds one, from the real folder of the file) to be trusted. It decides the
+  spelling the tool and the spawned program act on and the real path, and both need a trusted owner (the stricter answer
+  wins, class 3), so a link in an untrusted folder that leads into a trusted one is refused, as are a link that leads out,
+  a dangling link, `..` and the Windows case of a name. A refused file is skipped. Proof: `test/lsp.test.ts`, `test/lsp-trust.test.ts`,
   `test/plugin/lsp-diagnostics.test.ts` (a Write by `~`, Git Bash, Cygwin, WSL, trailing dot and space and case
   spellings), `test/formatter.test.ts`.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the

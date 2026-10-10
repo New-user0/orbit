@@ -116,7 +116,7 @@ const layer = Layer.effect(
     })
 
     // A server reads the configuration near the file it is told about, and several of them run it, so a file outside the
-    // project needs its own folder to be trusted too. A refused file is skipped, with one log line.
+    // project needs its own folder to be trusted too. A refused file is skipped.
     const allowed = Effect.fnUntraced(function* (file: string) {
       if (yield* trust.trustedAt(file)) return true
       yield* Effect.logWarning("language server skipped a file whose folder is not trusted", { file })

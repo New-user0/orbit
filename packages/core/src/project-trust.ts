@@ -257,13 +257,29 @@ const layer = Layer.effect(
         const leads = yield* lead(file)
         return [...folders, ...real].some((folder) => FSUtil.contains(folder, leads)) ? undefined : leads
       }),
+      // The stricter answer wins: a tool and a spawned program act on the spelling they were given, and a link can
+      // lead somewhere else, so both the spelling and the real path need a trusted owner. A program walks up the
+      // spelling looking for config, and a link can show a trusted folder's `.git` below an untrusted one, so when a
+      // link is in the way every owner above the spelling must be trusted.
       trustedAt: Effect.fn("ProjectTrust.trustedAt")(function* (file) {
         if (!(yield* trust.status(root)).trusted) return false
+        const spelled = path.resolve(file)
         const leads = yield* lead(file)
-        if ([...folders, ...real].some((folder) => FSUtil.contains(folder, leads))) return true
-        const folder = path.dirname(leads)
-        const owner = yield* Project.root(fs, AbsolutePath.make(folder))
-        return (yield* trust.status(owner ?? folder)).trusted
+        // Whether the owners of a path are trusted: the nearest one, or with `every` each one above it as well.
+        const owned = Effect.fnUntraced(function* (candidate: string, every: boolean) {
+          if ([...folders, ...real].some((folder) => FSUtil.contains(folder, candidate))) return true
+          let folder = path.dirname(candidate)
+          for (;;) {
+            const owner = yield* Project.root(fs, AbsolutePath.make(folder))
+            if (!(yield* trust.status(owner ?? folder)).trusted) return false
+            if (!every || owner === undefined || path.dirname(owner) === owner) return true
+            folder = path.dirname(owner)
+            // Above the first owner, a folder with no marker owns nothing.
+            if ((yield* Project.root(fs, AbsolutePath.make(folder))) === undefined) return true
+          }
+        })
+        const linked = !(FSUtil.contains(spelled, leads) && FSUtil.contains(leads, spelled))
+        return (yield* owned(spelled, linked)) && (yield* owned(leads, false))
       }),
       supplies,
     })

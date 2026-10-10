@@ -9,6 +9,7 @@ import { Tool } from "@orbit/schema/tool"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Agent } from "@orbit/core/agent"
 import { Location } from "@orbit/core/location"
+import { FileAccess } from "@orbit/core/file-access"
 import { Lsp } from "@orbit/core/lsp/index"
 import { LspPlugin } from "@orbit/core/lsp/plugin"
 import { Plugin } from "@orbit/core/plugin"
@@ -153,7 +154,12 @@ describe("LspPlugin", () => {
     body: (
       hooks: PluginHooks.Interface,
       directory: string,
-      extra: { readonly trust: WorkspaceTrust.Interface; readonly marker: string },
+      extra: {
+        readonly trust: WorkspaceTrust.Interface
+        readonly marker: string
+        // The target a real Write returns for a path: what the tool resolved, not what a test writes by hand.
+        readonly written: (file: string) => Effect.Effect<string, unknown>
+      },
     ) => Effect.Effect<void, unknown, Scope.Scope>,
   ) =>
     Effect.gen(function* () {
@@ -161,7 +167,7 @@ describe("LspPlugin", () => {
       const marker = path.join((yield* tmpdirScoped()).path, "opened.txt")
       yield* Effect.promise(() => Bun.write(marker, ""))
       const lsp = yield* Layer.build(
-        AppNodeBuilder.build(LayerNode.group([Lsp.node, WorkspaceTrust.node]), [
+        AppNodeBuilder.build(LayerNode.group([Lsp.node, WorkspaceTrust.node, FileAccess.node]), [
           WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
           Config.node.replace(
             Config.testLayer([
@@ -182,7 +188,12 @@ describe("LspPlugin", () => {
       )
       const trust = Context.get(lsp, WorkspaceTrust.Service)
       yield* trust.grant(location.directory, { persist: false, via: "test" })
-      yield* body(hooks, location.directory, { trust, marker })
+      const access = Context.get(lsp, FileAccess.Service)
+      yield* body(hooks, location.directory, {
+        trust,
+        marker,
+        written: (file) => access.resolve({ path: file, kind: "file" }).pipe(Effect.map((target) => target.absolute)),
+      })
     })
 
   it.live("a Write with only its input reaches the server, and its result gains only diagnostics", () =>
@@ -282,11 +293,11 @@ describe("LspPlugin", () => {
       }),
     ),
   )
-
-  // The server is told the path the tool wrote (its output), not the spelling the model gave. A link in an untrusted
-  // folder that leads into the project is therefore sent as the project path; the same link into a trusted folder is
-  // the control.
-  it.live("a Write through a link reaches the server by the path the tool wrote", () =>
+  // The server is told the path the tool wrote (its output), and that path is decided twice: by the spelling and by
+  // where the file really is, and the stricter answer wins. Each row takes its target from the real FileAccess.resolve,
+  // as the Write tool does. A link in an untrusted folder that leads into the project is sent as the project path (the
+  // tool anchors it there); one that leads into a trusted folder keeps the untrusted spelling and is refused.
+  it.live("a Write through a link reaches the server only when the spelling and the real place are both trusted", () =>
     real((hooks, directory, extra) =>
       Effect.gen(function* () {
         const outer = (yield* tmpdirScoped()).path
@@ -296,35 +307,40 @@ describe("LspPlugin", () => {
           Promise.all([untrusted, trusted].map((folder) => fs.mkdir(path.join(folder, ".git"), { recursive: true }))),
         )
         yield* extra.trust.grant(trusted, { persist: false, via: "test" })
-        yield* Effect.promise(() => Bun.write(path.join(directory, "inside.fake"), "an ERROR\n"))
-        yield* Effect.promise(() => Bun.write(path.join(trusted, "dir", "t.fake"), "an ERROR\n"))
-        yield* Effect.promise(() => fs.symlink(directory, path.join(untrusted, "link"), "junction"))
-        yield* Effect.promise(() => fs.symlink(path.join(trusted, "dir"), path.join(untrusted, "tlink"), "junction"))
-        const rows = [
-          [
-            "untrusted link into the project",
-            path.join(untrusted, "link", "inside.fake"),
-            path.join(directory, "inside.fake"),
-          ],
-          [
-            "untrusted link into a trusted folder (control)",
-            path.join(untrusted, "tlink", "t.fake"),
-            path.join(trusted, "dir", "t.fake"),
-          ],
-        ] as const
-        for (const [name, given, target] of rows) {
-          const output = { operation: "write", target, resource: name, existed: true }
-          const event = base("Write", { file_path: given, content: "x" }, {
-            output,
-            content: "Wrote it",
-          } as Tool.Result)
-          yield* hooks.trigger("tool", "execute.after", event)
-          expect({ name, found: JSON.stringify(event.result).includes("found ERROR") }).toEqual({ name, found: true })
-        }
+        yield* Effect.promise(async () => {
+          await Bun.write(path.join(directory, "inside.fake"), "an ERROR\n")
+          await Bun.write(path.join(trusted, "dir", "t.fake"), "an ERROR\n")
+          await Bun.write(path.join(untrusted, "dir", "u.fake"), "an ERROR\n")
+          await fs.symlink(directory, path.join(untrusted, "link"), "junction")
+          await fs.symlink(path.join(trusted, "dir"), path.join(untrusted, "tlink"), "junction")
+          await fs.symlink(path.join(trusted, "dir"), path.join(trusted, "clink"), "junction")
+          await fs.symlink(path.join(untrusted, "dir"), path.join(trusted, "ulink"), "junction")
+        })
+        const rows: ReadonlyArray<readonly [string, string, boolean]> = [
+          ["untrusted link into the project", path.join(untrusted, "link", "inside.fake"), true],
+          ["untrusted link into a trusted folder", path.join(untrusted, "tlink", "t.fake"), false],
+          ["trusted link into a trusted folder (control)", path.join(trusted, "clink", "t.fake"), true],
+          ["trusted link into an untrusted folder", path.join(trusted, "ulink", "u.fake"), false],
+        ]
+        const outcomes = yield* Effect.forEach(rows, ([name, given]) =>
+          Effect.gen(function* () {
+            const target = yield* extra.written(given)
+            const output = { operation: "write", target, resource: name, existed: true }
+            const event = base("Write", { file_path: given, content: "x" }, {
+              output,
+              content: "Wrote it",
+            } as Tool.Result)
+            yield* hooks.trigger("tool", "execute.after", event)
+            return [name, JSON.stringify(event.result).includes("found ERROR")] as const
+          }),
+        )
+        expect(outcomes).toEqual(rows.map(([name, , allowed]) => [name, allowed]))
+        // The server was told about the project file and the control only, by no spelling under the untrusted folder.
         const opened = (yield* Effect.promise(() => Bun.file(extra.marker).text())).toLowerCase()
         expect(opened).toContain("inside.fake")
         expect(opened).toContain("t.fake")
         expect(opened).not.toContain("untrusted")
+        expect(opened).not.toContain("u.fake")
       }),
     ),
   )
