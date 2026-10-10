@@ -1,6 +1,7 @@
 // A minimal language server for tests: it reports an error on every line that contains "ERROR".
 // After a save it also reports what a deeper on-save check would find, and says what the save carried.
 // `--plain-save` makes it advertise saves without text.
+import { appendFileSync } from "fs"
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node"
 
 const connection = createMessageConnection(
@@ -29,15 +30,23 @@ connection.onRequest("initialize", () => ({
   capabilities: {
     textDocumentSync: process.argv.includes("--plain-save")
       ? { openClose: true, change: 1, save: {} }
-      : { openClose: true, change: 1, save: { includeText: true } },
+      : process.argv.includes("--save-true")
+        ? { openClose: true, change: 1, save: true }
+        : process.argv.includes("--sync-kind")
+          ? 1
+          : { openClose: true, change: 1, save: { includeText: true } },
     hoverProvider: true,
   },
 }))
 connection.onRequest("shutdown", () => null)
 connection.onNotification("exit", () => process.exit(0))
-connection.onNotification("textDocument/didOpen", (params: { textDocument: { uri: string; text: string } }) =>
-  remember(params.textDocument.uri, params.textDocument.text),
-)
+// `--marker=<file>` appends a line to the file for every document the server is told to open, so a test can tell that
+// a server read a file at all.
+const marker = process.argv.find((argument) => argument.startsWith("--marker="))?.slice("--marker=".length)
+connection.onNotification("textDocument/didOpen", (params: { textDocument: { uri: string; text: string } }) => {
+  if (marker) appendFileSync(marker, `${params.textDocument.uri}\n`)
+  return remember(params.textDocument.uri, params.textDocument.text)
+})
 connection.onNotification(
   "textDocument/didChange",
   (params: { textDocument: { uri: string }; contentChanges: { text: string }[] }) =>

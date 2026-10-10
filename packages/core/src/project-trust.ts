@@ -12,6 +12,7 @@ import { CommandFile } from "./config/plugin/command-file.js"
 import { ConfigTrust } from "./config/trust.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
+import { Project } from "./project.js"
 import { AbsolutePath } from "./schema.js"
 import { WorkspaceTrust } from "./workspace-trust.js"
 
@@ -38,6 +39,15 @@ export interface Interface {
   readonly grant: (input: { readonly persist: boolean; readonly via: string }) => Effect.Effect<Trust.Status>
   /** Ends the grants for this Location's project; see `WorkspaceTrust.revoke`. */
   readonly revoke: () => Effect.Effect<Trust.Status>
+  /**
+   * Whether code that reads the folder around a file, such as a language server or a formatter, may run for that file.
+   * Both must hold: this Location's project is trusted, and the file's real path is inside the project's folders or the
+   * folder that owns it is trusted in its own right. The owner is found as `Project.root` finds one, from the folder the
+   * file really lives in (the nearest folder above it that holds `.git` or `.hg`, else its own folder). A link in the
+   * project that leads out is decided by where it leads, and a link that points nowhere by where a write through it
+   * would land. A linked worktree of a trusted repository, reached as an outside file, needs a grant of its own.
+   */
+  readonly trustedAt: (file: string) => Effect.Effect<boolean>
   /**
    * Whether a file may run the code it carries, such as the hooks in a skill's or an agent's front matter, or any other
    * file that something would execute. Callers must ask this before running any such code; see `ConfigTrust.allows`.
@@ -246,6 +256,14 @@ const layer = Layer.effect(
         if ((yield* trust.status(root)).trusted) return undefined
         const leads = yield* lead(file)
         return [...folders, ...real].some((folder) => FSUtil.contains(folder, leads)) ? undefined : leads
+      }),
+      trustedAt: Effect.fn("ProjectTrust.trustedAt")(function* (file) {
+        if (!(yield* trust.status(root)).trusted) return false
+        const leads = yield* lead(file)
+        if ([...folders, ...real].some((folder) => FSUtil.contains(folder, leads))) return true
+        const folder = path.dirname(leads)
+        const owner = yield* Project.root(fs, AbsolutePath.make(folder))
+        return (yield* trust.status(owner ?? folder)).trusted
       }),
       supplies,
     })

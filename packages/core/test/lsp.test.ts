@@ -17,10 +17,10 @@ import { Tool } from "@orbit/core/tool"
 import { FSUtil } from "@orbit/util/fs-util"
 import { FileAccess } from "@orbit/core/file-access"
 import { Permission } from "@orbit/core/permission"
+import { Session } from "@orbit/core/session"
 import { LspTool } from "@orbit/core/tool/plugin/lsp"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { allowAllPermission, permissionLayer } from "./lib/permission"
-import { Session } from "@orbit/core/session"
 import { executeTool, registerToolPlugin, toolIdentity, toolTraits } from "./lib/tool"
 
 const server = path.join(import.meta.dir, "fixtures", "lsp", "fake-server.ts")
@@ -124,14 +124,22 @@ describe("Lsp", () => {
           ])
         }),
       )
-      yield* withLsp(
-        directory,
-        { fake: { command: [process.execPath, server, "--plain-save"], extensions: [".fake"] } },
-        (lsp) =>
-          lsp
-            .diagnostics([file], { save: true })
-            .pipe(Effect.map((found) => expect(messages(found)).toEqual(["found ERROR", "checked on save (no text)"]))),
-      )
+      // Only `save: { includeText: true }` asks for the text: a bare `save: {}`, `save: true` and a numeric sync kind do not.
+      for (const mode of ["--plain-save", "--save-true", "--sync-kind"]) {
+        yield* withLsp(
+          directory,
+          { fake: { command: [process.execPath, server, mode], extensions: [".fake"] } },
+          (lsp) =>
+            lsp.diagnostics([file], { save: true }).pipe(
+              Effect.map((found) =>
+                expect({ mode, found: messages(found) }).toEqual({
+                  mode,
+                  found: ["found ERROR", "checked on save (no text)"],
+                }),
+              ),
+            ),
+        )
+      }
     }),
   )
 

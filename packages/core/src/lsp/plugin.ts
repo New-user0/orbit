@@ -29,13 +29,9 @@ export const Plugin = define({
         if (event.status !== "completed" || !EDITING_TOOLS.has(event.tool)) return
         // Write returns no file list, so its target comes from its own input, resolved as the tool resolves it. The
         // other tools report the files they changed, already resolved by the tool.
-        const written =
-          event.tool === "Write" && isRecord(event.input) ? (event.input.file_path ?? event.input.path) : undefined
         const files =
           event.tool === "Write"
-            ? typeof written === "string"
-              ? [FileAccess.resolvePath(location.directory, written)]
-              : []
+            ? writtenFile(event.input, location.directory)
             : changedFiles(event.result.metadata?.files).map((file) => path.resolve(location.directory, file))
         if (files.length === 0) return
         const found = yield* lsp.diagnostics(files, { save: true })
@@ -75,6 +71,11 @@ export const Plugin = define({
     )
   }),
 } satisfies PluginInternal.InternalPlugin)
+
+function writtenFile(input: unknown, directory: string) {
+  const target = isRecord(input) ? (input.file_path ?? input.path) : undefined
+  return typeof target === "string" ? [FileAccess.resolvePath(directory, target)] : []
+}
 
 function changedFiles(value: unknown): string[] {
   if (!Array.isArray(value)) return []

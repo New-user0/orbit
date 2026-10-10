@@ -1,8 +1,12 @@
 export * as LspClient from "./client.js"
 
 import { isRecord } from "@orbit/ai/utils/record"
-import spawn from "cross-spawn"
+import { NodeStream } from "@effect/platform-node"
+import { Effect, Exit, Scope } from "effect"
+import { ChildProcess } from "effect/unstable/process"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import path from "path"
+import { PassThrough } from "stream"
 import { pathToFileURL } from "url"
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from "vscode-jsonrpc/node"
 
@@ -50,22 +54,38 @@ export async function start(input: {
   readonly id: string
   readonly command: readonly string[]
   readonly root: string
+  /** Starts the server, so its program is looked up on PATH only and its whole process tree stops with it. */
+  readonly spawner: ChildProcessSpawner["Service"]
   readonly env?: Record<string, string>
   readonly initialization?: Record<string, unknown>
 }): Promise<Client> {
   const [command, ...args] = input.command
   if (!command) throw new Error(`Language server ${input.id} has no command`)
-  const child = spawn(command, args, {
-    cwd: input.root,
-    env: { ...process.env, ...input.env },
-    stdio: ["pipe", "pipe", "pipe"],
-  })
-  child.stderr?.resume()
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()))
-  const failed = new Promise<never>((_, reject) => child.once("error", reject))
+  // The server's process lives in this scope; closing it stops the whole process tree.
+  const scope = Scope.makeUnsafe()
+  const stop = () => Effect.runPromise(Scope.close(scope, Exit.void))
+  const toServer = new PassThrough()
+  const child = await Effect.runPromise(
+    input.spawner
+      .spawn(
+        ChildProcess.make(command, args, {
+          cwd: input.root,
+          env: input.env,
+          extendEnv: true,
+          stdin: NodeStream.fromReadable({ evaluate: () => toServer, onError: (error) => error as never }),
+          stderr: "ignore",
+        }),
+      )
+      .pipe(Scope.provide(scope)),
+  )
+  const failed = Effect.runPromise(child.exitCode).then(
+    () => Promise.reject(new Error(`Language server ${input.id} exited`)),
+    () => Promise.reject(new Error(`Language server ${input.id} exited`)),
+  )
+  failed.catch(() => undefined)
   const connection = createMessageConnection(
-    new StreamMessageReader(child.stdout!),
-    new StreamMessageWriter(child.stdin!),
+    new StreamMessageReader(NodeStream.toReadableNever(child.stdout)),
+    new StreamMessageWriter(toServer),
   )
 
   const published = new Map<string, Diagnostic[]>()
@@ -105,7 +125,11 @@ export async function start(input: {
         workspace: { configuration: true, workspaceFolders: true },
       },
     }),
-  ])
+  ]).catch(async (error: unknown) => {
+    connection.dispose()
+    await stop()
+    throw error
+  })
   // The one place the server's unknown answer is checked: a save carries the text only when the server asked for it.
   const saveText = saveIncludesText(initialized)
   await connection.sendNotification("initialized", {})
@@ -148,7 +172,6 @@ export async function start(input: {
         }
       })
       await sync(file, text)
-      // A lost save notice must not lose the diagnostics of the change, so its failure is ignored.
       if (options?.save)
         await connection
           .sendNotification("textDocument/didSave", { textDocument: { uri }, ...(saveText ? { text } : {}) })
@@ -166,8 +189,8 @@ export async function start(input: {
         timeout(2_000, "shutdown timed out"),
       ]).catch(() => undefined)
       connection.dispose()
-      child.kill()
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 1_000))])
+      toServer.end()
+      await Promise.race([stop(), new Promise((resolve) => setTimeout(resolve, 3_000))])
     },
   }
 }
