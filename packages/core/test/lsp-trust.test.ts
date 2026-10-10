@@ -133,6 +133,37 @@ describe("language servers and formatters for a file outside the project", () =>
     }),
   )
 
+  // A linked worktree has a `.git` file, not a folder, and is a folder of its own: trusting the repository it was made
+  // from does not trust it, and a grant of its own does.
+  it.live("a linked worktree of a trusted repository needs a grant of its own", () =>
+    Effect.gen(function* () {
+      const { root, trust, services } = yield* layout
+      const repo = path.join(root, "repo")
+      const worktree = path.join(root, "linked")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(repo, { recursive: true })
+        const git = (...args: string[]) =>
+          Bun.spawn(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+            cwd: repo,
+            stdout: "ignore",
+            stderr: "ignore",
+          }).exited
+        await git("init", "-q")
+        await git("commit", "-q", "--allow-empty", "-m", "init")
+        await git("worktree", "add", "-q", worktree)
+      })
+      yield* trust.grant(repo, { persist: false, via: "test" })
+      const ask = (file: string) =>
+        Effect.gen(function* () {
+          return yield* (yield* ProjectTrust.Service).trustedAt(file)
+        }).pipe(Effect.provide(services))
+      const file = path.join(worktree, "a.fake")
+      expect([yield* ask(path.join(repo, "a.fake")), yield* ask(file)]).toEqual([true, false])
+      yield* trust.grant(worktree, { persist: false, via: "test" })
+      expect(yield* ask(file)).toBe(true)
+    }),
+  )
+
   it.live("an untrusted project gates every file, whatever its owner", () =>
     Effect.gen(function* () {
       const { project, trusted, trust, services } = yield* layout

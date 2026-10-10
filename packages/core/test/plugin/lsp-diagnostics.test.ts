@@ -283,6 +283,52 @@ describe("LspPlugin", () => {
     ),
   )
 
+  // The server is told the path the tool wrote (its output), not the spelling the model gave. A link in an untrusted
+  // folder that leads into the project is therefore sent as the project path; the same link into a trusted folder is
+  // the control.
+  it.live("a Write through a link reaches the server by the path the tool wrote", () =>
+    real((hooks, directory, extra) =>
+      Effect.gen(function* () {
+        const outer = (yield* tmpdirScoped()).path
+        const untrusted = path.join(outer, "untrusted")
+        const trusted = path.join(outer, "trusted")
+        yield* Effect.promise(() =>
+          Promise.all([untrusted, trusted].map((folder) => fs.mkdir(path.join(folder, ".git"), { recursive: true }))),
+        )
+        yield* extra.trust.grant(trusted, { persist: false, via: "test" })
+        yield* Effect.promise(() => Bun.write(path.join(directory, "inside.fake"), "an ERROR\n"))
+        yield* Effect.promise(() => Bun.write(path.join(trusted, "dir", "t.fake"), "an ERROR\n"))
+        yield* Effect.promise(() => fs.symlink(directory, path.join(untrusted, "link"), "junction"))
+        yield* Effect.promise(() => fs.symlink(path.join(trusted, "dir"), path.join(untrusted, "tlink"), "junction"))
+        const rows = [
+          [
+            "untrusted link into the project",
+            path.join(untrusted, "link", "inside.fake"),
+            path.join(directory, "inside.fake"),
+          ],
+          [
+            "untrusted link into a trusted folder (control)",
+            path.join(untrusted, "tlink", "t.fake"),
+            path.join(trusted, "dir", "t.fake"),
+          ],
+        ] as const
+        for (const [name, given, target] of rows) {
+          const output = { operation: "write", target, resource: name, existed: true }
+          const event = base("Write", { file_path: given, content: "x" }, {
+            output,
+            content: "Wrote it",
+          } as Tool.Result)
+          yield* hooks.trigger("tool", "execute.after", event)
+          expect({ name, found: JSON.stringify(event.result).includes("found ERROR") }).toEqual({ name, found: true })
+        }
+        const opened = (yield* Effect.promise(() => Bun.file(extra.marker).text())).toLowerCase()
+        expect(opened).toContain("inside.fake")
+        expect(opened).toContain("t.fake")
+        expect(opened).not.toContain("untrusted")
+      }),
+    ),
+  )
+
   it.effect("adds language server errors for the files an edit changed", () =>
     Effect.gen(function* () {
       const hooks = yield* PluginHooks.Service

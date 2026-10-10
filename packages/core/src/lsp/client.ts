@@ -54,14 +54,14 @@ export async function start(input: {
   readonly id: string
   readonly command: readonly string[]
   readonly root: string
-  /** Starts the server, so its program is looked up on PATH only and its whole process tree stops with it. */
+  /** Starts the server, so its program is looked up on PATH only. */
   readonly spawner: ChildProcessSpawner["Service"]
   readonly env?: Record<string, string>
   readonly initialization?: Record<string, unknown>
 }): Promise<Client> {
   const [command, ...args] = input.command
   if (!command) throw new Error(`Language server ${input.id} has no command`)
-  // The server's process lives in this scope; closing it stops the whole process tree.
+  // The server's process lives in this scope.
   const scope = Scope.makeUnsafe()
   const stop = () => Effect.runPromise(Scope.close(scope, Exit.void))
   const toServer = new PassThrough()
@@ -72,6 +72,7 @@ export async function start(input: {
           cwd: input.root,
           env: input.env,
           extendEnv: true,
+          // A PassThrough that this process writes to has no failure the type could carry, so the error stays never.
           stdin: NodeStream.fromReadable({ evaluate: () => toServer, onError: (error) => error as never }),
           stderr: "ignore",
         }),
