@@ -1831,16 +1831,23 @@ Windows program now fail.
 ### The status line refreshes on events, gets more fields and can keep colors
 
 The status line command (`status_line.command`) used to run only on its interval and received a short JSON object. It
-now also runs, at most once per 300 ms, when a step ends, an execution starts or ends, a permission is asked or
-answered, or the agent or model changes, and a trigger that arrives while a run is in flight causes exactly one more run
-afterwards. Its stdin JSON gains `version`, `session` (`id`, `title`), `cwd`, `project_dir`, `model` (`provider`, `id`,
-`name`, `variant`), `agent`, `output_style`, `context` (`used`, `limit`, `percent`), `cost` (`usd`, `duration_ms`,
-`lines_added`, `lines_removed`), `status` (`idle`, `running` or `waiting`) and `vim_mode`; `session_id` stays. The `model`
-object now names its provider `provider` (it was `providerID`) and `cost` is an object, where it was a number. `lines_added` and
-`lines_removed` are 0 for now. The new `status_line.colors` key (default `false`) renders the command's colors, bold,
-dim, italic and underline instead of removing them. Every other escape sequence, such as a title change or a clipboard
-write, is dropped in both modes, and other control characters are shown as their control pictures. On Windows the command
-no longer finds a program of the same name in the working folder first.
+now also runs when a step ends or an execution starts or ends in the session, and when the selected agent, model or
+model variant changes. Runs start at least 300 ms apart (the interval aside), and a trigger that arrives while a run is
+in flight causes exactly one more run, 300 ms after the first started or when it ends, whichever is later. A command that
+runs longer than 2 s is stopped together with the programs it started, and the last good line stays. Its stdin JSON gains
+`version`, `session` (`id`, `title`), `cwd`, `project_dir`, `model` (`provider`, `id`, `name`, `variant`, the model
+selected for the next prompt), `agent`, `output_style`, `context` (`used`, `limit`, `percent`), `cost` (`usd`,
+`duration_ms`, `lines_added`, `lines_removed`), `status` (`idle` or `running`) and `vim_mode`; `session_id` stays. The
+`model` object now names its provider `provider` (it was `providerID`) and `cost` is an object, where it was a number.
+`lines_added` and `lines_removed` are `null` until Orbit tracks them. The new `status_line.colors` key (default
+`false`) renders the command's colors, bold, dim, italic and underline instead of removing them. Every other escape
+sequence, such as a title change or a clipboard write, is dropped in both modes, control characters are shown as their
+control pictures, and format characters such as a right-to-left override or a zero-width space are written out as
+`‮`. On Windows the command runs through `cmd.exe` by its full path and no longer finds a program of the same
+name in the working folder first.
+
+Known gap: the prompt, and with it the status line, is replaced by the permission prompt while a permission is pending,
+so the line is not drawn then, and `status` has no `waiting` value.
 
 **Affects:** people with a `status_line` command, in particular scripts that read `model` or `cost` from stdin.
 

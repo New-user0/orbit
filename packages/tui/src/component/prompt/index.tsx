@@ -51,7 +51,8 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { Vim } from "./vim-state"
-import { createStatusLine } from "../../util/status-line"
+import { StatusLine } from "./status-line"
+import { configuredOutputStyle } from "../dialog-output-style"
 import { statusLinePayload } from "../../util/status-line-payload"
 import { contextUsage } from "../../util/session"
 import { usePromptMove } from "./move"
@@ -1681,75 +1682,66 @@ export function Prompt(props: PromptProps) {
     if (agentLabel()) revealedPromptMetadata.add(local)
   })
   const borderHighlight = createMemo(() => tint(theme.border.base, highlight(), agentMetaAlpha()))
-  const outputStyle = () => {
-    const entry = data.location.config
-      .list(
-        (props.sessionID ? data.session.get(props.sessionID)?.location : undefined) ??
-          currentLocation.ref ??
-          data.location.default(),
-      )
-      ?.findLast((item) => item.type === "document" && item.info.output_style !== undefined)
-    return entry?.type === "document" ? (entry.info.output_style ?? undefined) : undefined
+  const statusLineLocation = () =>
+    (props.sessionID ? data.session.get(props.sessionID)?.location : undefined) ??
+    currentLocation.ref ??
+    data.location.default()
+  // The model the next prompt uses: the selection, which the session's own model only follows once a prompt is sent.
+  const statusLineModel = () => {
+    const selection = local.model.selection()
+    if (selection) return { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }
+    return props.sessionID ? data.session.get(props.sessionID)?.model : undefined
   }
   // A user-configured status line command, shown under the prompt footer.
-  const statusLine = createStatusLine({
-    command: () => config.status_line?.command,
-    interval: () => config.status_line?.interval,
-    colors: () => config.status_line?.colors,
-    payload: () => {
-      const session = props.sessionID ? data.session.get(props.sessionID) : undefined
-      const models = session ? data.location.model.list(session.location) : undefined
-      const context = session
-        ? contextUsage(data.session.message.list(session.id), models, session.revert?.messageID)
-        : undefined
-      const model = session?.model
-        ? models?.find((item) => item.providerID === session.model?.providerID && item.id === session.model.id)
-        : undefined
-      return statusLinePayload({
-        version: app.version,
-        session: session
-          ? {
-              id: session.id,
-              title: session.title,
-              cost: data.session.cost(session.id),
-              created: session.time.created,
-              model: session.model,
-              agent: session.agent,
-            }
-          : undefined,
-        cwd: session?.location.directory ?? data.location.info()?.directory,
-        projectDir: data.location.info()?.project.directory,
-        modelName: model?.name,
-        agent: local.agent.current()?.id,
-        outputStyle: outputStyle(),
-        context,
-        contextLimit: model?.limit.context,
-        permissionsPending: props.sessionID ? (data.session.permission.list(props.sessionID)?.length ?? 0) : 0,
-        running: status() !== "idle",
-        vimMode: config.prompt?.vim === true ? vim().mode : undefined,
-        now: Date.now(),
-      })
-    },
-  })
-  // Refresh the line when something it shows has changed, not only on the interval.
-  const mine = (sessionID: string) => !props.sessionID || sessionID === props.sessionID
-  onCleanup(
-    [
-      data.on("session.step.ended", (event) => mine(event.data.sessionID) && statusLine.trigger()),
-      data.on("session.execution.started", (event) => mine(event.data.sessionID) && statusLine.trigger()),
-      data.on("session.execution.succeeded", (event) => mine(event.data.sessionID) && statusLine.trigger()),
-      data.on("session.execution.failed", (event) => mine(event.data.sessionID) && statusLine.trigger()),
-      data.on("session.execution.interrupted", (event) => mine(event.data.sessionID) && statusLine.trigger()),
-      data.on("permission.asked", () => statusLine.trigger()),
-      data.on("permission.replied", () => statusLine.trigger()),
-    ].reduce((all, off) => () => (all(), off()), () => {}),
-  )
-  createEffect(
-    on(
-      () => [local.agent.current()?.id, local.model.selection()?.providerID, local.model.selection()?.modelID] as const,
-      () => statusLine.trigger(),
-      { defer: true },
-    ),
+  const statusLine = (
+    <StatusLine
+      sessionID={props.sessionID}
+      command={() => config.status_line?.command}
+      interval={() => config.status_line?.interval}
+      colors={() => config.status_line?.colors}
+      fg={theme.text.muted}
+      on={(type, handler) => data.on(type, handler)}
+      watch={() => [
+        local.agent.current()?.id,
+        statusLineModel()?.providerID,
+        statusLineModel()?.id,
+        statusLineModel()?.variant,
+      ]}
+      payload={() => {
+        const session = props.sessionID ? data.session.get(props.sessionID) : undefined
+        const models = data.location.model.list(statusLineLocation())
+        const context = session
+          ? contextUsage(data.session.message.list(session.id), models, session.revert?.messageID)
+          : undefined
+        const selected = statusLineModel()
+        const model = selected
+          ? models?.find((item) => item.providerID === selected.providerID && item.id === selected.id)
+          : undefined
+        return statusLinePayload({
+          version: app.version,
+          session: session
+            ? {
+                id: session.id,
+                title: session.title,
+                cost: data.session.cost(session.id),
+                created: session.time.created,
+                agent: session.agent,
+              }
+            : undefined,
+          cwd: session?.location.directory ?? data.location.info()?.directory,
+          projectDir: data.location.info(statusLineLocation())?.project.directory,
+          model: selected,
+          modelName: model?.name,
+          agent: local.agent.current()?.id,
+          outputStyle: configuredOutputStyle(data, statusLineLocation()),
+          context,
+          contextLimit: model?.limit.context,
+          running: status() !== "idle",
+          vimMode: config.prompt?.vim === true ? vim().mode : undefined,
+          now: Date.now(),
+        })
+      }}
+    />
   )
 
   const footerInput = () => ({
@@ -2103,17 +2095,7 @@ export function Prompt(props: PromptProps) {
             </Slot>
           </Slot>
         </box>
-        <Show when={statusLine.spans()}>
-          {(spans) => (
-            <box paddingLeft={1} flexShrink={0}>
-              <text fg={theme.text.muted} wrapMode="none" truncate>
-                <For each={spans()}>
-                  {(span) => <span style={{ fg: span.fg, bg: span.bg, attributes: span.attributes }}>{span.text}</span>}
-                </For>
-              </text>
-            </box>
-          )}
-        </Show>
+        {statusLine}
       </box>
       <Autocomplete
         sessionID={props.sessionID}

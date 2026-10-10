@@ -1052,8 +1052,9 @@ ran through Bun's spawn, which reads the variable from the process that starts t
 tests had planted `.bat` decoys only, which `cmd.exe` finds through the child's environment, so they said nothing about
 an `.exe`. The fix is `ProgramLookup` (#22, `9b79fd1`): every Orbit process installs the variable in its own environment
 first, and the spawner installs it again and gives it to every child. It is half of the answer again for a plain
-`Bun.spawn`, which hands its child the environment that the process started with, so the terminal UI's status line passes `ProgramLookup.environment(undefined)`, and a test plants a decoy for it. The earlier holes took four fix commits in three rounds, and the
-executables three more.
+`Bun.spawn`, which hands its child the environment that the process started with, so the terminal UI's status line
+starts `cmd.exe` by its full path and passes `ProgramLookup.environment(undefined)`, and a test plants a decoy for it,
+with a control run. The earlier holes took four fix commits in three rounds, and the executables three more.
 
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust

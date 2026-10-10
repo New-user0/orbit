@@ -5,18 +5,18 @@ export type StatusLinePayloadInput = {
     readonly title?: string
     readonly cost: number
     readonly created: number
-    readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string }
     readonly agent?: string
   }
   readonly cwd?: string
   readonly projectDir?: string
+  /** The model the person has selected, which is the one the next prompt uses. */
+  readonly model?: { readonly providerID: string; readonly id: string; readonly variant?: string }
   readonly modelName?: string
   readonly agent?: string
   readonly outputStyle?: string
   readonly context?: { readonly tokens: number; readonly percent?: number }
   readonly contextLimit?: number
   readonly lines?: { readonly added: number; readonly removed: number }
-  readonly permissionsPending: number
   readonly running: boolean
   readonly vimMode?: string
   readonly now: number
@@ -30,12 +30,12 @@ export function statusLinePayload(input: StatusLinePayloadInput) {
     session: session ? { id: session.id, title: session.title ?? null } : null,
     cwd: input.cwd ?? null,
     project_dir: input.projectDir ?? null,
-    model: session?.model
+    model: input.model
       ? {
-          provider: session.model.providerID,
-          id: session.model.id,
-          name: input.modelName ?? session.model.id,
-          variant: session.model.variant ?? null,
+          provider: input.model.providerID,
+          id: input.model.id,
+          name: input.modelName ?? input.model.id,
+          variant: input.model.variant ?? null,
         }
       : null,
     agent: input.agent ?? session?.agent ?? null,
@@ -50,10 +50,10 @@ export function statusLinePayload(input: StatusLinePayloadInput) {
     cost: {
       usd: session?.cost ?? 0,
       duration_ms: session ? Math.max(0, input.now - session.created) : 0,
-      lines_added: input.lines?.added ?? 0,
-      lines_removed: input.lines?.removed ?? 0,
+      lines_added: input.lines?.added ?? null,
+      lines_removed: input.lines?.removed ?? null,
     },
-    status: input.permissionsPending > 0 ? "waiting" : input.running ? "running" : "idle",
+    status: input.running ? "running" : "idle",
     vim_mode: input.vimMode ?? null,
     // Kept for scripts written against the first payload.
     session_id: session?.id ?? null,

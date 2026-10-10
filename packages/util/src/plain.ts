@@ -71,3 +71,9 @@ function escapedCharacter(match: string) {
   const code = match.codePointAt(0) ?? 0
   return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
 }
+
+/**
+ * Text that is already one line, such as a run of a status line, escaped as `plain` does but without trimming it, so the
+ * spaces between runs of styled text stay.
+ */
+export const inline = (text: string) => escaped(text)

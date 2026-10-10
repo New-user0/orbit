@@ -63,12 +63,34 @@ test("a trigger during an in-flight run gives exactly one trailing refresh", asy
   test.status.trigger()
   test.status.trigger()
   test.gate.release.shift()?.()
-  await wait(50)
+  // The trailing run starts 300 ms after the first one started.
+  await wait(400)
   expect(test.calls.length).toBe(2)
   test.gate.release.shift()?.()
   await wait(400)
   expect(test.calls.length).toBe(2)
   test.dispose()
+})
+
+test("steady triggers against a slow run still give at most about three runs per second", async () => {
+  const test = harness({ delay: 50 })
+  const ticker = setInterval(() => test.status.trigger(), 10)
+  await wait(2_000)
+  clearInterval(ticker)
+  test.dispose()
+  // Without the throttle on the trailing run this was 40 runs; one per 300 ms is 7.
+  expect(test.calls.length).toBeLessThanOrEqual(9)
+  expect(test.calls.length).toBeGreaterThanOrEqual(4)
+}, 10_000)
+
+test("a trigger during a run does not start another run after the status line is disposed", async () => {
+  const test = harness({ delay: -1 })
+  await wait(20)
+  test.status.trigger()
+  test.dispose()
+  test.gate.release.shift()?.()
+  await wait(400)
+  expect(test.calls.length).toBe(1)
 })
 
 test("the interval still fires", async () => {
@@ -123,17 +145,29 @@ test("colors are kept as spans only when status_line.colors is on", () => {
   })
 })
 
-test("a real command that hangs is killed and leaves no line", async () => {
+test("a real command that hangs keeps the last good line and the next trigger starts a new run", async () => {
+  const hang = process.platform === "win32" ? "ping -n 30 127.0.0.1" : "sleep 30"
+  const commands = ["echo good", hang, "echo after"]
+  const state = { index: 0 }
   const status = createRoot(() =>
     createStatusLine({
-      command: () => (process.platform === "win32" ? "ping -n 30 127.0.0.1" : "sleep 30"),
+      command: () => commands[state.index++],
       interval: () => 60_000,
       payload: () => ({}),
     }),
   )
+  await wait(700)
+  expect(status.line()).toBe("good")
+  status.trigger()
+  // The hang starts at about 300 ms and is given up at 2 s; a run that kept waiting for its output would still be open.
   await wait(2_800)
-  expect(status.line()).toBeUndefined()
-}, 10_000)
+  expect(state.index).toBe(2)
+  expect(status.line()).toBe("good")
+  status.trigger()
+  await wait(900)
+  expect(state.index).toBe(3)
+  expect(status.line()).toBe("after")
+}, 15_000)
 
 test.skipIf(process.platform === "win32")("the status line command reads the session from stdin", async () => {
   const line = await new Promise<string | undefined>((resolve) =>
@@ -155,17 +189,28 @@ test.skipIf(process.platform === "win32")("the status line command reads the ses
 })
 
 test.skipIf(process.platform !== "win32")("the command head is not looked up in the working folder", async () => {
+  // The agent shell may set the variable, which would make the test pass without testing anything.
+  const saved = process.env.NoDefaultCurrentDirectoryInExePath
   delete process.env.NoDefaultCurrentDirectoryInExePath
   const dir = await mkdtemp(path.join(os.tmpdir(), "status-line-decoy-"))
-  const marker = path.join(dir, "ran.txt")
-  await Bun.write(path.join(dir, "statusdecoy.bat"), `@echo off\r\necho ran> "${marker}"\r\n`)
-  createRoot((dispose) => {
-    createStatusLine({ command: () => "statusdecoy", interval: () => 60_000, payload: () => ({}), cwd: dir })
-    setTimeout(dispose, 1_500)
-  })
-  await wait(1_800)
-  expect(await Bun.file(marker).exists()).toBe(false)
-  await rm(dir, { recursive: true, force: true })
+  try {
+    const marker = (name: string) => path.join(dir, name + ".txt")
+    for (const name of ["statusdecoy", "controldecoy"])
+      await Bun.write(path.join(dir, name + ".bat"), `@echo off\r\necho ran> "${marker(name)}"\r\n`)
+    createRoot((dispose) => {
+      // The control names the file explicitly, so the decoy is known to run when it is asked for.
+      createStatusLine({ command: () => ".\\controldecoy", interval: () => 60_000, payload: () => ({}), cwd: dir })
+      createStatusLine({ command: () => "statusdecoy", interval: () => 60_000, payload: () => ({}), cwd: dir })
+      setTimeout(dispose, 1_500)
+    })
+    await wait(1_800)
+    expect(await Bun.file(marker("controldecoy")).exists()).toBe(true)
+    expect(await Bun.file(marker("statusdecoy")).exists()).toBe(false)
+  } finally {
+    if (saved === undefined) delete process.env.NoDefaultCurrentDirectoryInExePath
+    else process.env.NoDefaultCurrentDirectoryInExePath = saved
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test("the payload carries the new fields", () => {
@@ -176,9 +221,9 @@ test("the payload carries the new fields", () => {
       title: "Fix bug",
       cost: 0.42,
       created: 1_000,
-      model: { providerID: "acme", id: "m1", variant: "high" },
       agent: "build",
     },
+    model: { providerID: "acme", id: "m1", variant: "high" },
     cwd: "/work/app/src",
     projectDir: "/work/app",
     modelName: "Model One",
@@ -187,7 +232,6 @@ test("the payload carries the new fields", () => {
     context: { tokens: 5_000, percent: 5 },
     contextLimit: 100_000,
     lines: { added: 3, removed: 1 },
-    permissionsPending: 0,
     running: true,
     vimMode: "normal",
     now: 4_000,
@@ -208,12 +252,14 @@ test("the payload carries the new fields", () => {
   })
 })
 
-test("the payload status is waiting while a permission is pending and nulls fill unknown values", () => {
-  const payload = statusLinePayload({ version: "1", permissionsPending: 2, running: true, now: 0 })
-  expect(payload.status).toBe("waiting")
+test("the payload nulls unknown values, including the line counts", () => {
+  const payload = statusLinePayload({ version: "1", running: true, now: 0 })
+  expect(payload.status).toBe("running")
   expect(payload.session).toBeNull()
   expect(payload.model).toBeNull()
   expect(payload.context).toBeNull()
   expect(payload.vim_mode).toBeNull()
-  expect(statusLinePayload({ version: "1", permissionsPending: 0, running: false, now: 0 }).status).toBe("idle")
+  expect(payload.cost.lines_added).toBeNull()
+  expect(payload.cost.lines_removed).toBeNull()
+  expect(statusLinePayload({ version: "1", running: false, now: 0 }).status).toBe("idle")
 })

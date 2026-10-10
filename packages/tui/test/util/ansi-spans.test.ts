@@ -50,3 +50,34 @@ test("an unterminated OSC drops the rest of the line", () => {
 test("remaining control characters are written out and tabs become a space", () => {
   expect(ansiText("a\u0007b\u0000c\td\u007fe")).toBe("a\u2407b\u2400c d\u2421e")
 })
+
+test("colon sub-parameters are read as one parameter", () => {
+  // The empty colour-space slot must not shift the channels, and the trailing 0 is a channel, not a reset.
+  expect(summary("\u001b[38:2::255:0:0mx")).toEqual([["x", "#ff0000", undefined, 0]])
+  expect(summary("\u001b[38:2:255:0:0mx")).toEqual([["x", "#ff0000", undefined, 0]])
+  expect(summary("\u001b[48:5:196mx")).toEqual([["x", undefined, "#ff0000", 0]])
+  // A curly underline is an underline, not italic; 4:0 turns it off.
+  expect(summary("\u001b[4:3mx\u001b[4:0my")).toEqual([
+    ["x", undefined, undefined, TextAttributes.UNDERLINE],
+    ["y", undefined, undefined, 0],
+  ])
+})
+
+// Class 9: format characters reorder or hide text, so each is written out, with an ordinary line as the trusted control.
+test.each([
+  ["U+202E right-to-left override", "\u202e", "\\u{202e}"],
+  ["U+2066 isolate", "\u2066", "\\u{2066}"],
+  ["U+2069 pop isolate", "\u2069", "\\u{2069}"],
+  ["U+200E left-to-right mark", "\u200e", "\\u{200e}"],
+  ["U+200F right-to-left mark", "\u200f", "\\u{200f}"],
+  ["U+061C Arabic letter mark", "\u061c", "\\u{61c}"],
+  ["U+200B zero-width space", "\u200b", "\\u{200b}"],
+  ["U+0085 C1 control", "\u0085", "\ufffd"],
+])("%s is written out in both color modes", (_name, char, written) => {
+  expect(ansiText(`a${char}b`)).toBe(`a${written}b`)
+  expect(summary(`\u001b[31ma${char}b`)).toEqual([[`a${written}b`, "#cd0000", undefined, 0]])
+})
+
+test("an ordinary line is unchanged", () => {
+  expect(ansiText("main \u2713 \u65e5\u672c\u8a9e e\u0301")).toBe("main \u2713 \u65e5\u672c\u8a9e e\u0301")
+})
