@@ -2365,7 +2365,8 @@ describe("ShellTool", () => {
       }),
     )
 
-  // Runs the real thing where bubblewrap works: an interface list that holds only the loopback means no network.
+  // Runs the real thing where bubblewrap works. The sandbox mounts its own /proc, so the interfaces listed there are those
+  // of the sandbox's network namespace: only the loopback means the network is off.
   const bwrapTest =
     process.platform === "linux" && which("bwrap") !== null && Bun.spawnSync(["bwrap", "--dev-bind", "/", "/", "true"]).exitCode === 0
       ? it.live
@@ -2380,10 +2381,10 @@ describe("ShellTool", () => {
         Effect.gen(function* () {
           const policy = yield* ManagedPolicy.Service
           yield* policy.set("file", { statements: [], restrictions: { network: { allow_managed_domains_only: true } } })
-          return yield* executeTool(registry, call({ command: "ls /sys/class/net" }, "call-bwrap"))
+          return yield* executeTool(registry, call({ command: "ls /proc/net/dev_snmp6" }, "call-bwrap"))
         }),
       )
-      expect(settled.content).toEqual([{ type: "text", text: "lo" }])
+      expect(settled.content?.map((part) => (part.type === "text" ? part.text.trim() : ""))).toEqual(["lo"])
     }),
   )
 
