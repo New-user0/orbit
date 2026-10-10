@@ -38,6 +38,14 @@ export default Runtime.handler(Commands, (input) =>
       return yield* Effect.fail(new Error("--fork requires --continue, --session or --resume"))
     const requestedDirectory = Option.getOrUndefined(input.directory)
     const requestedServer = Option.getOrUndefined(input.server)
+    // A private server holds this run's --mcp-config and --agents; the file that carries them is removed on exit. They
+    // are read before the change of directory below: a relative file name means the folder the person typed it in, and
+    // the folder they start Orbit in may be a clone that ships a file of the same name.
+    const overlay = yield* ConfigOverlay.apply({
+      mcpConfig: input.mcpConfig,
+      agents: Option.getOrUndefined(input.agents),
+      server: requestedServer,
+    })
     if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
     const serviceStarts = yield* Queue.unbounded<{
       readonly reason: "missing" | "version-mismatch"
@@ -48,12 +56,6 @@ export default Runtime.handler(Commands, (input) =>
       Effect.forever,
       Effect.forkScoped,
     )
-    // A private server holds this run's --mcp-config and --agents; the file that carries them is removed on exit.
-    const overlay = yield* ConfigOverlay.apply({
-      mcpConfig: input.mcpConfig,
-      agents: Option.getOrUndefined(input.agents),
-      server: requestedServer,
-    })
     const server = yield* ServerConnection.resolve({
       server: requestedServer,
       standalone: input.standalone || overlay,
@@ -71,13 +73,21 @@ export default Runtime.handler(Commands, (input) =>
     // the session list with the value typed into its search.
     const resumeID = resume !== undefined && /^ses\S*$/.test(resume) ? resume : undefined
     const session = Option.getOrUndefined(input.session) ?? resumeID
-    if (overlay)
+    if (overlay) {
+      const client = Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
+      // The folder is the one the interface will open, which is what the private server reports for itself.
+      const folder = yield* Effect.tryPromise({
+        try: () => client.location.get(),
+        catch: (cause) => new Error(errorMessage(cause)),
+      })
       yield* ConfigOverlay.refuseActive({
-        client: Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) }),
+        client,
         session,
         continue: input.continue,
-        directory: process.cwd(),
+        fork: input.fork,
+        directory: folder.directory,
       })
+    }
     // A missing --session ID becomes the ID of the session the first prompt creates.
     const sessionExists =
       session !== undefined &&

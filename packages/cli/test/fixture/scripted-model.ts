@@ -30,7 +30,12 @@ export type ScriptedReply =
       readonly delayMs?: number
     }
 
-export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"], contextLength = 32_768) {
+export function scriptedModel(
+  replies: ReadonlyArray<ScriptedReply> = ["ok"],
+  contextLength = 32_768,
+  /** Called for each request before it is answered, so a test can look at the machine while the run is in progress. */
+  observe?: (request: ScriptedRequest) => void | Promise<void>,
+) {
   const requests: ScriptedRequest[] = []
   const details = {
     format: "gguf",
@@ -74,6 +79,7 @@ export function scriptedModel(replies: ReadonlyArray<ScriptedReply> = ["ok"], co
         body,
       }
       requests.push(entry)
+      await observe?.(entry)
       const reply = entry.step
         ? (replies[Math.min(requests.filter((item) => item.step).length - 1, replies.length - 1)] ?? "ok")
         : "Title"

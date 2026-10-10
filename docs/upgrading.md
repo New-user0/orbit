@@ -1021,8 +1021,12 @@ A run with either flag uses a private server, as `--bare` does, so it starts a l
 background service. The config reaches that server in a file in Orbit's temporary folder that only your user can open,
 which the server deletes when it has read it. The environment that `orb` hands to a session no longer carries
 `ORBIT_CONFIG_CONTENT` or `ORBIT_CONFIG_CONTENT_FILE`. The flags cannot be combined with `--server`. With `--continue`, `--session` or `--resume`,
-the run stops when the background service reports that session as running, because two servers would run it at once;
-an `orb` that opens the session list cannot tell, and does not check.
+the run stops when the background service reports that session as running, or when a service is registered and alive
+but cannot be asked, because two servers would run it at once; `--fork` is not checked, since a fork never runs the
+session it copies, and an `orb` that opens the session list cannot tell, and does not check. A relative file name is
+taken from the folder you typed it in, also with `orb <directory>`. Rules that `--agents` gives an agent add to the rules
+the same agent already has from `ORBIT_CONFIG_CONTENT`. A `ORBIT_CONFIG_CONTENT_FILE` that you set yourself is ignored
+and never deleted.
 
 **Affects:** scripts and people who want a different set of MCP servers or agents for a single run.
 
