@@ -1987,8 +1987,9 @@ offset skips nothing and repeats nothing, because matches come in path order. A 
 to a window that starts about 100 characters before its first match, with ellipsis markers and a
 `[line truncated: N chars]` note, and the submatch offsets in the result index into the clipped text; a match that runs
 past the window is kept and cut at its end. A multiline match is measured one line at a time, so only a line longer
-than 500 characters is cut, and a match of more than 200 lines ends with a `[match continues for N more lines]`
-marker. A line that is not valid UTF-8 is shown with replacement characters instead of failing the search. Submatch
+than 500 characters is cut, and a match of more than 20,000 characters ends with a
+`[match continues for N more lines]` marker. A line that is not valid UTF-8 is shown with replacement characters
+instead of failing the search. Submatch
 `start` and `end` are now offsets in UTF-16 characters of the row's `text`, not UTF-8 bytes, on every line including
 unclipped ones (a plugin reading `Ripgrep.Service` sees this too); `Match.offset` stays a byte offset. Grep and Glob
 also skip `.svn`, `.hg`, `.bzr`, `.jj` and `.sl` folders and files of those names, as they already skipped `.git`.

@@ -16,6 +16,7 @@ import { Session } from "@orbit/core/session"
 import { GlobTool } from "@orbit/core/tool/plugin/glob"
 import { GrepTool } from "@orbit/core/tool/plugin/grep"
 import { Tool } from "@orbit/core/tool"
+import { Token } from "@orbit/core/util/token"
 import { Global } from "@orbit/util/global"
 import { FSUtil } from "@orbit/util/fs-util"
 import { location } from "./fixture/location"
@@ -360,6 +361,53 @@ describe("search tools", () => {
       }),
     )
   }
+
+  it.live("returns a multiline match of short lines whole and budgets a huge one", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const fields = Array.from({ length: 30 }, (_, index) => `  field_${index}: Some<${"x".repeat(30)}>,`)
+      const record = `struct S {\n${fields.join("\n")}\n}`
+      yield* Effect.promise(() =>
+        Promise.all([
+          Bun.write(path.join(tmp.path, "s.rs"), `${record}\n`),
+          Bun.write(path.join(tmp.path, "big.txt"), `start\n${"line of text\n".repeat(20_000)}end\n`),
+        ]),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const text = (result: { content?: readonly { type: string; text?: string }[] }) =>
+            result.content?.[0]?.type === "text" ? (result.content[0].text ?? "") : ""
+          const struct = yield* executeTool(
+            registry,
+            call("Grep", { pattern: "struct S \\{.*?\\n\\}", multiline: true, path: "s.rs" }),
+          )
+          expect(text(struct)).toContain("field_29: Some<")
+          expect(text(struct)).not.toContain("[line truncated")
+          const big = yield* executeTool(registry, call("Grep", { pattern: "start.*end", multiline: true, path: "big.txt" }))
+          expect(text(big)).toContain("[match continues for")
+          expect(Token.estimate(text(big))).toBeLessThanOrEqual(GrepTool.MAX_OUTPUT_TOKENS)
+        }),
+      )
+    }),
+  )
+
+  it.live("finds matches next to files that are not valid UTF-8", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Promise.all([
+          Bun.write(path.join(tmp.path, "a-latin.txt"), Buffer.from([...Buffer.from("ab "), 0xff, ...Buffer.from(" needle\n")])),
+          Bun.write(path.join(tmp.path, "b-clean.txt"), "clean needle\n"),
+        ]),
+      )
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const result = yield* executeTool(registry, call("Grep", { pattern: "needle" }))
+          expect(result.content?.[0]?.type === "text" ? result.content[0].text : "").toContain("Found 2 matches")
+        }),
+      )
+    }),
+  )
 
   it.live("rejects an empty grep pattern", () =>
     Effect.acquireUseRelease(
