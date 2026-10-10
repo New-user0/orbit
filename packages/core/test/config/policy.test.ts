@@ -92,7 +92,7 @@ describe("ConfigPolicyPlugin.Plugin", () => {
     }),
   )
 
-  // Authority runs project < local < flag < user < remote < managed. Entries are listed in arbitrary order because
+  // Authority runs project < local < flag < user < remote; organization statements follow all of them. Entries are listed in arbitrary order because
   // the scope decides the winner, not the position.
   const deny = provider("deny", "openai")
   const allow = provider("allow", "openai")
@@ -112,11 +112,8 @@ describe("ConfigPolicyPlugin.Plugin", () => {
     ["lets flag policy outrank project policy", [scoped("project", deny), scoped("flag", allow)], true],
     ["lets flag policy outrank local policy", [scoped("local", deny), scoped("flag", allow)], true],
     ["lets user policy outrank flag policy", [scoped("user", deny), scoped("flag", allow)], false],
-    [
-      "lets a managed-scope document outrank every other scope",
-      [scoped("managed", deny), scoped("remote", allow)],
-      false,
-    ],
+    // A managed document does not take part: its statements arrive through ManagedPolicy (see the test below).
+    ["leaves a managed-scope document out of the ranking", [scoped("managed", deny), scoped("remote", allow)], true],
     ["counts a document without a scope as user policy", [document(deny), scoped("project", allow)], false],
     ["ranks a document without a scope below remote policy", [document(deny), scoped("remote", allow)], true],
     [
@@ -238,7 +235,7 @@ describe("ConfigPolicyPlugin.Plugin", () => {
   it.effect("blocks a URL through an organization URL statement", () =>
     Effect.gen(function* () {
       const managed = yield* ManagedPolicy.Service
-      yield* managed.set({ statements: [permission("deny", "webfetch:https://pastebin.com/*")] })
+      yield* managed.set("connection", { statements: [permission("deny", "webfetch:https://pastebin.com/*")] })
       yield* addPlugin([])
 
       expect(yield* webfetch("https://pastebin.com/raw/abc")).toEqual({
@@ -253,7 +250,10 @@ describe("ConfigPolicyPlugin.Plugin", () => {
   it.effect("blocks a URL through a host-form statement and a configured URL policy", () =>
     Effect.gen(function* () {
       const managed = yield* ManagedPolicy.Service
-      yield* managed.set({ statements: [permission("deny", "webfetch:pastebin.com")], organization: "Acme" })
+      yield* managed.set("connection", {
+        statements: [permission("deny", "webfetch:pastebin.com")],
+        organization: "Acme",
+      })
       yield* addPlugin([document(permission("deny", "webfetch:https://gist.example.com/*"))])
 
       expect(yield* webfetch("https://pastebin.com/raw/abc")).toEqual({
@@ -317,7 +317,7 @@ describe("ConfigPolicyPlugin.Plugin", () => {
         catalog.update(Provider.ID.anthropic, () => {})
         catalog.update(Provider.ID.orbit, () => {})
       })
-      yield* managed.set({ statements: [provider("deny", "*"), provider("allow", "orbit")] })
+      yield* managed.set("connection", { statements: [provider("deny", "*"), provider("allow", "orbit")] })
       yield* addPlugin([document(provider("allow", "anthropic"))])
 
       expect(yield* catalog.get(Provider.ID.anthropic)).toBeUndefined()
@@ -331,7 +331,7 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       const catalog = yield* Provider.Service
       const managed = yield* ManagedPolicy.Service
       yield* catalog.transform((catalog) => catalog.update(Provider.ID.openai, () => {}))
-      yield* managed.set({ statements: [provider("allow", "openai")] })
+      yield* managed.set("connection", { statements: [provider("allow", "openai")] })
       yield* addPlugin([scoped("remote", provider("deny", "openai")), scoped("managed", provider("deny", "openai"))])
 
       expect(yield* catalog.get(Provider.ID.openai)).toBeDefined()
@@ -343,7 +343,7 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       const catalog = yield* Provider.Service
       const managed = yield* ManagedPolicy.Service
       yield* catalog.transform((catalog) => catalog.update(Provider.ID.openai, () => {}))
-      yield* managed.set({ statements: [provider("allow", "openai")] })
+      yield* managed.set("connection", { statements: [provider("allow", "openai")] })
       yield* addPlugin([document(provider("deny", "openai"))])
 
       expect(yield* catalog.get(Provider.ID.openai)).toBeDefined()
@@ -353,13 +353,13 @@ describe("ConfigPolicyPlugin.Plugin", () => {
   it.effect("names the organization when its permission statement decides", () =>
     Effect.gen(function* () {
       const managed = yield* ManagedPolicy.Service
-      yield* managed.set({ statements: [permission("deny", "shell:sudo *")], organization: "Acme" })
+      yield* managed.set("connection", { statements: [permission("deny", "shell:sudo *")], organization: "Acme" })
       yield* addPlugin([document(permission("allow", "shell:*"))])
 
       expect(yield* evaluate("shell", ["sudo ls"])).toEqual({ effect: "deny", message: "Blocked by Acme's policy" })
       expect((yield* evaluate("shell", ["ls"])).effect).toBe("allow")
 
-      yield* managed.set({ statements: [permission("deny", "shell:sudo *")] })
+      yield* managed.set("connection", { statements: [permission("deny", "shell:sudo *")] })
       expect(yield* evaluate("shell", ["sudo ls"])).toEqual({
         effect: "deny",
         message: "Blocked by your organization's policy",
@@ -375,13 +375,60 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       yield* addPlugin([])
       expect(yield* catalog.get(Provider.ID.openai)).toBeDefined()
 
-      yield* managed.set({ statements: [provider("deny", "openai")] })
+      yield* managed.set("connection", { statements: [provider("deny", "openai")] })
       yield* catalog.reload()
       expect(yield* catalog.get(Provider.ID.openai)).toBeUndefined()
 
-      yield* managed.set({ statements: [] })
+      yield* managed.set("connection", { statements: [] })
       yield* catalog.reload()
       expect(yield* catalog.get(Provider.ID.openai)).toBeDefined()
+    }),
+  )
+
+  it.effect("merges file and connection statements and keeps one source when the other is set", () =>
+    Effect.gen(function* () {
+      const managed = yield* ManagedPolicy.Service
+      const restrictions = { disable_hooks: true }
+      const rules = [{ action: "shell", resource: "rm *", effect: "deny" as const }]
+      yield* managed.set("file", {
+        statements: [provider("deny", "file-one")],
+        rules,
+        restrictions,
+        organization: "FileOrg",
+      })
+      yield* managed.set("connection", { statements: [provider("deny", "connection-one")], organization: "ConsoleOrg" })
+
+      expect(managed.current()).toEqual({
+        statements: [provider("deny", "file-one"), provider("deny", "connection-one")],
+        rules,
+        restrictions,
+        organization: "FileOrg",
+      })
+
+      yield* managed.set("connection", { statements: [] })
+      expect(managed.current().statements).toEqual([provider("deny", "file-one")])
+      expect(managed.current().rules).toEqual(rules)
+
+      yield* managed.set("file", { statements: [] })
+      expect(managed.current()).toEqual({ statements: [], rules: [], restrictions: {} })
+
+      yield* managed.set("connection", { statements: [], organization: "ConsoleOrg" })
+      expect(managed.current().organization).toBe("ConsoleOrg")
+    }),
+  )
+
+  it.effect("ranks a managed document only through the organization statements", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Provider.Service
+      const managed = yield* ManagedPolicy.Service
+      yield* catalog.transform((catalog) => catalog.update(Provider.ID.openai, () => {}))
+      yield* addPlugin([scoped("managed", provider("deny", "openai"))])
+      // The document says deny, but its statements reach the ranking through ManagedPolicy, which holds none here.
+      expect(yield* catalog.get(Provider.ID.openai)).toBeDefined()
+
+      yield* managed.set("file", { statements: [provider("deny", "openai")] })
+      yield* catalog.reload()
+      expect(yield* catalog.get(Provider.ID.openai)).toBeUndefined()
     }),
   )
 })
