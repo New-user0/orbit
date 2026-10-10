@@ -1227,7 +1227,8 @@ function bashExpansion(
 }
 
 // `undecoded` is set when bash reads an escape differently from this decoder: \x{..}, an escape that makes NUL (bash ends
-// the string there), \c? (DEL), and a numeric escape of 0x80 or more (bash writes a raw byte) or above U+10FFFF. The
+// the string there), \c? (DEL), \c before a non-ASCII character (bash masks its first UTF-8 byte), and a numeric escape of
+// 0x80 or more, \u and \U included (the bytes depend on the locale). The
 // value stays as scan() has always read it; inspect() treats the word as dynamic and a heredoc delimiter is refused.
 function bashAnsiQuote(input: string, start: number) {
   let value = ""
@@ -1265,7 +1266,7 @@ function bashAnsiQuote(input: string, start: number) {
       // A backslash control character swallows the next character in the lexer; the decoder drops it only when it is
       // a second backslash (\c\\ is one 0x1c) and otherwise keeps it as plain text.
       const code = control.toUpperCase().charCodeAt(0) & 31
-      if (control === "?" || code === 0) undecoded = true
+      if (control === "?" || code === 0 || control > "\x7f") undecoded = true
       value += String.fromCharCode(code)
       if (control === "\\" && index + 1 < input.length) {
         index++
@@ -1286,10 +1287,10 @@ function bashAnsiQuote(input: string, start: number) {
       if (!digits) value += `\\${escaped}`
       else {
         const octal = /[0-7]/.test(escaped)
-        // Bash keeps one byte of an octal escape (\456 is "."), writes a raw byte for 0x80 and above, and keeps a
-        // \U above U+10FFFF as text; none of those is a code point here, so the word is dynamic.
+        // Bash keeps one byte of an octal escape (\456 is "."). From 0x80 up its output depends on the locale (a raw
+        // byte, the text itself under LC_ALL=C, surrogates as raw bytes, a \U above U+10FFFF as text), so the word is dynamic.
         const point = octal ? parseInt(digits, 8) & 0xff : parseInt(digits, 16)
-        if (point === 0 || point > 0x10ffff || (point >= 0x80 && escaped !== "u" && escaped !== "U")) undecoded = true
+        if (point === 0 || point >= 0x80) undecoded = true
         value += point <= 0x10ffff ? String.fromCodePoint(point) : ""
         index += digits.length - (octal ? 1 : 0)
       }

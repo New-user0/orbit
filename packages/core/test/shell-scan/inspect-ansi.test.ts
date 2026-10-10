@@ -57,6 +57,11 @@ const bash: Array<[string, string]> = [
   [String.raw`\cA`, "01"],
   [String.raw`\c@`, ""],
   [String.raw`\c?`, "7f"],
+  ["\\cé", "03a9"],
+  ["\\c😀", "109f9880"],
+  ["\\u00e9", "c3a9"],
+  [String.raw`\ud800`, "eda080"],
+  [String.raw`\U0001f600`, "f09f9880"],
   [String.raw`\c[`, "1b"],
   [String.raw`\c\\`, "1c"],
   [String.raw`\c\\x`, "1c78"],
@@ -96,13 +101,18 @@ describe("ShellScan $'...' decoder against bash 5.2.37", () => {
     "\\U110000",
     "\\Uffffffff",
     "\\x{2e}",
+    "\\u00e9",
+    "\\ud800",
+    "\\U0001f600",
+    "\\cé",
+    "\\c😀",
   ])("%s is undecoded in a word, an assignment value and an array value", (body) => {
     expect(scanned(`echo $'${body}'`).commands[0].flags[1].undecoded).toBe(true)
     expect(scanned(`a=$'${body}' env`).commands[0].assignments[0].flags.undecoded).toBe(true)
     expect(scanned(`a=($'${body}')`).statements[0].assignments[0].flags.undecoded).toBe(true)
   })
 
-  test.each(["\\400", "\\200", "\\777"])("the redirect target %s is dynamic", (body) => {
+  test.each(["\\400", "\\200", "\\777", "\\u00e9", "\\ud800", "\\U0001f600", "\\cé", "\\c😀"])("the redirect target %s is dynamic", (body) => {
     expect(scanned(`echo x > $'${body}mcp.json'`).commands[0].redirects[0].dynamic).toBe(true)
     expect(scanned(`echo x > $'..${body}pwned'`).commands[0].redirects[0].dynamic).toBe(true)
   })
@@ -167,6 +177,12 @@ describe("ShellScan heredoc delimiter in $'...'", () => {
     "cat <<$'E\\xffF'\nbody\nEÿF\ntouch pwned\n",
     "cat <<$'E\\777F'\nbody\nEÿF\ntouch pwned\n",
     "cat <<$'E\\U110000F'\nbody\nEF\ntouch pwned\n",
+    // Under LANG unset bash keeps these as text, in a UTF-8 locale it writes other bytes; either way the line below
+    // is the one the decoder would match, so cat <<$'\u00e9' must not hide touch.
+    "cat <<$'\\u00e9'\nbody\né\ntouch pwned\n",
+    "cat <<$'\\ud800'\nbody\n\ud800\ntouch pwned\n",
+    "cat <<$'\\U0001f600'\nbody\n😀\ntouch pwned\n",
+    "cat <<$'\\cé'\nbody\n\t\ntouch pwned\n",
   ])("%j is refused", (input) => {
     expect(ShellScan.scan(input).kind).not.toBe("scanned")
     expect(ShellScan.inspect(input).kind).not.toBe("scanned")
