@@ -82,7 +82,7 @@ const reader = Layer.succeed(
       if (readDefect !== undefined) return Effect.die(readDefect)
       if (readOverride) return readOverride(input, resource, page)
       if (readFailure !== undefined) return Effect.fail(readFailure)
-      return Effect.succeed(readResult)
+      return Effect.succeed({ content: readResult })
     },
   }),
 )
@@ -884,7 +884,7 @@ describe("ReadTool", () => {
       readOverride = (input) =>
         input === requestedAbsolute
           ? Effect.fail(new Environment.NotFound({ path: requestedAbsolute }))
-          : Effect.succeed(readResult)
+          : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       const result = yield* executeTool(registry, {
@@ -916,7 +916,7 @@ describe("ReadTool", () => {
       const recovered = path.join(directory, "report\u202ffinal.txt")
       directoryEntryDetails = [{ name: path.basename(recovered), type: "file" }]
       readOverride = (input) =>
-        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed(readResult)
+        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       expect(
@@ -942,7 +942,7 @@ describe("ReadTool", () => {
       deniedResource = path.basename(recovered)
       directoryEntryDetails = [{ name: path.basename(recovered), type: "file" }]
       readOverride = (input) =>
-        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed(readResult)
+        input === requested ? Effect.fail(new Environment.NotFound({ path: requested })) : Effect.succeed({ content: readResult })
       const registry = yield* Tool.Service
 
       expect(
@@ -992,7 +992,7 @@ describe("ReadTool", () => {
       readOverride = (input) =>
         input === requestedAbsolute
           ? Effect.fail(new Environment.NotFound({ path: requestedAbsolute }))
-          : Effect.succeed(new ReadToolFileSystem.ListPage({ type: "list-page", entries: [], truncated: false }))
+          : Effect.succeed({ content: new ReadToolFileSystem.ListPage({ type: "list-page", entries: [], truncated: false }) })
       const registry = yield* Tool.Service
 
       expect(

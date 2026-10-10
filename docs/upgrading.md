@@ -1977,3 +1977,11 @@ The Read, Grep and Glob tools now refuse a device or stream path with a message 
 **Affects:** people and scripts that read very large files or device paths through the Read tool.
 
 **What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
+
+### A touched file no longer blocks an edit, and a repeat read is short
+
+The file tools remember what a Session read of a file and what its own edits left behind. When a file's modification time is newer than the one remembered but its bytes are the same (a touch, a checkout that rewrote the same content, a formatter that changed nothing), Edit, Write and NotebookEdit now go ahead instead of reporting that the file changed. This applies to files the Session read whole (up to 256 KiB) and files it last edited or wrote; a larger file read only in pages, and Patch, still compare modification times only. A file whose content changed is refused as before. Separately, reading the same range of an unchanged text file or notebook again in the same Session answers with a short "unchanged since your last read" note instead of the text; the tool's structured output is unchanged and its metadata says `unchanged: true`. The note is not used after the Session is compacted or a revert is committed, nor after any Edit, Write, Patch or NotebookEdit of that file.
+
+**Affects:** people who run formatters, version control or build tools while a Session is open, and clients that show Read results.
+
+**What to do:** Nothing.

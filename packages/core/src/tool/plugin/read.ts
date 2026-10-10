@@ -4,6 +4,7 @@ import type { Context } from "@orbit/plugin/effect/plugin"
 import { basename, dirname, join } from "path"
 import { ToolFailure } from "@orbit/ai"
 import { CompatInstructions } from "@orbit/compat/instructions"
+import { createHash } from "crypto"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Config } from "../../config.js"
@@ -61,7 +62,7 @@ export const Plugin = {
 
               const requested = yield* access.authorizeRead(input.file_path, context)
               const result = yield* read(requested).pipe(
-                Effect.map((content) => ({ content, target: requested, path: input.file_path })),
+                Effect.map((read) => ({ ...read, target: requested, path: input.file_path })),
                 Effect.catchIf(
                   (error) => error instanceof Environment.NotFound,
                   () =>
@@ -71,15 +72,16 @@ export const Plugin = {
                       )
                       if (!alternate) return yield* missing(input.file_path, requested.absolute)
                       const target = yield* access.authorizeRead(alternate, context, { siblingOf: requested })
-                      const content = yield* read(target).pipe(
+                      const alternateRead = yield* read(target).pipe(
                         Effect.catchIf(
                           (error) => error instanceof Environment.NotFound,
                           () => missing(input.file_path, requested.absolute),
                         ),
                       )
-                      if (content.type === "list-page") return yield* missing(input.file_path, requested.absolute)
+                      if (alternateRead.content.type === "list-page")
+                        return yield* missing(input.file_path, requested.absolute)
                       return {
-                        content,
+                        ...alternateRead,
                         target,
                         path: join(dirname(input.file_path), basename(alternate)),
                       }
@@ -120,21 +122,46 @@ export const Plugin = {
                 return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource: result.target.resource }))
               // A folder named like a notebook was read whole above; page it as any folder.
               if (result.content.type === "list-page" && Notebook.isNotebook(result.target.absolute))
-                return { output: yield* read(result.target, true), path: result.path }
-              if (result.content.type !== "list-page") yield* ledger.record(context.sessionID, result.target.absolute)
-              if (result.content.type !== "list-page" && Notebook.isNotebook(result.target.absolute)) {
-                const notebook = yield* readNotebook(result.target.absolute, input.offset, input.limit)
-                if (notebook) return { output: notebook, path: result.path }
+                return {
+                  output: (yield* read(result.target, true)).content,
+                  path: result.path,
+                  absolute: result.target.absolute,
+                }
+              if (result.seen) yield* ledger.recordRead(context.sessionID, result.target.absolute, result.seen)
+              const absolute = result.target.absolute
+              if (result.content.type !== "list-page" && Notebook.isNotebook(absolute)) {
+                const notebook = yield* readNotebook(absolute, input.offset, input.limit)
+                if (notebook) return { output: notebook, path: result.path, absolute }
                 // Not a notebook after all: read it as the text it is, from the offset asked for.
-                return { output: yield* read(result.target, true), path: result.path }
+                return { output: (yield* read(result.target, true)).content, path: result.path, absolute }
               }
-              return { output: result.content, path: result.path }
+              return { output: result.content, path: result.path, absolute }
             }).pipe(
-              Effect.map((result) => ({
-                output: result.output,
-                content: toModelContent(result.path, input.offset, result.output),
-                metadata: { truncated: result.output.type === "file" ? false : result.output.truncated },
-              })),
+              Effect.flatMap((result) =>
+                Effect.gen(function* () {
+                  const content = toModelContent(result.path, input.offset, result.output)
+                  const metadata = { truncated: result.output.type === "file" ? false : result.output.truncated }
+                  // Lists and media are never answered with a stub. Text is, when this range showed the same text before.
+                  const repeatable =
+                    typeof content === "string" &&
+                    (result.output.type === "text-page" ||
+                      (result.output.type === "file" && result.output.encoding === "utf8"))
+                  const unchanged =
+                    repeatable &&
+                    (yield* ledger.markRead(
+                      context.sessionID,
+                      result.absolute,
+                      `${input.offset ?? 1}:${input.limit ?? "default"}`,
+                      createHash("sha256").update(content).digest("hex"),
+                    ))
+                  if (!unchanged) return { output: result.output, content, metadata }
+                  return {
+                    output: result.output,
+                    content: unchangedStub(result.path),
+                    metadata: { truncated: false, unchanged: true },
+                  }
+                }),
+              ),
               Effect.mapError((error) => {
                 if (error instanceof ToolFailure) return error
                 const message =
@@ -224,7 +251,11 @@ export const Plugin = {
   }),
 }
 
-export const toModelContent = (path: string, offset: number | undefined, output: typeof Output.Type) => {
+/** The model text for a repeat read of a range whose text is the same as the one the model already holds. */
+export const unchangedStub = (path: string) =>
+  `Read file ${path}: unchanged since your last read of this range. The text you were given then is still current, so use it instead of reading again.`
+
+export const toModelContent =(path: string, offset: number | undefined, output: typeof Output.Type) => {
   if (output.type === "file" && output.encoding === "base64")
     return [
       { type: "text", text: output.mime === "application/pdf" ? "PDF read successfully" : "Image read successfully" },

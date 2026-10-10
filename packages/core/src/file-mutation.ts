@@ -9,6 +9,7 @@ import { Bom } from "@orbit/util/bom"
 import { Environment } from "./environment/index.js"
 import type { Files } from "./environment/index.js"
 import type { FileAccess } from "./file-access.js"
+import { FileLedger } from "./file-ledger.js"
 
 export type Target = Pick<FileAccess.Target, "absolute" | "resource">
 
@@ -47,7 +48,16 @@ export const readText = Effect.fn("FileMutation.readText")(function* (files: Fil
   return Bom.decodeBytes((yield* files.read(target)).bytes)
 })
 
-export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
+/**
+ * The decoded text of a file with the modification time and byte digest of the same read, so the FileLedger can check
+ * freshness and a tool can record the result without another stat or read.
+ */
+export const readSnapshot = Effect.fn("FileMutation.readSnapshot")(function* (files: Files, target: string) {
+  const file = yield* files.read(target)
+  return { ...Bom.decodeBytes(file.bytes), mtimeMs: file.info.mtimeMs, digest: FileLedger.digest(file.bytes) }
+})
+
+export const syncTextBom =Effect.fn("FileMutation.syncTextBom")(function* (
   files: Files,
   target: string,
   bom: boolean,

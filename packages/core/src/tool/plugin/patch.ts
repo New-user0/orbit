@@ -286,18 +286,17 @@ export const Plugin = {
                 [...new Set(applied.filter((item) => item.type !== "delete").map((item) => item.target))],
                 (target) =>
                   Effect.gen(function* () {
-                    const current = yield* FileMutation.readText(environment.files, target).pipe(
+                    const written = yield* FileMutation.readSnapshot(environment.files, target).pipe(
                       Effect.mapError((error) => fail(`Failed to read ${target}`, error)),
                     )
-                    formatted.set(
-                      target,
-                      (yield* formatter.file(target))
-                        ? yield* FileMutation.syncTextBom(environment.files, target, current.bom).pipe(
-                            Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
-                          )
-                        : current.text,
-                    )
-                    yield* ledger.record(context.sessionID, target)
+                    const final = (yield* formatter.file(target))
+                      ? yield* FileMutation.syncTextBom(environment.files, target, written.bom).pipe(
+                          Effect.andThen(FileMutation.readSnapshot(environment.files, target)),
+                          Effect.mapError((error) => fail(`Failed to sync ${target}`, error)),
+                        )
+                      : written
+                    formatted.set(target, final.text)
+                    yield* ledger.recordWrite(context.sessionID, target, final)
                   }),
                 { discard: true },
               )

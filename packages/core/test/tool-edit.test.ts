@@ -4,6 +4,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Exit, Fiber, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { FileLedger } from "@orbit/core/file-ledger"
+import { readNow } from "./fixture/ledger"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Environment } from "@orbit/core/environment/index"
 import { FileMutation } from "@orbit/core/file-mutation"
@@ -508,7 +509,6 @@ describe("EditTool", () => {
                 })
                 expect(missing).toEqual(matching)
                 expect(edit.assertions).toEqual([])
-                expect(edit.reads).toBe(0)
                 expect(edit.writes).toEqual([])
               }),
             { ledger: "real" },
@@ -530,7 +530,7 @@ describe("EditTool", () => {
             edit,
             (registry) =>
               Effect.gen(function* () {
-                yield* (yield* FileLedger.Service).record(sessionID, target)
+                yield* readNow(sessionID, target)
                 const matching = yield* executeTool(
                   registry,
                   call({ file_path: "secret.txt", old_string: "secret content", new_string: "replacement" }),
@@ -635,9 +635,12 @@ describe("EditTool", () => {
               (registry) =>
                 Effect.gen(function* () {
                   if (item.ledger === "stale") {
-                    yield* (yield* FileLedger.Service).record(sessionID, target)
+                    yield* readNow(sessionID, target)
                     const later = new Date(Date.now() + 60_000)
-                    yield* Effect.promise(() => fs.utimes(target, later, later))
+                    yield* Effect.promise(async () => {
+                      await fs.appendFile(target, "\n")
+                      await fs.utimes(target, later, later)
+                    })
                   }
                   const expected = { type: item.type, message: item.message }
                   expect(
@@ -646,7 +649,9 @@ describe("EditTool", () => {
                   expect(yield* executeTool(registry, call(item.input))).toEqual({ status: "error", error: expected })
                   expect(edit.assertions).toEqual([])
                   expect(edit.writes).toEqual([])
-                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("same same")
+                  expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe(
+                    item.ledger === "stale" ? "same same\n" : "same same",
+                  )
                 }),
               { ledger: item.ledger === undefined ? "permissive" : "real" },
             ),
@@ -654,6 +659,40 @@ describe("EditTool", () => {
         )
       }),
     )
+
+  it.live("lets a file that was only touched since the session read it be edited, in validate and in execute", () =>
+    withTempDir((tmp) => {
+      const edit = makeEditFixture()
+      const target = path.join(tmp.path, "matches.txt")
+      return Effect.promise(() => fs.writeFile(target, "same same")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            edit,
+            (registry) =>
+              Effect.gen(function* () {
+                yield* readNow(sessionID, target)
+                const later = new Date(Date.now() + 60_000)
+                yield* Effect.promise(() => fs.utimes(target, later, later))
+                const input = { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true }
+                expect(yield* validateEdit(registry, input).pipe(Effect.exit)).toEqual(Exit.void)
+                expect(yield* executeTool(registry, call(input))).toMatchObject({ status: "completed" })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after after")
+
+                // The edit recorded the file as it left it, so touching it again does not block the next edit.
+                const much = new Date(Date.now() + 120_000)
+                yield* Effect.promise(() => fs.utimes(target, much, much))
+                expect(
+                  yield* executeTool(registry, call({ ...input, old_string: "after", new_string: "third" })),
+                ).toMatchObject({ status: "completed" })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("third third")
+              }),
+            { ledger: "real" },
+          ),
+        ),
+      )
+    }),
+  )
 
   it.live("accepts an edit that can work, in validate and in execute", () =>
     withTempDir((tmp) => {
@@ -666,7 +705,7 @@ describe("EditTool", () => {
             edit,
             (registry) =>
               Effect.gen(function* () {
-                yield* (yield* FileLedger.Service).record(sessionID, target)
+                yield* readNow(sessionID, target)
                 const input = { file_path: "matches.txt", old_string: "same", new_string: "after", replace_all: true }
                 expect(yield* validateEdit(registry, input).pipe(Effect.exit)).toEqual(Exit.void)
                 expect(yield* executeTool(registry, call(input))).toMatchObject({
@@ -892,7 +931,7 @@ describe("EditTool", () => {
             edit,
             (registry) =>
               Effect.gen(function* () {
-                yield* (yield* FileLedger.Service).record(sessionID, target)
+                yield* readNow(sessionID, target)
                 const first = yield* executeTool(
                   registry,
                   call({ file_path: "formatting.txt", old_string: "one", new_string: "ONE" }, "call-edit-one"),

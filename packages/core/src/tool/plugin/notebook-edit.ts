@@ -66,8 +66,10 @@ export const Plugin = {
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.notebook_path)
-              const original = yield* FileMutation.readText(environment.files, target.absolute).pipe(
+              const original = yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
+                Effect.tap((snapshot) =>
+                  ledger.assertFresh(context.sessionID, target.absolute, input.notebook_path, snapshot),
+                ),
                 Effect.catchTag("Environment.NotFound", () =>
                   Effect.fail(new ToolFailure({ message: `File not found: ${input.notebook_path}` })),
                 ),
@@ -91,7 +93,11 @@ export const Plugin = {
               })
               // Notebooks skip the formatter: reformatting JSON would rewrite every line of the file.
               const result = yield* fileMutation.write({ target, content: after })
-              yield* ledger.record(context.sessionID, target.absolute)
+              yield* ledger.recordWrite(
+                context.sessionID,
+                target.absolute,
+                yield* FileMutation.readSnapshot(environment.files, target.absolute),
+              )
               return {
                 files: [fileDiff(result.resource, original.text, after)],
                 cells: NonNegativeInt.make(next.cells.length),
