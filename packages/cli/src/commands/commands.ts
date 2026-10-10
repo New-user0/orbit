@@ -230,9 +230,10 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
               "bin",
               "log",
               "repos",
+              "managed",
             ]).pipe(
               Argument.withDescription(
-                "Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos",
+                "Print only one path: db, home, data, config, cache, state, tmp, bin, log, repos, managed",
               ),
               Argument.optional,
             ),

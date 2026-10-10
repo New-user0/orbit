@@ -1,8 +1,11 @@
 import { Orbit } from "@orbit/client"
 import { Service } from "@orbit/client/effect/service"
+import { ManagedPath } from "@orbit/util/managed-path"
 import { Network } from "@orbit/util/network"
+import { plain } from "@orbit/util/plain"
 import { Effect, Option } from "effect"
 import { EOL } from "node:os"
+import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
@@ -27,6 +30,8 @@ export default Runtime.handler(
   Commands.commands.doctor,
   Effect.fn("cli.doctor")(function* (input) {
     const model = Option.getOrUndefined(input.model)
+    const { ServerManaged } = yield* Effect.promise(() => import("@orbit/server/managed"))
+    const managed = yield* ServerManaged.read(ManagedPath.directory(process.platform, process.env))
     const checks = [
       { ok: undefined, label: "orb", detail: `${ORBIT_VERSION} on ${process.platform}-${process.arch}` },
       network(),
@@ -38,6 +43,7 @@ export default Runtime.handler(
       ripgrep(),
       git(),
       tachyon(),
+      ...managedChecks(managed),
     ] satisfies Check[]
     print(checks)
     if (!input.probe && model === undefined) {
@@ -83,6 +89,32 @@ function network(): Check {
       ...(configured.cert ? ["client certificate configured (mutual TLS)"] : []),
     ].join("; "),
   }
+}
+
+// The managed settings files by name, relative to their folder, and what could not be used in them; never a value.
+function managedChecks(managed: {
+  readonly directory: string
+  readonly sources: readonly string[]
+  readonly diagnostics: readonly { readonly source: string; readonly path: string; readonly message: string }[]
+}): Check[] {
+  if (managed.sources.length === 0)
+    return [{ ok: undefined, label: "managed", detail: `no managed settings in ${managed.directory}` }]
+  return [
+    {
+      ok: undefined,
+      label: "managed",
+      detail: plain(managed.sources.map((source) => path.relative(managed.directory, source)).join(", ")),
+    },
+    ...managed.diagnostics.map(
+      (diagnostic): Check => ({
+        ok: false,
+        label: "managed",
+        detail: plain(
+          `${path.relative(managed.directory, diagnostic.source)} ${diagnostic.path}: ${diagnostic.message}`,
+        ),
+      }),
+    ),
+  ]
 }
 
 function ripgrep(): Check {

@@ -261,6 +261,27 @@ trust prompt, which lists the `providers` kind.
 **What to do:** Nothing for your own config. To use a repository's model settings, run `orb trust` in it, or set them in
 your user config.
 
+### Managed settings files
+
+An organization can now put settings where users cannot override them. Orbit reads `managed-settings.json`, then the
+`managed-settings.d/*.json` drop-ins in filename order, from `/etc/orbit` on Linux, `/Library/Application Support/Orbit`
+on macOS and `%ProgramData%\Orbit` on Windows (`C:\ProgramData\Orbit` when that variable is unset).
+`ORBIT_MANAGED_DIR` points the server at another folder, and `orb debug paths managed` prints the one in use. Objects
+merge by key, arrays concatenate (a list of strings loses its repeats) and any other value takes the later file's. The
+merged settings load as a `managed` scope document that outranks every other scope, and the file watcher reloads them
+while the server runs. A `managed` block in these files holds restrictions (`organization`, `mcp`, `plugins`,
+`network` and the hook and permission switches); the key is ignored with a diagnostic in any other config file. Orbit
+never creates the folder, and a folder created after the server starts is read on the next start.
+
+A file or an entry that does not decode is skipped on its own and never drops what its siblings say. `orb doctor` lists
+the managed files by name and each problem it found. This release loads and merges the settings and hands the
+permission rules and restrictions to the policy service; enforcing them follows separately.
+
+**Affects:** machines that already have a file at one of those paths, and people who run a server with
+`ORBIT_MANAGED_DIR` set.
+
+**What to do:** Nothing unless your organization manages Orbit.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

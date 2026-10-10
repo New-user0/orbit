@@ -104,6 +104,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   update, and `MCP tools`), `core/test/session-runner.test.ts` (`does not authorize itself`, `registry gate is declined`),
   `plugin-browser/test/tools.test.ts` (the browser tools ask on `browser`), and the `expectRegistryAsks` line in the suite
   of each built-in the registry asks about.
+- Managed settings (`/etc/orbit`, `/Library/Application Support/Orbit`, `%ProgramData%\Orbit`, or `ORBIT_MANAGED_DIR`):
+  `ManagedSettings.read` reads a fixed folder the machine's administrator owns, never one a repository supplies, so it
+  has no trust gate, and nothing in a project can name its location (the override is the server's environment or
+  `ServerOptions.managed.directory`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
+  with a diagnostic. Each file and each entry decodes on its own (class 7). Proof: `core/test/managed-settings.test.ts`.
 - Plugins in `.orbit/plugins`: `ConfigPluginSource.scan` skips untrusted directories. Proof:
   `test/project-trust.test.ts`, `packages/cli/test/trust.test.ts`.
 - Shell snippets in commands: `ConfigCommandPlugin` refuses them with `UntrustedError`. Proof:

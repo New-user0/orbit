@@ -50,6 +50,40 @@ describe("debug paths command", () => {
   })
 })
 
+describe("debug paths managed", () => {
+  test("lists the managed settings folder, honours ORBIT_MANAGED_DIR and never creates it", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-debug-managed-"))
+    try {
+      const managed = path.join(root, "managed")
+      const listed = await cli(["debug", "paths"], { ORBIT_MANAGED_DIR: managed })
+      const paths = Object.fromEntries(
+        listed.stdout
+          .trim()
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/, 2)),
+      )
+      expect({ exitCode: listed.exitCode, managed: paths.managed }).toEqual({ exitCode: 0, managed })
+
+      const only = await cli(["debug", "paths", "managed"], { ORBIT_MANAGED_DIR: managed })
+      expect(only.stdout.trim()).toBe(managed)
+      await expect(fs.stat(managed)).rejects.toThrow()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("falls back to the per-OS default without the override", async () => {
+    const only = await cli(["debug", "paths", "managed"], { ORBIT_MANAGED_DIR: "" })
+    const expected =
+      process.platform === "win32"
+        ? path.win32.join(process.env.ProgramData || "C:\\ProgramData", "Orbit")
+        : process.platform === "darwin"
+          ? "/Library/Application Support/Orbit"
+          : "/etc/orbit"
+    expect(only.stdout.trim()).toBe(expected)
+  })
+})
+
 async function cli(args: string[], env?: Record<string, string>) {
   const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), ...args], {
     cwd: path.join(import.meta.dir, ".."),
