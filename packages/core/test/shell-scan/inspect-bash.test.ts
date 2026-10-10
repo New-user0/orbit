@@ -298,7 +298,8 @@ describe("ShellScan.inspect expansion positions", () => {
     ["echo {a,{b}}", { brace: true }],
     ["echo {a}", {}],
     ["echo ~/f", { tilde: true }],
-    ['echo "~/f" \\~/f', {}],
+    ['echo "~/f"', {}],
+    ["echo \\~/f", {}],
     ["echo A=~/x", { tilde: true }],
     ["echo ${x:-$(a)}", { parameter: true, command: true }],
     ["echo $((1+$(b)))", { arithmetic: true, command: true }],
@@ -308,21 +309,44 @@ describe("ShellScan.inspect expansion positions", () => {
     ['echo "$((1+$(b)))"', { arithmetic: true, command: true }],
     ['echo "${a[$(x)]}"', { parameter: true, command: true }],
     ["echo {a, b}", {}],
-    ["echo []a] [[] []] a[\" \"]b", { glob: true }],
+    ["echo []a]", { glob: true }],
+    ["echo [[]", { glob: true }],
+    ["echo []]", { glob: true }],
+    ['echo a[" "]b', { glob: true }],
     ["echo [a b]", {}],
     ["echo []", {}],
     ["echo [!]a]", { glob: true }],
-    ['echo "[a]" \\[a\\] [a"]"', {}],
-    ["echo \\$* \\$? \\$[ab]", { glob: true }],
-    ["echo $* $? $#", { parameter: true }],
+    ['echo "[a]"', {}],
+    ["echo \\[a\\]", {}],
+    ['echo [a"]"', {}],
+    ["echo \\$*", { glob: true }],
+    ["echo \\$?", { glob: true }],
+    ["echo \\$[ab]", { glob: true }],
+    ["echo $*", { parameter: true }],
+    ["echo $?", { parameter: true }],
+    ["echo $#", { parameter: true }],
+    ["echo $$*", { parameter: true, glob: true }],
+    ["echo $$?", { parameter: true, glob: true }],
+    ["echo $$'' *", { glob: true }],
+    ["echo $${x} *", { glob: true }],
+    ["echo a[0]=x", { arithmetic: true, glob: true }],
+    ["export a[0]=x", { arithmetic: true }],
+    ["echo $'\\x{2e}'", { undecoded: true }],
+    ["echo $'a\\0b'", { undecoded: true }],
+    ["echo $'\\x00'", { undecoded: true }],
+    ["echo $'\\c@'", { undecoded: true }],
+    ["echo $'\\c?'", { undecoded: true }],
+    ["echo $'\\x2e'", {}],
+    ["echo $'\\c\\\\'", {}],
+    ["echo $'\\u{2e}'", {}],
     ["unset A=*", { glob: true }],
     ["export B={a,b}", { brace: true }],
     ["declare D={x,y}", { brace: true }],
     ["export E={1..3}", { brace: true }],
   ]
   test.each(argument)("argument %s", (input, expected) => {
-    const flags = only(input).flags.slice(1)
-    expect(Object.assign({}, ...flags)).toEqual(expected)
+    // One word per cell: the flags of the last word, so one word's flags cannot hide another's.
+    expect(only(input).flags.at(-1)).toEqual(expected)
   })
 
   test("a prefix assignment and a declaration argument are exempt from glob and brace, not from tilde", () => {
@@ -344,6 +368,15 @@ describe("ShellScan.inspect expansion positions", () => {
     ["a=([a b])", {}],
     ["a=('*' \"?\" {b})", {}],
     ["a=($(a=($(x))))", { command: true }],
+    ["a=(\\* \\?)", {}],
+    ["a=(!(x))", { glob: true }],
+    ["a=(@(a|b))", { glob: true }],
+    ["a=(+(a))", { glob: true }],
+    ["a=(<(true))", { command: true, process: true }],
+    ["a=([1]=~)", { glob: true, tilde: true }],
+    ["a=([1]=x:~/y)", { glob: true, tilde: true }],
+    ["a=(x:~/y)", {}],
+    ["a=(x=~/y)", {}],
   ] as Array<[string, ShellScan.WordFlags]>)("assignment %s", (input, expected) => {
     expect(scanned(input).statements[0].assignments[0].flags).toEqual(expected)
   })
@@ -360,6 +393,19 @@ describe("ShellScan.inspect expansion positions", () => {
     ["echo x >> C=~", true],
     ["echo x > .[]m]cp.json", true],
     ["echo x > []p]re-commit", true],
+    ["echo x $$'' > */.git/config", true],
+    ["echo x $${x} > */.git/config", true],
+    ["echo x > */.git/config", true],
+    ["echo x > $'\\x{2e}mcp.json'", true],
+    ["echo x > $'\\x{2E}git'", true],
+    ["echo x > $'.bashrc\\0'", true],
+    ["echo x > $'.mcp.json\\0.txt'", true],
+    ["echo x > $'.mcp.json\\x00.txt'", true],
+    ["echo x > $'a\\0b'c", true],
+    ["echo x > $'\\c@'", true],
+    ["echo x > $'\\c?'", true],
+    ["echo x > $'\\x2emcp'", false],
+    ["echo x > $'\\c\\\\'", false],
     ["echo x > [a b]", false],
     ["echo x > f", false],
   ])("redirect target %s dynamic=%p", (input, dynamic) => {
@@ -391,27 +437,36 @@ describe("ShellScan.inspect cost", () => {
   const hostile: Array<[string, string]> = [
     ["brace commas", `"echo x" + "{,".repeat(4096)`],
     ["open braces", `"{".repeat(60000)`],
-    ["open brackets", `"[".repeat(60000)`],
+    // Prefixed so the [[ test-expression check does not refuse the input before any bracket is matched.
+    ["open brackets", `"echo " + "[".repeat(60000)`],
+    ["open brackets in an array", `"a=(" + "[".repeat(60000) + ")"`],
     ["brace ranges", `"echo " + "{a..".repeat(8000)`],
     ["array values", `"a=(" + "{,".repeat(8000) + ")"`],
     ["array chain", `"a=($(".repeat(15) + "x" + "))".repeat(15)`],
     ["array chain on lines", `Array.from({ length: 8 }, () => "a=($(".repeat(15) + "x" + "))".repeat(15)).join("\\n")`],
-    ["array tree", `(() => { let x = "a"; for (let i = 0; i < 10; i++) x = "a=($(" + x + ") $(" + x + "))"; return x })()`],
+    [
+      "array tree",
+      `(() => { let x = "a"; for (let i = 0; i < 10; i++) x = "a=($(" + x + ") $(" + x + "))"; return x })()`,
+    ],
   ]
-  test.each(hostile)("%s finish under a deadline", async (_name, expression) => {
-    const source = new URL("../../src/shell/scan.ts", import.meta.url).href
-    const child = Bun.spawn({
-      cmd: [
-        process.execPath,
-        "-e",
-        `const { ShellScan } = await import(${JSON.stringify(source)}); ShellScan.inspect(${expression})`,
-      ],
-      stdout: "ignore",
-      stderr: "ignore",
-      timeout: 8000,
-    })
-    expect(await child.exited).toBe(0)
-  }, 15000)
+  test.each(hostile)(
+    "%s finish under a deadline",
+    async (_name, expression) => {
+      const source = new URL("../../src/shell/scan.ts", import.meta.url).href
+      const child = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "-e",
+          `const { ShellScan } = await import(${JSON.stringify(source)}); ShellScan.inspect(${expression})`,
+        ],
+        stdout: "ignore",
+        stderr: "ignore",
+        timeout: 8000,
+      })
+      expect(await child.exited).toBe(0)
+    },
+    15000,
+  )
 
   test("a nested array tree still scans, once per substitution", () => {
     const tree = Array.from({ length: 10 }).reduce<string>((x) => "a=($(" + x + ") $(" + x + "))", "a")
@@ -428,7 +483,7 @@ describe("ShellScan.inspect cost", () => {
           process.execPath,
           "-e",
           `const { ShellScan } = await import(${JSON.stringify(source)});
-           const input = "[".repeat(${count}); ShellScan.inspect(input);
+           const input = "echo " + "[".repeat(${count}); ShellScan.inspect(input);
            const start = performance.now(); for (let run = 0; run < 20; run++) ShellScan.inspect(input); console.log(performance.now() - start)`,
         ],
         stdout: "pipe",
@@ -442,4 +497,23 @@ describe("ShellScan.inspect cost", () => {
     // Linear growth gives a ratio near 4. Quadratic growth gives near 16.
     expect(large / Math.max(small, 1)).toBeLessThan(10)
   }, 20000)
+})
+
+// \c followed by a backslash: bash pairs \\ as ctrl-backslash and closes the string at the next quote. The first
+// version of the decoder read \' as an escaped quote, kept the string open and hid the command after it. This is the
+// one deliberate change to scan() in this PR.
+describe("ShellScan $'...' with a control escape", () => {
+  test.each([
+    ["echo $'\\c\\\\'; touch pwned #'", ["echo", "touch"]],
+    ["echo $'\\c\\\\'\ntouch pwned\necho '#'", ["echo", "touch", "echo"]],
+  ])("%j closes where bash closes it", (input, names) => {
+    for (const result of [ShellScan.scan(input), ShellScan.inspect(input)]) {
+      expect(result.kind).toBe("scanned")
+      if (result.kind === "scanned") expect(result.commands.map((command) => command.words[0])).toEqual(names)
+    }
+  })
+
+  test("the control character is 0x1c", () => {
+    expect(only("echo $'\\c\\\\'").words[1]).toBe("\x1c")
+  })
 })

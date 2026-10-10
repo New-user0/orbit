@@ -40,6 +40,8 @@ export type WordFlags = {
   brace?: true
   // An unquoted leading ~ (or one after = or : in an assignment value) that bash replaces with a home folder.
   tilde?: true
+  // A $'...' that bash decodes differently from the word shown here (see bashAnsiQuote), so its value is not known.
+  undecoded?: true
 }
 export type Redirect = {
   operator: string
@@ -146,6 +148,15 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
   const braces: boolean[] = []
   // Bracket expression state of the current word: 0 none, 1 after "[", 2 after the negation, 3 inside the set.
   let bracket: 0 | 1 | 2 | 3 = 0
+  // Set once the current word holds a character a variable name cannot, so the name test is not repeated: testing the
+  // word flattens its string, which made a run of "[" quadratic.
+  let wordNotName = false
+  const nameWord = () => {
+    if (wordNotName) return false
+    const name = /^[A-Za-z_][A-Za-z0-9_]*$/.test(word)
+    wordNotName = !name && word.length > 0
+    return name
+  }
   // True while the next character names the parameter of the unquoted "$" just read.
   let parameterName = false
   let redirectOperator: string | undefined
@@ -380,7 +391,13 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
 
   for (let index = 0; index < input.length; index++) {
     const char = input[index]
-    if (!wordStarted) wordStart = index
+    // Every branch consumes the name guard, so it never reaches the next word or a redirect target.
+    const afterParameter = parameterName
+    parameterName = false
+    if (!wordStarted) {
+      wordStart = index
+      wordNotName = false
+    }
     if (!quote && !wordStarted) {
       if (char === " " || char === "\t") continue
       const structure = structures.at(-1)
@@ -609,6 +626,7 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
       if (!literal) return syntax("unterminated-quote")
       wordStarted = true
       if (!assignmentWord) assignmentHeadUnsafe = true
+      if (literal.undecoded) flags.undecoded = true
       feedBracket("$", true)
       word += literal.value
       index = literal.end
@@ -651,13 +669,17 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
     if (
       (char === "$" && "({[".includes(input[index + 1] ?? "\0")) ||
       char === "`" ||
-      (char === "[" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word) && /^\[[\s\S]*?\]\+?=/.test(input.slice(index))) ||
+      (char === "[" && nameWord() && /^\[[\s\S]*?\]\+?=/.test(input.slice(index))) ||
       (char === "(" && (assignmentWord || /[?*+@!]$/.test(word)))
     ) {
       if (char === "(") {
         if (!assignmentWord) flags.glob = true
-      } else if (char === "[") flags.arithmetic = true
-      else flags[expansionFlag(input, index)] = true
+      } else if (char === "[") {
+        flags.arithmetic = true
+        // Outside an assignment position bash does not read a[0]=x as an assignment, it globs it.
+        if (redirectTarget || (commandName >= 0 && !BASH_ASSIGNING_DECLARATIONS.has(rawWords[commandName])))
+          flags.glob = true
+      } else flags[expansionFlag(input, index)] = true
       const substitution =
         char === "("
           ? bashExpansion(budget, input, index, depth, assignmentWord ? "array" : "pattern")
@@ -791,7 +813,11 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
             if (!heredoc.quoted) {
               const expansion = bashExpansion(budget, body.source, 0, depth, "heredoc")
               if (!expansion) return fail("command-substitution")
-              const failure = addSubstitutions(expansion, heredoc.node && !heredoc.node.commandless ? heredoc.node.nested : roots, "heredoc")
+              const failure = addSubstitutions(
+                expansion,
+                heredoc.node && !heredoc.node.commandless ? heredoc.node.nested : roots,
+                "heredoc",
+              )
               if (failure) return failure
               commands.push(...nestedCommands.splice(0))
             }
@@ -817,10 +843,9 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
     wordStarted = true
     if (char === "=" && !assignmentHeadUnsafe && /^[A-Za-z_][A-Za-z0-9_]*(?:\[.*\])?\+?$/.test(word))
       assignmentWord = true
-    const afterParameter = parameterName
-    parameterName = false
     feedBracket(char, false)
-    if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) {
+    // A "$" that is itself the name (the second one in $$) does not name the next character.
+    if (char === "$" && !afterParameter && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) {
       flags.parameter = true
       parameterName = true
     } else if (!afterParameter && !assignmentExempt(false) && (char === "*" || char === "?")) flags.glob = true
@@ -851,23 +876,38 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
   return { kind: "scanned", commands, roots, features }
 }
 
+const BRACKET_ELEMENT = /\[[^\]\s]*\]\+?=/y
+
 // Flags of the values in an array assignment, read lexically so a nested substitution is scanned only once, by
-// addSubstitutions. It over-reports inside a substitution, which costs only an approval, never a missed expansion.
+// addSubstitutions. It mirrors the word loop for the expansions bash performs on array values (parameter, command,
+// arithmetic, process, glob with extglob, brace and tilde) and can over-report inside a substitution, which costs only
+// an approval. Each branch below is pinned by a one-word cell in the array table.
 function arrayValueFlags(source: string) {
   const flags: WordFlags = {}
   const braces: boolean[] = []
   let quote: "single" | "double" | undefined
   let wordStart = true
+  // The unquoted character just before this one, for extglob patterns such as !(x).
+  let last = ""
+  // Where the current element starts, and whether it is a subscripted one ([1]=value), which expands ~ after = and :.
+  let elementStart = 0
+  let subscripted: boolean | undefined
   // Same states as the bracket matcher of the word loop.
   let bracket = 0
   for (let index = 0; index < source.length; index++) {
     const char = source[index]
+    const before = last
+    last = ""
     if (quote === "single") {
       if (char === "'") quote = undefined
       else if (bracket) bracket = 3
       continue
     }
     const quoted = quote === "double"
+    if (wordStart && !quoted && !/\s/.test(char)) {
+      elementStart = index
+      subscripted = undefined
+    }
     if (char === "\\") {
       index++
       wordStart = false
@@ -901,7 +941,17 @@ function arrayValueFlags(source: string) {
       bracket = 0
       continue
     }
-    if (!quoted && char === "~" && wordStart) flags.tilde = true
+    if (!quoted && char === "~") {
+      if (wordStart) flags.tilde = true
+      else if (before === "=" || before === ":") {
+        BRACKET_ELEMENT.lastIndex = elementStart
+        subscripted ??= BRACKET_ELEMENT.test(source)
+        if (subscripted) flags.tilde = true
+      }
+    }
+    if (!quoted && (char === "<" || char === ">") && source[index + 1] === "(") flags.process = true
+    if (!quoted && char === "(" && "?*+@!".includes(before) && before) flags.glob = true
+    if (!quoted) last = char
     wordStart = false
     if (bracket === 0) {
       if (!quoted && char === "[") bracket = 1
@@ -1173,10 +1223,13 @@ function bashExpansion(
   if (kind === "heredoc") return { source: input.slice(start), end: input.length - 1, substitutions }
 }
 
+// `undecoded` is set when bash reads an escape differently from this decoder: \x{..}, an escape that makes NUL (bash ends
+// the string there) and \c? (DEL). The value stays as scan() has always read it; inspect() treats the word as dynamic.
 function bashAnsiQuote(input: string, start: number) {
   let value = ""
+  let undecoded = false
   for (let index = start + 1; index < input.length; index++) {
-    if (input[index] === "'") return { value, end: index }
+    if (input[index] === "'") return { value, end: index, undecoded }
     if (input[index] !== "\\") {
       value += input[index]
       continue
@@ -1198,9 +1251,15 @@ function bashAnsiQuote(input: string, start: number) {
       "?": "?",
     }
     if (escaped in simple) value += simple[escaped]
-    else if (escaped === "c" && index + 1 < input.length)
-      value += String.fromCharCode(input[++index].toUpperCase().charCodeAt(0) & 31)
-    else {
+    else if (escaped === "c" && index + 1 < input.length) {
+      const control = input[++index]
+      // Bash pairs the backslashes of \c\\ first, so the quote after them closes the string.
+      if (control === "\\" && index + 1 < input.length) index++
+      const code = control.toUpperCase().charCodeAt(0) & 31
+      if (control === "?" || code === 0) undecoded = true
+      value += String.fromCharCode(code)
+    } else {
+      if (escaped === "x" && input[index + 1] === "{") undecoded = true
       const digits =
         escaped === "x"
           ? /^[\da-fA-F]{1,2}/.exec(input.slice(index + 1))?.[0]
@@ -1215,6 +1274,7 @@ function bashAnsiQuote(input: string, start: number) {
       else {
         const octal = /[0-7]/.test(escaped)
         const point = parseInt(digits, octal ? 8 : 16)
+        if (point === 0) undecoded = true
         value += point <= 0x10ffff ? String.fromCodePoint(point) : ""
         index += digits.length - (octal ? 1 : 0)
       }
