@@ -11,13 +11,18 @@ function setup(options: { sessionID?: string; colors?: boolean; outputs: string[
   const handlers = new Map<string, Array<(event: { data: { sessionID: string } }) => void>>()
   const bus: StatusLineBus = (type, handler) => {
     handlers.set(type, [...(handlers.get(type) ?? []), handler])
-    return () => handlers.set(type, (handlers.get(type) ?? []).filter((item) => item !== handler))
+    return () =>
+      handlers.set(
+        type,
+        (handlers.get(type) ?? []).filter((item) => item !== handler),
+      )
   }
   const [model, setModel] = createSignal("m1")
   const runs = { count: 0 }
   return {
     handlers,
-    emit: (type: string, sessionID: string) => handlers.get(type)?.forEach((handler) => handler({ data: { sessionID } })),
+    emit: (type: string, sessionID: string) =>
+      handlers.get(type)?.forEach((handler) => handler({ data: { sessionID } })),
     setModel,
     runs,
     element: () => (
@@ -101,6 +106,28 @@ test("unmounting removes the event subscriptions", async () => {
   expect([...test.handlers.values()].flat().length).toBe(5)
   app.renderer.destroy()
   await wait(50)
+  expect([...test.handlers.values()].flat().length).toBe(0)
+})
+
+// The Private Use Area (Powerline, Nerd Font) and the zero-width joiner are the status line's usual glyphs and are drawn.
+test.each([
+  ["U+E0A0 Powerline branch", ""],
+  ["U+E0B0 Powerline arrow", ""],
+  ["U+F0001 supplementary Private Use Area", "\u{f0001}"],
+  ["emoji sequence with U+200D", "\u{1f468}‍\u{1f4bb}"],
+])("%s is drawn unchanged, with colors on and off", async (_name, glyph) => {
+  for (const colors of [true, false]) {
+    const test = setup({ colors, outputs: [`main ${glyph} ok\n`] })
+    const app = await testRender(test.element, { width: 40, height: 2 })
+    try {
+      await wait(50)
+      const frame = await draw(app)
+      expect(frame).toContain(glyph)
+      expect(frame).not.toContain("\\u{")
+    } finally {
+      app.renderer.destroy()
+    }
+  }
 })
 
 test("colors are drawn only when status_line.colors is on", async () => {

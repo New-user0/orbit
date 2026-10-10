@@ -30,7 +30,13 @@ import { expandPromptInputPastedText, realignPromptInputMentions } from "../../p
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
-import { emptyPrompt, PASTE_NOT_SAVED, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
+import {
+  emptyPrompt,
+  PASTE_NOT_SAVED,
+  usePromptHistory,
+  type PromptInfo,
+  type PromptPartRef,
+} from "../../prompt/history"
 import { saveDraft, takeDraft } from "./draft-stash"
 import { Skill } from "@orbit/schema/skill"
 import { computePromptTraits } from "../../prompt/traits"
@@ -1706,16 +1712,22 @@ export function Prompt(props: PromptProps) {
         statusLineModel()?.providerID,
         statusLineModel()?.id,
         statusLineModel()?.variant,
+        data.location.info(statusLineLocation())?.project.directory,
       ]}
       payload={() => {
         const session = props.sessionID ? data.session.get(props.sessionID) : undefined
         const models = data.location.model.list(statusLineLocation())
-        const context = session
+        const usage = session
           ? contextUsage(data.session.message.list(session.id), models, session.revert?.messageID)
           : undefined
         const selected = statusLineModel()
         const model = selected
           ? models?.find((item) => item.providerID === selected.providerID && item.id === selected.id)
+          : undefined
+        const limit = model?.limit.context
+        // used, limit and percent all describe the selected model; the usage's own percent is of the last answer's model.
+        const context = usage
+          ? { tokens: usage.tokens, percent: limit ? Math.round((usage.tokens / limit) * 100) : undefined }
           : undefined
         return statusLinePayload({
           version: app.version,
@@ -1728,14 +1740,14 @@ export function Prompt(props: PromptProps) {
                 agent: session.agent,
               }
             : undefined,
-          cwd: session?.location.directory ?? data.location.info()?.directory,
+          cwd: data.location.info(statusLineLocation())?.directory,
           projectDir: data.location.info(statusLineLocation())?.project.directory,
           model: selected,
           modelName: model?.name,
           agent: local.agent.current()?.id,
           outputStyle: configuredOutputStyle(data, statusLineLocation()),
           context,
-          contextLimit: model?.limit.context,
+          contextLimit: limit,
           running: status() !== "idle",
           vimMode: config.prompt?.vim === true ? vim().mode : undefined,
           now: Date.now(),

@@ -78,6 +78,18 @@ test.each([
   expect(summary(`\u001b[31ma${char}b`)).toEqual([[`a${written}b`, "#cd0000", undefined, 0]])
 })
 
+// The exceptions to the table above: Powerline and Nerd Font glyphs live in the Private Use Area and U+200D joins an emoji
+// sequence; neither acts on the text around it, so both are drawn as they are.
+test.each([
+  ["U+E0A0 Powerline branch", ""],
+  ["U+E0B0 Powerline arrow", ""],
+  ["U+F0001 supplementary Private Use Area", "\u{f0001}"],
+  ["emoji sequence with U+200D", "\u{1f468}‍\u{1f4bb}"],
+])("%s is drawn unchanged in both color modes", (_name, glyph) => {
+  expect(ansiText(`a${glyph}b`)).toBe(`a${glyph}b`)
+  expect(summary(`\u001b[31ma${glyph}b`)).toEqual([[`a${glyph}b`, "#cd0000", undefined, 0]])
+})
+
 test("an ordinary line is unchanged", () => {
   expect(ansiText("main \u2713 \u65e5\u672c\u8a9e e\u0301")).toBe("main \u2713 \u65e5\u672c\u8a9e e\u0301")
 })

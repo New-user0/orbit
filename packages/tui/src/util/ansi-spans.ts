@@ -1,5 +1,5 @@
 import { TextAttributes } from "@opentui/core"
-import { inline } from "@orbit/util/plain"
+import { printable } from "@orbit/util/plain"
 
 export type AnsiSpan = {
   readonly text: string
@@ -45,7 +45,7 @@ export function ansiSpans(input: string): ReadonlyArray<AnsiSpan> {
   let style: Style = { attributes: 0 }
   let last = 0
   const push = (raw: string) => {
-    const text = visible(raw)
+    const text = printable(raw)
     if (!text) return
     const previous = spans.at(-1)
     if (previous && previous.fg === style.fg && previous.bg === style.bg && previous.attributes === style.attributes)
@@ -68,18 +68,6 @@ export function ansiText(input: string) {
   return ansiSpans(input)
     .map((span) => span.text)
     .join("")
-}
-
-// C0, DEL and C1 become control pictures (U+2400 block); every other category C character (a right-to-left override, a
-// zero-width space, a lone surrogate) is written out as `inline` does, so it cannot reorder or hide the text around it.
-function visible(text: string) {
-  return inline(
-    text.replace(/\t/g, " ").replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
-      const code = char.charCodeAt(0)
-      if (code === 0x7f) return "␡"
-      return String.fromCharCode(code < 0x20 ? 0x2400 + code : 0xfffd)
-    }),
-  )
 }
 
 function sgr(style: Style, params: string): Style {

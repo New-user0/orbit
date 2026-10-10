@@ -119,7 +119,7 @@ async function spawn(command: string, stdin: string, cwd: string | undefined) {
     // A grandchild can hold stdout open after the shell is gone, so the run stops waiting for it.
     new Promise<typeof timeout>((resolve) => {
       timer.id = setTimeout(() => {
-        killTree(child.pid)
+        killTree(child)
         resolve(timeout)
       }, TIMEOUT_MS)
     }),
@@ -130,15 +130,18 @@ async function spawn(command: string, stdin: string, cwd: string | undefined) {
   return output
 }
 
-function killTree(pid: number) {
+function killTree(child: { readonly pid: number; readonly exitCode: number | null }) {
   if (process.platform !== "win32") {
     // Negative pid: the whole group. Already gone throws, which leaves nothing to kill.
     try {
-      process.kill(-pid, "SIGKILL")
+      process.kill(-child.pid, "SIGKILL")
     } catch {}
     return
   }
-  Bun.spawn([path.join(system32(), "taskkill.exe"), "/T", "/F", "/PID", String(pid)], {
+  // taskkill finds the tree through the parent that is still running. Once cmd.exe has exited there is nothing to find,
+  // and its PID may belong to another process by now, so an exited shell leaves what it started alone.
+  if (child.exitCode !== null) return
+  Bun.spawn([path.join(system32(), "taskkill.exe"), "/T", "/F", "/PID", String(child.pid)], {
     stdout: "ignore",
     stderr: "ignore",
     env: ProgramLookup.environment(undefined),

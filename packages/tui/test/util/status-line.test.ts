@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { createRoot } from "solid-js"
+import { currentDirectoryOnPath, plant } from "../../../core/test/fixture/decoy"
 import { createStatusLine, firstLine } from "../../src/util/status-line"
 import { statusLinePayload } from "../../src/util/status-line-payload"
 
@@ -169,6 +170,31 @@ test("a real command that hangs keeps the last good line and the next trigger st
   expect(status.line()).toBe("after")
 }, 15_000)
 
+test("a command that outlives the timeout is stopped together with what it started", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "status-line-kill-"))
+  try {
+    const marker = path.join(dir, "late.txt")
+    // The marker is written after the point where the run gives up (2 s), by the shell itself: only a stopped tree
+    // never gets there.
+    const command = (pings: number, file: string) =>
+      process.platform === "win32"
+        ? `ping -n ${pings} 127.0.0.1 >nul & echo late> ${file}`
+        : `sleep ${pings - 1}; echo late > '${file}'`
+    // The control is the same command with a delay that ends before the timeout, so it is known to write its marker.
+    const control = path.join(dir, "control.txt")
+    createRoot((dispose) => {
+      createStatusLine({ command: () => command(4, marker), interval: () => 60_000, payload: () => ({}) })
+      createStatusLine({ command: () => command(1, control), interval: () => 60_000, payload: () => ({}) })
+      setTimeout(dispose, 4_800)
+    })
+    await wait(5_000)
+    expect(await Bun.file(control).exists()).toBe(true)
+    expect(await Bun.file(marker).exists()).toBe(false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}, 15_000)
+
 test.skipIf(process.platform === "win32")("the status line command reads the session from stdin", async () => {
   const line = await new Promise<string | undefined>((resolve) =>
     createRoot((dispose) => {
@@ -212,6 +238,30 @@ test.skipIf(process.platform !== "win32")("the command head is not looked up in 
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test.skipIf(process.platform !== "win32")(
+  "a cmd.exe and an .exe of the working folder are not run for the head",
+  async () => {
+    using _path = currentDirectoryOnPath()
+    const dir = await mkdtemp(path.join(os.tmpdir(), "status-line-exe-"))
+    try {
+      // cmd.exe is the decoy for a bare "cmd", statusdecoy.exe for the head of the command.
+      const ran = await plant(dir, "cmd", "statusdecoy")
+      await new Promise<void>((resolve) =>
+        createRoot((dispose) => {
+          createStatusLine({ command: () => "statusdecoy", interval: () => 60_000, payload: () => ({}), cwd: dir })
+          setTimeout(() => {
+            dispose()
+            resolve()
+          }, 1_500)
+        }),
+      )
+      expect(await ran()).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  },
+)
 
 test("the payload carries the new fields", () => {
   const payload = statusLinePayload({

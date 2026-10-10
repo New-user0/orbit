@@ -73,7 +73,18 @@ function escapedCharacter(match: string) {
 }
 
 /**
- * Text that is already one line, such as a run of a status line, escaped as `plain` does but without trimming it, so the
- * spaces between runs of styled text stay.
+ * One run of a status line, which a person's own command prints: tabs become spaces, C0 controls, DEL and C1 controls
+ * become control pictures, and lone surrogates and format characters (a right-to-left override, a zero-width space, an
+ * isolate) are written out as `plain` does. The Private Use Area stays, since Powerline and Nerd Font put their glyphs
+ * there, and so does U+200D, which holds an emoji sequence together; neither acts on the text around it.
  */
-export const inline = (text: string) => escaped(text)
+export function printable(text: string) {
+  return text
+    .replace(/\t/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
+      const code = char.charCodeAt(0)
+      if (code === 0x7f) return "␡"
+      return String.fromCharCode(code < 0x20 ? 0x2400 + code : 0xfffd)
+    })
+    .replace(/[\p{Cs}\p{Cf}]/gu, (match) => (match === "‍" ? match : escapedCharacter(match)))
+}

@@ -161,7 +161,7 @@ export const Info = Schema.Struct({
       }),
       interval: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))).annotate({
         description:
-          "Milliseconds between refreshes (default 5000). The line also refreshes, at most every 300 ms, when a step ends, an execution starts or ends, a permission is asked or answered, or the agent or model changes.",
+          "Milliseconds between refreshes (default 5000). The line also refreshes, at most every 300 ms, when a step ends, an execution starts or ends, or the agent or model changes.",
       }),
       colors: Schema.optional(Schema.Boolean).annotate({
         description:

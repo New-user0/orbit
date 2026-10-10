@@ -961,6 +961,12 @@ repository text.
   sequences are removed, and `outputText` writes out what it leaves, such as a lone ESC, BEL and backspace. A new place
   that draws such text calls `bodyText` or `outputText`, and a new row goes into the test of the component that draws
   it, with a trusted control row.
+- The output of the status line command passes `printable` (`@orbit/util/plain`, used by `ansiSpans` in
+  `packages/tui/src/util/ansi-spans.ts`). It writes out control characters as control pictures, lone surrogates and
+  every format character, and keeps two things that `plain` would write out: the Private Use Area (Cn and Co glyphs,
+  where Powerline and Nerd Font put theirs) and U+200D (an emoji sequence). Neither reorders or hides text, and the
+  command is the person's own setting. `ansi-spans.test.ts` and `prompt-status-line.test.tsx` pin both exceptions, next
+  to the U+202E, U+200B and U+2066 rows.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
   the Mini splash (`packages/tui/src/mini/splash.ts`), and `DialogFlowRuns` passes every store string through `plain`
@@ -1122,9 +1128,8 @@ kind in turn.
   on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
-- One member of the class is still open: a relative `PATH` entry. Three more rest
-  on `ProgramLookup.install()` alone, with no test of their own: the language server client, the bare `git` fallback and
-  the terminal UI's external editor. Known gaps lists each with its task. A change must not widen one.
+- One member of the class is still open: a relative `PATH` entry. Three more rest on `ProgramLookup.install()` alone,
+  with no test of their own: the language server client, the bare `git` fallback and the terminal UI's external editor. Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
