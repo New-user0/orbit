@@ -3,6 +3,7 @@ import { realpathSync, watch } from "node:fs"
 import os from "os"
 import path from "path"
 import { describe, expect } from "bun:test"
+import { TestClock } from "effect/testing"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from "effect"
 import { Money } from "@orbit/schema/money"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -2842,4 +2843,161 @@ describe("ShellTool timeouts", () => {
       ),
     { timeout: 30_000 },
   )
+
+  // The stall watcher of a background command. The watcher sleeps on the test clock, so each test lets the real
+  // command print, then moves the clock instead of waiting 50 seconds.
+  describe("stall notice", () => {
+    const promptThenIdle = isWindows
+      ? "[Console]::Out.Write('Continue? [y/N] '); Start-Sleep -Seconds 600"
+      : "printf 'Continue? [y/N] '; sleep 600"
+    const quietAndIdle = isWindows ? "Start-Sleep -Seconds 600" : "sleep 600"
+    const promptThenExit = isWindows ? "[Console]::Out.Write('Continue? [y/N] ')" : "printf 'Continue? [y/N] '"
+
+    /** The synthetic notifications of the session, with the text and the message ID. */
+    const collect = Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const seen: Array<{ id: string; text: string; metadata: Record<string, unknown> }> = []
+      yield* bus.subscribe(SessionEvent.InboxEnqueued).pipe(
+        Stream.filter((event) => event.data.sessionID === sessionID && event.data.item.type === "synthetic"),
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            const payload = event.data.item.payload as { text: string; metadata?: Record<string, unknown> }
+            seen.push({ id: event.data.inboxID, text: payload.text, metadata: payload.metadata ?? {} })
+          }),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return seen
+    })
+
+    const realWait = (milliseconds: number) => Effect.promise(() => Bun.sleep(milliseconds))
+
+    const untilPrinted = (shellID: string) =>
+      Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        for (let attempt = 0; attempt < 500; attempt++) {
+          if ((yield* shell.output(ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER })).size > 0) return
+          yield* realWait(20)
+        }
+        return yield* Effect.fail(new Error("The command printed nothing"))
+      })
+
+    /** Moves the test clock in 5 second checks, letting the watcher and the notification run after each. */
+    const advance = (seconds: number) =>
+      Effect.forEach(Array.from({ length: seconds / 5 }), () =>
+        TestClock.adjust("5 seconds").pipe(Effect.andThen(realWait(30))),
+      )
+
+    // Stopping a command waits on the clock too, so the test clock moves while this waits.
+    const untilCount = (seen: ReadonlyArray<unknown>, count: number): Effect.Effect<void, Error> =>
+      Effect.gen(function* () {
+        for (let attempt = 0; attempt < 400 && seen.length < count; attempt++) {
+          yield* TestClock.adjust("1 second")
+          yield* realWait(25)
+        }
+        if (seen.length < count) return yield* Effect.fail(new Error("Timed out waiting for the notification"))
+      })
+
+    const start = (registry: Tool.Interface, command: string, id: string) =>
+      Effect.gen(function* () {
+        const settled = yield* executeTool(registry, call({ command, run_in_background: true }, id))
+        const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : ""
+        expect(shellID).toStartWith("sh_")
+        yield* untilPrinted(shellID)
+        return shellID
+      })
+
+    it.effect(
+      "posts one waiting notice about 50 seconds after a background command stops at a prompt, then the completion",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            const shell = yield* Shell.Service
+            const jobs = yield* Job.Service
+            const shellID = yield* start(registry, promptThenIdle, "call-stall")
+            yield* advance(45)
+            expect(seen).toEqual([])
+            yield* advance(5)
+            expect(seen).toHaveLength(1)
+            expect(seen[0]?.metadata).toMatchObject({ source: "shell", shellID, state: "waiting" })
+            expect(seen[0]?.metadata).not.toHaveProperty("exit")
+            expect(seen[0]?.text).toContain("Continue? [y/N]")
+            expect(seen[0]?.text).toContain(`TaskStop`)
+            expect(seen[0]?.text).toContain(shellID)
+            expect((yield* shell.get(ID.make(shellID))).status).toBe("running")
+
+            // The completion keeps the job's own message ID and marker; the waiting notice has neither.
+            const marker = yield* jobs.pendingBackground
+            expect(marker).toHaveLength(1)
+            expect(JSON.stringify(marker)).not.toContain(seen[0]?.id ?? "missing")
+
+            yield* advance(600)
+            expect(seen).toHaveLength(1)
+
+            yield* (yield* Shell.Service).kill(ID.make(shellID))
+            yield* untilCount(seen, 2)
+            expect(seen.map((entry) => entry.metadata.state)).toEqual(["waiting", "completed"])
+            expect(yield* jobs.pendingBackground).toEqual([])
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+
+    it.effect(
+      "stays silent for a quiet command that is not at a prompt",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            const shellID = yield* start(registry, `${isWindows ? "[Console]::Out.Write('Compiling...'); " : "printf 'Compiling...'; "}${quietAndIdle}`, "call-quiet")
+            yield* advance(300)
+            expect(seen).toEqual([])
+            yield* (yield* Shell.Service).kill(ID.make(shellID))
+            yield* untilCount(seen, 1)
+            expect(seen.map((entry) => entry.metadata.state)).toEqual(["completed"])
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+
+    it.effect(
+      "posts no waiting notice for a command that ends before the threshold",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            yield* start(registry, promptThenExit, "call-short")
+            yield* realWait(500)
+            yield* advance(120)
+            expect(seen.map((entry) => entry.metadata.state)).toEqual(["completed"])
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+
+    it.effect(
+      "watches a foreground command only after its deadline moves it to the background",
+      () =>
+        inFolder(undefined, ({ registry }) =>
+          Effect.gen(function* () {
+            const seen = yield* collect
+            const fiber = yield* Effect.forkChild(
+              executeTool(registry, call({ command: promptThenIdle, timeout: 1000 }, "call-fg")),
+              { startImmediately: true },
+            )
+            yield* realWait(1000)
+            yield* advance(5)
+            const settled = yield* Fiber.join(fiber)
+            const shellID = typeof settled.metadata?.shellID === "string" ? settled.metadata.shellID : ""
+            expect(settled.metadata).toMatchObject({ status: "running" })
+            expect(seen).toEqual([])
+            yield* advance(50)
+            expect(seen.map((entry) => entry.metadata.state)).toEqual(["waiting"])
+            yield* (yield* Shell.Service).kill(ID.make(shellID))
+          }),
+        ),
+      { timeout: 30_000 },
+    )
+  })
 })
