@@ -1,46 +1,105 @@
-import { createSignal, onCleanup } from "solid-js"
+import { createMemo, createSignal, onCleanup } from "solid-js"
+import { ProgramLookup } from "@orbit/util/program-lookup"
+import { ansiSpans, ansiText } from "./ansi-spans"
 
 const TIMEOUT_MS = 2_000
+const DEBOUNCE_MS = 300
 
 /**
- * Runs the user's status line command every `interval` milliseconds and keeps the first line it prints. The command
- * gets the current session as JSON on stdin; a command that fails or hangs leaves the last good line in place.
+ * Runs the user's status line command every `interval` milliseconds, and again (at most once per 300 ms) after
+ * `trigger()`, and keeps the first line it prints. The command gets the current session as JSON on stdin; a command that
+ * fails or hangs leaves the last good line in place. One run is in flight at a time: a trigger that arrives during a run
+ * sets a flag and causes exactly one more run when the first ends.
  */
 export function createStatusLine(input: {
   readonly command: () => string | undefined
   readonly interval: () => number | undefined
   readonly payload: () => Record<string, unknown>
+  /** Keep the SGR colors of the output as styled spans (`status_line.colors`). */
+  readonly colors?: () => boolean | undefined
+  readonly cwd?: string
+  /** Replaces the process that runs the command; it resolves to the raw output, or undefined when the run failed. */
+  readonly run?: (command: string, stdin: string) => Promise<string | undefined>
 }) {
-  const [line, setLine] = createSignal<string>()
-  const running = { current: false }
+  const [output, setOutput] = createSignal<string>()
+  const state = { running: false, dirty: false, timer: undefined as ReturnType<typeof setTimeout> | undefined }
+  const run = input.run ?? ((command: string, stdin: string) => spawn(command, stdin, input.cwd))
   const refresh = async () => {
     const command = input.command()
-    if (!command || running.current) return
-    running.current = true
-    const child = Bun.spawn(process.platform === "win32" ? ["cmd", "/c", command] : ["sh", "-c", command], {
-      stdin: new TextEncoder().encode(JSON.stringify(input.payload())),
-      stdout: "pipe",
-      stderr: "ignore",
-    })
-    const timer = setTimeout(() => child.kill(), TIMEOUT_MS)
-    const output = await new Response(child.stdout).text().catch(() => "")
-    clearTimeout(timer)
-    running.current = false
-    if ((await child.exited) !== 0) return
-    setLine(firstLine(output))
+    if (!command) return
+    if (state.running) return
+    state.running = true
+    const result = await run(command, JSON.stringify(input.payload())).catch(() => undefined)
+    state.running = false
+    if (result !== undefined) setOutput(result)
+    if (!state.dirty) return
+    state.dirty = false
+    void refresh()
+  }
+  const trigger = () => {
+    if (state.running) {
+      state.dirty = true
+      return
+    }
+    if (state.timer) return
+    state.timer = setTimeout(() => {
+      state.timer = undefined
+      // A run may have started meanwhile (the interval): fold this trigger into its trailing run.
+      if (state.running) state.dirty = true
+      else void refresh()
+    }, DEBOUNCE_MS)
   }
   void refresh()
   const timer = setInterval(() => void refresh(), Math.max(1_000, input.interval() ?? 5_000))
-  onCleanup(() => clearInterval(timer))
-  return line
+  onCleanup(() => {
+    clearInterval(timer)
+    clearTimeout(state.timer)
+  })
+  const spans = createMemo(() => {
+    const value = output()
+    if (value === undefined) return undefined
+    const line = firstLine(value, true)
+    return line === undefined ? undefined : ansiSpans(line)
+  })
+  const line = createMemo(() => {
+    const value = output()
+    return value === undefined ? undefined : firstLine(value, false)
+  })
+  return {
+    /** The first line as plain text. */
+    line,
+    /** The first line as styled spans when `status_line.colors` is on, otherwise a single unstyled span. */
+    spans: createMemo(() => {
+      const value = line()
+      if (value === undefined) return undefined
+      return input.colors?.() === true ? spans() : [{ text: value, attributes: 0 }]
+    }),
+    trigger,
+  }
 }
 
-export function firstLine(output: string) {
-  // Keep colors out: the TUI styles the line itself, and escape codes would break its width.
-  return (
-    output
-      .replace(/\u001b\[[0-9;]*m/g, "")
-      .split(/\r?\n/)[0]
-      ?.trim() || undefined
-  )
+async function spawn(command: string, stdin: string, cwd: string | undefined) {
+  const child = Bun.spawn(process.platform === "win32" ? ["cmd", "/c", command] : ["sh", "-c", command], {
+    cwd,
+    // cmd.exe looks for the head of the command in the working folder first, which may be an untrusted repository.
+    env: ProgramLookup.environment(undefined),
+    stdin: new TextEncoder().encode(stdin),
+    stdout: "pipe",
+    stderr: "ignore",
+  })
+  const timer = setTimeout(() => child.kill(), TIMEOUT_MS)
+  const output = await new Response(child.stdout).text().catch(() => "")
+  clearTimeout(timer)
+  if ((await child.exited) !== 0) return
+  return output
+}
+
+/**
+ * The first line of the output. With `colors` the SGR sequences stay in it for `ansiSpans`; without, they go too.
+ * Every other escape sequence and control character is dropped or written out either way.
+ */
+export function firstLine(output: string, colors = false) {
+  const first = output.split(/\r?\n/)[0]
+  if (first === undefined) return
+  return (colors ? first : ansiText(first)).trim() || undefined
 }

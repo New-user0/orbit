@@ -1827,3 +1827,22 @@ bubblewrap's own namespace error.
 Windows program now fail.
 
 **What to do:** convert the distribution with `wsl --set-version <name> 2`, or turn the sandbox off.
+
+### The status line refreshes on events, gets more fields and can keep colors
+
+The status line command (`status_line.command`) used to run only on its interval and received a short JSON object. It
+now also runs, at most once per 300 ms, when a step ends, an execution starts or ends, a permission is asked or
+answered, or the agent or model changes, and a trigger that arrives while a run is in flight causes exactly one more run
+afterwards. Its stdin JSON gains `version`, `session` (`id`, `title`), `cwd`, `project_dir`, `model` (`provider`, `id`,
+`name`, `variant`), `agent`, `output_style`, `context` (`used`, `limit`, `percent`), `cost` (`usd`, `duration_ms`,
+`lines_added`, `lines_removed`), `status` (`idle`, `running` or `waiting`) and `vim_mode`; `session_id` stays. The `model`
+object now names its provider `provider` (it was `providerID`) and `cost` is an object, where it was a number. `lines_added` and
+`lines_removed` are 0 for now. The new `status_line.colors` key (default `false`) renders the command's colors, bold,
+dim, italic and underline instead of removing them. Every other escape sequence, such as a title change or a clipboard
+write, is dropped in both modes, and other control characters are shown as their control pictures. On Windows the command
+no longer finds a program of the same name in the working folder first.
+
+**Affects:** people with a `status_line` command, in particular scripts that read `model` or `cost` from stdin.
+
+**What to do:** Update a script that read `cost` as a number to read `cost.usd`, and one that read `model.providerID` to read
+`model.provider`. Set `status_line.colors` to `true` to see your script's colors.

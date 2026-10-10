@@ -14,7 +14,7 @@ import { useTheme, useThemes } from "../../context/theme"
 import { tint } from "../../theme/color"
 import { createAnimatable, tween } from "../../ui/animation"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiApp, useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useClient } from "../../context/client"
@@ -52,6 +52,7 @@ import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { Vim } from "./vim-state"
 import { createStatusLine } from "../../util/status-line"
+import { statusLinePayload } from "../../util/status-line-payload"
 import { contextUsage } from "../../util/session"
 import { usePromptMove } from "./move"
 import { resolvePastedAttachments } from "./local-attachment"
@@ -208,6 +209,7 @@ export function Prompt(props: PromptProps) {
   const promptRef = usePromptRef()
   const sessionTabs = useSessionTabs()
   const data = useData()
+  const app = useTuiApp()
   const directoryRecents = useDirectoryRecents()
   const keymapCommands = Keymap.useCommands()
   const currentLocation = useLocation()
@@ -1679,28 +1681,76 @@ export function Prompt(props: PromptProps) {
     if (agentLabel()) revealedPromptMetadata.add(local)
   })
   const borderHighlight = createMemo(() => tint(theme.border.base, highlight(), agentMetaAlpha()))
+  const outputStyle = () => {
+    const entry = data.location.config
+      .list(
+        (props.sessionID ? data.session.get(props.sessionID)?.location : undefined) ??
+          currentLocation.ref ??
+          data.location.default(),
+      )
+      ?.findLast((item) => item.type === "document" && item.info.output_style !== undefined)
+    return entry?.type === "document" ? (entry.info.output_style ?? undefined) : undefined
+  }
   // A user-configured status line command, shown under the prompt footer.
   const statusLine = createStatusLine({
     command: () => config.status_line?.command,
     interval: () => config.status_line?.interval,
+    colors: () => config.status_line?.colors,
     payload: () => {
       const session = props.sessionID ? data.session.get(props.sessionID) : undefined
-      return {
-        session_id: props.sessionID,
-        cwd: session?.location.directory ?? data.location.info()?.directory,
-        model: session?.model,
-        agent: session?.agent,
-        context: session
-          ? contextUsage(
-              data.session.message.list(session.id),
-              data.location.model.list(session.location),
-              session.revert?.messageID,
-            )
+      const models = session ? data.location.model.list(session.location) : undefined
+      const context = session
+        ? contextUsage(data.session.message.list(session.id), models, session.revert?.messageID)
+        : undefined
+      const model = session?.model
+        ? models?.find((item) => item.providerID === session.model?.providerID && item.id === session.model.id)
+        : undefined
+      return statusLinePayload({
+        version: app.version,
+        session: session
+          ? {
+              id: session.id,
+              title: session.title,
+              cost: data.session.cost(session.id),
+              created: session.time.created,
+              model: session.model,
+              agent: session.agent,
+            }
           : undefined,
-        cost: props.sessionID ? data.session.cost(props.sessionID) : 0,
-      }
+        cwd: session?.location.directory ?? data.location.info()?.directory,
+        projectDir: data.location.info()?.project.directory,
+        modelName: model?.name,
+        agent: local.agent.current()?.id,
+        outputStyle: outputStyle(),
+        context,
+        contextLimit: model?.limit.context,
+        permissionsPending: props.sessionID ? (data.session.permission.list(props.sessionID)?.length ?? 0) : 0,
+        running: status() !== "idle",
+        vimMode: config.prompt?.vim === true ? vim().mode : undefined,
+        now: Date.now(),
+      })
     },
   })
+  // Refresh the line when something it shows has changed, not only on the interval.
+  const mine = (sessionID: string) => !props.sessionID || sessionID === props.sessionID
+  onCleanup(
+    [
+      data.on("session.step.ended", (event) => mine(event.data.sessionID) && statusLine.trigger()),
+      data.on("session.execution.started", (event) => mine(event.data.sessionID) && statusLine.trigger()),
+      data.on("session.execution.succeeded", (event) => mine(event.data.sessionID) && statusLine.trigger()),
+      data.on("session.execution.failed", (event) => mine(event.data.sessionID) && statusLine.trigger()),
+      data.on("session.execution.interrupted", (event) => mine(event.data.sessionID) && statusLine.trigger()),
+      data.on("permission.asked", () => statusLine.trigger()),
+      data.on("permission.replied", () => statusLine.trigger()),
+    ].reduce((all, off) => () => (all(), off()), () => {}),
+  )
+  createEffect(
+    on(
+      () => [local.agent.current()?.id, local.model.selection()?.providerID, local.model.selection()?.modelID] as const,
+      () => statusLine.trigger(),
+      { defer: true },
+    ),
+  )
 
   const footerInput = () => ({
     sessionID: props.sessionID,
@@ -2053,11 +2103,13 @@ export function Prompt(props: PromptProps) {
             </Slot>
           </Slot>
         </box>
-        <Show when={statusLine()}>
-          {(line) => (
+        <Show when={statusLine.spans()}>
+          {(spans) => (
             <box paddingLeft={1} flexShrink={0}>
               <text fg={theme.text.muted} wrapMode="none" truncate>
-                {line()}
+                <For each={spans()}>
+                  {(span) => <span style={{ fg: span.fg, bg: span.bg, attributes: span.attributes }}>{span.text}</span>}
+                </For>
               </text>
             </box>
           )}

@@ -160,7 +160,12 @@ export const Info = Schema.Struct({
           "Shell command whose first line of output is shown under the prompt. It receives the session as JSON on stdin.",
       }),
       interval: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))).annotate({
-        description: "Milliseconds between refreshes (default 5000)",
+        description:
+          "Milliseconds between refreshes (default 5000). The line also refreshes, at most every 300 ms, when a step ends, an execution starts or ends, a permission is asked or answered, or the agent or model changes.",
+      }),
+      colors: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Render the colors and text styles (bold, dim, italic, underline) of the command output instead of removing them (default false). Other escape sequences are always removed.",
       }),
     }),
   ).annotate({ description: "A custom status line from your own command" }),
