@@ -440,9 +440,11 @@ describe("QuestionTool", () => {
     Effect.gen(function* () {
       const registry = yield* Tool.Service
       expect(yield* toolTraits(registry, "AskUserQuestion")).toMatchObject({ maxResultChars: 100000 })
-      for (const needle of ["1 to 4", "2 to 4", "multiple", "preview", "Type your own answer", "ExitPlanMode"])
+      for (const needle of ["1 to 4", "2 to 4", "multiple", "Type your own answer", "ExitPlanMode"])
         expect(QuestionTool.description).toContain(needle)
       expect(QuestionTool.description).not.toMatch(/claude|anthropic/i)
+      // No Orbit client draws previews yet, so the model must not be told the user sees them.
+      expect(QuestionTool.description).not.toContain("preview")
     }),
   )
 })

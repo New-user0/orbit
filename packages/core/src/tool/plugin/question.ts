@@ -20,11 +20,6 @@ How questions are shaped:
 - Set \`multiple: true\` when the choices are not mutually exclusive.
 - To recommend an option, list it first and end its label with "(Recommended)".
 
-Previews:
-- An option may carry a \`preview\`: markdown that the user sees while that option is focused. It is drawn in a fixed-width box, so line breaks and alignment are kept.
-- Add one only when the user can choose well only by seeing what each option would produce. When the label and description are enough, leave it out.
-- Previews are for single-select questions. On a \`multiple: true\` question they are ignored.
-
 Planning:
 - While planning, use this tool to pin down requirements or to choose between approaches before you finish the plan.
 - Never use it to ask whether the plan is ready or whether to go ahead. Present the plan with ExitPlanMode instead.

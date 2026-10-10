@@ -10,7 +10,7 @@ const Option = Schema.Struct({
   preview: optional(
     Schema.String.annotate({
       description:
-        "Optional markdown shown beside this option while it is focused. Single-select questions only; ignored when multiple is true.",
+        "Optional markdown that a client may show while this option is focused. Single-select questions only; ignored when multiple is true.",
     }),
   ),
 })

@@ -2296,8 +2296,8 @@ git-ignored folders such as `node_modules`.
 
 ### The question tool has limits and option previews
 
-The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that clients show while the option is focused. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
+The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
 
-**Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with one option or more than four.
+**Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with no options or one option, more than four options, or more than four questions.
 
 **What to do:** Nothing for most setups. Clients that do not draw previews keep working because the field is optional.
