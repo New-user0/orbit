@@ -88,6 +88,7 @@ describe("FileAccess.authorizeRead", () => {
 
         expect(error).toBeInstanceOf(FileAccess.DeviceError)
         expect(error.message).toContain("device or stream")
+        if (process.platform === "win32") expect(error.message).toContain("reserved Windows device names")
         expect(requests).toEqual([])
       }).pipe(provide(requests))
     })

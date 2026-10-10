@@ -352,6 +352,53 @@ describe("ReadTool", () => {
     ),
   )
 
+  it.effect("fails a notebook read past the end like a text file, and pages a folder named like a notebook", () =>
+    Effect.gen(function* () {
+      const registry = yield* Tool.Service
+      const directory = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "orbit-notebook-edge-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })))
+      const notebook = path.join(directory, "small.ipynb")
+      const folder = path.join(directory, "nb.ipynb")
+      yield* Effect.promise(async () => {
+        await fs.writeFile(
+          notebook,
+          JSON.stringify({
+            cells: [{ cell_type: "code", id: "a", metadata: {}, source: ["print(1)"], outputs: [] }],
+            metadata: {},
+            nbformat: 4,
+            nbformat_minor: 5,
+          }),
+        )
+        await fs.mkdir(folder)
+        await Promise.all(Array.from({ length: 5 }, (_, index) => fs.writeFile(path.join(folder, `f${index}.txt`), "x")))
+      })
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const environment = Environment.makeFiles(Environment.makeLocalDriver(spawner))
+      readOverride = (input, resource, page) => ReadToolFileSystem.read(environment, input, resource, page)
+
+      const past = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-nb-past", name: "Read", input: { file_path: notebook, offset: 500 } },
+      })
+      expect(past).toMatchObject({
+        status: "error",
+        error: { message: expect.stringContaining("out of range") },
+      })
+
+      const listed = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-nb-folder", name: "Read", input: { file_path: folder, offset: 3, limit: 2 } },
+      })
+      if (listed.status !== "completed" || listed.output.type !== "list-page") throw new Error("expected a list page")
+      expect(listed.output.entries).toHaveLength(2)
+    }).pipe(
+      Effect.provide(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem]))),
+      Effect.scoped,
+    ),
+  )
+
   it.effect("asks for external_directory approval before reading an external absolute path", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service

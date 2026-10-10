@@ -21,7 +21,7 @@ export class DeviceError extends Schema.TaggedError<DeviceError>()("FileAccess.D
   resource: Schema.String,
 }) {
   override get message() {
-    return `${this.resource} is a device or stream, not a file, and reading it would never finish. Name a regular file instead.${
+    return `${this.resource} is a device or stream, not a file, and reading it can block or never finish. Name a regular file instead.${
       process.platform === "win32"
         ? " NUL, CON, PRN, AUX, COM1 to COM9 and LPT1 to LPT9 are reserved Windows device names, with or without an extension."
         : ""

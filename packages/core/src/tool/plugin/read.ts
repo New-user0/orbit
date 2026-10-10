@@ -118,6 +118,9 @@ export const Plugin = {
                 !ReadToolFileSystem.MEDIA_MIMES.has(result.content.mime)
               )
                 return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource: result.target.resource }))
+              // A folder named like a notebook was read whole above; page it as any folder.
+              if (result.content.type === "list-page" && Notebook.isNotebook(result.target.absolute))
+                return { output: yield* read(result.target, true), path: result.path }
               if (result.content.type !== "list-page") yield* ledger.record(context.sessionID, result.target.absolute)
               if (result.content.type !== "list-page" && Notebook.isNotebook(result.target.absolute)) {
                 const notebook = yield* readNotebook(result.target.absolute, input.offset, input.limit)
@@ -160,6 +163,8 @@ export const Plugin = {
       if (!notebook) return
       const lines = Notebook.render(notebook).split("\n")
       const start = offset || 1
+      if (start > lines.length && start !== 1)
+        return yield* new ReadToolFileSystem.OffsetOutOfRangeError({ offset: start, lines: lines.length })
       const count = Math.min(limit || ReadToolFileSystem.MAX_READ_LINES, ReadToolFileSystem.MAX_READ_LINES)
       // The same budget as a text file: lines are clamped, and the page ends before the line that would pass it.
       const page: string[] = []
