@@ -13,6 +13,10 @@ import { Tool } from "@orbit/core/tool"
 import { WebSearchTool } from "@orbit/core/tool/plugin/websearch"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Image } from "@orbit/core/image"
+import { ToolOutput } from "@orbit/core/tool-output"
+import { FSUtil } from "@orbit/util/fs-util"
+import { Global } from "@orbit/util/global"
+import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { permissionLayer } from "./lib/permission"
@@ -40,6 +44,7 @@ const providers = [
 class Fixture {
   assertions: Permission.AssertInput[] = []
   events: string[] = []
+  providerInputs: unknown[] = []
   formRequests: Form.CreateInput[] = []
   formResponse: Form.TerminalState = { status: "cancelled" }
   formResponses: Form.TerminalState[] = []
@@ -59,9 +64,10 @@ const setup = Effect.gen(function* () {
     providers.forEach((provider) =>
       editor.add({
         ...provider,
-        execute: () =>
+        execute: (input) =>
           Effect.gen(function* () {
             fixture.events.push("query")
+            fixture.providerInputs.push(input)
             if (fixture.error) return yield* fixture.error
             return fixture.results
           }),
@@ -123,7 +129,14 @@ describe("WebSearchTool registration", () => {
         }),
       ).toMatchObject({
         status: "completed",
-        content: [{ type: "text", text: "## [Search results](https://example.com)\n\nsearch results" }],
+        content: [
+          {
+            type: "text",
+            text: `${WebSearchTool.SOURCES_REMINDER}
+
+## [Search results](https://example.com)\n\nsearch results`,
+          },
+        ],
       })
       expect(fixture.assertions).toMatchObject([
         {
@@ -181,7 +194,9 @@ describe("WebSearchTool registration", () => {
         content: [
           {
             type: "text",
-            text: "## [Effect](https://effect.website)\nPublished: 2026-07-25T00:00:00.000Z\n\nparallel results",
+            text: `${WebSearchTool.SOURCES_REMINDER}
+
+## [Effect](https://effect.website)\nPublished: 2026-07-25T00:00:00.000Z\n\nparallel results`,
           },
         ],
         metadata: { provider: "parallel" },
@@ -212,6 +227,95 @@ describe("WebSearchTool registration", () => {
         "https://docs.python.org/3/",
         "https://blog.python.org/x",
       ])
+      // Domains filter the results only; the provider and the recorded query see just the query.
+      expect(fixture.providerInputs).toEqual([{ query: "python" }, { query: "python" }])
+      expect(fixture.websearch.queries).toEqual([
+        { query: "python", providerID: undefined },
+        { query: "python", providerID: undefined },
+      ])
+
+      // The model sees only `content`, so the filter must hold there too.
+      const filtered = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-domains-content",
+          name: "WebSearch",
+          input: { query: "python", allowedDomains: ["python.org"], blockedDomains: ["blog.python.org"] },
+        },
+      })
+      const text = (filtered.content?.[0] as { text: string }).text
+      expect(text.startsWith(WebSearchTool.SOURCES_REMINDER)).toBe(true)
+      expect(text).toContain("https://docs.python.org/3/")
+      expect(text).not.toContain("blog.python.org")
+      expect(text).not.toContain("spam.example.com")
+
+      const empty = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-domains-empty",
+          name: "WebSearch",
+          input: { query: "python", allowedDomains: ["nowhere.test"] },
+        },
+      })
+      expect(empty.content).toEqual([{ type: "text", text: WebSearchTool.NO_RESULTS }])
+      expect((empty.output as { results: unknown[] }).results).toEqual([])
+    }),
+  )
+
+  it.effect("requires a Sources section in the description and starts results with a reminder", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* fixture.websearch.select(WebSearch.ID.make("exa"))
+      const definition = (yield* toolDefinitions(fixture.registry)).find((tool) => tool.name === "WebSearch")
+      expect(definition?.description).toContain('"Sources:" section')
+      expect(definition?.description).toContain("allowedDomains")
+      expect(definition?.description).toContain("blockedDomains")
+      expect(definition?.description).toContain(String(new Date().getFullYear()))
+      const result = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-sources", name: "WebSearch", input: { query: "effect" } },
+      })
+      expect(result.content).toMatchObject([{ type: "text" }])
+      const text = (result.content?.[0] as { text: string }).text
+      expect(text.startsWith(WebSearchTool.SOURCES_REMINDER)).toBe(true)
+      expect(WebSearchTool.SOURCES_REMINDER).toContain('"Sources:"')
+      expect(definition?.description).toContain('"Sources:"')
+
+      // The session runner keeps the head of an oversized result, so the reminder must survive that bound.
+      fixture.results = Array.from({ length: 30 }, (_, i) => ({
+        url: `https://example.com/${i}`,
+        title: `Result ${i}`,
+        content: "line\n".repeat(20),
+        time: {},
+      }))
+      const large = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-large", name: "WebSearch", input: { query: "effect" } },
+      })
+      const bounded = yield* Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          Effect.gen(function* () {
+            const output = yield* ToolOutput.Service
+            yield* output.transform((editor) => editor.configure({ maxLines: 50 }))
+            return yield* output.truncate({ content: large.content as Tool.Content[] })
+          }).pipe(
+            Effect.provide(
+              AppNodeBuilder.build(LayerNode.group([ToolOutput.node, FSUtil.node]), [
+                Global.node.replace(Global.layerWith({ data: tmp.path })),
+              ]),
+            ),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+      expect(bounded.metadata).toMatchObject({ truncated: true })
+      expect(JSON.stringify(bounded.content)).toContain("Reminder: when your reply uses these results")
     }),
   )
 
@@ -232,6 +336,7 @@ describe("WebSearchTool registration", () => {
         status: "completed",
         content: [{ type: "text", text: WebSearchTool.NO_RESULTS }],
       })
+      expect(WebSearchTool.NO_RESULTS).not.toContain("Sources")
     }),
   )
 
