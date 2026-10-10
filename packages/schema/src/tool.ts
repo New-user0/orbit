@@ -220,6 +220,11 @@ export const ErrorCode = {
   EditNoMatch: "edit.no-match",
   /** The text to replace is in the file more than once, and not every occurrence was asked for. */
   EditAmbiguous: "edit.ambiguous",
+  /**
+   * The user has not agreed to send queries to a search provider (the consent form was cancelled, timed out or could not
+   * be shown), so nothing was searched.
+   */
+  WebSearchNotEnabled: "websearch.not-enabled",
 } as const
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode]
 
