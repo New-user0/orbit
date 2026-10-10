@@ -1,6 +1,6 @@
 import path from "path"
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { Effect, Exit, Fiber, Layer, Scope, Stream, type Types } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -16,6 +16,7 @@ import { agentHost, host } from "./plugin/host"
 
 const testLocation = location({ directory: AbsolutePath.make("/project") })
 const locationLayer = Layer.succeed(Location.Service, Location.Service.of(testLocation))
+const mutable = <T>(value: T) => value as Types.DeepMutable<T>
 const global = Global.make({ data: "/data", config: "/config", tmp: "/tmp/orbit" })
 const globalLayer = Layer.succeed(Global.Service, Global.Service.of(global))
 
@@ -162,6 +163,15 @@ describe("Agent", () => {
         Permission.evaluate("external_directory", path.join(global.tmp, "*"), info?.permissions ?? []).effect,
       ).toBe("allow")
 
+      // Orbit's own folder allows keep their mark in the agent, so that `Permission` leaves them out for a place a link
+      // leads to; a rule of the person's with the same value has none (permissions-23).
+      const folders = (info?.permissions ?? []).filter(
+        (rule) => rule.action === "external_directory" && rule.effect === "allow",
+      )
+      expect(folders).toHaveLength(4)
+      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true])
+      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false])
+
       yield* agent.transform((editor) => editor.remove(id))
       expect(yield* agent.get(id)).toBeUndefined()
     }),
@@ -210,6 +220,41 @@ describe("Agent", () => {
       expect(Permission.evaluate("read", "src/index.ts", explore?.permissions ?? []).effect).toBe("allow")
       for (const item of agents) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
+      }
+    }),
+  )
+
+  // The plugin host hands the real editor to a plugin, as this does, so the rules a plugin takes over by reference keep
+  // their mark. Permission leaves the marked allows out for a place a link leads to; Explore takes them over, and a
+  // plugin that copied them would turn them into the person's (permissions-23).
+  it.effect("keeps the mark of Orbit's own folder allows in every built-in agent, Explore among them", () =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: {
+            ...agentHost(agent),
+            transform: (callback) =>
+              agent.transform((editor) =>
+                callback({
+                  list: () => mutable(editor.list()),
+                  get: (id) => mutable(editor.get(Agent.ID.make(id))),
+                  default: (id) => editor.default(id === undefined ? undefined : Agent.ID.make(id)),
+                  update: (id, update) => editor.update(Agent.ID.make(id), update),
+                  remove: (id) => editor.remove(Agent.ID.make(id)),
+                }),
+              ),
+          },
+        }),
+      )
+      const valued = new Set(Agent.folders(global).map((rule) => rule.resource))
+      const agents = yield* agent.list()
+      expect(agents.map((item) => String(item.id))).toContain("explore")
+      for (const item of agents) {
+        const own = item.permissions.filter(
+          (rule) => rule.action === "external_directory" && rule.effect === "allow" && valued.has(rule.resource),
+        )
+        expect([String(item.id), own.length >= 4, own.every(Agent.isOwnFolder)]).toEqual([String(item.id), true, true])
       }
     }),
   )

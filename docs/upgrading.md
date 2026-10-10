@@ -1182,6 +1182,35 @@ drive such as `HKLM:`, which now fail. Code that matches on a failed tool call's
 **What to do:** use the plain path of a file or folder. A shell command can still name a registry key as an argument;
 only a change of location to it is refused.
 
+### Another spelling of the project's folder is decided where it really is, and share paths are refused
+
+A path that named the project through another spelling of its own folder was counted as outside the project by that
+spelling: on Windows `C:\Documents and Settings\…` and `C:\Users\<you>\Local Settings\…` (system junctions), and anywhere
+a link that leads to the project. In a folder that is not trusted, a link the repository ships below such a path was not
+followed, so the folder question named the link's path while the tool acted where the link leads, and your deny rules
+for the project's own names turned into questions.
+
+Now the file tools (Read, Write, Edit, NotebookEdit, Patch, LSP, and the paths of Grep, Glob and a shell `workdir`) find
+which part of the path is really inside the project, and decide the rest under the project's own folder: the rules see
+the project-relative name, a repository link below it is followed and asked about as for the plain spelling, and an
+approval names the place the tool acts on. An 8.3 short name of the project's folder, or of a folder above it, is decided as the project, too. A share or device path (`\\server\share\…`, `\\localhost\C$\…`,
+`\\?\Volume{…}\…`, `\\.\…`) is refused with the error type `file.spelling` before any disk is read, unless the path
+is in the project's folder. A repository link whose target is a share, in any of these spellings (a local
+`\\localhost\C$\…` included), is refused the same way, with no question, for a tool's path and for the plain words of a
+shell command, and is never opened; a part with `~` (an 8.3 short name) below such a link is refused too, as its long
+name could only be found by opening the share. `file-access-spelling.test.ts` pins that only `readLink` touches such a link or a path below it. The words a shell command names are followed through a repository link in these
+spellings as well, and a drive made from the project's folder (`subst`) is the project. The lock that serializes edits of one file now takes the long name without the periods and spaces
+Windows drops, so `new.txt.` and `new.txt` wait for each other.
+
+Your own rule with exactly the value of one of Orbit's folder allows (such as `external_directory` for the global config
+folder) now decides a place a link leads to; before, it was taken for Orbit's own allow and the question was asked.
+
+**Affects:** Windows users who name a project through `Documents and Settings`, `Local Settings` or a share path, and
+anyone whose path goes through a link to the project; code that matches on a failed tool call's `error.type` can see
+`file.spelling`.
+
+**What to do:** use the plain path of a file or folder on a local drive. Nothing else.
+
 ### Grep and Glob ask your Read rules about the path they search
 
 Grep and Glob asked their own rules about the pattern only, so a Read deny of `*.env` did not cover a Grep of `.env`,

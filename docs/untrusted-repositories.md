@@ -580,7 +580,12 @@ The reader list in the `ConfigTrust` header arrived only after the third round.
 - Build the link as a directory junction on Windows, which needs no privilege, and as a real symlink where `canLinkFile`
   allows it (`packages/core/test/fixture/symlink.ts`). For every reader in the list cover a link to a file, a link to a
   folder, a dangling link, a loop, a not-yet-existing target through a link, a `..` name and a UNC path. For UNC, assert
-  that no disk access happens: a share test that waits 5 seconds means the check came too late.
+  that no disk access happens: record the paths the file system is called with (`packages/core/test/fixture/recorded-fs.ts`)
+  and assert that none names the share, rather than a time limit, which a fast failing host meets either way. A link's own path is a drive path, so a listing
+  of the share it leads to shows under the link's path: the recorder also keeps each call as `method path` (`calls`), and
+  the share-link rows and the deny row of `file-access-spelling.test.ts` assert that every recorded call naming the link
+  or a path below it is a `readLink`, because any other call follows the link and opens the share. Two mutations fail
+  them: a `fs.stat(absolute)` before `trust.escapes(absolute)`, and `refuseShare` replaced by `Effect.void`.
 - Untrusted: the file is not read and `config file skipped` is logged once. After a grant the file appears without a
   restart. The trusted control follows links as before.
 - For a tool, point the link at a folder that Orbit allows by itself, such as the global config folder, so that only the
@@ -806,6 +811,7 @@ for `cd ~/.ssh && cat id_rsa` (#6).
 
 **In M2:** approvals showed something other than what the tool acted on, and verification found the members one at a
 time:
+
 - an old field name `path` beside the field the tool runs (`file_path`, or NotebookEdit's `notebook_path`) in the
   terminal UI, Mini and VS Code (round 4);
 - the calling Code Mode (`Execute`), Workflow or Patch call's own input in place of the request, in the terminal UI and
@@ -1629,24 +1635,57 @@ fixes it or asks.
 - **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
   rule covers the folder. Task `permissions-3` (M6) carries a Read check for each file a search returns.
-- **A share named before anyone is asked.** For a target outside the project, `FileAccess.resolve` reads the place
-  (its kind, and the folders above it for a `.git`) before the folder question, so a UNC path that a call names
-  connects to the share first; and `ProjectTrust.escapes` follows a link in the project whose target is a share before
-  any question. A link to a share needs a clone that makes symlinks (Developer Mode on Windows). Task `permissions-23`
-  (M3) refuses UNC forms before any disk access.
-- **Other spellings of the project folder.** A path that names the project through another spelling of its own folder
-  (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`, `\\localhost\C$\…`, `\\?\Volume{…}\…`,
-  `\\.\Volume{…}\…`) is decided as outside the project by its spelling, so a repository link inside it is not
-  followed: the folder question names the link's path while the tool reads, writes or runs where the link leads. M2's
-  final check showed it over a real `orb acp` in an untrusted folder (the global config folder's files moved aside, and
-  its provider key sent to the model). The same spellings turn a person's absolute-path deny rule into an ask. The fix
-  decides containment on the real path for every spelling. The owner chose it on 2026-10-09 as the first M3 fix (task
-  `permissions-23`).
-- **A rule of the person's with the value of one of Orbit's own allows.** A place a link leads to is decided without
-  Orbit's own allows (`Agent.folders`), which `Permission` recognises by value, because an agent may copy them. A rule
-  the person wrote with exactly the same action, folder and effect is taken for Orbit's and does not decide that place,
-  so the person is asked; it fails closed. Saved approvals are not affected. Task `permissions-23` (M3) marks Orbit's
-  allows by where they come from.
+- **A share named before anyone is asked (closed for the file tools by `permissions-23`).** `FileAccess.resolve` now
+  refuses a UNC, `\\?\Volume{…}` or `\\.\` path with `file.spelling` before any disk is read, unless the path is in
+  the project's folder. `ProjectTrust.escapes` reads a link's target one part at a time and names a share as the link
+  says without opening it, and `FileAccess` refuses a place that a repository link leads to when it is a share, in any
+  spelling (`\\localhost\C$\…` included, which names a local folder that the person's rules write as a drive path, so a
+  question about it would have turned their deny into an ask), with the same `file.spelling` failure, before any
+  question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir`) and for the plain
+  words of a shell command (`escaped`). A part with `~` below such a link is refused the same way, because looking up
+  its long name would read the folder the link leads to. A link to a device path (`\\?\Volume{…}`, `\\.\…`) reads
+  back in the NT form `\??\…`, which `ProjectTrust.escapes` names as the device path it is (the `orb acp` rows found
+  that a first version took it for a folder named `??` and asked). The first review found the `~` case (6 seconds to connect to
+  the host), the third the admin-share target. `file-access-spelling.test.ts` wraps `FSUtil.Service` in the test layer,
+  records every path it is called with, and asserts that none starts with `\\` or `//` in the rows for a share given
+  directly (nine spellings, trusted and not, `resolve` and `escaped`), for a link to a share in six spellings
+  (every kind of path a tool resolves, `~` parts, a shell word), and for the person's deny row beside the junction
+  control (the link rows and the deny row also assert that only `readLink` names the link or a path below it, which the
+  recorded drive path would otherwise hide from the share check); the link rows need Developer Mode and fail instead of passing without it. The `orb acp` table in
+  `permission-files.subprocess.test.ts` crosses every row of `linkRows` with the six link targets untrusted, and the
+  first with the person's deny and with a trusted control. What remains: a share named in a shell command's text
+  directly, which is asked about as the shell asks, or in a path that a loader other than the file tools reads, such
+  as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
+- **Other spellings of the project folder (closed for the file tools by `permissions-23`).** A path that named the
+  project through another spelling of its own folder (`C:\Documents and Settings\…`, `C:\Users\<me>\Local Settings\…`,
+  or a link to the project) was decided as outside the project by its spelling, so a repository link inside it was not
+  followed (shown over a real `orb acp` in M2's final check: the global config folder's files moved aside, and its
+  provider key sent to the model). `FileAccess.resolve` now resolves each part of such a path from its root, takes the
+  first part that is really inside the project as the start, and decides the rest under the project's own folder, so
+  `ProjectTrust.escapes` follows the repository's links and `Target.place` and `escaped` are set as for the plain
+  spelling, and the rules see the project-relative name. `\\localhost\C$\…`, `\\?\Volume{…}\…` and `\\.\Volume{…}\…`
+  are refused (see the entry above). Pinned by the table in `file-access-spelling.test.ts` (deny, ask and trusted rows
+  for each spelling) and by the `orb acp` table in `permission-files.subprocess.test.ts`, which fail on the code before
+  the change. The paths a shell command names in its text (`FileAccess.escaped`) are anchored the same way before
+  `ProjectTrust.escapes` follows them (`cat "<spelling>/cfg/orbit.json"` meets the folder question of the plain
+  spelling), and the `orb acp` table crosses every row of `linkRows` (Bash workdir, `cd`, path words, `cat` and
+  redirect, PowerShell, Grep, Glob, Read, Write) with every real spelling, untrusted with `once` and `reject`, trusted,
+  and under a person's deny of the config folder, and the refused spellings with Bash workdir, Grep and Write. A drive
+  that is made from the project's folder (`subst Q: <project>`) is anchored too, because the root is the first part
+  asked about. An 8.3 short name of the project's folder, or of a folder above it, is expanded to the long name first, and the anchor, not a difference from the long name, says the path is in the project (the review found that the first version decided such a spelling as outside it, because the expansion gave the project's own name). The core table and the `orb acp` table have these rows, and fail on a Windows volume that makes no 8.3 names rather than pass without them. What remains: a path that goes through a link that is not in the project and that leads into it by a
+  route this walk cannot read (a mapped network drive); a word of a command that a shell builds as it runs.
+- **A rule of the person's with the value of one of Orbit's own allows (closed by `permissions-23`).** A place a link
+  leads to is decided without Orbit's own allows (`Agent.folders`). They are now marked where they are made (the rule
+  objects are kept in a `WeakSet`, so the mark is not a field that a config file, stored rule or decoded value can
+  carry), and `Permission` leaves out the marked rules instead of comparing values, so a rule of the person's with the
+  same action, folder and effect decides that place, as an allow, an ask or a deny (`permission.test.ts`, "lets the
+  person's rule with the value of one of Orbit's own allows decide a folder a link leads to"; `agent.test.ts` pins the
+  mark on a new agent). What remains: the mark follows the object, so a copy of a rule (a spread, a structured clone, a
+  JSON round trip or a schema decode) counts as the person's, which is the looser reading. The production plugin host
+  hands the agent editor over without copying, so Explore's rules keep the mark by reference; `agent.test.ts` ("keeps
+  the mark of Orbit's own folder allows in every built-in agent, Explore among them") builds the agents through the
+  real `orbit.agent` plugin with an editor that does not copy and fails when Explore copies its rules. The copying
+  `agentHost` of the test fixtures does not keep the mark.
 - **Approvals not yet built only from the request.** Since M2 the server puts the resolved file or folder on file,
   shell, Grep and Glob requests, and the terminal UI, Mini and ACP prefer it. Parts of an approval still come from the
   call's recorded input, or are missing: the terminal UI, Mini and VS Code name no folder on a shell, Grep or Glob

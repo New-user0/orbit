@@ -852,6 +852,49 @@ describe("Permission for a place a link leads out to", () => {
     }),
   )
 
+  // The very same action, folder and effect as one of Orbit's own allows: Orbit's are marked where they are made, so the
+  // person's copy is the person's rule, and a deny of the same value still wins over it.
+  it.effect("lets the person's rule with the value of one of Orbit's own allows decide a folder a link leads to", () =>
+    Effect.gen(function* () {
+      const fixture = yield* folders
+      const global = yield* Global.Service
+      const same = Agent.folders(global).map((rule) => ({
+        action: rule.action,
+        resource: rule.resource,
+        effect: rule.effect,
+      }))
+      expect(same.map((rule) => rule.resource.replaceAll("\\", "/"))).toContain(fixture.config)
+      // The rules Orbit makes are its own; a plain object with the very same value is not.
+      expect(Agent.folders(global).map(Agent.isOwnFolder)).toEqual([true, true, true, true])
+      expect(same.map(Agent.isOwnFolder)).toEqual([false, false, false, false])
+
+      // Orbit's allows alone do not decide the place; the person's rule with the same value does.
+      yield* setup([
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "external_directory", resource: "*", effect: "ask" },
+        ...Agent.folders(global),
+      ])
+      const service = yield* Permission.Service
+      for (const place of fixture.places) expect((yield* service.ask(external(place, true))).effect).toBe("ask")
+      yield* setRules([
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "external_directory", resource: "*", effect: "ask" },
+        ...Agent.folders(global),
+        ...same,
+      ])
+      for (const place of fixture.places) expect((yield* service.ask(external(place, true))).effect).toBe("allow")
+      // The same value as a deny and as an ask decides as well.
+      for (const effect of ["deny", "ask"] as const) {
+        yield* setRules([
+          { action: "*", resource: "*", effect: "allow" },
+          ...Agent.folders(global),
+          ...same.map((rule) => ({ ...rule, effect })),
+        ])
+        for (const place of fixture.places) expect((yield* service.ask(external(place, true))).effect).toBe(effect)
+      }
+    }),
+  )
+
   it.effect("holds only the resources a link leads to, and lets an always reply save the person's approval", () =>
     Effect.gen(function* () {
       const fixture = yield* folders

@@ -96,16 +96,41 @@ const layer = Layer.effect(
     // nowhere leads where it points, and that is where a write through it would land. The depth only ends a loop of
     // links, which nothing can open anyway. Whether a path is there is asked of `stat`, which follows links: `access`
     // answers yes for a link that points nowhere on Windows.
-    const lead = (file: string, depth = 0): Effect.Effect<string> =>
+    const follow = (file: string, depth = 0): Effect.Effect<string> =>
       Effect.gen(function* () {
         if ((yield* fs.stat(file).pipe(Effect.orElseSucceed(() => undefined))) !== undefined)
           return yield* fs.resolve(file)
         const parent = path.dirname(file)
         if (parent === file) return file
-        const named = path.join(yield* lead(parent, depth), path.basename(file))
+        const named = path.join(yield* follow(parent, depth), path.basename(file))
         const target = depth < 40 ? yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined)) : undefined
-        return target === undefined ? named : yield* lead(path.resolve(path.dirname(named), target), depth + 1)
+        return target === undefined ? named : yield* follow(path.resolve(path.dirname(named), target), depth + 1)
       })
+
+    // The share that a link on the way to a file names, when one does: opening a path through such a link connects to the
+    // share, so the links are read one part at a time, which touches no share, and the share is named as the link says.
+    // Only Windows has them.
+    const share = (file: string, depth = 0): Effect.Effect<string | undefined> =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32" || depth >= 40) return undefined
+        const parts = path.relative(path.parse(file).root, file).split(path.sep)
+        for (const index of parts.keys()) {
+          const named = path.join(path.parse(file).root, ...parts.slice(0, index + 1))
+          const target = yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined))
+          if (target === undefined) continue
+          // A link to a device path (`\\?\Volume{…}\…`, `\\.\…`) reads back in the NT form `\??\…`, which `path.resolve`
+          // would take for a folder named `??` on the current drive. It is named as the device path it is.
+          if (target.startsWith("\\??\\"))
+            return path.join(`\\\\?\\${target.slice(4)}`, ...parts.slice(index + 1))
+          const leads = path.join(path.resolve(path.dirname(named), target), ...parts.slice(index + 1))
+          if (leads.startsWith("\\\\")) return leads
+          const deeper = yield* share(leads, depth + 1)
+          if (deeper !== undefined) return deeper
+        }
+        return undefined
+      })
+    const lead = (file: string) =>
+      share(file).pipe(Effect.flatMap((shared) => (shared === undefined ? follow(file) : Effect.succeed(shared))))
 
     // Whether a file is inside the folders by its name, and still is once every link in it is followed.
     const stays = Effect.fnUntraced(function* (roots: readonly string[], file: string) {
