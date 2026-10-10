@@ -2,6 +2,7 @@ export * as Permission from "./permission.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Global } from "@orbit/util/global"
+import path from "path"
 import { Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
 import { Permission } from "@orbit/schema/permission"
 import { Bus } from "./bus.js"
@@ -230,7 +231,15 @@ const layer = Layer.effect(
       resource: string,
       rules: Permission.Ruleset,
     ): Permission.Effect | undefined {
-      const subjects = [resource, ...(input.aliases?.[resource] ?? [])]
+      // FileAccess asks inside the project with a path relative to the session folder, while a rule written with `~`,
+      // `$HOME` or a drive path is absolute. A file tool's place is therefore also tried by where it really is.
+      const action = ToolNames.canonical(input.action)
+      const absolute = (action === "Read" || action === "Edit") && !path.isAbsolute(resource)
+      const subjects = [
+        resource,
+        ...(absolute ? [path.resolve(location.directory, resource)] : []),
+        ...(input.aliases?.[resource] ?? []),
+      ]
       return rules.findLast(
         (rule) =>
           actionMatches(input.action, rule.action) &&

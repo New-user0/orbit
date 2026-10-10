@@ -19,9 +19,16 @@ export function expandPermissions(rules: Permission.Ruleset, home: string): Perm
     if (!matchesPathAction(rule.action)) return [rule]
     const expanded = { ...rule, resource: expandHome(rule.resource, home) }
     if (isPathAction(rule.action)) return [expanded]
-    // A pattern such as `*`, `Read*` or (on Windows) `READ` also names Bash and the other tools, whose text stays as
-    // written. Keep the rule and put an expanded copy beside it so the path actions are decided on the resolved path.
-    return expanded.resource === rule.resource ? [rule] : [rule, expanded]
+    // A pattern such as `*`, `Read*` or (on Windows) `READ` also names Bash, whose text stays as written. Keep the
+    // rule as written (it still decides Bash text such as `~/.ssh/run.sh`) and add one expanded copy for each path
+    // action the pattern names, so the copy never decides Bash or any other tool.
+    if (expanded.resource === rule.resource) return [rule]
+    return [
+      rule,
+      ...pathActions
+        .filter((item) => ToolNames.spellings(item).some((spelling) => Wildcard.match(spelling, rule.action)))
+        .map((item) => ({ ...expanded, action: item })),
+    ]
   })
 }
 

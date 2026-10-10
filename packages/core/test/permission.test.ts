@@ -1490,6 +1490,68 @@ describe("Permission under managed settings", () => {
     }
   }
 
+  // Class 3 and 4: FileAccess asks inside the session folder with a path relative to it, so a rule spelled with `~`,
+  // `$HOME` or a drive path has to decide the place the relative resource really names.
+  const sessionDirectory = path.resolve("/project")
+  for (const where of [
+    { name: "the home folder", home: sessionDirectory, resource: ".ssh/id_rsa" },
+    { name: "a folder under a repository at home", home: path.dirname(sessionDirectory), resource: "../.ssh/id_rsa" },
+    { name: "a folder outside home", home: path.join(sessionDirectory, "..", "elsewhere"), resource: undefined },
+  ]) {
+    const secret = path.join(where.home, ".ssh", "id_rsa")
+    for (const tool of ["Read", "Edit"]) {
+      for (const spelling of [
+        { name: "~", rule: "~/.ssh/*" },
+        { name: "$HOME", rule: "$HOME/.ssh/*" },
+        { name: "absolute", rule: `${path.join(where.home, ".ssh").replaceAll("\\", "/")}/*` },
+      ]) {
+        it.effect(`denies a ${tool} of ${secret} for ${spelling.name} when the session is in ${where.name}`, () =>
+          Effect.gen(function* () {
+            yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+            yield* managed({
+              rules: ConfigPermissionExpand.expandPermissions(
+                [{ action: tool, resource: spelling.rule, effect: "deny" }],
+                where.home,
+              ),
+            })
+            const service = yield* Permission.Service
+            expect(
+              yield* service.ask(assertion({ ...next(), action: tool, resources: [where.resource ?? secret] })),
+            ).toMatchObject({ effect: "deny" })
+          }),
+        )
+      }
+    }
+  }
+
+  // The kept literal still decides Bash text, and the expanded copy is limited to the path actions.
+  const bashHome = path.join(path.parse(process.cwd()).root, "users", "tester")
+  const bashAbsolute = `${bashHome.replaceAll("\\", "/")}/.ssh/run.sh`
+  for (const row of [
+    { name: "denies the Bash text as written", command: "~/.ssh/run.sh", effect: "deny" },
+    { name: "leaves the absolute Bash text to the agent's rule", command: bashAbsolute, effect: "ask" },
+    { name: "leaves other Bash text to the agent's rule", command: "make build", effect: "ask" },
+  ]) {
+    it.effect(`a wildcard-action managed deny ${row.name}`, () =>
+      Effect.gen(function* () {
+        yield* setup([{ action: "bash", resource: "*", effect: "ask" }])
+        yield* managed({
+          rules: ConfigPermissionExpand.expandPermissions(
+            [
+              { action: "*", resource: "~/.ssh/*", effect: "deny" },
+              { action: "*", resource: "~/tools/*", effect: "allow" },
+            ],
+            bashHome,
+          ),
+        })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(assertion({ ...next(), action: "bash", resources: [row.command] }))).toMatchObject({
+          effect: row.effect,
+        })
+      }),
+    )
+  }
+
   describe("managed_permissions_only", () => {
     const only = { restrictions: { managed_permissions_only: true } }
 

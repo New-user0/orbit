@@ -299,7 +299,7 @@ no plugin can override it. In order of precedence: a configured deny (agent rule
 config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
 then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
 `managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
-upgrades an ask, but never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` like config rules do. The rules that a
+upgrades an ask, but never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a managed `Read` or `Edit` rule also decides a file inside the session's folder by its absolute place, so a deny on `~/.ssh/*` holds when Orbit runs in the home folder. The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
 managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
 
 - `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
