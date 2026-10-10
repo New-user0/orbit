@@ -172,6 +172,16 @@ export const Effective = Schema.Struct({
         "What organization-managed settings leave open about permission prompts. Absent from a server that predates it, which clients read as bypass refused.",
     }),
   ),
+  plugins: Schema.optionalKey(
+    Schema.Struct({
+      allow: Schema.optionalKey(Schema.Array(Schema.String)),
+      block: Schema.optionalKey(Schema.Array(Schema.String)),
+      organization: Schema.optionalKey(Schema.String),
+    }).annotate({
+      description:
+        "Which plugins organization-managed settings allow or block, as selectors that match a package name, an absolute path or a plugin ID. An empty object means no restriction. Absent from a server that predates it, which clients read as no external plugin may load.",
+    }),
+  ),
 }).annotate({
   identifier: "Config.Effective",
   description:

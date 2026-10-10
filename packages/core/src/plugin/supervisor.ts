@@ -3,6 +3,7 @@ export * as PluginSupervisor from "./supervisor.js"
 import { Event } from "@orbit/schema/config"
 import { Cause, Effect, Layer, Queue, Stream } from "effect"
 import path from "path"
+import { realpath } from "node:fs/promises"
 import { ConfigPluginSource } from "../config/plugin/source.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
@@ -14,6 +15,25 @@ import { PluginModule } from "./module.js"
 import { SdkPlugins } from "./sdk.js"
 import { PluginUpdate } from "./update.js"
 import { Watcher } from "../filesystem/watcher.js"
+import { ManagedPolicy } from "../managed-policy.js"
+import { FSUtil } from "@orbit/util/fs-util"
+import { PluginRestriction } from "@orbit/plugin/restriction"
+
+/** What the organization restricts, read when a generation is resolved. */
+interface Managed {
+  readonly restrictions: PluginRestriction.Restrictions
+  /** What a target is checked as: the real path of a local one, the package name of a registry spec. */
+  readonly identify: (target: string) => Effect.Effect<Required<Pick<PluginRestriction.Subject, "target" | "verified">>>
+  readonly message: string
+}
+
+function blockedFailure(target: string, message: string) {
+  return {
+    source: pluginSource(target),
+    state: { status: "failed" as const, error: message },
+    features: { server: true as const },
+  }
+}
 
 const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
   modules: Effect.Success<ReturnType<typeof PluginModule.make>>,
@@ -22,6 +42,7 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
   operations: readonly ConfigPluginSource.Operation[],
   install: boolean,
   running: ReadonlyMap<string, Plugin.Generation>,
+  managed: Managed,
 ) {
   const matches = (selector: string, target: string) =>
     selector === "*" || (selector.endsWith(".*") ? target.startsWith(selector.slice(0, -1)) : selector === target)
@@ -55,6 +76,15 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       continue
     }
 
+    // Before anything is downloaded, imported or read: an external plugin is checked by what it is, and never reaches
+    // `modules.load` when the organization blocks it or leaves it off its allow list. It is reported, not dropped, and a
+    // copy that was running is not kept.
+    const identity = yield* managed.identify(operation.target)
+    if (!PluginRestriction.check(managed.restrictions, identity).allowed) {
+      failures.set(operation.target, blockedFailure(operation.target, managed.message))
+      continue
+    }
+
     const plugin = yield* modules.load(operation, { install }).pipe(
       Effect.catchCause((cause) => {
         const ref = `err_${crypto.randomUUID().slice(0, 8)}`
@@ -77,8 +107,19 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       // The new revision never became a generation, so the one already running keeps its place.
       const retained = packages.get(operation.target) ?? running.get(operation.target)
       if (!retained) continue
+      // An ID the organization blocked after the old revision started does not stay active because the new one failed.
+      if (!PluginRestriction.check({ block: managed.restrictions.block }, { id: retained.id }).allowed) {
+        failures.set(operation.target, blockedFailure(operation.target, managed.message))
+        continue
+      }
       packages.set(operation.target, retained)
       enabled.add(retained.id)
+      continue
+    }
+    // A plugin's ID is known only once its module is imported, so this stops its setup but not its top-level code. To
+    // stop code from running at all, block the target.
+    if (!PluginRestriction.check({ block: managed.restrictions.block }, { id: plugin.id }).allowed) {
+      failures.set(operation.target, blockedFailure(operation.target, managed.message))
       continue
     }
     failures.delete(operation.target)
@@ -122,6 +163,7 @@ export const layer = Layer.effectDiscard(
     const modules = yield* PluginModule.make()
     const bus = yield* Bus.Service
     const updates = yield* PluginUpdate.Service
+    const policy = yield* ManagedPolicy.Service
     const internal = yield* PluginInternal.list()
     let release: Effect.Effect<void> | undefined = yield* registry.hold()
     yield* Effect.addFinalizer(() => release ?? Effect.void)
@@ -151,8 +193,35 @@ export const layer = Layer.effectDiscard(
         source: { type: "builtin" as const },
       }))
       const operations = yield* sources.operations()
+      const org = policy.current()
+      const unresolved: string[] = []
+      const managed: Managed = {
+        restrictions: yield* Effect.promise(() =>
+          // The native realpath expands Windows 8.3 short names, which is what the terminal UI's check does too.
+          PluginRestriction.real(org.restrictions.plugins ?? {}, (file) => realpath(file), (file) => unresolved.push(file)),
+        ),
+        identify: (target) =>
+          path.isAbsolute(target)
+            ? Effect.promise(() => realpath(target)).pipe(
+                Effect.map((real) => ({ target: real, verified: true })),
+                // An unresolvable path is one unverified entry (refused under an allow list), not a failed activation.
+                Effect.catchCause(() =>
+                  Effect.logWarning("plugin path could not be resolved; checking it as written", { target }).pipe(
+                    Effect.as({ target, verified: false }),
+                  ),
+                ),
+              )
+            : Effect.promise(() => PluginRestriction.identify(target)),
+        message:
+          org.organization === undefined
+            ? "Blocked by managed settings"
+            : `Blocked by ${org.organization}'s managed settings`,
+      }
+      yield* Effect.forEach(unresolved, (file) =>
+        Effect.logWarning("managed plugin selector could not be resolved; using it as written", { file }),
+      )
       // Activate everything available locally before waiting on missing package installs.
-      const immediate = yield* resolve(modules, pre, post, operations, false, running)
+      const immediate = yield* resolve(modules, pre, post, operations, false, running, managed)
       const source = (source: Plugin.Source) =>
         source.type === "package"
           ? {
@@ -168,7 +237,7 @@ export const layer = Layer.effectDiscard(
         )
       yield* apply(immediate)
       const resolved = immediate.pending.length
-        ? yield* resolve(modules, pre, post, operations, true, running)
+        ? yield* resolve(modules, pre, post, operations, true, running, managed)
         : immediate
       if (resolved !== immediate) yield* apply(resolved)
       running = resolved.packages
@@ -246,6 +315,8 @@ const nodeDeps = [
   PluginUpdate.node,
   Bus.node,
   Npm.node,
+  ManagedPolicy.node,
+  FSUtil.node,
   Watcher.node,
   PluginInternal.requirements,
 ] as const

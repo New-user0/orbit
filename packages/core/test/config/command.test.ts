@@ -24,6 +24,7 @@ import { AppProcess } from "@orbit/util/process"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { Permission } from "@orbit/core/permission"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
@@ -61,6 +62,7 @@ const it = testEffect(
       Job.node,
       Agent.node,
       ProjectTrust.node,
+      ManagedPolicy.node,
     ]),
     [
       Mcp.node.replace(emptyMcpLayer),

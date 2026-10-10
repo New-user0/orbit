@@ -14,7 +14,8 @@ import {
   type ParentProps,
 } from "solid-js"
 import path from "path"
-import { stat } from "fs/promises"
+import { realpath, stat } from "fs/promises"
+import { PluginRestriction } from "@orbit/plugin/restriction"
 import { fileURLToPath } from "url"
 import type { Page } from "@orbit/plugin/tui/context"
 import { Host } from "@orbit/plugin/host"
@@ -109,6 +110,36 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
         (plugin.source.type === "package" || plugin.source.type === "local"),
     ),
   )
+  // What the server says the organization restricts. A server that does not report it, or a read that fails, leaves no
+  // external plugin to load: built-in plugins still do. Undefined until the first answer, so nothing imports before it.
+  const [restrictions, setRestrictions] = createSignal<
+    | { readonly allow?: readonly string[]; readonly block?: readonly string[]; readonly organization?: string }
+    | "unreadable"
+    | undefined
+  >(undefined)
+  // The skip is logged once per change of the answer, not once per plugin on every reconcile.
+  let skippedLogged = false
+  const syncRestrictions = () =>
+    client.api.config
+      .effective({ location: data.location.default() })
+      .then(async (effective) => {
+        if (effective.plugins === undefined)
+          log.warn("the server does not report plugin restrictions, so no external plugin will load")
+        skippedLogged = false
+        // Absolute selectors are made real once per answer, so one written through a link meets the real path of a target.
+        setRestrictions(
+          effective.plugins === undefined
+            ? "unreadable"
+            : {
+                ...(await PluginRestriction.real(effective.plugins, (file) => realpath(file).catch(() => file))),
+                ...(effective.plugins.organization === undefined ? {} : { organization: effective.plugins.organization }),
+              },
+        )
+      })
+      .catch((error) => {
+        log.warn("failed to read the plugin restrictions, so no external plugin will load", { error })
+        setRestrictions("unreadable")
+      })
   const directory = config.path ? path.dirname(config.path) : process.cwd()
   const [store, setStore] = createStore({
     ready: false,
@@ -342,6 +373,27 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
 
       const options = typeof entry === "string" ? undefined : entry.options
       const local = localSource(target, directory)
+      // The organization's plugin lists are checked in this process, before anything is read, watched, installed or
+      // imported: the server's check cannot stop a plugin that only this process loads. Both the trust gate above and
+      // this one must pass.
+      const limits = restrictions()
+      if (limits === undefined || limits === "unreadable") {
+        if (!skippedLogged) {
+          skippedLogged = true
+          log.warn("skipped the external plugins because the plugin restrictions could not be read")
+        }
+        continue
+      }
+      const identity = await (local
+        ? realpath(fileURLToPath(local)).then(
+            (real) => ({ target: real, verified: true }),
+            () => ({ target: fileURLToPath(local), verified: false }),
+          )
+        : PluginRestriction.identify(target))
+      if (!PluginRestriction.check(limits, identity).allowed) {
+        failures.push({ target, status: "failed", error: managedMessage(limits.organization) })
+        continue
+      }
       if (
         local &&
         (await stat(local).then(
@@ -383,7 +435,15 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
           status: "failed",
           error: previous?.active ? `${resolved.error} (previous version still active)` : resolved.error,
         })
-        if (previous) desired.set(previous.plugin.id, toDesired(previous))
+        // A copy whose ID the organization has blocked since it started is not kept running by a failed reload.
+        if (previous && PluginRestriction.check({ block: limits.block }, { id: previous.plugin.id }).allowed)
+          desired.set(previous.plugin.id, toDesired(previous))
+        continue
+      }
+      // An ID is known only once the module is imported, so this stops setup but not the module's top-level code. To
+      // stop code from running at all, block the target. Checked for an unchanged plugin too, so a new block takes it down.
+      if (!PluginRestriction.check({ block: limits.block }, { id: resolved.plugin.id }).allowed) {
+        failures.push({ target, id: resolved.plugin.id, status: "failed", error: managedMessage(limits.organization) })
         continue
       }
       const setupFailure = setupFailures.get(target)
@@ -539,12 +599,13 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     on(
       // Nothing is imported until the trust status is known, so no project plugin loads in the moment it takes to ask.
       () =>
-        trust.startup.settled()
+        trust.startup.settled() && restrictions() !== undefined
           ? JSON.stringify([
               serverTuiPlugins(),
               config.data.plugins ?? [],
               trust.startup.trusted(),
               trust.startup.above(),
+              restrictions(),
             ])
           : undefined,
       (key) => {
@@ -587,8 +648,16 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
       () => void syncServerPlugins(),
     ),
   )
+  createEffect(
+    on(
+      () => JSON.stringify(data.location.default()),
+      () => void syncRestrictions(),
+    ),
+  )
   onCleanup(client.event.on("plugin.updated", syncServerPlugins))
   onCleanup(client.event.on("server.connected", syncServerPlugins))
+  onCleanup(client.event.on("server.connected", syncRestrictions))
+  onCleanup(client.event.on("config.updated", syncRestrictions))
   onMount(() => {
     let disposing: Promise<void> | undefined
     const dispose = () => {
@@ -665,6 +734,9 @@ async function setup(plugin: Plugin.Definition, context: Plugin.Context, owned: 
     throw error
   }
 }
+
+const managedMessage = (organization?: string) =>
+  organization === undefined ? "Blocked by managed settings" : `Blocked by ${organization}'s managed settings`
 
 function matches(selector: string, id: string) {
   return selector === "*" || selector === id || (selector.endsWith(".*") && id.startsWith(selector.slice(0, -1)))

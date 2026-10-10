@@ -44,7 +44,7 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Manag
 
 const empty: State = { statements: [] }
 
-const layer = Layer.sync(Service, () => {
+export const layer = Layer.sync(Service, () => {
   const sources: Record<Source, State> = { file: empty, connection: empty }
   return Service.of({
     current: () => {

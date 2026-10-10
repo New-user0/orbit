@@ -14,11 +14,18 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
         const config = yield* Config.Service
         const managed = yield* ManagedPolicy.Service
         const restrictions = managed.current().restrictions
+        const organization = managed.current().organization
         return {
           compatibility: yield* config.compatEnabled(),
           permissions: {
             bypass: restrictions.disable_bypass_permissions !== true,
             always: restrictions.managed_permissions_only !== true,
+          },
+          // The marketplaces list stays in ManagedPolicy for the extensibility work.
+          plugins: {
+            ...(restrictions.plugins?.allow === undefined ? {} : { allow: restrictions.plugins.allow }),
+            ...(restrictions.plugins?.block === undefined ? {} : { block: restrictions.plugins.block }),
+            ...(organization === undefined ? {} : { organization }),
           },
         }
       }),

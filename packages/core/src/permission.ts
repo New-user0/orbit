@@ -15,6 +15,7 @@ import { Wildcard } from "./util/wildcard.js"
 import { ToolNames } from "./tool/names.js"
 import { PermissionSaved } from "./permission/saved.js"
 import { PluginHooks } from "./plugin/hooks.js"
+import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
 
@@ -290,6 +291,13 @@ const layer = Layer.effect(
         current.organization === undefined
           ? "Blocked by managed settings"
           : `Blocked by ${current.organization}'s managed settings`
+      // denied_domains binds every URL-bearing action and beats grants, config allows and hook allows. Only the deny list
+      // does: allowed_domains and allow_managed_domains_only govern the shell sandbox, never a fetch.
+      if (
+        ManagedNetwork.bearsUrl(input.action) &&
+        ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
+      )
+        return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
       if (decided.includes("deny")) return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
       // A managed ask tightens an allow, never a hook's deny.
       if (decided.includes("ask"))

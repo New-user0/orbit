@@ -17,6 +17,7 @@ import { Job } from "@orbit/core/job"
 import { Location } from "@orbit/core/location"
 import { Mcp } from "@orbit/core/mcp/index"
 import { Permission } from "@orbit/core/permission"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
@@ -105,6 +106,7 @@ const nodes = LayerNode.group([
   Job.node,
   Agent.node,
   ProjectTrust.node,
+  ManagedPolicy.node,
 ])
 const replacements = [
   Mcp.node.replace(emptyMcpLayer),
@@ -337,6 +339,48 @@ describe("command template shell spans", () => {
         )
         expect(spawned).toEqual([])
         expect(probe.prompts).toEqual([])
+      }),
+    ),
+  )
+
+  // The wrapper's arguments tell whether the span may reach the network: bubblewrap gets --unshare-net only without it.
+  const offline = (args: readonly string[]) => args.includes("--unshare-net") || args.some((arg) => arg.includes("(deny network*)"))
+  const networkCases = [
+    ["domain lists", { denied_domains: ["x.example"] }, true],
+    ["an allow list, even an empty one", { allowed_domains: [] }, true],
+    ["allow_managed_domains_only", { allow_managed_domains_only: true }, true],
+    ["no domain settings at all (control)", undefined, false],
+    ["an empty deny list alone (control)", { denied_domains: [] }, false],
+  ] as const
+  for (const [name, network, forced] of networkCases)
+    it.live(`runs a span with the network ${forced ? "off" : "on"} under ${name}`, () =>
+      withSandboxTool(
+        tool,
+        Effect.gen(function* () {
+          const policy = yield* ManagedPolicy.Service
+          yield* policy.set("file", { statements: [], restrictions: network ? { network } : {} })
+          const probe = yield* install("Status: !`git status`", { sandbox: { enabled: true, network: true } })
+          yield* probe.execute("")
+          expect(spawned).toHaveLength(1)
+          expect(offline(spawned[0].args)).toBe(forced)
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              const policy = yield* ManagedPolicy.Service
+              yield* policy.set("file", { statements: [] })
+            }),
+          ),
+        ),
+      ),
+    )
+
+  it.live("leaves a span that asked for no network offline whatever the domain settings", () =>
+    withSandboxTool(
+      tool,
+      Effect.gen(function* () {
+        const probe = yield* install("Status: !`git status`", { sandbox: { enabled: true, network: false } })
+        yield* probe.execute("")
+        expect(offline(spawned[0].args)).toBe(true)
       }),
     ),
   )
