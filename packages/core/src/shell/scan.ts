@@ -11,7 +11,7 @@ export type OpaqueReason =
   | "unterminated-escape"
   | "unterminated-quote"
 
-type Command = {
+export type Command = {
   resource: string
   words: string[]
   rawWords: string[]
@@ -26,22 +26,121 @@ type Command = {
 // Opaque describes a parsing limitation, not a permission decision.
 export type Result = { kind: "scanned"; commands: Command[] } | { kind: "opaque"; reason: OpaqueReason }
 
+// limit: size, depth or budget bound; syntax: bash would reject the text; unsupported: valid or unknown text this scanner declines.
+export type OpaqueClass = "limit" | "syntax" | "unsupported"
+export type Origin = "substitution" | "heredoc" | "group"
+export type WordFlags = {
+  // Expansions seen unquoted or inside double quotes.
+  parameter?: true
+  command?: true
+  arithmetic?: true
+  process?: true
+  // Unquoted pathname patterns and brace lists.
+  glob?: true
+  brace?: true
+}
+export type Redirect = {
+  operator: string
+  // A file descriptor written before the operator, such as 2 in 2>f.
+  fd?: string
+  // Unquoted target word. Absent for fd duplications (2>&1, >&-) and heredocs.
+  target?: string
+  raw: string
+  write: boolean
+  // The target contains an expansion, glob or brace list, so its value is not known statically.
+  dynamic: boolean
+  nullSink: boolean
+}
+export type Assignment = { name: string; value: string; raw: string; append: boolean; flags: WordFlags }
+export type Heredoc = { delimiter: string; quoted: boolean; tabs: boolean; body: string }
+export type Features = { assignment: boolean; functionDefinition: boolean; background: boolean }
+export type Detail = Command & {
+  assignments: Assignment[]
+  // Parallel to words.
+  flags: WordFlags[]
+  redirects: Redirect[]
+  // Heredocs whose operator belongs to this node.
+  heredocs: Heredoc[]
+  // Commands scanned out of this node's expansions, groups and heredoc bodies.
+  nested: Detail[]
+  origin?: Origin
+  // A statement with no command word: assignments, redirects or a group only.
+  commandless?: true
+}
+export type Inspection =
+  | { kind: "scanned"; commands: Detail[]; statements: Detail[]; features: Features }
+  | { kind: "opaque"; reason: OpaqueReason; class: OpaqueClass }
+
+type Scanned = { kind: "scanned"; commands: Detail[]; roots: Detail[]; features: Features }
+type Opaque = Extract<Inspection, { kind: "opaque" }>
+
 const BASH_REDIRECTS = ["&>>", "&>", "<<<", "<<-", "<<", "<>", "<&", ">&", ">|", ">>", ">", "<"]
 const BASH_DECLARATIONS = new Set(["declare", "typeset", "export", "readonly", "local", "unset", "unsetenv"])
 const MAX_INPUT_LENGTH = 64 * 1024
 const MAX_SUBSTITUTION_DEPTH = 32
 
+// Set when a nesting bound refuses text, so the failure that follows is classed as a limit and not as bad syntax.
+let depthLimitHit = false
+
+export function inspect(input: string): Inspection {
+  const result = inspectBash(input)
+  if (result.kind === "opaque") return result
+  return {
+    kind: "scanned",
+    commands: result.roots.filter((root) => !root.commandless),
+    statements: result.roots.filter((root) => root.commandless),
+    features: result.features,
+  }
+}
+
+// Flattens the detail pass to the legacy command list, in the order it has always been emitted.
 export function scan(input: string): Result {
+  const result = inspectBash(input)
+  if (result.kind === "opaque") return { kind: "opaque", reason: result.reason }
+  return { kind: "scanned", commands: result.commands.map(plain) }
+}
+
+function plain(detail: Detail): Command {
+  return {
+    resource: detail.resource,
+    words: detail.words,
+    rawWords: detail.rawWords,
+    ...(detail.wordEnds ? { wordEnds: detail.wordEnds } : {}),
+    ...(detail.statementHead ? { statementHead: detail.statementHead } : {}),
+    ...(detail.declaration ? { declaration: detail.declaration } : {}),
+    ...(detail.redirectWordCount !== undefined ? { redirectWordCount: detail.redirectWordCount } : {}),
+  }
+}
+
+function inspectBash(input: string): Scanned | Opaque {
+  depthLimitHit = false
   return scanBash(input, 0, { remaining: MAX_INPUT_LENGTH * MAX_SUBSTITUTION_DEPTH })
 }
 
-function scanBash(input: string, depth: number, budget: { remaining: number }): Result {
+function scanBash(input: string, depth: number, budget: { remaining: number }): Scanned | Opaque {
   // Bound both nesting and total source visited by expansion scans.
   budget.remaining -= input.length
   if (input.length > MAX_INPUT_LENGTH || budget.remaining < 0 || depth > MAX_SUBSTITUTION_DEPTH)
-    return { kind: "opaque", reason: "invalid-structure" }
-  const commands: Command[] = []
-  const nestedCommands: Command[] = []
+    return { kind: "opaque", reason: "invalid-structure", class: "limit" }
+  const fail = (reason: OpaqueReason): Opaque => ({
+    kind: "opaque",
+    reason,
+    class: depthLimitHit || depth >= MAX_SUBSTITUTION_DEPTH ? "limit" : "syntax",
+  })
+  const syntax = (reason: OpaqueReason): Opaque => ({ kind: "opaque", reason, class: "syntax" })
+  const unsupported = (reason: OpaqueReason): Opaque => ({ kind: "opaque", reason, class: "unsupported" })
+  // commands is the flat legacy sequence; roots is the tree whose nodes own their nested commands.
+  const commands: Detail[] = []
+  const roots: Detail[] = []
+  const features: Features = { assignment: false, functionDefinition: false, background: false }
+  const nestedCommands: Detail[] = []
+  const pendingNested: Detail[] = []
+  const pendingGroups: Detail[] = []
+  const wordFlags: WordFlags[] = []
+  const redirects: Redirect[] = []
+  let flags: WordFlags = {}
+  let redirectOperator: string | undefined
+  let redirectFd: string | undefined
   const words: string[] = []
   const rawWords: string[] = []
   const assignmentWords: boolean[] = []
@@ -57,14 +156,23 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
   let segment = 0
   let quote: "single" | "double" | undefined
   let invalidRedirect = false
-  let invalidStructure = false
+  let invalidStructure: false | "syntax" | "unsupported" = false
   let separated = false
   let redirectTarget = false
   let hasRedirect = false
   let dangling = false
   let inList = false
   let compoundEnd = false
-  const heredocs: Array<{ delimiter: string; quoted: boolean; tabs: boolean; command?: Command; start?: number }> = []
+  const heredocs: Array<{
+    delimiter: string
+    quoted: boolean
+    tabs: boolean
+    command?: Command
+    start?: number
+    record: Heredoc
+    node?: Detail
+  }> = []
+  let nodeHeredocs: typeof heredocs = []
   const structures: Array<{
     kind: "if" | "while" | "until" | "for" | "case"
     phase: "header" | "condition" | "pattern" | "body" | "do"
@@ -72,11 +180,23 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
     sawElse?: boolean
   }> = []
 
-  const addSubstitutions = (substitution: BashExpansion): Result | undefined => {
+  const adopt = (result: Scanned, origin: Origin, target: Detail[]) => {
+    result.roots.forEach((root) => (root.origin = origin))
+    target.push(...result.roots)
+    features.assignment ||= result.features.assignment
+    features.functionDefinition ||= result.features.functionDefinition
+    features.background ||= result.features.background
+  }
+  const addSubstitutions = (
+    substitution: BashExpansion,
+    target = pendingNested,
+    origin: Origin = "substitution",
+  ): Opaque | undefined => {
     for (const source of substitution.substitutions ?? [substitution.source]) {
       const result = scanBash(source, depth + 1, budget)
       if (result.kind === "opaque") return result
       nestedCommands.push(...result.commands)
+      adopt(result, origin, target)
     }
   }
   const statement = () => {
@@ -92,28 +212,84 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       // Unquoted trailing continuations are ignored syntax, not part of the raw token.
       rawWords.push(input.slice(wordStart, wordEnd))
       assignmentWords.push(assignmentWord)
+      wordFlags.push(flags)
       commandEnd = wordEnd
+    } else if (redirectOperator) {
+      // A file descriptor duplication (2>&1, >&-) names a descriptor, not a file.
+      const duplication = (redirectOperator === ">&" || redirectOperator === "<&") && /^(?:\d+-?|-)$/.test(word)
+      const dynamic = Object.keys(flags).length > 0
+      redirects.push({
+        operator: redirectOperator,
+        ...(redirectFd ? { fd: redirectFd } : {}),
+        ...(duplication ? {} : { target: word }),
+        raw: input.slice(wordStart, wordEnd),
+        write:
+          [">", ">>", ">|", "&>", "&>>", "<>"].includes(redirectOperator) ||
+          (redirectOperator === ">&" && !duplication),
+        dynamic,
+        nullSink: !duplication && !dynamic && /^\/dev\/(?:null|stdout|stderr|fd\/\d+)$/.test(word),
+      })
     }
     redirectTarget = false
+    redirectOperator = undefined
+    redirectFd = undefined
     word = ""
     wordStarted = false
     assignmentWord = false
     assignmentHeadUnsafe = false
+    flags = {}
+  }
+  const commandlessNode = (resource: string, assignments: Assignment[]): Detail => {
+    const node: Detail = {
+      resource,
+      words: [],
+      rawWords: [],
+      assignments,
+      flags: [],
+      redirects: [...redirects],
+      heredocs: [],
+      nested: [],
+      commandless: true,
+    }
+    roots.push(node)
+    return node
   }
   const finishCommand = (boundary = false) => {
     finishWord()
     if (redirectTarget) invalidRedirect = true
     redirectTarget = false
-    if (compoundEnd && words.length > 0) invalidStructure = true
+    redirectOperator = undefined
+    redirectFd = undefined
+    if (compoundEnd && words.length > 0) invalidStructure = "syntax"
     const resource = input.slice(segment, resourceEnd ?? wordEnd).replace(/^[ \t\n]+|[ \t\n]+$/g, "")
     const name = assignmentWords.findIndex((assignment) => !assignment)
-    if (name >= 0 && !words[name]) invalidStructure = true
-    if (rawWords[name] === "}") invalidStructure = true
+    // An empty command name is valid bash that fails at run time, so it is declined, not rejected.
+    if (name >= 0 && !words[name]) invalidStructure ||= "unsupported"
+    if (rawWords[name] === "}") invalidStructure = "syntax"
+    const assignments = words.slice(0, name < 0 ? words.length : name).flatMap((text, position) => {
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[[\s\S]*\])?(\+?)=([\s\S]*)$/.exec(text)
+      if (!match) return []
+      return [
+        {
+          name: match[1],
+          value: match[3],
+          raw: rawWords[position],
+          append: match[2] === "+",
+          flags: wordFlags[position],
+        },
+      ]
+    })
+    let node: Detail | undefined
     if (resource && name >= 0 && !header()) {
-      const command: Command = {
+      const command: Detail = {
         resource,
         words: words.slice(name),
         rawWords: rawWords.slice(name),
+        assignments,
+        flags: wordFlags.slice(name),
+        redirects: [...redirects],
+        heredocs: [],
+        nested: [],
         ...(name === 0 && BASH_DECLARATIONS.has(rawWords[0]) && resource.startsWith(rawWords[0])
           ? { declaration: true as const }
           : {}),
@@ -122,6 +298,8 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
           : {}),
       }
       commands.push(command)
+      roots.push(command)
+      node = command
       if (resourceEnd === undefined) {
         for (const heredoc of heredocs) {
           if (heredoc.command) continue
@@ -131,8 +309,24 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       }
     } else if (!header() && !compoundEnd && (hasRedirect || boundary || separated)) {
       const assignmentOnly = assignmentWords.length > 0 && assignmentWords.every(Boolean)
-      if (!assignmentOnly && !hasRedirect) invalidStructure = true
+      if (!assignmentOnly && !hasRedirect) invalidStructure = "syntax"
     }
+    if (!node && !header() && (assignments.length || redirects.length || pendingGroups.length || nodeHeredocs.length))
+      node = commandlessNode(resource, assignments)
+    if (node) {
+      node.nested.push(...pendingGroups.splice(0))
+      // Expansions with no command to own them become top-level entries.
+      if (node.commandless) roots.push(...pendingNested.splice(0))
+      else node.nested.push(...pendingNested.splice(0))
+      for (const entry of nodeHeredocs) {
+        entry.node = node
+        node.heredocs.push(entry.record)
+      }
+    } else roots.push(...pendingNested.splice(0), ...pendingGroups.splice(0))
+    if (assignments.length) features.assignment = true
+    nodeHeredocs = []
+    redirects.length = 0
+    wordFlags.length = 0
     commands.push(...nestedCommands.splice(0))
     if (!header() && (words.length > 0 || hasRedirect)) statement()
     words.length = 0
@@ -169,9 +363,9 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       }
       if (structure?.kind === "for" && structure.phase === "header" && char === "(" && input[index + 1] !== "(") {
         const values = bashExpansion(input, index, depth, "array")
-        if (!values) return { kind: "opaque", reason: "compound-command" }
+        if (!values) return fail("compound-command")
         finishCommand()
-        const failure = addSubstitutions(values)
+        const failure = addSubstitutions(values, roots)
         if (failure) return failure
         commands.push(...nestedCommands.splice(0))
         // Zsh permits a sublist or brace group directly after the value list, without do/done.
@@ -184,6 +378,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       if (!words.length && !hasRedirect && !compoundEnd) {
         const definition = bashFunctionHead(input, index)
         if (definition && !header()) {
+          features.functionDefinition = true
           index += definition.length - 1
           segment = index + 1
           continue
@@ -197,7 +392,8 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
             token === "select" ||
             token === "case")
         ) {
-          if (depth + structures.length >= MAX_SUBSTITUTION_DEPTH) return { kind: "opaque", reason: "compound-command" }
+          if (depth + structures.length >= MAX_SUBSTITUTION_DEPTH)
+            return { kind: "opaque", reason: "compound-command", class: "limit" }
           structures.push({
             kind: token === "select" ? "for" : token,
             phase: ["for", "select", "case"].includes(token) ? "header" : "condition",
@@ -215,14 +411,14 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
             (token === "do" && structure?.phase === "do") ||
             (token === "esac" && structure?.phase === "pattern"))
         ) {
-          if (!structure || dangling) return { kind: "opaque", reason: "compound-command" }
+          if (!structure || dangling) return syntax("compound-command")
           if (token === "then") {
             if (structure.kind !== "if" || structure.phase !== "condition" || !structure.count)
-              return { kind: "opaque", reason: "compound-command" }
+              return syntax("compound-command")
             structure.phase = "body"
           } else if (token === "elif" || token === "else") {
             if (structure.kind !== "if" || structure.phase !== "body" || !structure.count || structure.sawElse)
-              return { kind: "opaque", reason: "compound-command" }
+              return syntax("compound-command")
             structure.phase = token === "elif" ? "condition" : "body"
             structure.sawElse = token === "else"
           } else if (token === "do") {
@@ -231,7 +427,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
               !["condition", "do"].includes(structure.phase) ||
               (structure.kind !== "for" && !structure.count)
             )
-              return { kind: "opaque", reason: "compound-command" }
+              return syntax("compound-command")
             structure.phase = "body"
           } else {
             if (
@@ -242,7 +438,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
                   !structure.count)) ||
               (token === "esac" && (structure.kind !== "case" || structure.phase === "header"))
             )
-              return { kind: "opaque", reason: "compound-command" }
+              return syntax("compound-command")
             structures.pop()
             statement()
             compoundEnd = true
@@ -280,8 +476,8 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         input.startsWith("((", index)
       ) {
         const expression = bashExpansion(input, index, depth, "arithmetic")
-        if (!expression) return { kind: "opaque", reason: "invalid-structure" }
-        const failure = addSubstitutions(expression)
+        if (!expression) return fail("invalid-structure")
+        const failure = addSubstitutions(expression, roots)
         if (failure) return failure
         commands.push(...nestedCommands.splice(0))
         statement()
@@ -298,10 +494,11 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         (char === "(" || (char === "{" && /[ \t\n]/.test(input[index + 1] ?? "")))
       ) {
         const group = bashDelimited(input, index, depth)
-        if (!group || !group.source.trim()) return { kind: "opaque", reason: "invalid-structure" }
+        if (!group || !group.source.trim()) return fail("invalid-structure")
         const result = scanBash(group.source, depth + 1, budget)
         if (result.kind === "opaque") return result
         commands.push(...result.commands)
+        adopt(result, "group", pendingGroups)
         statement()
         compoundEnd = true
         dangling = false
@@ -311,8 +508,8 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       }
       if (!words.length && !hasRedirect && input.startsWith("[[", index)) {
         const expression = bashExpansion(input, index, depth, "test")
-        if (!expression) return { kind: "opaque", reason: "invalid-structure" }
-        const failure = addSubstitutions(expression)
+        if (!expression) return fail("invalid-structure")
+        const failure = addSubstitutions(expression, roots)
         if (failure) return failure
         commands.push(...nestedCommands.splice(0))
         statement()
@@ -340,19 +537,23 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
           if (next !== "\n") word += next
         } else word += char
       } else if ((char === "$" && "({[".includes(input[index + 1] ?? "\0")) || char === "`") {
+        flags[expansionFlag(input, index)] = true
         const substitution = bashExpansion(input, index, depth, undefined, true)
-        if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return { kind: "opaque", reason: "command-substitution" }
+        if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
         const failure = addSubstitutions(substitution)
         if (failure) return failure
         word += input.slice(index, substitution.end + 1)
         index = substitution.end
-      } else word += char
+      } else {
+        if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) flags.parameter = true
+        word += char
+      }
       wordEnd = index + 1
       continue
     }
     if (char === "$" && input[index + 1] === "'") {
       const literal = bashAnsiQuote(input, index + 1)
-      if (!literal) return { kind: "opaque", reason: "unterminated-quote" }
+      if (!literal) return syntax("unterminated-quote")
       wordStarted = true
       if (!assignmentWord) assignmentHeadUnsafe = true
       word += literal.value
@@ -382,7 +583,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       continue
     }
     if (char === "\\") {
-      if (index + 1 >= input.length) return { kind: "opaque", reason: "unterminated-escape" }
+      if (index + 1 >= input.length) return syntax("unterminated-escape")
       if (input[index + 1] === "\n") index++
       else {
         wordStarted = true
@@ -398,13 +599,17 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       (char === "[" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word) && /^\[[\s\S]*?\]\+?=/.test(input.slice(index))) ||
       (char === "(" && (assignmentWord || /[?*+@!]$/.test(word)))
     ) {
+      if (char === "(") {
+        if (!assignmentWord) flags.glob = true
+      } else if (char === "[") flags.arithmetic = true
+      else flags[expansionFlag(input, index)] = true
       const substitution =
         char === "("
           ? bashExpansion(input, index, depth, assignmentWord ? "array" : "pattern")
           : char === "["
             ? bashExpansion(input, index, depth, "subscript")
             : bashExpansion(input, index, depth)
-      if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return { kind: "opaque", reason: "command-substitution" }
+      if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
       const failure = addSubstitutions(substitution)
       if (failure) return failure
       wordStarted = true
@@ -414,8 +619,9 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       continue
     }
     if ((char === "<" || char === ">" || (char === "=" && !wordStarted)) && input[index + 1] === "(") {
+      flags.process = true
       const substitution = bashDelimited(input, index + 1, depth)
-      if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return { kind: "opaque", reason: "command-substitution" }
+      if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
       const failure = addSubstitutions(substitution)
       if (failure) return failure
       wordStarted = true
@@ -445,8 +651,10 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       if (wordStarted && !assignmentHeadUnsafe && /^(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(word)) {
         // A continuation separates the legacy number token from the redirect descriptor.
         if (wordEnd < index) commandEnd = wordEnd
+        redirectFd = word
         word = ""
         wordStarted = false
+        flags = {}
       } else finishWord()
       // Trailing redirects wrap a whole list/pipeline in the legacy grammar, not its last command.
       // Prefix redirects remain part of the command, and later words remain redirect destinations.
@@ -456,14 +664,29 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       }
       if (redirect === "<<" || redirect === "<<-") {
         const delimiter = bashHeredocDelimiter(input, index)
-        if (!delimiter) return { kind: "opaque", reason: "invalid-redirect" }
-        heredocs.push(delimiter)
+        if (!delimiter) return syntax("invalid-redirect")
+        const entry = {
+          ...delimiter,
+          record: { delimiter: delimiter.delimiter, quoted: delimiter.quoted, tabs: delimiter.tabs, body: "" },
+        }
+        heredocs.push(entry)
+        nodeHeredocs.push(entry)
+        redirects.push({
+          operator: redirect,
+          ...(redirectFd ? { fd: redirectFd } : {}),
+          raw: input.slice(index, delimiter.end + 1),
+          write: false,
+          dynamic: false,
+          nullSink: false,
+        })
+        redirectFd = undefined
         wordEnd = delimiter.end + 1
         index = delimiter.end
         redirectTarget = false
         continue
       }
       redirectTarget = true
+      redirectOperator = redirect
       index += redirect.length - 1
       continue
     }
@@ -472,8 +695,8 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
       index--
       continue
     }
-    if ("()".includes(char)) return { kind: "opaque", reason: "compound-command" }
-    if (/\s/.test(char) && !" \t\n".includes(char)) return { kind: "opaque", reason: "invalid-structure" }
+    if ("()".includes(char)) return syntax("compound-command")
+    if (/\s/.test(char) && !" \t\n".includes(char)) return unsupported("invalid-structure")
     if (char === " " || char === "\t") {
       finishWord()
       continue
@@ -499,12 +722,13 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         if (heredocs.length) {
           for (const heredoc of heredocs.splice(0)) {
             const body = bashHeredoc(input, index + 1, heredoc)
-            if (!body) return { kind: "opaque", reason: "heredoc" }
+            if (!body) return unsupported("heredoc")
             if (heredoc.command) heredoc.command.resource = input.slice(heredoc.start, body.end).trim()
+            heredoc.record.body = body.source
             if (!heredoc.quoted) {
               const expansion = bashExpansion(body.source, 0, depth, "heredoc")
-              if (!expansion) return { kind: "opaque", reason: "command-substitution" }
-              const failure = addSubstitutions(expansion)
+              if (!expansion) return fail("command-substitution")
+              const failure = addSubstitutions(expansion, heredoc.node?.nested ?? roots, "heredoc")
               if (failure) return failure
               commands.push(...nestedCommands.splice(0))
             }
@@ -515,6 +739,7 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
         continue
       }
       finishCommand(true)
+      if (separator === "&") features.background = true
       if (structure?.kind === "for" && structure.phase === "header") structure.phase = "do"
       dangling = separator !== "&" && separator !== ";" && separator !== "\n"
       inList = dangling
@@ -529,21 +754,47 @@ function scanBash(input: string, depth: number, budget: { remaining: number }): 
     wordStarted = true
     if (char === "=" && !assignmentHeadUnsafe && /^[A-Za-z_][A-Za-z0-9_]*(?:\[.*\])?\+?$/.test(word))
       assignmentWord = true
+    if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) flags.parameter = true
+    else if (
+      !assignmentWord &&
+      input[index - 1] !== "$" &&
+      (char === "*" || char === "?" || (char === "[" && matchAt(BRACKET_GLOB, input, index)))
+    )
+      flags.glob = true
+    else if (!assignmentWord && char === "{" && matchAt(BRACE_LIST, input, index)) flags.brace = true
     word += char
     wordEnd = index + 1
   }
 
-  if (quote) return { kind: "opaque", reason: "unterminated-quote" }
-  if (heredocs.length) return { kind: "opaque", reason: "heredoc" }
+  if (quote) return syntax("unterminated-quote")
+  if (heredocs.length) return unsupported("heredoc")
   if (wordStarted || words.length > 0 || hasRedirect) {
     finishCommand()
     dangling = false
   }
-  if (dangling) invalidStructure = true
-  if (invalidStructure) return { kind: "opaque", reason: "invalid-structure" }
-  if (invalidRedirect) return { kind: "opaque", reason: "invalid-redirect" }
-  if (structures.length) return { kind: "opaque", reason: "compound-command" }
-  return { kind: "scanned", commands }
+  if (pendingGroups.length) commandlessNode(input.slice(segment).trim(), []).nested.push(...pendingGroups.splice(0))
+  if (dangling) invalidStructure = "syntax"
+  if (invalidStructure)
+    return invalidStructure === "syntax" ? syntax("invalid-structure") : unsupported("invalid-structure")
+  if (invalidRedirect) return syntax("invalid-redirect")
+  if (structures.length) return syntax("compound-command")
+  return { kind: "scanned", commands, roots, features }
+}
+
+const BRACKET_GLOB = /\[[^\]\s]+\]/y
+const BRACE_LIST = /\{[^\s]*?(?:,|\.\.)[^\s]*?\}/y
+
+function matchAt(pattern: RegExp, input: string, index: number) {
+  pattern.lastIndex = index
+  return pattern.test(input)
+}
+
+// Which expansion a backtick or dollar sign at index starts.
+function expansionFlag(input: string, index: number): "parameter" | "command" | "arithmetic" {
+  if (input[index] === "`") return "command"
+  if (input.startsWith("$((", index) || input[index + 1] === "[") return "arithmetic"
+  if (input[index + 1] === "{") return /^[ \t\n|]/.test(input.slice(index + 2, index + 3)) ? "command" : "parameter"
+  return "command"
 }
 
 type BashExpansion = { source: string; end: number; substitutions?: string[] }
@@ -557,7 +808,10 @@ function bashFunctionHead(input: string, start: number) {
 }
 
 function bashDelimited(input: string, start: number, depth: number): BashExpansion | undefined {
-  if (depth >= MAX_SUBSTITUTION_DEPTH) return
+  if (depth >= MAX_SUBSTITUTION_DEPTH) {
+    depthLimitHit = true
+    return
+  }
   const close = input[start] === "{" ? "}" : ")"
   const cases: Array<"header" | "pattern" | "body"> = []
   const heredocs: Array<{ delimiter: string; quoted: boolean; tabs: boolean }> = []
@@ -670,7 +924,10 @@ function bashExpansion(
     | "parameter",
   quoted = false,
 ): BashExpansion | undefined {
-  if (depth >= MAX_SUBSTITUTION_DEPTH) return
+  if (depth >= MAX_SUBSTITUTION_DEPTH) {
+    depthLimitHit = true
+    return
+  }
   if (!mode && input[start] === "`") {
     let source = ""
     for (let index = start + 1; index < input.length; index++) {
