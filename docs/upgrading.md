@@ -1943,7 +1943,7 @@ also begin with a one-line reminder of that rule, ahead of the first result so t
 keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
 unchanged.
 
-**Affects:** people who read `WebSearch` tool output in logs, ACP editor users, who see the reminder in the tool card,
+**Affects:** people who read `WebSearch` tool output in logs, ACP editor users and VS Code users who expand a WebSearch card, who see the reminder,
 and plugin or SDK code that compares the result text exactly.
 
 **What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.

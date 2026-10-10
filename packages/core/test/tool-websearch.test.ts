@@ -233,6 +233,36 @@ describe("WebSearchTool registration", () => {
         { query: "python", providerID: undefined },
         { query: "python", providerID: undefined },
       ])
+
+      // The model sees only `content`, so the filter must hold there too.
+      const filtered = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-domains-content",
+          name: "WebSearch",
+          input: { query: "python", allowedDomains: ["python.org"], blockedDomains: ["blog.python.org"] },
+        },
+      })
+      const text = (filtered.content?.[0] as { text: string }).text
+      expect(text.startsWith(WebSearchTool.SOURCES_REMINDER)).toBe(true)
+      expect(text).toContain("https://docs.python.org/3/")
+      expect(text).not.toContain("blog.python.org")
+      expect(text).not.toContain("spam.example.com")
+
+      const empty = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-domains-empty",
+          name: "WebSearch",
+          input: { query: "python", allowedDomains: ["nowhere.test"] },
+        },
+      })
+      expect(empty.content).toEqual([{ type: "text", text: WebSearchTool.NO_RESULTS }])
+      expect((empty.output as { results: unknown[] }).results).toEqual([])
     }),
   )
 
