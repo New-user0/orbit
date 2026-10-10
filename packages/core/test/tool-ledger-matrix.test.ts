@@ -419,7 +419,10 @@ describe("Read repeat stubs and the freshness of the edit tools", () => {
               fs.utimes(destination, new Date(Date.now() + 5_000_000), new Date(Date.now() + 5_000_000)),
             )
           }
+          state.wholeReads.length = 0
           expect(errorType(yield* run("p", "Patch", move(name, "dest.txt")))).toBe(item.code)
+          // An unread destination is refused before any of its bytes are loaded.
+          if (!item.read) expect(state.wholeReads).not.toContain(destination)
           expect(yield* Effect.promise(() => Bun.file(destination).text())).toBe(item.change ? "other\n" : "keep\n")
           expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(tools[2].initial)
         }),

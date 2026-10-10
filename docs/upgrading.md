@@ -1400,7 +1400,7 @@ content, and a file that appeared or vanished in the meantime counts as changed.
 destination of a move included, and no path is written when one is stale. Only content counts: a file that was touched
 or rewritten with the same bytes is not stale, but a change of line endings alone or of a leading byte-order mark is.
 
-`write` now also waits for any other Orbit change to the same file, as `edit` already did. A file that cannot be read
+`write` now also waits for another `write` to the same file. A file that cannot be read
 after approval counts as changed. `edit.stale` differs from `file.stale`: the first means the file changed during the
 approval, the second that it changed since the session last read it. After either, read the file again and retry.
 
@@ -1409,6 +1409,11 @@ old lines as removed, not as `added`, and a move onto an existing file lists the
 `metadata.files` (and in the result) with its current text as removed. A move destination that already exists must now
 have been read by the session and unchanged since, as an `Add File` target must: otherwise the call fails with
 `file.unread` or `file.stale` and nothing is written.
+
+`patch` now also refuses, before anything is asked, a patch that reaches one file under two names: a `Move to` that
+names its own source (the same path, another letter case on a case-insensitive file system, or a link to it), or two
+hunks that name one file by different spellings. Such a patch used to delete the file. Rename a file's letter case with
+the shell instead. An `Add File` over an existing file now keeps that file's byte-order mark, as `write` does.
 
 **Affects:** code that reads a failed tool call's `error.type`, and anyone whose editor, formatter or script writes a file
 while a change to it is waiting for approval: the change now fails instead of overwriting.

@@ -559,6 +559,81 @@ describe("PatchTool", () => {
     )
   }
 
+  // One file under two names must never reach the write-then-remove move, nor be asked about as two files.
+  const sameFileRows = [
+    {
+      name: "Move to the same path",
+      needs: "plain",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n*** Move to: s.txt\n@@\n-src\n+SRC\n*** End Patch",
+    },
+    {
+      name: "Move to a case spelling of the source",
+      needs: "case",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n*** Move to: S.TXT\n@@\n-src\n+SRC\n*** End Patch",
+    },
+    {
+      name: "Move to a link to the source",
+      needs: "link",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n*** Move to: link.txt\n@@\n-src\n+SRC\n*** End Patch",
+    },
+    {
+      name: "Add File by one case spelling, Delete File by the other",
+      needs: "case",
+      patch: "*** Begin Patch\n*** Add File: S.TXT\n+new\n*** Delete File: s.txt\n*** End Patch",
+    },
+    {
+      name: "Update File by one case spelling, Delete File by the other",
+      needs: "case",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n@@\n-src\n+SRC\n*** Delete File: S.TXT\n*** End Patch",
+    },
+    {
+      name: "Add File by a link, Delete File by the real name",
+      needs: "link",
+      patch: "*** Begin Patch\n*** Add File: link.txt\n+new\n*** Delete File: s.txt\n*** End Patch",
+    },
+  ] as const
+  for (const row of sameFileRows) {
+    it.live(`refuses ${row.name}, asks nothing and leaves the file`, () =>
+      withTempTool((directory, registry) =>
+        Effect.gen(function* () {
+          const source = path.join(directory, "s.txt")
+          yield* Effect.promise(() => fs.writeFile(source, "src\n"))
+          if (row.needs === "case" && !(yield* exists(path.join(directory, "S.TXT")))) return
+          if (row.needs === "link") {
+            const linked = yield* Effect.promise(() =>
+              fs.symlink(source, path.join(directory, "link.txt")).then(
+                () => true,
+                () => false,
+              ),
+            )
+            if (!linked) return
+          }
+          const result = yield* executeTool(registry, call(row.patch))
+          expect(result.status).toBe("error")
+          if (result.status !== "error") return
+          expect(result.error?.message).toMatch(/same file|file being moved/)
+          expect(assertions.filter((input) => input.action === "Edit")).toEqual([])
+          expect(yield* Effect.promise(() => fs.readFile(source, "utf8"))).toBe("src\n")
+        }),
+      ),
+    )
+  }
+
+  it.live("Add File over an existing file keeps its BOM", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        const target = path.join(directory, "t.txt")
+        yield* Effect.promise(() => fs.writeFile(target, "﻿keep me\n"))
+        const result = yield* executeTool(
+          registry,
+          call("*** Begin Patch\n*** Add File: t.txt\n+keep me\n*** End Patch"),
+        )
+        expect(result.status).toBe("completed")
+        expect([...(yield* Effect.promise(() => fs.readFile(target))).subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+      }),
+    ),
+  )
+
   it.live("moves a file without changing its contents", () =>
     withTempTool((directory, registry) =>
       Effect.gen(function* () {

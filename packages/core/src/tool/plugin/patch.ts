@@ -6,6 +6,8 @@ import { ToolFailure } from "@orbit/ai"
 import { FileDiff } from "@orbit/schema/file-diff"
 import { Effect, Result, Schema } from "effect"
 import { Bom } from "@orbit/util/bom"
+import { FSUtil } from "@orbit/util/fs-util"
+import path from "path"
 import { Environment } from "../../environment/index.js"
 import { Formatter } from "../../formatter.js"
 import { FileMutation } from "../../file-mutation.js"
@@ -136,8 +138,31 @@ export const Plugin = {
               const updates = new Map<string, string>()
               const places: string[] = []
               // Each path's state when it was first read, before anyone is asked: absent, or the snapshot. Rechecked after approval.
-              const states = new Map<string, { display: string; snapshot: FileMutation.Snapshot | undefined }>()
-              const probe = (target: { readonly absolute: string }, display: string) =>
+              const states = new Map<
+                string,
+                { absolute: string; display: string; snapshot: FileMutation.Snapshot | undefined }
+              >()
+              // Which spelling first named each file, so a second spelling of one file is refused before anyone is asked.
+              const spellings = new Map<string, string>()
+              const identify = (target: { readonly absolute: string }, display: string) =>
+                Effect.try({
+                  try: () => fileIdentity(target.absolute),
+                  catch: (error) =>
+                    new ToolFailure({
+                      message: `patch verification failed: Failed to resolve ${display}: ${errorMessage(error)}`,
+                    }),
+                }).pipe(
+                  Effect.tap((id) =>
+                    spellings.has(id) && spellings.get(id) !== target.absolute
+                      ? Effect.fail(
+                          new ToolFailure({
+                            message: `patch verification failed: ${display} and ${spellings.get(id)} are the same file`,
+                          }),
+                        )
+                      : Effect.sync(() => spellings.set(id, target.absolute)),
+                  ),
+                )
+              const probe = (target: { readonly absolute: string }, display: string, id: string) =>
                 FileMutation.readSnapshot(environment.files, target.absolute).pipe(
                   Effect.catchTag("Environment.NotFound", () => Effect.undefined),
                   Effect.mapError(
@@ -148,7 +173,7 @@ export const Plugin = {
                   ),
                   Effect.tap((snapshot) =>
                     Effect.sync(() => {
-                      if (!states.has(target.absolute)) states.set(target.absolute, { display, snapshot })
+                      if (!states.has(id)) states.set(id, { absolute: target.absolute, display, snapshot })
                     }),
                   ),
                 )
@@ -167,16 +192,18 @@ export const Plugin = {
               for (const hunk of hunks) {
                 yield* Effect.gen(function* () {
                   const target = yield* resolveTarget(hunk.path)
+                  const id = yield* identify(target, hunk.path)
                   if (hunk.type === "add") {
                     yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
-                    const existing = yield* probe(target, hunk.path)
+                    const existing = yield* probe(target, hunk.path, id)
                     yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, existing)
                     const content =
                       hunk.contents.endsWith("\n") || hunk.contents === "" ? hunk.contents : `${hunk.contents}\n`
                     prepared.push({
                       ...hunk,
                       target,
-                      content,
+                      // Like Write, a replacing Add File keeps the BOM the file already has.
+                      content: existing?.bom ? Bom.join(Bom.split(content).text, true) : content,
                       // A file that already exists is replaced, so its text is what the approval shows as removed.
                       before: existing?.text ?? "",
                       after: Bom.split(content).text,
@@ -185,7 +212,7 @@ export const Plugin = {
                     return
                   }
                   // Refused before any content is loaded; the snapshot then tells a touched file from an edited one.
-                  const previous = hunk.type === "update" ? updates.get(target.absolute) : undefined
+                  const previous = hunk.type === "update" ? updates.get(id) : undefined
                   yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
                   const snapshot =
                     previous === undefined
@@ -203,7 +230,7 @@ export const Plugin = {
                       : undefined
                   if (snapshot) {
                     yield* ledger.assertFresh(context.sessionID, target.absolute, hunk.path, snapshot)
-                    if (!states.has(target.absolute)) states.set(target.absolute, { display: hunk.path, snapshot })
+                    if (!states.has(id)) states.set(id, { absolute: target.absolute, display: hunk.path, snapshot })
                   }
                   if (hunk.type === "delete") {
                     prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
@@ -216,11 +243,17 @@ export const Plugin = {
                     catch: (error) => new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                   })
                   const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
+                  const moveID = moveTarget && hunk.movePath ? yield* identify(moveTarget, hunk.movePath) : undefined
+                  // Writing the destination and then removing the source would delete a file moved onto itself.
+                  if (moveID !== undefined && moveID === id)
+                    return yield* new ToolFailure({
+                      message: `patch verification failed: ${hunk.movePath} is the file being moved (${hunk.path}); a move needs a different destination`,
+                    })
                   // The destination follows the same sequence as an Add File target: read, probe, freshness.
                   const replaced =
-                    moveTarget && hunk.movePath && moveTarget.absolute !== target.absolute
+                    moveTarget && hunk.movePath && moveID !== undefined
                       ? yield* ledger.assertRead(context.sessionID, moveTarget.absolute, hunk.movePath).pipe(
-                          Effect.andThen(probe(moveTarget, hunk.movePath)),
+                          Effect.andThen(probe(moveTarget, hunk.movePath, moveID)),
                           Effect.tap((existing) =>
                             ledger.assertFresh(context.sessionID, moveTarget.absolute, hunk.movePath!, existing),
                           ),
@@ -235,7 +268,7 @@ export const Plugin = {
                     moveTarget,
                     replaced: replaced?.text,
                   })
-                  if (!moveTarget) updates.set(target.absolute, Patch.joinBom(update.content, update.bom))
+                  if (!moveTarget) updates.set(id, Patch.joinBom(update.content, update.bom))
                 }).pipe(
                   Effect.mapError((error) =>
                     error instanceof ToolFailure
@@ -276,9 +309,9 @@ export const Plugin = {
 
               // Every path before the first write, so a stale one leaves no partial patch.
               yield* Effect.forEach(
-                states,
-                ([absolute, state]) =>
-                  FileMutation.assertUnchanged(environment.files, absolute, state.display, state.snapshot),
+                states.values(),
+                (state) =>
+                  FileMutation.assertUnchanged(environment.files, state.absolute, state.display, state.snapshot),
                 { discard: true },
               )
 
@@ -384,6 +417,16 @@ export const Plugin = {
     yield* ctx.session.hook("compaction", hook)
     yield* ctx.session.hook("generate", hook)
   }),
+}
+
+/**
+ * One name per file: links followed, the parent's real path for a file that does not exist yet, and case folded where
+ * the file system ignores case, so two spellings of a file never look like two files.
+ */
+function fileIdentity(absolute: string) {
+  const full = FSUtil.resolve(absolute)
+  const identity = path.join(FSUtil.resolve(path.dirname(full)), path.basename(full))
+  return process.platform === "win32" || process.platform === "darwin" ? identity.toLowerCase() : identity
 }
 
 function errorMessage(error: unknown) {
