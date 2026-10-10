@@ -1932,10 +1932,18 @@ pending, so the line is not drawn then, and `status` has no `waiting` value.
 read `model.provider`, and one that read `context.tokens` to read `context.used`.
 Set `status_line.colors` to `true` to see your script's colors.
 
-### Web search results end with their sources
+## Tools
 
-The `WebSearch` tool's description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page also end with a one-line reminder of that rule; an empty result does not. Domain filtering and the query sent to providers are unchanged.
+### Web search results start with a Sources reminder
 
-**Affects:** people who read `WebSearch` tool output in logs, and plugin or SDK code that compares it exactly.
+Before, the `WebSearch` tool returned only the results and its description did not mention how to cite them. Its
+description now asks the model to finish any reply that uses search results with a "Sources:" section of markdown
+links to the pages it used, and explains `allowedDomains` and `blockedDomains`. Results that contain at least one page
+also begin with a one-line reminder of that rule, ahead of the first result so that a result the session bounds (it
+keeps the head) still carries it; an empty result does not. Domain filtering and the query sent to providers are
+unchanged.
 
-**What to do:** nothing, unless you parse the result text: expect the reminder line after the last result.
+**Affects:** people who read `WebSearch` tool output in logs, ACP editor users, who see the reminder in the tool card,
+and plugin or SDK code that compares the result text exactly.
+
+**What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.

@@ -11,7 +11,14 @@ test("renders the default system prompt instructions", () => {
 
 test("names the tools the way the model is offered them, and not by their old names", () => {
   const prompt = SessionSystemPrompt.make(["Bash", "TaskOutput", "Write", "Agent", "TodoWrite", "EnterPlanMode"])
-  for (const old of ["shell_output", "the edit tool", "the subagent tool", "oldString", "replaceAll", "enter_plan_mode"])
+  for (const old of [
+    "shell_output",
+    "the edit tool",
+    "the subagent tool",
+    "oldString",
+    "replaceAll",
+    "enter_plan_mode",
+  ])
     expect(prompt).not.toContain(old)
   expect(prompt).toContain("TaskOutput")
   expect(prompt).toContain("`run_in_background`")
@@ -22,5 +29,5 @@ test("names the tools the way the model is offered them, and not by their old na
 })
 
 test("renders no web search guidance, because the tool can be removed after the prompt is rendered", () => {
-  expect(SessionSystemPrompt.make(["WebSearch", "Read"]).toLowerCase()).not.toContain("websearch")
+  expect(SessionSystemPrompt.make(["WebSearch", "Read"])).toBe(SessionSystemPrompt.make(["Read"]))
 })
