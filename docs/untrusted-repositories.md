@@ -138,7 +138,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   out of an untrusted project is not read until the folder it leads to has been approved. Proof:
   `test/file-access.test.ts`, `test/tool-edit.test.ts` (that link, with a trusted project as the control),
   `test/tool-write.test.ts`.
-- Language servers and formatters: `ProjectTrust.trustedAt(file)` per file in `Lsp.diagnostics`, `Lsp.request` and
+- Language servers and formatters: `ProjectTrust.trustedAt(file)` per file in `Lsp.diagnostics`, `Lsp.request`, `Lsp.send` and
   `Formatter.file`. It needs the Location's project trusted, and a file outside the project's folders also needs the
   folder that owns it (found as `Project.root` finds one, from the real folder of the file) to be trusted. It decides the
   spelling the tool and the spawned program act on and the real path, and the real path needs a trusted owner, and so does the
@@ -146,7 +146,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   link in an untrusted folder, with or without a marker, that leads into a trusted one is refused, as are a link that leads out,
   a dangling link, `..` and the Windows case of a name. A refused file is skipped. Proof: `test/lsp.test.ts`, `test/lsp-trust.test.ts`,
   `test/plugin/lsp-diagnostics.test.ts` (a Write by `~`, Git Bash, Cygwin, WSL, trailing dot and space and case
-  spellings), `test/formatter.test.ts`.
+  spellings), `test/formatter.test.ts`, and `test/tool-lsp.test.ts` (the `LSP` tool's new actions refused while the folder
+  is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
+  this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:

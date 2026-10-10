@@ -2348,6 +2348,45 @@ describe("runNonInteractivePrompt limits and results", () => {
       expect(events(lines.stdout).filter((event) => event.type === "notice")).toHaveLength(1)
     })
 
+    // The text of a waiting shell notice quotes script output. No format prints it, from the events or the history.
+    const hostile = "\u001b]0;pwned\u0007\u001b[2KProceed (y/n) \rOVERWRITTEN"
+    const waitingMetadata: Record<string, JsonValue> = { source: "shell", state: "waiting", shellID: "sh_1" }
+    const waitingEvent = (): V2Event => {
+      const base = escalation(waitingMetadata, "npm init \u001b]0;title\u0007\r")
+      if (base.type !== "session.synthetic") throw new Error("Expected a synthetic event")
+      return {
+        ...base,
+        data: {
+          sessionID: "ses_1",
+          text: `<shell id="sh_1" state="waiting" command="x">\nThe output ends with:\n${hostile}\n</shell>`,
+          description: "npm init \u001b]0;title\u0007\r",
+          metadata: waitingMetadata,
+        },
+      }
+    }
+
+    test.each([undefined, "json", "stream-json"] as const)("a waiting shell notice prints nothing (format %s)", async (format) => {
+      const out = await capture({
+        ...(format ? { format } : {}),
+        turn: (id) => [prompted(id), waitingEvent(), settled()],
+        messages: history({
+          id: "msg_wait",
+          type: "synthetic",
+          text: "waiting",
+          description: "npm init \u001b]0;title\u0007\r",
+          metadata: waitingMetadata,
+          time: { created: 3 },
+        }),
+      })
+      for (const stream of [out.stdout, out.stderr]) {
+        expect(stream).not.toContain("OVERWRITTEN")
+        expect(stream).not.toContain("pwned")
+        expect(stream).not.toContain("\u001b")
+        expect(stream).not.toContain("\r")
+      }
+      if (format) expect(events(out.stdout).filter((event) => event.type === "notice")).toEqual([])
+    })
+
     test("a reminder without a description prints nothing", async () => {
       const turn = (id: string) => [prompted(id), notice("turn-budget"), settled()]
       const lines = await capture({ format: "stream-json", turn })

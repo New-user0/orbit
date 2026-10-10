@@ -76,6 +76,8 @@ export type Command = {
   /** PowerShell: the parser's view of the command. */
   source?: PowerShellParse.Command
   origin: "top" | "substitution" | "subshell" | "body" | "condition" | "pipeline"
+  /** Set on a command that reads the output of the command at index `from` of `commands`, when both are plain commands. */
+  input?: { from: number; operator: "|" | "|&" }
   readOnly: boolean
 }
 
@@ -195,7 +197,7 @@ const SHELL_VARIABLES = new Set(
   ),
 )
 // A statement-level assignment to one of these changes how a later command finds or starts a program.
-const SENSITIVE = /^(?:PATH|PAGER|MANPAGER|LESSOPEN|LESSCLOSE|LD_.*|DYLD_.*|BASH_ENV|ENV|CDPATH|SHELL|EDITOR|VISUAL|PROMPT_COMMAND|NODE_OPTIONS|BUN_.*)$/i
+const SENSITIVE = /^(?:PATH|PAGER|MANPAGER|LESSOPEN|LESSCLOSE|LD_.*|DYLD_.*|RIPGREP_CONFIG_PATH|BASH_ENV|ENV|CDPATH|SHELL|EDITOR|VISUAL|PROMPT_COMMAND|NODE_OPTIONS|BUN_.*)$/i
 const DIRECTORY = new Set(["cd", "chdir", "pushd", "popd"])
 
 type Scope = Map<string, string | null>
@@ -231,6 +233,16 @@ function maskBraces(text: string) {
     out += char === "{" && state !== "none" ? "_" : char
   }
   return out
+}
+
+// A command, possibly negated or redirected: the shapes whose last command is the whole pipeline element.
+function plainCommand(node: Node): boolean {
+  if (node.type === "command") return true
+  const named = kids(node).filter((child) => child.isNamed && child.type !== "comment")
+  if (node.type === "negated_command") return named.length === 1 && plainCommand(named[0])
+  if (node.type !== "redirected_statement") return false
+  const body = named.filter((child) => !["file_redirect", "herestring_redirect", "heredoc_redirect"].includes(child.type))
+  return body.length === 1 && plainCommand(body[0])
 }
 
 function analyzeBash(command: string, ctx: Context, parse?: Parse): Analysis {
@@ -290,7 +302,9 @@ class BashWalk {
     this.feature.directoryChange = this.commands.some((command) => DIRECTORY.has(command.head))
     this.feature.alias = this.commands.some((command) => command.head === "alias")
     const reads: string[] = []
-    const verdicts = this.commands.map((command) => ShellReadOnly.bash(command, ctx))
+    const verdicts = this.commands.map((command) =>
+      ShellReadOnly.bash(command, ctx, command.input?.operator === "|" ? this.commands[command.input.from] : undefined),
+    )
     verdicts.forEach((verdict, index) => {
       this.commands[index].readOnly = verdict.ok
     })
@@ -384,9 +398,18 @@ class BashWalk {
 
   pipeline(node: Node, scope: Scope): Walked {
     let last: Command | undefined
+    let previous: { command: Command; plain: boolean } | undefined
+    let operator: "|" | "|&" | undefined
     for (const child of kids(node)) {
+      if (child.type === "|" || child.type === "|&") operator = child.type
       if (!child.isNamed || child.type === "comment") continue
-      last = this.node(child, new Map(scope), "pipeline").last ?? last
+      const walked = this.node(child, new Map(scope), "pipeline")
+      last = walked.last ?? last
+      const plain = walked.last !== undefined && plainCommand(child)
+      // Only a plain command that follows a plain command has an input to speak of; any other shape leaves it unset.
+      if (plain && previous?.plain && operator) walked.last!.input = { from: this.commands.indexOf(previous.command), operator }
+      previous = walked.last ? { command: walked.last, plain } : undefined
+      operator = undefined
     }
     return { last }
   }

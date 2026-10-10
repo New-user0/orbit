@@ -1,6 +1,8 @@
 export * as ShellResult from "./result.js"
 
 import type { Shell } from "@orbit/schema/shell"
+import { Duration } from "effect"
+import { ShellStall } from "./stall.js"
 
 export type Result = {
   info: Shell.Info
@@ -38,6 +40,15 @@ export function deadlineNotice(budget: number) {
   return `The command was still running after ${budget} ms, so it keeps running in the background instead of being stopped. Use TaskStop with this shell ID to stop it.`
 }
 
+/** The text of a notice that a background command seems to wait for an answer. Holds the output tail and the shell ID. */
+export function stallNotice(input: { shellID: string; tail: string }) {
+  return [
+    `The command has printed nothing new for ${Duration.toSeconds(ShellStall.QUIET)} seconds and its last line looks like a question. Commands run with no input, so it cannot be answered.`,
+    `The output ends with:\n${input.tail}`,
+    `It is probably blocked on that prompt. Stop it with TaskStop and shell ID ${input.shellID}, then run it again with the answer supplied in the command (for example piped in) or with its non-interactive option.`,
+  ].join("\n\n")
+}
+
 export function metadata(output: Output) {
   return {
     truncated: output.truncated,
@@ -51,7 +62,7 @@ export function notification(input: {
   shellID: string
   jobID?: string
   command: string
-  state: "completed" | "cancelled" | "error"
+  state: "completed" | "cancelled" | "error" | "waiting"
   text: string
   output?: Output
 }) {

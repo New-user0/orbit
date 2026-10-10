@@ -29,7 +29,7 @@ const declared: Record<string, readonly string[]> = {
   ],
   Write: ["file_path", "content", "path", "filePath"],
   NotebookEdit: ["notebook_path", "mode", "cellId", "index", "source", "cellType", "path"],
-  LSP: ["action", "path", "line", "character"],
+  LSP: ["action", "path", "line", "character", "query"],
   Glob: ["pattern", "path", "hidden", "limit"],
   Grep: [
     "pattern",
