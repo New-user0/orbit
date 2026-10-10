@@ -182,6 +182,17 @@ export const Effective = Schema.Struct({
         "Which plugins organization-managed settings allow or block, as selectors that match a package name, an absolute path or a plugin ID. An empty object means no restriction. Absent from a server that predates it, which clients read as no external plugin may load.",
     }),
   ),
+  mcp: Schema.optionalKey(
+    Schema.Struct({
+      managed_only: Schema.Boolean.annotate({
+        description:
+          "Whether organization-managed settings run only the MCP servers they define. When true, adding a server is refused and servers from every other source are ignored.",
+      }),
+    }).annotate({
+      description:
+        "What organization-managed settings say about MCP servers. Absent from a server that predates it, which clients read as unknown.",
+    }),
+  ),
 }).annotate({
   identifier: "Config.Effective",
   description:

@@ -195,6 +195,53 @@ describe("ManagedSettings.read", () => {
     }),
   )
 
+  it.live("reads managed_only, lets a later drop-in override it and keeps its siblings when it is bad", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { managed: { mcp: { managed_only: true, deny: ["a"] } } },
+        "managed-settings.d/10-off.json": { managed: { mcp: { managed_only: false } } },
+      })
+      const merged = yield* read(tmp.path)
+      expect(merged.restrictions.mcp).toEqual({ managed_only: false, deny: ["a"] })
+      // The key is known, so it is not reported as an unknown one.
+      expect(merged.diagnostics).toEqual([])
+
+      const on = yield* tmpdirScoped()
+      yield* write(on.path, { "managed-settings.json": { managed: { mcp: { managed_only: true } } } })
+      expect((yield* read(on.path)).restrictions.mcp).toEqual({ managed_only: true })
+
+      const bad = yield* tmpdirScoped()
+      yield* write(bad.path, {
+        "managed-settings.json": { managed: { mcp: { managed_only: "yes", deny: ["a"] } } },
+      })
+      const snapshot = yield* read(bad.path)
+      expect(snapshot.restrictions.mcp).toEqual({ deny: ["a"] })
+      expect(snapshot.diagnostics.map((item) => [item.path, item.kind])).toEqual([
+        ["$.managed.mcp.managed_only", "invalid"],
+      ])
+    }),
+  )
+
+  it.live("hands the managed servers and their timeout to ManagedPolicy.current().mcp", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(path.join(tmp.path, "managed"), {
+        "managed-settings.json": {
+          managed: { mcp: { managed_only: true } },
+          mcp: { timeout: { startup: 7 }, servers: { org: { type: "local", command: ["node", "org.js"] } } },
+        },
+      })
+      yield* Effect.gen(function* () {
+        yield* Config.Service
+        const current = (yield* ManagedPolicy.Service).current()
+        expect(current.restrictions.mcp).toEqual({ managed_only: true })
+        expect(Object.keys(current.mcp.servers)).toEqual(["org"])
+        expect(current.mcp.timeout?.startup).toBe(7)
+      }).pipe(Effect.provide(layers(tmp.path)))
+    }),
+  )
+
   it.live("reads allow_managed_domains_only, lets a later drop-in override it and keeps its siblings when it is bad", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

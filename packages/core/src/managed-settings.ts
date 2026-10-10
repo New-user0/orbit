@@ -66,6 +66,8 @@ const lists = {
 
 // The one boolean in `managed.network`; the other keys there are lists of hosts.
 const domainsOnly = "allow_managed_domains_only"
+// The one boolean in `managed.mcp`; the other keys there are lists of selectors.
+const mcpOnly = "managed_only"
 
 interface Loaded {
   readonly present: boolean
@@ -322,13 +324,14 @@ function cleanRestrictions(raw: unknown) {
         return []
       })
     })
-    const flag = section[domainsOnly]
-    if (group !== "network" || flag === undefined) {
+    const booleanKey = group === "network" ? domainsOnly : group === "mcp" ? mcpOnly : undefined
+    const flag = booleanKey === undefined ? undefined : section[booleanKey]
+    if (booleanKey === undefined || flag === undefined) {
       value[group] = kept
       return
     }
-    if (typeof flag !== "boolean") bad(`${group}.${domainsOnly}`, "ignored a value that is not a boolean")
-    value[group] = typeof flag === "boolean" ? { ...kept, [domainsOnly]: flag } : kept
+    if (typeof flag !== "boolean") bad(`${group}.${booleanKey}`, "ignored a value that is not a boolean")
+    value[group] = typeof flag === "boolean" ? { ...kept, [booleanKey]: flag } : kept
   })
   const unknown = (at: string) =>
     problems.push({ kind: "unsupported", path: `$.managed.${at}`, message: "ignored an unknown key" })
@@ -340,7 +343,7 @@ function cleanRestrictions(raw: unknown) {
     const section = raw[group]
     if (!isRecord(section)) return
     Object.keys(section)
-      .filter((key) => !(keys as readonly string[]).includes(key) && !(group === "network" && key === domainsOnly))
+      .filter((key) => !(keys as readonly string[]).includes(key) && !(group === "network" && key === domainsOnly) && !(group === "mcp" && key === mcpOnly))
       .forEach((key) => unknown(`${group}.${key}`))
   })
   if (raw.env !== undefined)
@@ -437,6 +440,10 @@ export const layer = (options?: Options) =>
             ),
           ),
           restrictions: snapshot.restrictions,
+          mcp: {
+            servers: snapshot.info.mcp?.servers ?? {},
+            ...(snapshot.info.mcp?.timeout === undefined ? {} : { timeout: snapshot.info.mcp.timeout }),
+          },
           ...(snapshot.restrictions.organization === undefined
             ? {}
             : { organization: snapshot.restrictions.organization }),

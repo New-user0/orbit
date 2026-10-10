@@ -153,7 +153,7 @@ describe("a file", () => {
     const elsewhere = path.join(root, "elsewhere")
     await Bun.write(path.join(elsewhere, "s.json"), '{"shell":"{file:./note.txt}"}')
     const built = await build([path.join(elsewhere, "s.json")])
-    expect(built).toEqual({ file: await fs.realpath(path.join(elsewhere, "s.json")) })
+    expect(built).toEqual({ file: await fs.realpath(path.join(elsewhere, "s.json")), named: false })
     expect(built?.content).toBeUndefined()
   })
 
@@ -233,7 +233,7 @@ describe("a file", () => {
   test("an empty or blank file is an empty document that the server has nothing to load for", async () => {
     for (const text of ["", " \n\t "]) {
       await Bun.write(path.join(typed, "blank.json"), text)
-      expect(await build(["blank.json"])).toEqual({ file: undefined })
+      expect(await build(["blank.json"])).toEqual({ file: undefined, named: false })
     }
   })
 
