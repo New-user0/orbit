@@ -1225,6 +1225,19 @@ search.
 
 **What to do:** answer the question, or allow the path for Read in your own rules or the agent's.
 
+### Shell strings written as $'...' are read the way bash reads them
+
+The command scanner decoded some `$'...'` escapes differently from bash, so a command could hide behind one. It now
+ends `$'\c'` at its quote, keeps the character after `\c\` (`$'\c\/'` is 0x1c then `/`), keeps one byte of an octal
+escape (`\456` is `.`), and refuses a heredoc delimiter written with an escape it cannot decode (`\x{..}`, a NUL, a
+byte or code point of 0x80 or more written with `\x`, `\u`, `\U` or octal, a `\c` before a non-ASCII character, a
+code point above U+10FFFF). Bash writes a raw byte for the `\x`, octal and `\c` forms, and bytes that depend on the locale for `\u` and `\U`, so
+the scanner treats the word as dynamic. Such a command is now seen as two commands, or is refused.
+
+**Affects:** people whose shell commands use these escapes; an approval may ask where it did not before.
+
+**What to do:** Nothing; write the character itself instead of the escape if a command is refused.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
