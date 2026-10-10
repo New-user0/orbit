@@ -1382,7 +1382,7 @@ export function make(options: ClientOptions) {
             query: { location: input["location"] },
             body: { config: input["config"] },
             successStatus: 204,
-            declaredStatuses: [400, 401],
+            declaredStatuses: [400, 401, 403],
             empty: true,
           },
           requestOptions,

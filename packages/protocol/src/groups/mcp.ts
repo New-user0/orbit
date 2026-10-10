@@ -2,7 +2,7 @@ import { Mcp } from "@orbit/schema/mcp"
 import { Location } from "@orbit/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { McpServerNotFoundError } from "../errors.js"
+import { ForbiddenError, McpServerNotFoundError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const McpGroup = HttpApiGroup.make("server.mcp")
@@ -28,6 +28,7 @@ export const McpGroup = HttpApiGroup.make("server.mcp")
       // represent a top-level union payload.
       payload: Schema.Struct({ config: Mcp.ServerConfig }),
       success: HttpApiSchema.NoContent,
+      error: ForbiddenError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

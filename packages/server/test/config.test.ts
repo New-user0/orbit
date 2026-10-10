@@ -240,7 +240,7 @@ const effective = (
       const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
       expect(response.status).toBe(200)
       const body: unknown = yield* Effect.promise(() => response.json())
-      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility", "permissions"])
+      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility", "permissions", "plugins"])
       return Schema.decodeUnknownSync(Config.Effective)(body)
     }),
   )
@@ -296,6 +296,60 @@ it.live("reports what managed settings leave open about permission prompts", () 
       always: true,
     })
   }),
+)
+
+it.live("reports the plugin lists managed settings set, and an empty object when there are none", () =>
+  Effect.gen(function* () {
+    expect((yield* effective()).plugins).toEqual({})
+    expect((yield* effective({ managed: { managed: { plugins: { block: [] } } } })).plugins).toEqual({ block: [] })
+    // The marketplaces list stays on the server for the extensibility work.
+    expect(
+      (yield* effective({
+        managed: { managed: { plugins: { allow: ["@corp/x"], block: ["acme.*"], marketplaces: ["https://m.example"] } } },
+      })).plugins,
+    ).toEqual({ allow: ["@corp/x"], block: ["acme.*"] })
+    // A project's own file cannot set them.
+    expect((yield* effective({ project: { managed: { plugins: { allow: [] } } } })).plugins).toEqual({})
+  }),
+)
+
+it.live("refuses with a 403 to add an MCP server that managed settings block, and stores nothing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped("orbit-mcp-blocked-")
+      const global = path.join(tmp.path, "global")
+      const project = path.join(tmp.path, "project")
+      const managed = path.join(tmp.path, "managed")
+      yield* Effect.promise(() =>
+        Promise.all([global, project, managed].map((directory) => fs.mkdir(directory, { recursive: true }))),
+      )
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          path.join(managed, "managed-settings.json"),
+          JSON.stringify({ managed: { mcp: { deny: ["blocked"], allow: ["blocked", "fine"] } } }),
+        ),
+      )
+      yield* environment({ ORBIT_TEST_HOME: path.join(tmp.path, "home") })
+      const server = yield* startServer(global, { managed })
+      const put = (name: string) => {
+        const url = new URL(`/api/experimental/mcp/${name}`, server.base)
+        url.searchParams.set("location[directory]", project)
+        return Effect.promise(() =>
+          fetch(url, {
+            method: "PUT",
+            headers: { ...server.headers, "content-type": "application/json" },
+            body: JSON.stringify({ config: { type: "local", command: ["unused"], disabled: true } }),
+          }),
+        )
+      }
+      for (const name of ["blocked", "stranger"]) {
+        const response = yield* put(name)
+        expect(response.status).toBe(403)
+        expect(yield* Effect.promise(() => response.json())).toMatchObject({ _tag: "ForbiddenError" })
+      }
+      expect((yield* put("fine")).status).toBe(204)
+    }),
+  ),
 )
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -12,6 +12,8 @@ import { ChildProcess } from "effect/unstable/process"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
 import { Location } from "../../location.js"
+import { ManagedNetwork } from "../../managed-network.js"
+import { ManagedPolicy } from "../../managed-policy.js"
 import { Permission } from "../../permission.js"
 import { ProjectTrust } from "../../project-trust.js"
 import { Session } from "../../session.js"
@@ -56,6 +58,7 @@ export const Plugin = define({
       return [{ commands: sanitized.value, ...trust }]
     })
     const location = yield* Location.Service
+    const managed = yield* ManagedPolicy.Service
     const processes = yield* AppProcess.Service
     const shell = yield* ShellSelect.Service
     const permission = yield* Permission.Service
@@ -121,7 +124,7 @@ export const Plugin = define({
                   command.template,
                   input.prompt.text,
                   input.sessionID,
-                  { config, location, permission, processes, shell },
+                  { config, location, managed, permission, processes, shell },
                   { name, trusted: document.trusted, folder: document.folder },
                 )
                 if (subagent ?? commandAgent?.mode === "subagent") {
@@ -185,6 +188,7 @@ function isCommandSource(entries: Entry[], file: string) {
 type Services = {
   readonly config: Config.Interface
   readonly location: Location.Info
+  readonly managed: ManagedPolicy.Interface
   readonly permission: Permission.Interface
   readonly processes: AppProcess.Interface
   readonly shell: ShellSelect.Interface
@@ -271,8 +275,9 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
         })
         const args = ShellSelect.args(shell, source)
+        const network = services.managed.current().restrictions.network
         const sandboxed = ShellSandbox.launch({
-          settings: sandbox ?? {},
+          settings: yield* ManagedNetwork.sandboxSettings(sandbox, network),
           shell,
           args,
           cwd,

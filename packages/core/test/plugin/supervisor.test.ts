@@ -1,5 +1,6 @@
+import path from "node:path"
 import { describe, expect } from "bun:test"
-import { Deferred, Duration, Effect, Layer, LayerMap, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, LayerMap, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { define } from "@orbit/plugin/effect/plugin"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -11,6 +12,9 @@ import { Instance } from "@orbit/core/instance"
 import { LocationServiceMap } from "@orbit/core/location-services"
 import { Location } from "@orbit/core/location"
 import { Plugin } from "@orbit/core/plugin"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { ManagedSettings } from "@orbit/core/managed-settings"
+import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Database } from "../../src/database/database"
@@ -45,6 +49,16 @@ const sourceLayer = Layer.succeed(
   }),
 )
 
+// One policy for the test and every location it builds, so a restriction set here reaches the supervisor.
+const sharedPolicy = Effect.runSync(
+  Layer.build(ManagedPolicy.layer).pipe(
+    Effect.map((context) => Context.get(context, ManagedPolicy.Service)),
+    Effect.scoped,
+  ),
+)
+
+const policyLayer = Layer.succeed(ManagedPolicy.Service, sharedPolicy)
+
 const instances = Layer.effect(
   LocationServiceMap.Service,
   Effect.gen(function* () {
@@ -57,6 +71,9 @@ const instances = Layer.effect(
       Global.node.replace(tempGlobalLayer),
       offlineModels,
       ConfigPluginSource.node.replace(sourceLayer),
+      ManagedPolicy.node.replace(policyLayer),
+      // The real one would write the machine's own managed settings over the policy this test sets.
+      ManagedSettings.node.replace(ManagedSettings.emptyLayer),
       LocationServiceMap.node.replace(Layer.succeed(LocationServiceMap.Service, map)),
       Instance.node.replace(
         Layer.succeed(Instance.Service, {
@@ -69,10 +86,11 @@ const instances = Layer.effect(
 )
 
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node]), [
+  AppNodeBuilder.build(LayerNode.group([Database.node, Bus.node, SdkPlugins.node, ManagedPolicy.node, LocationServiceMap.node]), [
     Global.node.replace(tempGlobalLayer),
     offlineModels,
     LocationServiceMap.node.replace(instances),
+    ManagedPolicy.node.replace(policyLayer),
   ]),
 )
 
@@ -257,4 +275,163 @@ describe("PluginSupervisor", () => {
       expect(source.activations).toBe(2)
     }),
   )
+
+  describe("under the organization's plugin lists", () => {
+    // Each plugin writes one file when its module is evaluated and another when its setup runs.
+    const plugin = (directory: string, name: string, pluginID: string) =>
+      Effect.promise(async () => {
+        const root = path.join(directory, name)
+        await Bun.write(
+          path.join(root, "index.ts"),
+          [
+            `import { writeFileSync } from "node:fs"`,
+            `writeFileSync(${JSON.stringify(path.join(directory, `${name}.top`))}, "x")`,
+            `export default { id: ${JSON.stringify(pluginID)}, async setup() { writeFileSync(${JSON.stringify(path.join(directory, `${name}.setup`))}, "x") } }`,
+          ].join("\n"),
+        )
+        return root
+      })
+    const exists = (file: string) => Effect.promise(() => Bun.file(file).exists())
+    const inventory = (restrictions: ConfigManaged.Restrictions, operations: ConfigPluginSource.Operation[]) =>
+      Effect.gen(function* () {
+        const policy = sharedPolicy
+        yield* policy.set("file", { statements: [], restrictions })
+        source.operations = operations
+        const sdk = yield* SdkPlugins.Service
+        yield* sdk.register(greeter("host-greet", "host.plugin"))
+        const directory = yield* tmpdirScoped()
+        const locations = yield* LocationServiceMap.Service
+        return yield* Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          yield* plugins.awaitActivation
+          return yield* plugins.list()
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+        )
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            source.operations = []
+          }),
+        ),
+      )
+    const state = (list: readonly Plugin.Info[], id: string) =>
+      list.find((item) => item.id === id)?.state
+    const failedTargets = (list: readonly Plugin.Info[]) =>
+      list.flatMap((item) => (item.state.status === "failed" && item.source?.type === "local" ? [item.source.path] : []))
+
+    it.live("never loads a blocked or unlisted local target, and loads the allowed one", () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const good = yield* plugin(tmp, "good", "corp.good")
+        const blocked = yield* plugin(tmp, "blocked", "corp.blocked")
+        const unlisted = yield* plugin(tmp, "unlisted", "corp.unlisted")
+        const add = (target: string) => ({ type: "add" as const, target, options: {} })
+        const list = yield* inventory({ plugins: { allow: [good, blocked], block: [blocked] } }, [
+          add(good),
+          add(blocked),
+          add(unlisted),
+        ])
+        expect(state(list, "corp.good")).toEqual({ status: "active" })
+        expect(yield* exists(path.join(tmp, "good.top"))).toBe(true)
+        // The module is never evaluated, so top-level code does not run, and the failure says why.
+        for (const name of ["blocked", "unlisted"]) {
+          expect(yield* exists(path.join(tmp, `${name}.top`))).toBe(false)
+          expect(yield* exists(path.join(tmp, `${name}.setup`))).toBe(false)
+        }
+        expect(failedTargets(list).toSorted()).toEqual([blocked, unlisted].toSorted())
+        expect(list.filter((item) => item.state.status === "failed" && "error" in item.state)).toSatisfy((failed) =>
+          failed.every((item) => item.state.status === "failed" && item.state.error === "Blocked by managed settings"),
+        )
+      }),
+    )
+
+    it.live("names the organization in the failure", () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const blocked = yield* plugin(tmp, "blocked", "corp.blocked")
+        const policy = sharedPolicy
+        yield* policy.set("file", { statements: [], restrictions: { plugins: { block: [blocked] } }, organization: "Acme" })
+        source.operations = [{ type: "add", target: blocked, options: {} }]
+        const locations = yield* LocationServiceMap.Service
+        const list = yield* Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          yield* plugins.awaitActivation
+          return yield* plugins.list()
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(tmp) }))),
+          Effect.ensuring(Effect.sync(() => (source.operations = []))),
+        )
+        expect(list.find((item) => item.source?.type === "local")?.state).toMatchObject({
+          status: "failed",
+          error: "Blocked by Acme's managed settings",
+        })
+      }),
+    )
+
+    it.live("drops a plugin whose ID is blocked after it loads: setup never runs", () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const bad = yield* plugin(tmp, "bad", "acme.bad")
+        const fine = yield* plugin(tmp, "fine", "corp.fine")
+        const add = (target: string) => ({ type: "add" as const, target, options: {} })
+        const list = yield* inventory({ plugins: { block: ["acme.*"] } }, [add(bad), add(fine)])
+        expect(state(list, "corp.fine")).toEqual({ status: "active" })
+        expect(list.some((item) => item.id === "acme.bad" && item.state.status === "active")).toBe(false)
+        expect(failedTargets(list)).toEqual([bad])
+        // The module was imported, which is why blocking the target is what stops code from running at all.
+        expect(yield* exists(path.join(tmp, "bad.top"))).toBe(true)
+        expect(yield* exists(path.join(tmp, "bad.setup"))).toBe(false)
+        expect(yield* exists(path.join(tmp, "fine.setup"))).toBe(true)
+      }),
+    )
+
+    for (const [name, plugins] of [
+      ["block everything", { block: ["*"] }],
+      ["an empty allow list", { allow: [] }],
+    ] as const) {
+      it.live(`keeps the built-in and host plugins active under ${name}`, () =>
+        Effect.gen(function* () {
+          const tmp = (yield* tmpdirScoped()).path
+          const external = yield* plugin(tmp, "external", "corp.external")
+          const list = yield* inventory({ plugins }, [{ type: "add", target: external, options: {} }])
+          expect(state(list, "orbit.config.policy")).toEqual({ status: "active" })
+          expect(state(list, "host.plugin")).toEqual({ status: "active" })
+          expect(yield* exists(path.join(tmp, "external.top"))).toBe(false)
+          expect(failedTargets(list)).toEqual([external])
+        }),
+      )
+    }
+
+    it.live("holds a plugin the managed document names to the allow list too", () =>
+      Effect.gen(function* () {
+        // The operation is the same wherever the document came from, so a managed document gets no exemption.
+        const tmp = (yield* tmpdirScoped()).path
+        const named = yield* plugin(tmp, "named", "corp.named")
+        const list = yield* inventory({ plugins: { allow: ["@other/pkg"] } }, [{ type: "add", target: named, options: {} }])
+        expect(yield* exists(path.join(tmp, "named.top"))).toBe(false)
+        expect(failedTargets(list)).toEqual([named])
+      }),
+    )
+
+    it.live("never installs a package that is blocked or off the allow list", () =>
+      Effect.gen(function* () {
+        // A registry package would be installed by modules.load; it is reported as failed without that.
+        const list = yield* inventory({ plugins: { allow: ["@corp/ok"], block: ["@corp/bad"] } }, [
+          { type: "add", target: "@corp/bad@^1", options: {} },
+          { type: "add", target: "@elsewhere/x", options: {} },
+          { type: "add", target: "foo@npm:bar", options: {} },
+        ])
+        const failed = list.flatMap((item) =>
+          item.state.status === "failed" && item.source?.type === "package" ? [item.source.target] : [],
+        )
+        expect(failed.toSorted()).toEqual(["@corp/bad@^1", "@elsewhere/x", "foo@npm:bar"])
+        for (const item of list)
+          if (item.source?.type === "package" && item.state.status === "failed")
+            expect(item.state.error).toBe("Blocked by managed settings")
+      }),
+    )
+  })
 })

@@ -45,9 +45,15 @@ export const Restrictions = Schema.Struct({
   network: Schema.Struct({
     allowed_domains: Selectors.pipe(optional),
     denied_domains: Selectors.pipe(optional),
+    allow_managed_domains_only: Schema.Boolean.pipe(optional).annotate({
+      description: "Let shell commands reach only the domains that managed settings allow.",
+    }),
   })
     .pipe(optional)
-    .annotate({ description: "Which domains tools may reach." }),
+    .annotate({
+      description:
+        "Which domains tools may reach. `denied_domains` binds every tool that fetches a URL. `allowed_domains` and `allow_managed_domains_only` bind shell commands in the sandbox.",
+    }),
 })
 export type Restrictions = typeof Restrictions.Type
 

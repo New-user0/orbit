@@ -195,6 +195,73 @@ describe("ManagedSettings.read", () => {
     }),
   )
 
+  it.live("reads allow_managed_domains_only, lets a later drop-in override it and keeps its siblings when it is bad", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { managed: { network: { allow_managed_domains_only: true, denied_domains: ["a.example"] } } },
+        "managed-settings.d/10-off.json": { managed: { network: { allow_managed_domains_only: false } } },
+      })
+      const merged = yield* read(tmp.path)
+      expect(merged.restrictions.network).toEqual({ allow_managed_domains_only: false, denied_domains: ["a.example"] })
+      // The key is known, so it is not reported as an unknown one.
+      expect(merged.diagnostics).toEqual([])
+
+      const bad = yield* tmpdirScoped()
+      yield* write(bad.path, {
+        "managed-settings.json": { managed: { network: { allow_managed_domains_only: "yes", denied_domains: ["a.example"] } } },
+      })
+      const snapshot = yield* read(bad.path)
+      expect(snapshot.restrictions.network).toEqual({ denied_domains: ["a.example"] })
+      expect(snapshot.diagnostics.map((item) => [item.path, item.kind])).toEqual([
+        ["$.managed.network.allow_managed_domains_only", "invalid"],
+      ])
+    }),
+  )
+
+  it.live("reaches ManagedPolicy.current().restrictions.network", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(path.join(tmp.path, "managed"), {
+        "managed-settings.json": { managed: { network: { allow_managed_domains_only: true } } },
+      })
+      yield* Effect.gen(function* () {
+        yield* Config.Service
+        expect((yield* ManagedPolicy.Service).current().restrictions.network).toEqual({ allow_managed_domains_only: true })
+      }).pipe(Effect.provide(layers(tmp.path)))
+    }),
+  )
+
+  it.live("drops each domain pattern that is not a host or a *.domain, and normalizes the rest", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const rejected = ["*", "*.com", "https://x.com", "x.com:443", "x.com/path", "*x.com", "a.*.com", "", ".x.com", "x y.com"]
+      yield* write(tmp.path, {
+        "managed-settings.json": {
+          managed: {
+            network: {
+              denied_domains: [...rejected, "Example.COM.", "intranet", "*.Corp.Example", "bücher.example", "127.1"],
+              allowed_domains: ["ok.example", "bad entry"],
+            },
+          },
+        },
+      })
+      const snapshot = yield* read(tmp.path)
+      expect(snapshot.restrictions.network).toEqual({
+        denied_domains: ["example.com", "intranet", "*.corp.example", "xn--bcher-kva.example", "127.0.0.1"],
+        allowed_domains: ["ok.example"],
+      })
+      // One diagnostic for each bad entry, and no other.
+      expect(snapshot.diagnostics.map((item) => item.path).toSorted()).toEqual(
+        [...rejected.keys()]
+          .map((index) => `$.managed.network.denied_domains.${index}`)
+          .concat("$.managed.network.allowed_domains.1")
+          .toSorted(),
+      )
+      expect(snapshot.diagnostics.every((item) => item.kind === "invalid")).toBe(true)
+    }),
+  )
+
   it.live("yields an empty snapshot for a missing directory and does not create it", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

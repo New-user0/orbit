@@ -12,6 +12,10 @@ import { Permission } from "@orbit/core/permission"
 import { PermissionTable } from "@orbit/core/permission/sql"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { ManagedNetwork } from "@orbit/core/managed-network"
+import { PermissionWeb } from "@orbit/core/permission/web"
+import { CodeModeWeb } from "@orbit/core/codemode/web"
+import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { ConfigPermissionExpand } from "@orbit/core/config/expand-permissions"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
@@ -1619,4 +1623,141 @@ describe("Permission under managed settings", () => {
       }),
     )
   })
+})
+
+// denied_domains binds every URL-bearing action and beats every source of an allow. allowed_domains and
+// allow_managed_domains_only are for the shell sandbox and never deny a fetch.
+describe("Permission under managed network settings", () => {
+  const network = (state: NonNullable<ConfigManaged.Restrictions["network"]>, organization?: string) =>
+    Effect.gen(function* () {
+      const policy = yield* ManagedPolicy.Service
+      yield* policy.set("file", {
+        statements: [],
+        restrictions: { network: state },
+        ...(organization === undefined ? {} : { organization }),
+      })
+    })
+  const fetchOf = (url: string, method = "GET") => {
+    const web = PermissionWeb.request(url, method)
+    return assertion({ action: "WebFetch", resources: web.resources, aliases: web.aliases, save: web.save })
+  }
+
+  // The sources that could allow the fetch; none of them may outrank the deny.
+  const allowers = {
+    "no allow at all": () => Effect.void,
+    "a config allow rule": () => setRules([{ action: "WebFetch", resource: "*", effect: "allow" }]),
+    "a saved grant": () =>
+      Effect.gen(function* () {
+        const saved = yield* PermissionSaved.Service
+        yield* saved.add({ projectID: Project.ID.global, action: "WebFetch", resources: ["*"] })
+      }),
+    "a plugin hook that sets allow": () =>
+      Effect.gen(function* () {
+        const hooks = yield* PluginHooks.Service
+        yield* hooks.register("permission", "evaluate", (event) =>
+          Effect.sync(() => {
+            event.effect = "allow"
+          }),
+        )
+      }),
+  }
+  for (const [name, arrange] of Object.entries(allowers)) {
+    it.effect(`denies a fetch of a denied host with ${name}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        yield* arrange()
+        yield* network({ denied_domains: ["evil.example"] }, "Acme")
+        const service = yield* Permission.Service
+        expect(yield* service.ask(fetchOf("https://evil.example/x"))).toMatchObject({ effect: "deny" })
+        const blocked = yield* service.assert(fetchOf("https://evil.example/x")).pipe(Effect.flip)
+        expect(blocked).toBeInstanceOf(Permission.BlockedError)
+        expect(blocked.message).toBe("Blocked by Acme's managed settings")
+      }),
+    )
+  }
+
+  const cases: ReadonlyArray<readonly [string, string, string, boolean]> = [
+    ["an exact host", "example.com", "https://example.com/x", true],
+    ["an exact host in another case with a trailing dot", "example.com", "https://EXAMPLE.com./x", true],
+    ["an exact host with a default port", "example.com", "https://example.com:443/x", true],
+    ["an exact host does not cover its subdomains", "example.com", "https://a.example.com/", false],
+    ["a wildcard covers a subdomain", "*.example.com", "https://a.example.com/", true],
+    ["a wildcard covers any depth", "*.example.com", "https://a.b.example.com/", true],
+    ["a wildcard does not cover the domain itself", "*.example.com", "https://example.com/", false],
+    ["a wildcard does not cover a lookalike", "*.example.com", "https://notexample.com/", false],
+    ["an internationalized pattern", ManagedNetwork.pattern("bücher.example")!, "https://bücher.example/", true],
+    ["a numeric IPv4 shorthand", "127.0.0.1", "http://127.1/", true],
+    ["a single-number IPv4", "127.0.0.1", "http://2130706433/", true],
+    ["an IPv6 literal", "[::1]", "http://[0:0:0:0:0:0:0:1]/", true],
+    ["a single-label host", "intranet", "http://intranet/", true],
+  ]
+  for (const [name, pattern, url, denied] of cases) {
+    it.effect(`${denied ? "denies" : "allows"} ${name}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        yield* network({ denied_domains: [pattern] })
+        const service = yield* Permission.Service
+        expect((yield* service.ask(fetchOf(url))).effect).toBe(denied ? "deny" : "ask")
+      }),
+    )
+  }
+
+  it.effect("a wildcard pattern never matches an IP address", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["*.0.0.1"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("http://127.0.0.1/"))).effect).toBe("ask")
+    }),
+  )
+
+  it.effect("denies a write to a denied host through its METHOD resource too", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("https://evil.example/x", "POST"))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("a Code Mode fetch redirect hop that lands on a denied host is denied at that hop", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      // Code Mode asks again for every hop with the same action and the request it is about to send.
+      const first = CodeModeWeb.request(["https://ok.example/start"])
+      const hop = CodeModeWeb.request(["https://evil.example/landing", { method: "GET" }])
+      expect((yield* service.ask(assertion({ action: "WebFetch", ...first }))).effect).toBe("ask")
+      expect((yield* service.ask(assertion({ action: "WebFetch", ...hop }))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("fails closed on a URL action whose resource is not an http(s) URL while a deny list exists", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      for (const resource of ["not a url", "file:///etc/passwd", "ftp://ok.example/"])
+        expect((yield* service.ask(assertion({ action: "WebFetch", resources: [resource] }))).effect).toBe("deny")
+    }),
+  )
+
+  it.effect("leaves an action that carries no URL alone", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ denied_domains: ["evil.example"] })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(assertion({ action: "read", resources: ["not a url"] }))).effect).not.toBe("deny")
+    }),
+  )
+
+  it.effect("allowed_domains and allow_managed_domains_only do not restrict a fetch", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      yield* network({ allowed_domains: ["ok.example"], allow_managed_domains_only: true })
+      const service = yield* Permission.Service
+      expect((yield* service.ask(fetchOf("https://elsewhere.example/x"))).effect).toBe("ask")
+    }),
+  )
 })
