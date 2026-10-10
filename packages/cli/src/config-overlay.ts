@@ -111,11 +111,21 @@ export async function consume(file: string) {
   const refusal = new Error("ORBIT_CONFIG_CONTENT_FILE does not hold a version 1 overlay")
   refusal.name = "OverlayRefusal"
   if (!OWN_FILE.test(path.relative(base(), file))) throw refusal
-  const envelope = decodeEnvelope(await Bun.file(file).text())
+  // A path of the CLI's own shape that is gone (a run that is over) is not a config for this server; any other error
+  // reading an own file stops the run.
+  const text = await Bun.file(file)
+    .text()
+    .catch((error) => {
+      if (error?.code === "ENOENT") throw refusal
+      throw error
+    })
+  const envelope = decodeEnvelope(text)
   if (envelope._tag === "Failure") throw refusal
   // Only the file: the folder around it is the CLI's to remove. The content was read, so a delete that fails (a scanner
   // holding the file on Windows) must not cost the run its config; the CLI removes the folder when the run ends.
-  await fs.rm(file, { force: true }).catch((error) => console.error("could not delete the overlay file", errorMessage(error)))
+  await fs
+    .rm(file, { force: true })
+    .catch((error) => console.error("could not delete the overlay file", errorMessage(error)))
   return envelope.success.content
 }
 
@@ -285,15 +295,27 @@ function anchorFiles<T extends Json>(flag: string, layer: T, directory: string):
   const text = JSON.stringify(layer)
   if (!text.includes("{file:")) return layer
   return JSON.parse(
-    text.replace(/\{file:([^}]+)\}/g, (token, reference: string) => {
-      // A reference that holds a token of its own ({env:VAR}) is resolved by core first, so it is left as written.
-      if (reference.includes("{") || reference.startsWith("~/") || path.isAbsolute(reference)) return token
-      const resolved = path.resolve(directory, reference).replaceAll("\\", "/")
+    // A reference may hold {env:VAR} tokens, which core expands before it reads the file.
+    text.replace(/\{file:((?:[^{}]|\{env:[^}]*\})+)\}/g, (token, reference: string) => {
+      const expanded = leadingEnv(reference)
+      if (expanded.startsWith("{") || expanded.startsWith("~/") || path.isAbsolute(expanded)) return token
+      // Only the part before the first token is a path this process can resolve; the rest is core's to expand.
+      const split = expanded.indexOf("{")
+      const head = split < 0 ? expanded : expanded.slice(0, split)
+      const resolved = path.resolve(directory, head).replaceAll("\\", "/")
       // The token has no way to quote these, so a folder that holds them cannot be named.
       if (/["}]/.test(resolved)) throw new Error(`${flag}: cannot resolve ${shown(token)} from ${shown(directory)}`)
-      return `{file:${resolved}}`
+      const rest = split < 0 ? "" : `${/[\\/]$/.test(head) ? "/" : ""}${expanded.slice(split)}`
+      return `{file:${resolved}${rest}}`
     }),
   )
+}
+
+// A reference that starts with {env:NAME} means what NAME holds (the server inherits this process's environment, and
+// core reads it for the content layer), so whether the path is relative depends on that value.
+function leadingEnv(reference: string) {
+  const match = /^\{env:([^}]*)\}([^]*)$/.exec(reference)
+  return match === null ? reference : `${process.env[match[1]] ?? ""}${match[2]}`
 }
 
 // A local server's program and working folder, when they are relative paths, mean the folder of the file that names
@@ -313,11 +335,12 @@ function anchor(server: Json, directory: string) {
   }
 }
 
-// The shape of a value decides, never the disk: a value that starts (after whitespace) with { or a // or /* comment is
-// inline JSONC, and anything else is a file name. A folder that ships a file named after the text a person types
-// must not replace it. A file whose name starts with { is reached as ./{...}.
+// The shape of a value decides, never the disk: a value that starts (after whitespace) with { or a /* comment, or a //
+// comment followed by more lines, is inline JSONC, and anything else is a file name. A folder that ships a file named
+// after the text a person types must not replace it. A file whose name starts with { is reached as ./{...}.
 async function read(flag: string, value: string, cwd: string) {
-  if (/^\s*(\{|\/[/*])/.test(value)) return { text: value, directory: cwd }
+  // A // value on one line is all comment and cannot hold an object: it is an absolute path (//server/share/x.json).
+  if (/^(\{|\/\*|\/\/[^\r\n]*[\r\n])/.test(value.trim())) return { text: value, directory: cwd }
   const file = path.resolve(cwd, value)
   const stat = await fs.stat(file).catch(() => undefined)
   if (!stat?.isFile()) throw new Error(`${flag}: ${shown(value)} is not a file that exists and is not JSON`)

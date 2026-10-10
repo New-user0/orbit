@@ -399,3 +399,32 @@ test("a command that starts a standalone server is not stopped by an ORBIT_CONFI
   expect(run.code).toBe(0)
   expect(await Bun.file(own).text()).toBe('{"model":"a/b"}')
 }, 120_000)
+
+// A path of the CLI's own shape that names nothing (a run that is over left the variable behind) is refused like any
+// file that is not the CLI's. One that cannot be read stops the server, so a config is never silently dropped.
+test.each([
+  ["a file that is gone", "gone", 0],
+  ["a folder", "folder", 1],
+])(
+  "a standalone server given an own-shaped ORBIT_CONFIG_CONTENT_FILE that is %s",
+  async (_, kind, code) => {
+    const folder = path.join(overlays, `overlay-${kind}`)
+    const file = path.join(folder, `${crypto.randomUUID()}.json`)
+    await fs.mkdir(kind === "folder" ? file : folder, { recursive: true })
+
+    const run = await orb(["session", "list", "--standalone"], { ORBIT_CONFIG_CONTENT_FILE: file })
+
+    expect(run.code).toBe(code)
+    if (code !== 0) expect(run.stderr).toContain("Standalone server exited before reporting readiness")
+  },
+  120_000,
+)
+
+// release() runs once the private server is up, while the interface is still running. The interface needs a terminal,
+// so the run is stopped at the deadline; the folder must be gone by then.
+test("the run's overlay folder is removed while the interface is still up", async () => {
+  const run = await orb(["--agents", '{"h": {"system": "x"}}'], { PWD: workspace }, workspace, 30_000)
+
+  expect(run.stdout + run.stderr).not.toContain("not a file that exists")
+  expect(await leftovers()).toEqual([])
+}, 120_000)

@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
+import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Orbit } from "@orbit/client/promise"
@@ -342,7 +343,7 @@ test("an agent's rules in a flag add to the inherited rules of the same agent, a
   expect(merged.agents.other.permissions).toEqual([allow])
 })
 
-test("a value is a file when the file exists, whatever it starts with, and inline JSONC may start with a comment", async () => {
+test("a value that starts with a comment is inline JSONC, and a value that does not start with { is a file", async () => {
   const inline = await built({
     agents: '// the helper\n{"helper": {"system": "from a comment"}}',
   })
@@ -491,7 +492,111 @@ test.each([
   expect(Object.keys(key === "agents" ? named.agents : named.mcp.servers)).toEqual(["clone"])
 })
 
-test("an {env:} token inside a {file:} reference is left as written", async () => {
-  const content = await built({ agents: '{"a":{"system":"{file:{env:FX_DIR}/p.md}"}}' })
-  expect(content.agents.a.system).toBe("{file:{env:FX_DIR}/p.md}")
+// Class 1, every spelling of an inline value: none is looked up on disk, so a file named after it changes nothing. A
+// file named like a full JSON value cannot exist on Windows, so that row runs elsewhere.
+test.each([
+  ["--mcp-config", "mcpConfig", JSON.stringify({ servers: { clone: server() } })],
+  ["--agents", "agents", JSON.stringify({ clone: { system: "from the clone" } })],
+])("%s: no spelling of an inline value is read from a file of that name", async (_, key, clone) => {
+  const folder = path.join(root, `spellings-${key}`)
+  await fs.mkdir(folder, { recursive: true })
+  const spellings = ["{ }", "  {}", ...(process.platform === "win32" ? [] : ["{}\n", '{"a": {}}'])]
+  for (const spelling of spellings) await Bun.write(path.join(folder, spelling), clone)
+  const input = (value: string) => (key === "agents" ? { agents: value } : { mcpConfig: [value] })
+
+  for (const spelling of spellings) {
+    const content = await built({ ...input(spelling), cwd: folder }).catch(() => undefined)
+    expect({ spelling, clone: JSON.stringify(content ?? {}).includes("clone") }).toEqual({ spelling, clone: false })
+  }
 })
+
+// A comment line before the value is inline, which cannot collide with a file name because it holds a line break. A
+// one-line // value is all comment and an absolute path (//host/share/x.json), so it is read as a file.
+test.each([
+  ["--mcp-config", "mcpConfig", '/* c */ {"servers": {}}'],
+  ["--agents", "agents", '// c\n{"h": {"system": "x"}}'],
+])("%s: a comment then the value is inline, and a one-line // value is a path", async (flag, key, commented) => {
+  const input = (value: string) => (key === "agents" ? { agents: value } : { mcpConfig: [value] })
+
+  expect(await refused(input(commented))).toBe("")
+  // A path that starts with two separators, spelled so that no network share is asked for.
+  const absolute = process.platform === "win32" ? `//?/${root.replaceAll("\\", "/")}/none.json` : `/${root}/none.json`
+  const message = await refused(input(absolute))
+  expect(message).toContain(`${flag}: ${absolute} is not a file that exists`)
+  expect(message).not.toContain("invalid JSON")
+})
+
+// Core expands {env:} before it reads a file, so a reference that starts with one is relative when the variable holds
+// a relative path, and a {env:} further on follows an ordinary relative head.
+test.each([
+  ["--agents", "agents"],
+  ["--mcp-config", "mcpConfig"],
+])("%s: a {file:} that holds an {env:} is anchored by what its head resolves to", async (_, key) => {
+  const where = path.join(root, `env-anchor-${key}`)
+  const wrap = (token: string) =>
+    key === "agents"
+      ? JSON.stringify({ a: { system: token } })
+      : JSON.stringify({ servers: { s: { type: "local", command: ["fx"], environment: { K: token } } } })
+  const run = async (token: string) => {
+    const parsed = await built({
+      mcpConfig: key === "mcpConfig" ? [wrap(token)] : [],
+      agents: key === "agents" ? wrap(token) : undefined,
+      cwd: where,
+    })
+    return (key === "agents" ? parsed.agents.a.system : parsed.mcp.servers.s.environment.K) as string
+  }
+  const slashed = (...parts: string[]) => path.join(where, ...parts).replaceAll("\\", "/")
+  const before = { FX_REL: process.env.FX_REL, FX_ABS: process.env.FX_ABS }
+  process.env.FX_REL = "sub"
+  process.env.FX_ABS = path.join(root, "absolute")
+  try {
+    expect(await run("{file:./sub/{env:X}.md}")).toBe(`{file:${slashed("sub")}/{env:X}.md}`)
+    expect(await run("{file:{env:FX_REL}/p.md}")).toBe(`{file:${slashed("sub", "p.md")}}`)
+    // An absolute value is core's to expand and read as it is.
+    expect(await run("{file:{env:FX_ABS}/p.md}")).toBe("{file:{env:FX_ABS}/p.md}")
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+})
+
+test("consume: a path of the CLI's shape that is gone is refused, and one that cannot be read stops the run", async () => {
+  await fs.mkdir(overlays, { recursive: true })
+  const folder = await fs.mkdtemp(path.join(overlays, "overlay-"))
+  try {
+    await expect(ConfigOverlay.consume(path.join(folder, `${randomUUID()}.json`))).rejects.toMatchObject({
+      name: "OverlayRefusal",
+    })
+
+    const asFolder = path.join(folder, `${randomUUID()}.json`)
+    await fs.mkdir(asFolder)
+    const error = await ConfigOverlay.consume(asFolder).then(
+      () => undefined,
+      (cause: Error) => cause,
+    )
+    expect(error).toBeDefined()
+    expect(error?.name).not.toBe("OverlayRefusal")
+  } finally {
+    await fs.rm(folder, { recursive: true, force: true })
+  }
+})
+
+// The content was read, so a delete that fails must not cost the run its config. A folder without write permission
+// makes the delete fail after the read succeeds; root ignores the mode, so the row is for a non-root Linux user.
+test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "consume still returns the content when the file cannot be deleted",
+  async () => {
+    const written = await ConfigOverlay.write('{"agents":{}}')
+    const folder = path.dirname(written.file)
+    await fs.chmod(folder, 0o555)
+    try {
+      expect(await ConfigOverlay.consume(written.file)).toBe('{"agents":{}}')
+      expect(await Bun.file(written.file).exists()).toBe(true)
+    } finally {
+      await fs.chmod(folder, 0o700)
+      await written.remove()
+    }
+  },
+)
