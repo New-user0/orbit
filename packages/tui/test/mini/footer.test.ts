@@ -102,6 +102,7 @@ async function setup(
     startup?: { version: string; detail: string }
     cursorRow?: number
     update?: (change: MiniSettingChange) => Promise<MiniSettings>
+    onActivity?: (activity: "working" | "needs input" | undefined) => void
   } = {},
 ) {
   const mono = input.mono ?? true
@@ -144,6 +145,7 @@ async function setup(
       current: { ...resolveMiniSettings(), mono, ...(input.tools ? { tools: input.tools } : {}) },
       update: input.update,
     },
+    onActivity: input.onActivity,
     onPermissionReply: () => {},
     onFormReply: () => {},
     onFormCancel: () => {},
@@ -415,6 +417,24 @@ test("system fallback follows physical mode changes when palette queries remain 
         .find((span) => span.text.includes("draft"))
         ?.fg.toInts(),
     ).toEqual((RUN_THEME_FALLBACK_LIGHT.footer.text as RGBA).toInts())
+  } finally {
+    app.footer.destroy()
+    app.renderer.destroy()
+  }
+})
+
+test("footer reports working and needs-input activity for the terminal title", async () => {
+  const seen: Array<"working" | "needs input" | undefined> = []
+  const app = await setup({ onActivity: (activity) => seen.push(activity) })
+  try {
+    app.footer.event({ type: "stream.patch", patch: { phase: "running" } })
+    app.footer.event({
+      type: "stream.view",
+      view: { type: "form", request: { id: "form_1", sessionID: "ses_1", title: "Question", fields: [{ key: "authorization", type: "external", url: "https://example.com" }] } },
+    })
+    app.footer.event({ type: "stream.view", view: { type: "prompt" } })
+    app.footer.event({ type: "stream.patch", patch: { phase: "idle" } })
+    expect(seen).toEqual(["working", "needs input", "working", undefined])
   } finally {
     app.footer.destroy()
     app.renderer.destroy()

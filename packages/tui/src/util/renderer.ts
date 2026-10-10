@@ -25,9 +25,10 @@ export function outputText(text: string) {
  * characters. A title can come from a model or from a workflow file, and the renderer writes the title into an escape
  * sequence as it is, so a BEL in it ends the sequence early and what follows acts as one of its own.
  */
-export function terminalTitle(title: string) {
-  const clean = title.replace(/\p{C}/gu, "")
-  return `OC | ${clean.length > 40 ? clean.slice(0, 37) + "…" : clean}`
+export function terminalTitle(title: string | undefined, activity?: "working" | "needs input") {
+  const clean = (title ?? "").replace(/\p{C}/gu, "")
+  const named = clean ? `Orbit · ${clean.length > 40 ? clean.slice(0, 37) + "…" : clean}` : "Orbit"
+  return activity ? `${named} · ${activity}` : named
 }
 
 export function destroyRenderer(renderer: Pick<CliRenderer, "isDestroyed" | "setTerminalTitle" | "destroy">) {

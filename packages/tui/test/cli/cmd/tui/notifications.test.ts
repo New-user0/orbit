@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test"
+import { EventEmitter } from "node:events"
 import Notifications from "../../../../src/feature-plugins/system/notifications"
 import type { OrbitEvent, PermissionAsked } from "@orbit/client"
 import type { AttentionNotifyOptions, Context, Route, ToastOptions } from "@orbit/plugin/tui/context"
 
 type Session = { id: string; title: string; parentID?: string }
 
-async function setup(route: Route = { type: "session", sessionID: "session" }) {
+async function setup(route: Route = { type: "session", sessionID: "session" }, idleReminder = 0) {
+  const keys = new EventEmitter()
   const notifications: AttentionNotifyOptions[] = []
   const toasts: ToastOptions[] = []
   const handlers = new Map<OrbitEvent["type"], ((event: OrbitEvent) => void)[]>()
@@ -26,7 +28,9 @@ async function setup(route: Route = { type: "session", sessionID: "session" }) {
       router: { current: () => route },
       toast: { show: (toast: ToastOptions) => toasts.push(toast) },
     },
+    renderer: { keyInput: keys },
     attention: {
+      idleReminder,
       async notify(input: AttentionNotifyOptions) {
         notifications.push(input)
         return { ok: true, notification: true, sound: true }
@@ -57,6 +61,7 @@ async function setup(route: Route = { type: "session", sessionID: "session" }) {
 
   return {
     notifications,
+    keys,
     toasts,
     emit(event: OrbitEvent) {
       for (const handler of handlers.get(event.type) ?? []) handler(event)
@@ -295,5 +300,66 @@ describe("internal notifications TUI plugin", () => {
         sound: { name: "error", when: "always" },
       },
     ])
+  })
+})
+
+describe("idle reminder", () => {
+  const reminder: AttentionNotifyOptions = {
+    title: "Orbit",
+    message: "Orbit is waiting for your input",
+    notification: { when: "blurred" },
+    sound: { name: "default", when: "blurred" },
+  }
+  const waiting = (harness: Awaited<ReturnType<typeof setup>>) =>
+    harness.notifications.filter((item) => item.message === reminder.message)
+
+  test("fires once, after the configured seconds, for a root session", async () => {
+    const harness = await setup(undefined, 0.05)
+    harness.emit(executionStarted("s"))
+    harness.emit(executionSucceeded("d"))
+    expect(waiting(harness)).toEqual([])
+    await Bun.sleep(150)
+    expect(waiting(harness)).toEqual([reminder])
+    await Bun.sleep(150)
+    expect(waiting(harness)).toHaveLength(1)
+  })
+
+  test("stays off at 0 seconds and for subagent sessions", async () => {
+    const off = await setup(undefined, 0)
+    off.emit(executionSucceeded("d"))
+    const sub = await setup(undefined, 0.05)
+    sub.emit(executionSucceeded("d2", "subagent"))
+    await Bun.sleep(150)
+    expect(waiting(off)).toEqual([])
+    expect(waiting(sub)).toEqual([])
+  })
+
+  test.each([
+    ["a keypress", (h: Awaited<ReturnType<typeof setup>>) => h.keys.emit("keypress", {})],
+    ["a new execution", (h: Awaited<ReturnType<typeof setup>>) => h.emit(executionStarted("again"))],
+    [
+      "a pending permission",
+      (h: Awaited<ReturnType<typeof setup>>) =>
+        h.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-1") }),
+    ],
+    [
+      "a pending form",
+      (h: Awaited<ReturnType<typeof setup>>) =>
+        h.emit({ id: "f", created: 0, type: "form.created", data: { form: form("form-1") } }),
+    ],
+  ])("is cancelled by %s", async (_name, act) => {
+    const harness = await setup(undefined, 0.05)
+    harness.emit(executionSucceeded("d"))
+    act(harness)
+    await Bun.sleep(150)
+    expect(waiting(harness)).toEqual([])
+  })
+
+  test("does not start while a permission is already pending", async () => {
+    const harness = await setup(undefined, 0.05)
+    harness.emit({ id: "p", created: 0, type: "permission.asked", data: permission("permission-1") })
+    harness.emit(executionSucceeded("d"))
+    await Bun.sleep(150)
+    expect(waiting(harness)).toEqual([])
   })
 })

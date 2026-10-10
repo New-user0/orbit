@@ -173,10 +173,15 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     clearOnShutdown: false,
   })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
-  const setTitle = (title?: string) => {
+  let titled: string | undefined
+  let activity: "working" | "needs input" | undefined
+  const writeTitle = () => {
     if (input.host.platform !== "linux") return
-    if (!title || isFallbackTitle(title)) return renderer.setTerminalTitle("Orbit")
-    renderer.setTerminalTitle(terminalTitle(title))
+    renderer.setTerminalTitle(terminalTitle(!titled || isFallbackTitle(titled) ? undefined : titled, activity))
+  }
+  const setTitle = (title?: string) => {
+    titled = title
+    writeTitle()
   }
   setTitle(input.sessionTitle)
   const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono)
@@ -230,6 +235,11 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     miniSettings: {
       current: miniSettings,
       update: input.onMiniSettingChange,
+    },
+    onActivity: (next) => {
+      if (activity === next) return
+      activity = next
+      if (!renderer.isDestroyed) writeTitle()
     },
     onMonoChange: (mono) => {
       if (mono) {

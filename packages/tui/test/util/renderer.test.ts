@@ -72,9 +72,13 @@ test("draws ordinary Unicode, emoji and wide characters unchanged, and markdown 
 })
 
 test("builds the title of the terminal window from a session title and cuts a long one", () => {
-  expect(terminalTitle("Fix the build")).toBe("OC | Fix the build")
-  expect(terminalTitle("x".repeat(40))).toBe(`OC | ${"x".repeat(40)}`)
-  expect(terminalTitle("x".repeat(41))).toBe(`OC | ${"x".repeat(37)}…`)
+  expect(terminalTitle("Fix the build")).toBe("Orbit · Fix the build")
+  expect(terminalTitle("x".repeat(40))).toBe(`Orbit · ${"x".repeat(40)}`)
+  expect(terminalTitle("x".repeat(41))).toBe(`Orbit · ${"x".repeat(37)}…`)
+  expect(terminalTitle("Fix the build", "working")).toBe("Orbit · Fix the build · working")
+  expect(terminalTitle("Fix the build", "needs input")).toBe("Orbit · Fix the build · needs input")
+  expect(terminalTitle(undefined, "working")).toBe("Orbit · working")
+  expect(terminalTitle(undefined)).toBe("Orbit")
 })
 
 test("leaves the characters that act on a terminal out of the title of its window", () => {
@@ -82,8 +86,8 @@ test("leaves the characters that act on a terminal out of the title of its windo
   // follows is a sequence of its own. A title can come from a model, or from a workflow that an older release ran.
   const title = terminalTitle("work\u0007\u001b]0;pwned\u0007\u001b[2K\u009b\u{202e}done")
 
-  expect(title).toBe("OC | work]0;pwned[2Kdone")
-  expect(terminalTitle("a\r\nb\tc")).toBe("OC | abc")
+  expect(title).toBe("Orbit · work]0;pwned[2Kdone")
+  expect(terminalTitle("a\r\nb\tc")).toBe("Orbit · abc")
 })
 
 test("clears the terminal title before destroying the renderer", () => {

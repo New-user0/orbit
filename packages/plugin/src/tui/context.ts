@@ -317,10 +317,14 @@ export interface AttentionNotifyResult {
   readonly ok: boolean
   readonly notification: boolean
   readonly sound: boolean
+  /** True when the terminal bell rang; absent from hosts that predate the bell. */
+  readonly bell?: boolean
   readonly skipped?: AttentionNotifySkipReason
 }
 
 export interface Attention {
+  /** Seconds a finished session waits for a keypress before a reminder; 0 turns the reminder off. */
+  readonly idleReminder?: number
   notify(options: AttentionNotifyOptions): Promise<AttentionNotifyResult>
 }
 

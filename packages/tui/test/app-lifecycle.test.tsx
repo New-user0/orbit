@@ -265,14 +265,16 @@ test("session lifecycle updates the terminal title and prints the epilogue after
   const initialTitleSet = new Promise<void>((resolve) => {
     initialTitle = resolve
   })
+  const seen: string[] = []
   let renamedTitle!: () => void
   const renamedTitleSet = new Promise<void>((resolve) => {
     renamedTitle = resolve
   })
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
-    if (title === "OC | Demo session") initialTitle()
-    if (title === "OC | Renamed session") renamedTitle()
+    if (title === "Orbit · Demo session") initialTitle()
+    if (title === "Orbit · Renamed session") renamedTitle()
+    seen.push(title)
     setTitle(title)
   }
   const events = createEventStream()
@@ -332,6 +334,26 @@ test("session lifecycle updates the terminal title and prints the epilogue after
       data: { sessionID: "dummy", title: "Renamed session" },
     })
     await renamedTitleSet
+    const until = async (title: string) => {
+      const deadline = Date.now() + 3000
+      while (!seen.includes(title) && Date.now() < deadline) await Bun.sleep(10)
+      expect(seen).toContain(title)
+    }
+    events.emit({
+      id: "evt_started",
+      created: 2,
+      type: "session.execution.started",
+      durable: { aggregateID: "dummy", seq: 2, version: 1 },
+      data: { sessionID: "dummy" },
+    })
+    await until("Orbit · Renamed session · working")
+    events.emit({
+      id: "evt_permission",
+      created: 3,
+      type: "permission.asked",
+      data: { id: "per_1", sessionID: "dummy", action: "bash", resources: ["bun test"], metadata: {}, save: [] },
+    })
+    await until("Orbit · Renamed session · needs input")
     setup.renderer.destroy()
     await task
 
@@ -356,7 +378,7 @@ test("a session title with control characters is cleaned in the terminal title a
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
     titles.push(title)
-    if (title === "OC | Odd]0;pwned[2K title") oddTitle.resolve()
+    if (title === "Orbit · Odd]0;pwned[2K title") oddTitle.resolve()
     setTitle(title)
   }
   const events = createEventStream()
@@ -399,7 +421,7 @@ test("a session title with control characters is cleaned in the terminal title a
     )
 
     // Once the session is on screen, with the title it was made with.
-    while (!titles.includes("OC | Demo session")) await Bun.sleep(10)
+    while (!titles.includes("Orbit · Demo session")) await Bun.sleep(10)
     events.emit({
       id: "evt_odd",
       created: 1,
@@ -429,7 +451,7 @@ test("session title generated while an untitled session is loading remains visib
   const generatedTitle = Promise.withResolvers<void>()
   setup.renderer.setTerminalTitle = (title) => {
     titles.push(title)
-    if (title === "OC | Generated title") generatedTitle.resolve()
+    if (title === "Orbit · Generated title") generatedTitle.resolve()
     setTitle(title)
   }
   const sessionRequested = Promise.withResolvers<void>()
@@ -497,7 +519,7 @@ test("session title generated while an untitled session is loading remains visib
     ])
     await Bun.sleep(20)
 
-    const generated = titles.lastIndexOf("OC | Generated title")
+    const generated = titles.lastIndexOf("Orbit · Generated title")
     expect(generated).toBeGreaterThan(-1)
     expect(titles.slice(generated + 1)).not.toContain("Orbit")
     setup.renderer.destroy()

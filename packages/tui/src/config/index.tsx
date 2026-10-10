@@ -101,6 +101,13 @@ export const Info = Schema.Struct({
     Schema.Struct({
       notifications: Schema.optional(Schema.Boolean).annotate({ description: "Show system notifications" }),
       sound: Schema.optional(Schema.Boolean).annotate({ description: "Play attention sounds" }),
+      bell: Schema.optional(Schema.Boolean).annotate({
+        description: "Ring the terminal bell for attention events while the terminal is blurred or its focus is unknown",
+      }),
+      idle_reminder: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+        description:
+          "Seconds after a session finishes, with no keypress, before reminding you that Orbit is waiting; 0 turns the reminder off",
+      }),
       volume: Schema.optional(
         Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(1)),
       ).annotate({ description: "Attention sound volume from 0 to 1" }),
@@ -277,6 +284,8 @@ export type Resolved = Omit<Info, "attention" | "cursor" | "keybinds" | "leader"
   attention: {
     notifications: boolean
     sound: boolean
+    bell: boolean
+    idle_reminder: number
     volume: number
     sound_pack: string
     sounds: AttentionSoundPaths
@@ -336,6 +345,8 @@ export function resolve(
     attention: {
       notifications: input.attention?.notifications ?? false,
       sound: input.attention?.sound ?? false,
+      bell: input.attention?.bell ?? false,
+      idle_reminder: input.attention?.idle_reminder ?? 60,
       volume: input.attention?.volume ?? 0.4,
       sound_pack: input.attention?.sound_pack ?? "orbit.default",
       sounds: input.attention?.sounds ?? {},
