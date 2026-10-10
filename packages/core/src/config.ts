@@ -371,9 +371,10 @@ export const layer = (options?: Options) =>
             Effect.catchDefect(() => Effect.succeed(path.resolve(file))),
             Effect.map((real) => (process.platform === "win32" ? FSUtil.normalizePath(real).toLowerCase() : real)),
           )
-        const explicit = sources.explicit
+        const explicitFile = sources.explicit
+        const explicit = explicitFile
           ? yield* Effect.gen(function* () {
-              const explicitIdentity = yield* identity(sources.explicit!)
+              const explicitIdentity = yield* identity(explicitFile)
               const claimed = yield* Effect.forEach(
                 [globalEntries, homeEntries, projectEntries].flatMap((entries) =>
                   entries ? [...entries.base, ...entries.local] : [],
@@ -381,7 +382,7 @@ export const layer = (options?: Options) =>
                 (entry) => (entry.type === "document" && entry.path ? identity(entry.path) : Effect.succeed(undefined)),
               )
               if (claimed.includes(explicitIdentity)) return []
-              return yield* loadFile(sources.explicit!, "flag").pipe(
+              return yield* loadFile(explicitFile, "flag").pipe(
                 Effect.map((config) => (config ? [config] : [])),
                 Effect.orDie,
               )

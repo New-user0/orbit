@@ -491,7 +491,9 @@ describe("what the private server loads", () => {
   }
 
   // Decided at load so a volume without short names reports a skip and not a pass.
-  const projectShort = shortName(project)
+  // The project folder does not exist until beforeAll, so the root (which does) is probed and the rest appended.
+  const rootShort = shortName(root)
+  const projectShort = rootShort === undefined ? undefined : path.join(rootShort, "e2e", "work", "project")
   test.skipIf(projectShort === undefined)(
     "the folder's own file, named from a folder spelled by its 8.3 short name, still loads once and withheld",
     async () => {
