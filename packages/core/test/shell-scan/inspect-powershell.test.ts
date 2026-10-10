@@ -501,6 +501,7 @@ describe("ShellScan.inspect powershell .NET statements", () => {
     ["$f. \n  Delete()", [{ kind: "instance", member: "Delete" }]],
     ["[IO.File]::\nDelete('x')", [{ kind: "static", type: "IO.File", member: "Delete" }]],
     ["[IO.File]::\r\nDelete('x')", [{ kind: "static", type: "IO.File", member: "Delete" }]],
+    ["[IO.File]::\f\nDelete('x')", [{ kind: "static", type: "IO.File", member: "Delete" }]],
     ["$t::\nDelete('x')", [{ kind: "static", type: "$t", member: "Delete", dynamic: true }]],
     ["(Get-Item a).\nDelete()", [{ kind: "instance", member: "Delete" }]],
     ["$w = [IO.StreamWriter]'victim-chain.txt'; $w.AutoFlush = $true; $w.\nWrite('payload')", undefined],
@@ -569,6 +570,121 @@ describe("ShellScan.inspect powershell .NET statements", () => {
     expect(scanned(input).commands.map((command) => command.words[0])).toContain("Remove-Item")
   })
 
+  // Round 3. Windows PowerShell 5.1 (ParseInput) continues member access over every blank, not only space and tab,
+  // and over a backtick-newline on the continued line.
+  test.each([
+    "$w.\n\t`\nWrite('payload')",
+    "$w.\n`\r\nWrite('payload')",
+  ])("member access over a blank, then a break, then a comment or backtick is opaque: %j", (input) => {
+    expect(ShellScan.inspect(input, "powershell")).toMatchObject({ kind: "opaque", class: "syntax" })
+  })
+
+  test.each([
+    "$w.\f\nWrite('x')",
+    "$w.\v\nWrite('x')",
+    "$w.\u00a0\nWrite('x')",
+    "$w.\u1680\nWrite('x')",
+    "$w.\u2000\nWrite('x')",
+    "$w.\u2003\nWrite('x')",
+    "$w.\u202f\nWrite('x')",
+    "$w.\u205f\nWrite('x')",
+    "$w.\u3000\nWrite('x')",
+    "$w.\n\fWrite('x')",
+    "$w.\u00a0Write('x')",
+    "$w.\n\u00a0Write('x')",
+  ])(
+    "a continuation over blanks and one break reports the invocation: %j",
+    (input) => {
+      expect(scanned(input).statements.flatMap((item) => item.invocations)).toContainEqual({ kind: "instance", member: "Write" })
+    },
+  )
+
+  // A glued . or :: in a command argument or a redirect target continues over a comment or a backtick-newline.
+  test.each([
+    "Write-Output $x.<#c#>Delete()",
+    "Write-Output $x.`\nDelete()",
+    "Write-Output $x.`\r\nDelete()",
+    "Write-Output $x::`\nDelete()",
+    "Write-Output ($x).`\nDelete()",
+    'Write-Output "s".`\nDelete()',
+    "Write-Output $x.y.`\nDelete()",
+    "Write-Output -a:$x.`\nDelete()",
+    "Get-Date > $x.`\nDelete()",
+    "Write-Output $w.#c\nWrite(1)",
+    "Write-Output $w.<# c #>$x > f",
+  ])("a glued accessor before a comment or backtick in an argument is opaque: %j", (input) => {
+    expect(ShellScan.inspect(input, "powershell")).toMatchObject({ kind: "opaque", class: "syntax" })
+  })
+
+  test.each(["Get-ChildItem . `\n-Recurse", "Get-ChildItem .`\n-Recurse", "Copy-Item $a `\n-Destination $b"])(
+    "a backtick continuation that is not glued to a member stays scanned: %j",
+    (input) => {
+      expect(scanned(input).commands).toHaveLength(1)
+    },
+  )
+
+  // 5.1 ends an expression-led argument word at a glued # or <# and starts a comment that hides what follows.
+  test.each([
+    "Write-Output $x.Length<# c #>; Remove-Item a",
+    "Write-Output $x[0]<# c #>; Remove-Item a",
+    "Write-Output $x::y<# c #>; Remove-Item a",
+    "Write-Output $x.y.z<# c #>; Remove-Item a",
+    "Write-Output ${x}.y<# c #>; Remove-Item a",
+    "Write-Output $(1)<# c #>; Remove-Item a",
+    "Write-Output @(1)<# c #>; Remove-Item a",
+    "Write-Output @{a=1}.a<# c #>; Remove-Item a",
+    "Write-Output -x:$(1)<# c #>; Remove-Item a",
+    "Write-Output $x.y<# c #>| Remove-Item",
+    "Write-Output $x.Length<# c #> > f",
+    "Get-Date > $(1)<# c #>; Remove-Item a",
+    "Write-Output $x.y#c; Remove-Item a",
+    "Write-Output $(1)#c; Remove-Item a",
+    "Write-Output @(1)#c; Remove-Item a",
+    "Write-Output $x.Length#'\nRemove-Item a\n#'",
+    "Get-Date > $y.z#; Remove-Item a",
+  ])("a comment glued to an expression-led argument is opaque: %j", (input) => {
+    expect(ShellScan.inspect(input, "powershell")).toMatchObject({ kind: "opaque", class: "syntax" })
+  })
+
+  test.each([
+    "Write-Output a<#c#>; Remove-Item a",
+    "Write-Output a#c; Remove-Item a",
+    "Write-Output https://example.com/#frag; Remove-Item a",
+    "git commit -m fix#12; Remove-Item a",
+    "Write-Output (1)<# #>; Remove-Item a",
+    "Write-Output 'a' <# #>; Remove-Item a",
+    "Write-Output $x.y() <# #>; Remove-Item a",
+    "Write-Output $x #c\nRemove-Item a",
+  ])("a generic word or a spaced comment keeps its meaning: %j", (input) => {
+    expect(scanned(input).commands.map((command) => command.words[0])).toContain("Remove-Item")
+  })
+
+  // The target of a redirect after an expression statement is read as a command argument, so # and = are text.
+  test.each([
+    ["$x > f#; Remove-Item a", "f#"],
+    ["$x >> f#; Remove-Item a", "f#"],
+    ["$x 2> f#; Remove-Item a", "f#"],
+    ["$x>f#; Remove-Item a", "f#"],
+    ["1 > f#; Remove-Item a", "f#"],
+    ["$(1) > f#; Remove-Item a", "f#"],
+    ["$x = 1 > f#; Remove-Item a", "f#"],
+    ["$x > f<#; Remove-Item a #>", "f<#"],
+    ["$x > f<#c#>", "f<#c#>"],
+    ["$x > f=1", "f=1"],
+    ["$x > f>g", "f>g"],
+    ["$x > f>g", "f>g"],
+    ["Get-Date > f#; Remove-Item a", "f#"],
+  ])("a redirect target after an expression is a command argument: %j", (input, target) => {
+    const result = scanned(input)
+    expect([...result.statements, ...result.commands].flatMap((item) => item.redirects.map((redirect) => redirect.target))).toEqual([target])
+    if (input.includes("Remove-Item")) expect(result.commands.map((command) => command.words[0])).toContain("Remove-Item")
+  })
+
+  test("a $-led argument ends at > in the scanner, which over-reports a write 5.1 does not make", () => {
+    const result = scanned("Write-Output $x>f")
+    expect(result.commands.flatMap((command) => command.redirects.map((redirect) => redirect.target))).toEqual(["f"])
+  })
+
   test("a glued block comment before > leaves the redirect", () => {
     expect(scanned("$x<#c#>>f").statements.flatMap((item) => item.redirects.map((redirect) => redirect.target))).toEqual(["f"])
   })
@@ -632,6 +748,8 @@ describe("ShellScan.inspect powershell cost", () => {
     ["here-string env reads", `'@"\\n' + "$env:A ".repeat(9000) + '\\n"@'`],
     ["continued members", `"$a.\\n".repeat(15000)`],
     ["many generics", `"$a.b[".repeat(12000)`],
+    ["long word with many hashes", `"Write-Output -a" + "a".repeat(32000) + "#".repeat(32000)`],
+    ["many glued comments", `"Write-Output a<#c#>".repeat(8000)`],
   ]
   test.each(hostile)(
     "%s finish under a deadline",

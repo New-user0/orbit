@@ -1668,9 +1668,12 @@ function scanPowerShellNested(
 
   // True when the text before a line break ends in . or ::, which member access continues over. In an expression that
   // holds for any token; in a command argument Windows PowerShell 5.1 never continues, so the next line is a command.
+  let expressionLedStart = -1
+  let expressionLed = false
   const memberContinues = (at: number) => {
     let end = at
-    while (end > 0 && /[ \t]/.test(input[end - 1])) end--
+    // Windows PowerShell 5.1 treats form feed, vertical tab and Unicode spaces as blanks too.
+    while (end > 0 && /[^\S\r\n]/.test(input[end - 1])) end--
     const accessor = input.startsWith("::", end - 2) ? 2 : input[end - 1] === "." ? 1 : 0
     if (accessor === 0 || quote) return false
     if (!expression) return false
@@ -1736,6 +1739,28 @@ function scanPowerShellNested(
       started = true
       continue
     }
+    // In a command argument or a redirect target Windows PowerShell 5.1 ends an expression word at a glued # or <# and
+    // starts a comment, and continues a glued . or :: over a comment or a backtick-newline. The scanner reads those
+    // as text, so it refuses the whole input instead of guessing.
+    if (started && (redirectTarget || !expression)) {
+      const blockOrLine = char === "#" || (char === "<" && input[index + 1] === "#")
+      if (blockOrLine || (char === "`" && /[\r\n]/.test(input[index + 1] ?? ""))) {
+        const accessor = input.startsWith("::", index - 2) ? 2 : input[index - 1] === "." ? 1 : 0
+        if (accessor > 0 && /[\w)\]}"'$]/.test(input[index - accessor - 1] ?? ""))
+          return syntax("invalid-structure")
+        if (blockOrLine) {
+          // Decided once per word: a regex at every # is quadratic in a word that holds many.
+          if (expressionLedStart !== wordStart) {
+            expressionLedStart = wordStart
+            // A word that starts right after a group or a closing quote, such as the .a of @{a=1}.a, is a member too.
+            expressionLed =
+              /[)\]}"']/.test(input[wordStart - 1] ?? "") ||
+              /^(?:-[^\s:]*:)?[$@"']/.test(input.slice(wordStart, wordStart + 80))
+          }
+          if (expressionLed) return syntax("invalid-structure")
+        }
+      }
+    }
     if (char === "`") {
       if (/[\r\n]/.test(input[index + 1] ?? "") && memberContinues(index)) return syntax("invalid-structure")
       const escape = powerShellEscape(input, index)
@@ -1762,7 +1787,7 @@ function scanPowerShellNested(
     if ((char === "#" || (char === "<" && input[index + 1] === "#")) && memberContinues(index))
       return syntax("invalid-structure")
     // A <# #> comment ends an expression token wherever it is glued to one; `$x<# c #>; ...` is not a line comment.
-    if (char === "<" && input[index + 1] === "#" && (!started || expression)) {
+    if (char === "<" && input[index + 1] === "#" && (!started || (expression && !redirectTarget))) {
       if (started) finishWord(index)
       const end = powerShellComment(input, index)
       if (end === undefined) return syntax("invalid-structure")
@@ -1770,7 +1795,7 @@ function scanPowerShellNested(
       index = end
       continue
     }
-    if (char === "#" && (!started || expression)) {
+    if (char === "#" && (!started || (expression && !redirectTarget))) {
       if (words.length || started || invocation) finishCommand(index)
       statementHead = !dangling
       comment = true
@@ -1783,8 +1808,10 @@ function scanPowerShellNested(
       continue
     }
     // A ">" ends an expression token such as $v, ${v}, $(...) or $x.Length, so `$v>f` writes f. It does not end a
-    // generic argument token: Windows PowerShell 5.1 prints the text of `Write-Output a>f` and creates no file.
-    if (char === ">" && started && input[index - 1] !== ">" && (expression || /^(?:\$|@[({])/.test(input.slice(wordStart, index))))
+    // generic argument token: Windows PowerShell 5.1 prints the text of `Write-Output a>f` and creates no file. A
+    // $-led command argument such as `Write-Output $x>f` also ends at ">" here, which over-reports a write that 5.1
+    // does not make; the over-report is the safe direction and a test pins it.
+    if (char === ">" && started && !redirectTarget && input[index - 1] !== ">" && (expression || /^(?:\$|@[({])/.test(input.slice(wordStart, index))))
       finishWord(index)
     const redirect =
       !started && (char === ">" || char === "*" || /\d/.test(char)) ? powerShellRedirect(input, index) : undefined
@@ -1835,7 +1862,7 @@ function scanPowerShellNested(
         continue
       }
     }
-    if (expression && !compound && (char === "=" || (/[-+*/%]/.test(char) && input[index + 1] === "="))) {
+    if (expression && !compound && !redirectTarget && (char === "=" || (/[-+*/%]/.test(char) && input[index + 1] === "="))) {
       finishWord(index)
       // A hashtable entry or a type literal's content is not an assignment.
       if (!hash) {
@@ -1952,7 +1979,7 @@ function scanPowerShellNested(
     if (separator && (separator === "\n" || separator === "\r" || separator === "\r\n") && memberContinues(index)) {
       // Member access goes on over a line break after . or ::, so the next line is part of this statement. A second
       // line break or a comment in between continues too, but the scanner does not follow it.
-      if (/^[ \t]*(?:[\r\n]|#|<#)/.test(input.slice(index + separator.length))) return syntax("invalid-structure")
+      if (/^[^\S\r\n]*(?:[\r\n]|#|<#|`)/.test(input.slice(index + separator.length))) return syntax("invalid-structure")
       index += separator.length - 1
       continue
     }
