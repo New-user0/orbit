@@ -607,7 +607,8 @@ describe("acp edit previews over the wire", () => {
           : [],
       ),
     ).toEqual([
-      ["in_progress", locations],
+      // Nothing is named until the tool reports its places; the finished call has the ones the request served.
+      ["in_progress", []],
       ["completed", locations],
     ])
   })
