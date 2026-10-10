@@ -128,7 +128,7 @@ describe("LifecycleHooksPlugin", () => {
     { name: "disable_hooks", restrictions: { disable_hooks: true }, ran: [] },
     { name: "both set", restrictions: { disable_hooks: true, managed_hooks_only: true }, ran: [] },
   ]) {
-    it.live(`runs ${item.ran.length === 0 ? "no hooks" : item.ran.join(" and ")} hooks with ${item.name}`, () =>
+    it.live(`runs ${item.ran.length === 0 ? "no" : item.ran.join(" and ")} hooks with ${item.name}`, () =>
       Effect.gen(function* () {
         const registry = yield* PluginHooks.Service
         const config = yield* Config.Test
