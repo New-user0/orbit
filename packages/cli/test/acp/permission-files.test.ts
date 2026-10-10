@@ -78,6 +78,7 @@ async function approval(row: {
 
 // Keys a model can add to its own input. Each tool's row adds every one it does not use itself.
 const decoys: Record<string, unknown> = {
+  query: "decoy query",
   cwd: "C:/decoy-folder",
   cmd: "rm -rf decoy",
   method: "POST",
@@ -180,6 +181,17 @@ describe("keys a tool does not declare, added by the model to its own input, cha
     expect(result.call?.title).toBe("sh setup.sh")
     expect(result.call?.locations).toEqual([{ path: result.cwd }])
     expect(result.call?.rawInput).toEqual({ command: "sh setup.sh", cwd: result.cwd })
+  })
+
+  test("an LSP workspace search keeps its query, a field the tool declares", async () => {
+    const row = {
+      tool: "LSP",
+      input: { action: "workspace_symbols", path: "a.ts", query: "Widget" },
+      action: "Read",
+      resources: ["a.ts"],
+      metadata: {},
+    }
+    expect((await approval(row)).call?.rawInput).toMatchObject({ query: "Widget" })
   })
 
   test("a WebFetch with a model-added method keeps the method its request names", async () => {
