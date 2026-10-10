@@ -14,7 +14,7 @@ import { useTheme, useThemes } from "../../context/theme"
 import { tint } from "../../theme/color"
 import { createAnimatable, tween } from "../../ui/animation"
 import { EmptyBorder, SplitBorder } from "../../ui/border"
-import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
+import { useTuiApp, useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
 import { Spinner } from "../spinner"
 import { useClient } from "../../context/client"
@@ -30,7 +30,13 @@ import { expandPromptInputPastedText, realignPromptInputMentions } from "../../p
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
 import { createStore, produce, unwrap } from "solid-js/store"
-import { emptyPrompt, PASTE_NOT_SAVED, usePromptHistory, type PromptInfo, type PromptPartRef } from "../../prompt/history"
+import {
+  emptyPrompt,
+  PASTE_NOT_SAVED,
+  usePromptHistory,
+  type PromptInfo,
+  type PromptPartRef,
+} from "../../prompt/history"
 import { saveDraft, takeDraft } from "./draft-stash"
 import { Skill } from "@orbit/schema/skill"
 import { computePromptTraits } from "../../prompt/traits"
@@ -51,7 +57,9 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { Vim } from "./vim-state"
-import { createStatusLine } from "../../util/status-line"
+import { StatusLine } from "./status-line"
+import { configuredOutputStyle } from "../dialog-output-style"
+import { statusLinePayload } from "../../util/status-line-payload"
 import { contextUsage } from "../../util/session"
 import { usePromptMove } from "./move"
 import { resolvePastedAttachments } from "./local-attachment"
@@ -208,6 +216,7 @@ export function Prompt(props: PromptProps) {
   const promptRef = usePromptRef()
   const sessionTabs = useSessionTabs()
   const data = useData()
+  const app = useTuiApp()
   const directoryRecents = useDirectoryRecents()
   const keymapCommands = Keymap.useCommands()
   const currentLocation = useLocation()
@@ -1679,28 +1688,73 @@ export function Prompt(props: PromptProps) {
     if (agentLabel()) revealedPromptMetadata.add(local)
   })
   const borderHighlight = createMemo(() => tint(theme.border.base, highlight(), agentMetaAlpha()))
+  const statusLineLocation = () =>
+    (props.sessionID ? data.session.get(props.sessionID)?.location : undefined) ??
+    currentLocation.ref ??
+    data.location.default()
+  // The model the next prompt uses: the selection, which the session's own model only follows once a prompt is sent.
+  const statusLineModel = () => {
+    const selection = local.model.selection()
+    if (selection) return { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }
+    return props.sessionID ? data.session.get(props.sessionID)?.model : undefined
+  }
   // A user-configured status line command, shown under the prompt footer.
-  const statusLine = createStatusLine({
-    command: () => config.status_line?.command,
-    interval: () => config.status_line?.interval,
-    payload: () => {
-      const session = props.sessionID ? data.session.get(props.sessionID) : undefined
-      return {
-        session_id: props.sessionID,
-        cwd: session?.location.directory ?? data.location.info()?.directory,
-        model: session?.model,
-        agent: session?.agent,
-        context: session
-          ? contextUsage(
-              data.session.message.list(session.id),
-              data.location.model.list(session.location),
-              session.revert?.messageID,
-            )
-          : undefined,
-        cost: props.sessionID ? data.session.cost(props.sessionID) : 0,
-      }
-    },
-  })
+  const statusLine = (
+    <StatusLine
+      sessionID={props.sessionID}
+      command={() => config.status_line?.command}
+      interval={() => config.status_line?.interval}
+      colors={() => config.status_line?.colors}
+      fg={theme.text.muted}
+      on={(type, handler) => data.on(type, handler)}
+      watch={() => [
+        local.agent.current()?.id,
+        statusLineModel()?.providerID,
+        statusLineModel()?.id,
+        statusLineModel()?.variant,
+        data.location.info(statusLineLocation())?.project.directory,
+      ]}
+      payload={() => {
+        const session = props.sessionID ? data.session.get(props.sessionID) : undefined
+        const models = data.location.model.list(statusLineLocation())
+        const usage = session
+          ? contextUsage(data.session.message.list(session.id), models, session.revert?.messageID)
+          : undefined
+        const selected = statusLineModel()
+        const model = selected
+          ? models?.find((item) => item.providerID === selected.providerID && item.id === selected.id)
+          : undefined
+        const limit = model?.limit.context
+        // used, limit and percent all describe the selected model; the usage's own percent is of the last answer's model.
+        const context = usage
+          ? { tokens: usage.tokens, percent: limit ? Math.round((usage.tokens / limit) * 100) : undefined }
+          : undefined
+        return statusLinePayload({
+          version: app.version,
+          session: session
+            ? {
+                id: session.id,
+                title: session.title,
+                cost: data.session.cost(session.id),
+                created: session.time.created,
+                agent: session.agent,
+              }
+            : undefined,
+          cwd: data.location.info(statusLineLocation())?.directory,
+          projectDir: data.location.info(statusLineLocation())?.project.directory,
+          model: selected,
+          modelName: model?.name,
+          agent: local.agent.current()?.id,
+          outputStyle: configuredOutputStyle(data, statusLineLocation()),
+          context,
+          contextLimit: limit,
+          running: status() !== "idle",
+          vimMode: config.prompt?.vim === true ? vim().mode : undefined,
+          now: Date.now(),
+        })
+      }}
+    />
+  )
 
   const footerInput = () => ({
     sessionID: props.sessionID,
@@ -2053,15 +2107,7 @@ export function Prompt(props: PromptProps) {
             </Slot>
           </Slot>
         </box>
-        <Show when={statusLine()}>
-          {(line) => (
-            <box paddingLeft={1} flexShrink={0}>
-              <text fg={theme.text.muted} wrapMode="none" truncate>
-                {line()}
-              </text>
-            </box>
-          )}
-        </Show>
+        {statusLine}
       </box>
       <Autocomplete
         sessionID={props.sessionID}

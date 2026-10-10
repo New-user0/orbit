@@ -71,3 +71,21 @@ function escapedCharacter(match: string) {
   const code = match.codePointAt(0) ?? 0
   return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u{${code.toString(16)}}`
 }
+
+/**
+ * One run of a status line, which a person's own command prints: tabs become spaces, C0 controls and DEL become
+ * control pictures, C1 controls become U+FFFD, and lone surrogates and format characters (a right-to-left
+ * override, a zero-width space, an isolate) are written out as `plain` does. The Private Use Area stays, since
+ * Powerline and Nerd Font put their glyphs there, and so does U+200D, which holds an emoji sequence together;
+ * neither acts on the text around it.
+ */
+export function printable(text: string) {
+  return text
+    .replace(/\t/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, (char) => {
+      const code = char.charCodeAt(0)
+      if (code === 0x7f) return "␡"
+      return String.fromCharCode(code < 0x20 ? 0x2400 + code : 0xfffd)
+    })
+    .replace(/[\p{Cs}\p{Cf}]/gu, (match) => (match === "\u200d" ? match : escapedCharacter(match)))
+}

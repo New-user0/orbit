@@ -879,16 +879,28 @@ runs" is a permission.
   the place, file, method and diff only from those values; the raw input may appear only in a view labelled as raw
   input. A recorded call keeps the keys its schema drops at decode, so the raw input can carry a `cwd`, a `files` array
   or an old field name that the runner never uses. When the request lacks a value, add it on the server in the same PR.
-  New and changed approval code follows this now; `clients-ux-61` (M3) moves the existing clients onto it (Known gaps).
-- Show a place where the tool acts. A client prefers what the request carries: the resources of a request about files,
-  `metadata.workdir` of a shell request and `metadata.path` of a Grep or Glob request, all resolved by the server. A
-  path it takes from a tool's input goes through `FSUtil.resolveFrom`, which the tools use too, so `~` is the home
-  folder and `/c/...` the Windows drive. `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP,
-  `permission-files.subprocess.test.ts` the rows over a real `orb acp`, and `packages/tui/test/util/path-format.test.ts`
+  `PermissionView.of` (`packages/schema/src/permission-view.ts`) reads a request and nothing else, and every client draws
+  what it returns.
+- Show a place where the tool acts, and take it from the request. The server puts the absolute place on every request
+  that names one: `metadata.paths` of a Read, Edit, Write, NotebookEdit, LSP and Patch request (a moved file's source
+  too), with each diff's own `place` and, for a move, its `from`; `metadata.workdir` of a shell request and
+  `metadata.path` of a Grep or Glob request; `metadata.method` and `metadata.url` of a fetch; and
+  `metadata.arguments` of an MCP call, so a call through Code Mode is approved with what it sends. A client draws only
+  those, through `PermissionView.of`, and its own `rawInput` is the one place the model's keys appear, labelled as such.
+  A path from a tool's input is used only for a call that has recorded no place and is not being replayed, through
+  `FSUtil.resolveFrom` as the tools resolve it, and from the fields the tool declares. A live pending call is sent with an
+  empty input and names no place (no `cwd` either, for a shell); a replayed call carries its recorded input and names
+  the places its record holds and none otherwise.
+  An approval for a fetch shows the URL that the rules matched and the fetch connects to (no credentials, an ASCII host),
+  not the spelling the model chose, and a request for a resource or a skill lists what it names.
+  `packages/cli/test/acp/tool.test.ts` holds the spelling table for ACP and `packages/tui/test/util/path-format.test.ts`
   the terminal interface's and Mini's.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
-  as a folder of the project (class 4).
+  as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
+  and Grep also report the place they resolved in their progress (`places`) before they ask or act, and ACP names it in
+  the updates of the call (`packages/cli/test/acp/permission-files.subprocess.test.ts`, default rules, untrusted folder,
+  with a trusted control).
 - An allow that Orbit adds by itself is not the person's: it never decides a place that a link leads out to, and only
   the person's own rules and saved approvals do (`Permission.AssertInput.escaped`, class 4).
 - A rule keyed on one field does not cover the others. Grep and Glob ask their own rules about the pattern, so the path
@@ -906,11 +918,18 @@ runs" is a permission.
 - Plan mode: a config of `* * allow` must not make `general` spawnable.
 - Completeness: the classification table compiles only if every field of `Config.Info`, `ConfigAgent.Info` and
   `ConfigCommand.Info` is classified, and `packages/core/test/config/trust.test.ts` ("covers every field") checks it.
-- What is shown is what runs: `clients-ux-61` adds a matrix test (not on `main` yet) over every tool, every path
-  spelling the runner accepts, every key a model can add to its input and every client. It must fail if any client
-  shows a place, file, method or diff other than the one the runner uses, and it includes an `orb acp` subprocess row in
-  an untrusted folder with a trusted control. After it lands, a new tool, client or path form adds its row; before then,
-  a PR adds a table-driven test of the same shape for what it changes.
+- What is shown is what runs. `packages/core/test/approval-values.test.ts` runs Edit, Write, NotebookEdit, Patch (with
+  and without a move), Read and LSP over every path spelling the runner accepts (relative, absolute, `..`, `~`, a link
+  and, on Windows, the Git Bash drive form), in an untrusted folder and a trusted one, with every key a model can add on
+  the input, and asserts that the request names the place the tool really acted on. It writes the rows to
+  `packages/core/test/fixture/approval-matrix.json` (`UPDATE_APPROVAL_MATRIX=1` rewrites it); the requests of Glob, Grep,
+  Bash, WebFetch and an MCP call are in `approval-matrix-pinned.json`, each naming the core test that pins its request.
+  Every client draws those rows and fails on any place, file, method, URL or argument other than the request's, and on
+  any decoy: `packages/tui/test/approval-matrix.test.tsx` (the terminal UI's presentation, and Mini's drawn as the real
+  component), `packages/cli/test/acp/approval-matrix.test.ts` (ACP over the wire, approval and later updates),
+  `packages/vscode/test/approval-matrix.test.ts` (the item and card VS Code draws) and, over a real `orb acp` process in
+  an untrusted folder with a trusted control, `permission-files.subprocess.test.ts`. A new tool, client or path form
+  adds its row to these.
 
 **Review questions:**
 
@@ -918,7 +937,7 @@ runs" is a permission.
 - Does it pick a model, a provider or a budget? Then it is withheld as `providers`, never inert.
 - Whose rules come last, and can an untrusted source be last?
 - Can the approver see the whole thing that is approved (full span, method, URL, folder)?
-- Does any client work out what it shows from the model's raw input instead of the request's resolved values? Can a
+- Does any client work out what it shows from the model's raw input instead of the request's resolved values (`PermissionView.of`)? Can a
   key the model adds, or a `~`, Git Bash or relative spelling, make it show another place than the runner uses?
 - Does an allow that Orbit adds by itself decide something a repository can steer, such as a place a link leads to?
 - Which fields of the call do its rules key on, and is a path among the fields that no rule sees?
@@ -981,6 +1000,12 @@ repository text.
   sequences are removed, and `outputText` writes out what it leaves, such as a lone ESC, BEL and backspace. A new place
   that draws such text calls `bodyText` or `outputText`, and a new row goes into the test of the component that draws
   it, with a trusted control row.
+- The output of the status line command passes `printable` (`@orbit/util/plain`, used by `ansiSpans` in
+  `packages/tui/src/util/ansi-spans.ts`). It writes out control characters as control pictures, lone surrogates and
+  every format character, and keeps two things that `plain` would write out: the Private Use Area (Co glyphs,
+  where Powerline and Nerd Font put theirs) and U+200D (an emoji sequence). Neither reorders or hides text, and the
+  command is the person's own setting. `ansi-spans.test.ts` and `prompt-status-line.test.tsx` pin both exceptions, next
+  to the U+202E, U+200B and U+2066 rows.
 - The CLI writes every failure line by line through `progress` (`packages/cli/src/index.ts`). The terminal UI uses
   `terminalTitle` (`packages/tui/src/util/renderer.ts`), `sessionEpilogue` (`packages/tui/src/util/presentation.ts`) and
   the Mini splash (`packages/tui/src/mini/splash.ts`), and `DialogFlowRuns` passes every store string through `plain`
@@ -1072,9 +1097,9 @@ ran through Bun's spawn, which reads the variable from the process that starts t
 tests had planted `.bat` decoys only, which `cmd.exe` finds through the child's environment, so they said nothing about
 an `.exe`. The fix is `ProgramLookup` (#22, `9b79fd1`): every Orbit process installs the variable in its own environment
 first, and the spawner installs it again and gives it to every child. It is half of the answer again for a plain
-`Bun.spawn`, which hands its child the environment that the process started with, so the `cmd.exe` of the terminal UI's
-status line still has no variable (Known gaps). The earlier holes took four fix commits in three rounds, and the
-executables three more.
+`Bun.spawn`, which hands its child the environment that the process started with, so the terminal UI's status line
+starts `cmd.exe` by its full path and passes `ProgramLookup.environment(undefined)`, and a test plants a decoy for it,
+with a control run. The earlier holes took four fix commits in three rounds, and the executables three more.
 
 **Ask early:** when the single binary was first compiled (M0), and when `orb trust --standalone` and `serve --stdio`
 first started the server inside the repository, audit what the process resolves from its start folder before any trust
@@ -1142,9 +1167,9 @@ kind in turn.
   on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
-- Two members of the class are still open: a relative `PATH` entry and the terminal UI's status line. Three more rest
-  on `ProgramLookup.install()` alone, with no test of their own: the language server client, the bare `git` fallback and
-  the terminal UI's external editor. Known gaps lists each with its task. A change must not widen one.
+- One member of the class is still open: a relative `PATH` entry. Three more rest on `ProgramLookup.install()` alone,
+  with no test of their own: the language server client, the bare `git` fallback and the terminal UI's external editor.
+  Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
   assigned, `createRequire`, `import.meta.resolve`, `new Function`, `eval`, `dlopen` and imports of `#` names. The
   binary imports no `#name` at runtime, and a `package.json` `imports` field would map one to a file of the repository.
@@ -1588,16 +1613,6 @@ fixes it or asks.
   against the working folder with `path.resolve`, so it still finds the `git.exe` or `rg.exe` that a repository ships.
   It needs the person's own `PATH` to name a relative folder, which is rare, so it is a follow-up and not a blocker
   (task `foundations-17`).
-- **The terminal UI's status line.** `createStatusLine` in `packages/tui/src/util/status-line.ts` runs the user's
-  `status_line.command` as `cmd /c <command>` on Windows every few seconds (5 by default), in the working folder of the
-  terminal UI and outside the spawner, with a plain `Bun.spawn`. The `orb` process has set
-  `NoDefaultCurrentDirectoryInExePath`, which stops Bun from finding a `cmd.exe` of that folder, but `Bun.spawn` hands its
-  child the environment that the process started with, so the `cmd.exe` that runs the command has no variable and still
-  looks in the folder first: a `.bat`, `.cmd` or `.exe` there that is named after the head of the command runs instead
-  (measured with Bun 1.4.2 on Windows, and no test pins it yet). Its `firstLine` strips color codes only, so any other
-  escape sequence that the command prints reaches the screen (class 9). The command is the user's own setting. Pass
-  `env: ProgramLookup.environment(undefined)` or start it through the spawner, and plant a decoy in the test (task
-  `clients-ux-10`).
 - **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
   on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
   `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a
@@ -1707,12 +1722,12 @@ fixes it or asks.
   the mark of Orbit's own folder allows in every built-in agent, Explore among them") builds the agents through the
   real `orbit.agent` plugin with an editor that does not copy and fails when Explore copies its rules. The copying
   `agentHost` of the test fixtures does not keep the mark.
-- **Approvals not yet built only from the request.** Since M2 the server puts the resolved file or folder on file,
-  shell, Grep and Glob requests, and the terminal UI, Mini and ACP prefer it. Parts of an approval still come from the
-  call's recorded input, or are missing: the terminal UI, Mini and VS Code name no folder on a shell, Grep or Glob
-  approval; an MCP call through Code Mode is approved without its arguments; VS Code and ACP read NotebookEdit's fields
-  from the input; and ACP's ordinary tool call shows a link's own path. Task `clients-ux-61` (M3) moves every client
-  onto the request and adds the "what is shown is what runs" matrix test.
+- **An ACP tool call's diff still comes from its input's text.** The approval and the updates after it name the places
+  the server put on the request or that the tool reported in its progress, and the settled record keeps those places
+  (`places` in the metadata of a completed or failed call), so a replay on `session/load` names them too and names none
+  for a call recorded without them. The live pending call is sent with an empty input and names no place; a replayed one carries the recorded input. The finished call's
+  own diff is still built from the input's `old_string` and `new_string` (not an approval), at the recorded place, and
+  not drawn at all when the call has no place.
 
 ## Review checklist
 

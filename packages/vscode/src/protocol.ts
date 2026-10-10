@@ -1,8 +1,13 @@
 // Messages between the extension host and the chat webview. Kept free of `vscode` and DOM types so both sides and the
 // tests share them.
 
+import type { PermissionView } from "@orbit/schema/permission-view"
+
 export interface FileChange {
   readonly file: string
+  /** The absolute place the server resolved the file to, and where a moved file came from. */
+  readonly place?: string
+  readonly from?: string
   readonly patch: string
   readonly status?: string
   readonly additions?: number
@@ -46,6 +51,8 @@ export type Item =
       readonly resources: ReadonlyArray<string>
       /** Whether an "always" reply would save a grant; managed_permissions_only withholds it. */
       readonly canSave: boolean
+      /** What the card shows: the request's own values, never the calling tool's input. */
+      readonly view: PermissionView.View
       readonly files: ReadonlyArray<FileChange>
       readonly status: "pending" | "once" | "always" | "reject"
     }

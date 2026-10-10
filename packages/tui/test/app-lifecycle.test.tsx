@@ -7,7 +7,7 @@ import path from "node:path"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { createAppFixture, promptReady } from "./fixture/app"
-import type { PluginInfo } from "@orbit/client"
+import type { OrbitEvent, PluginInfo } from "@orbit/client"
 
 test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deletions at width %s", async (width) => {
   await using state = await tmpdir()
@@ -265,14 +265,16 @@ test("session lifecycle updates the terminal title and prints the epilogue after
   const initialTitleSet = new Promise<void>((resolve) => {
     initialTitle = resolve
   })
+  const seen: string[] = []
   let renamedTitle!: () => void
   const renamedTitleSet = new Promise<void>((resolve) => {
     renamedTitle = resolve
   })
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
-    if (title === "OC | Demo session") initialTitle()
-    if (title === "OC | Renamed session") renamedTitle()
+    if (title === "Orbit · Demo session") initialTitle()
+    if (title === "Orbit · Renamed session") renamedTitle()
+    seen.push(title)
     setTitle(title)
   }
   const events = createEventStream()
@@ -332,12 +334,157 @@ test("session lifecycle updates the terminal title and prints the epilogue after
       data: { sessionID: "dummy", title: "Renamed session" },
     })
     await renamedTitleSet
+    const until = async (title: string) => {
+      const deadline = Date.now() + 3000
+      while (!seen.includes(title) && Date.now() < deadline) await Bun.sleep(10)
+      expect(seen).toContain(title)
+    }
+    events.emit({
+      id: "evt_started",
+      created: 2,
+      type: "session.execution.started",
+      durable: { aggregateID: "dummy", seq: 2, version: 1 },
+      data: { sessionID: "dummy" },
+    })
+    await until("Orbit · Renamed session · working")
+    events.emit({
+      id: "evt_permission",
+      created: 3,
+      type: "permission.asked",
+      data: { id: "per_1", sessionID: "dummy", action: "bash", resources: ["bun test"], metadata: {}, save: [] },
+    })
+    await until("Orbit · Renamed session · needs input")
     setup.renderer.destroy()
     await task
 
     expect(stdout).toContain("Renamed session")
     expect(stdout).toContain("orb -s dummy")
     expect(promptRequests).toBe(0)
+  } finally {
+    process.stdout.write = originalWrite
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await server.stop()
+  }
+})
+
+// The session view draws the requests of its descendants and global forms, so the title must say "needs input" for them.
+test.each<[string, OrbitEvent]>([
+  [
+    "a subagent's permission",
+    {
+      id: "evt_child_permission",
+      created: 3,
+      type: "permission.asked",
+      data: {
+        id: "per_child",
+        sessionID: "child",
+        action: "bash",
+        resources: ["rm -rf build"],
+        metadata: {},
+        save: [],
+      },
+    },
+  ],
+  [
+    "a subagent's form",
+    {
+      id: "evt_child_form",
+      created: 3,
+      location: { directory },
+      type: "form.created",
+      data: {
+        form: {
+          id: "form_child",
+          sessionID: "child",
+          title: "Input requested",
+          fields: [{ key: "authorization", type: "external", url: "https://example.com" }],
+        },
+      },
+    },
+  ],
+  [
+    "a global form for the session's location",
+    {
+      id: "evt_global_form",
+      created: 3,
+      location: { directory },
+      type: "form.created",
+      data: {
+        form: {
+          id: "form_global",
+          sessionID: "global",
+          title: "Input requested",
+          fields: [{ key: "authorization", type: "external", url: "https://example.com" }],
+        },
+      },
+    },
+  ],
+])("the terminal title says needs input for %s", async (_name, request) => {
+  await using state = await tmpdir()
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const seen: string[] = []
+  const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
+  setup.renderer.setTerminalTitle = (title) => {
+    seen.push(title)
+    setTitle(title)
+  }
+  const events = createEventStream()
+  const base = {
+    projectID: "project",
+    location: { directory },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+  }
+  const root = { ...base, id: "dummy", title: "Demo session" }
+  const child = { ...base, id: "child", title: "Child session", parentID: "dummy" }
+  // The pending list the server would return once the form exists, for the sync the session view starts.
+  const pendingForms: unknown[] = []
+  const calls = createFetch((url) => {
+    const formList = url.pathname.match(/^\/api\/session\/(dummy|child)\/form$/)
+    if (formList)
+      return json({ data: pendingForms.filter((form) => (form as { sessionID: string }).sessionID === formList[1]) })
+    if (url.pathname === "/api/session") return json({ data: [root, child], cursor: {} })
+    if (url.pathname === "/api/session/dummy") return json({ data: root })
+    if (url.pathname === "/api/session/child") return json({ data: child })
+    if (/^\/api\/session\/(dummy|child)\/message$/.test(url.pathname)) return json({ data: [], cursor: {} })
+    if (/^\/api\/session\/(dummy|child)\/(inbox|permission)$/.test(url.pathname)) return json({ data: [] })
+  }, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const originalWrite = process.stdout.write.bind(process.stdout)
+  process.stdout.write = (() => true) as typeof process.stdout.write
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        app: { name: "test", version: "test", channel: "test" },
+        server: { endpoint: { url: server.url.toString() } },
+        config: { get: async () => ({}), update: async () => ({}) },
+        packages: { prepare: async () => ({ directory: "" }) },
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: () => {} }),
+        args: { sessionID: "dummy" },
+        log: () => {},
+      }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
+    )
+    const until = async (title: string) => {
+      const deadline = Date.now() + 3000
+      while (!seen.includes(title) && Date.now() < deadline) await Bun.sleep(10)
+      expect(seen).toContain(title)
+    }
+    await until("Orbit · Demo session")
+    events.emit({
+      id: "evt_started",
+      created: 2,
+      type: "session.execution.started",
+      durable: { aggregateID: "dummy", seq: 1, version: 1 },
+      data: { sessionID: "dummy" },
+    })
+    await until("Orbit · Demo session · working")
+    if (request.type === "form.created") pendingForms.push(request.data.form)
+    events.emit(request)
+    await until("Orbit · Demo session · needs input")
+    setup.renderer.destroy()
+    await task
   } finally {
     process.stdout.write = originalWrite
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
@@ -356,7 +503,7 @@ test("a session title with control characters is cleaned in the terminal title a
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
     titles.push(title)
-    if (title === "OC | Odd]0;pwned[2K title") oddTitle.resolve()
+    if (title === "Orbit · Odd]0;pwned[2K title") oddTitle.resolve()
     setTitle(title)
   }
   const events = createEventStream()
@@ -399,7 +546,7 @@ test("a session title with control characters is cleaned in the terminal title a
     )
 
     // Once the session is on screen, with the title it was made with.
-    while (!titles.includes("OC | Demo session")) await Bun.sleep(10)
+    while (!titles.includes("Orbit · Demo session")) await Bun.sleep(10)
     events.emit({
       id: "evt_odd",
       created: 1,
@@ -429,7 +576,7 @@ test("session title generated while an untitled session is loading remains visib
   const generatedTitle = Promise.withResolvers<void>()
   setup.renderer.setTerminalTitle = (title) => {
     titles.push(title)
-    if (title === "OC | Generated title") generatedTitle.resolve()
+    if (title === "Orbit · Generated title") generatedTitle.resolve()
     setTitle(title)
   }
   const sessionRequested = Promise.withResolvers<void>()
@@ -497,7 +644,7 @@ test("session title generated while an untitled session is loading remains visib
     ])
     await Bun.sleep(20)
 
-    const generated = titles.lastIndexOf("OC | Generated title")
+    const generated = titles.lastIndexOf("Orbit · Generated title")
     expect(generated).toBeGreaterThan(-1)
     expect(titles.slice(generated + 1)).not.toContain("Orbit")
     setup.renderer.destroy()

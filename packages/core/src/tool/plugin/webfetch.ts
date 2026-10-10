@@ -132,8 +132,10 @@ export const Plugin = {
                 resources: web.resources,
                 aliases: web.aliases,
                 save: web.save,
-                // The model and the TUI keep seeing the URL exactly as requested.
-                metadata: input,
+                // The method and the URL are the ones the rules matched and the fetch connects to (no credentials,
+                // an ASCII host), so a client shows them rather than the spelling the model chose, which stays in
+                // the call's raw input.
+                metadata: { ...input, method: web.metadata.method, url: web.metadata.url },
                 sessionID: context.sessionID,
                 agent: context.agent,
                 source: { type: "tool", messageID: context.messageID, id: context.id },

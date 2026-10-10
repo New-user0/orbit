@@ -8,6 +8,8 @@ function notify(
   message: string,
   sound: AttentionSoundName,
   title?: string,
+  // A subagent's permission or form still needs a person, so it rings the bell; its "Session done" stays silent.
+  needsPerson = false,
 ) {
   const session = sessionID ? context.data.session.get(sessionID) : undefined
   const isSubagent = session?.parentID !== undefined
@@ -16,6 +18,7 @@ function notify(
     message,
     notification: isSubagent ? false : { when: "blurred" },
     sound: { name: sound, when: "always" },
+    bell: needsPerson && isSubagent ? {} : undefined,
   })
 }
 
@@ -26,14 +29,42 @@ export default Plugin.define({
     const terminal = new Set<string>()
     const forms = new Set<string>()
     const permissions = new Set<string>()
+    let reminder: ReturnType<typeof setTimeout> | undefined
+
+    const cancelReminder = () => {
+      clearTimeout(reminder)
+      reminder = undefined
+    }
+    // One reminder per idle period: a keypress, a new execution or a pending request ends the period.
+    const scheduleReminder = (sessionID: string) => {
+      // A subagent finishing says nothing about whether the person is idle, so it leaves a root's reminder alone.
+      if (context.data.session.get(sessionID)?.parentID !== undefined) return
+      cancelReminder()
+      const seconds = context.attention.idleReminder ?? 0
+      if (seconds <= 0) return
+      if (forms.size + permissions.size > 0) return
+      reminder = setTimeout(() => {
+        reminder = undefined
+        void context.attention.notify({
+          title: "Orbit",
+          message: "Orbit is waiting for your input",
+          notification: { when: "blurred" },
+          sound: { name: "default", when: "blurred" },
+          bell: { when: "blurred" },
+        })
+      }, seconds * 1000)
+    }
+    context.renderer.keyInput.on("keypress", cancelReminder)
 
     const started = (sessionID: string) => {
       errored.delete(sessionID)
       terminal.delete(sessionID)
+      cancelReminder()
     }
     const ended = (sessionID: string) => {
       if (terminal.has(sessionID)) return
       terminal.add(sessionID)
+      scheduleReminder(sessionID)
       if (errored.has(sessionID)) {
         errored.delete(sessionID)
         return
@@ -46,14 +77,16 @@ export default Plugin.define({
       context.data.on("form.created", (event) => {
         if (forms.has(event.data.form.id)) return
         forms.add(event.data.form.id)
-        notify(context, event.data.form.sessionID, "Input needs response", "question", event.data.form.title)
+        cancelReminder()
+        notify(context, event.data.form.sessionID, "Input needs response", "question", event.data.form.title, true)
       }),
       context.data.on("form.replied", (event) => forms.delete(event.data.id)),
       context.data.on("form.cancelled", (event) => forms.delete(event.data.id)),
       context.data.on("permission.asked", (event) => {
         if (permissions.has(event.data.id)) return
         permissions.add(event.data.id)
-        notify(context, event.data.sessionID, "Permission needs input", "permission")
+        cancelReminder()
+        notify(context, event.data.sessionID, "Permission needs input", "permission", undefined, true)
       }),
       context.data.on("permission.replied", (event) => permissions.delete(event.data.requestID)),
       context.data.on("session.execution.started", (event) => started(event.data.sessionID)),
@@ -68,11 +101,20 @@ export default Plugin.define({
         }
         errored.add(sessionID)
         notify(context, sessionID, event.data.error.message, "error")
-        context.ui.toast.show({ sessionID, title: "Session failed", message: event.data.error.message, variant: "error" })
+        context.ui.toast.show({
+          sessionID,
+          title: "Session failed",
+          message: event.data.error.message,
+          variant: "error",
+        })
         ended(sessionID)
       }),
     ]
 
-    return () => dispose.reverse().forEach((cleanup) => cleanup())
+    return () => {
+      cancelReminder()
+      context.renderer.keyInput.off("keypress", cancelReminder)
+      dispose.reverse().forEach((cleanup) => cleanup())
+    }
   },
 })

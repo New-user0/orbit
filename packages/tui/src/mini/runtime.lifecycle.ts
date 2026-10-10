@@ -17,7 +17,7 @@ import {
   type ScrollbackWriter,
 } from "@opentui/core"
 import { isFallbackTitle } from "@orbit/util/session-title-fallback"
-import { terminalTitle } from "../util/renderer"
+import { createMiniTitle } from "../util/renderer"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -55,6 +55,8 @@ type CycleResult = {
 
 export type LifecycleInput = {
   host: MiniHost
+  // A seam for tests, which draw into a test renderer instead of the terminal.
+  createRenderer?: typeof createCliRenderer
   getDirectory: () => string
   findFiles: (query: string) => Promise<string[]>
   agents: RunAgent[]
@@ -155,7 +157,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   const tuiConfig = await input.tuiConfig
   const miniSettings = resolveMiniSettings(tuiConfig)
   const mono = miniSettings.mono
-  const renderer = await createCliRenderer({
+  const renderer = await (input.createRenderer ?? createCliRenderer)({
     stdin: input.host.terminal.stdin,
     targetFps: 30,
     maxFps: 60,
@@ -173,12 +175,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     clearOnShutdown: false,
   })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
-  const setTitle = (title?: string) => {
-    if (input.host.platform !== "linux") return
-    if (!title || isFallbackTitle(title)) return renderer.setTerminalTitle("Orbit")
-    renderer.setTerminalTitle(terminalTitle(title))
-  }
-  setTitle(input.sessionTitle)
+  const title = createMiniTitle(renderer, input.host.platform, input.sessionTitle)
   const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono)
   renderer.setBackgroundColor(theme.background)
   const state: SplashState = {
@@ -230,6 +227,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     miniSettings: {
       current: miniSettings,
       update: input.onMiniSettingChange,
+    },
+    onActivity: (next) => {
+      title.setActivity(next)
     },
     onMonoChange: (mono) => {
       if (mono) {
@@ -348,7 +348,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     refreshTheme() {
       footer.refreshTheme()
     },
-    setTitle,
+    setTitle: title.setTitle,
     onResize(fn) {
       let width = renderer.terminalWidth
       let height = renderer.terminalHeight
