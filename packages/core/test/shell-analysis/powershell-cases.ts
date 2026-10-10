@@ -75,7 +75,7 @@ export const notReadOnly = [
   "whoami.exe",
   "git.exe status",
   ".\\where.exe git",
-  "Get-ChildItem && Get-Content a",
+
   "sc x y",
   "curl u",
   "sort x",
@@ -87,3 +87,31 @@ export const notReadOnly = [
 
 // Whether these are read-only depends on the platform: a name is an alias on Windows and a program elsewhere.
 export const platform = ["ps e", "sleep 60", "Start-Sleep 60", "sleep 5; npm run build", "Start-Sleep 5; npm run build", "Get-Content `$x"]
+
+// Network and array rows (class 6 and 10): a path in an array, a share in any position, and a colon-bound flag on a
+// native program that names a remote system.
+export const arrayAndNetwork = [
+  "Get-Content README.md,C:\\Users\\u\\.ssh\\id_rsa",
+  "Get-Content a,env:GITHUB_TOKEN",
+  "Get-Content a,\\\\evil\\share\\x",
+  "Get-Content -Path a,b",
+  "Get-Content -LiteralPath a,b",
+  "Get-ChildItem a,b",
+  "Get-Content a,b -Tail 5",
+  "Get-Process -Name a,env:X",
+  "Get-Content -Path:\\\\evil\\share\\x",
+  "Get-Content x\\\\evil\\share\\y",
+  "tasklist -s:evilhost",
+  "tasklist /s:evilhost",
+  "tasklist /s evilhost",
+  "tasklist -u:nobody",
+  "getmac -s:evilhost",
+  "getmac /s:evilhost",
+  "getmac /s evilhost",
+]
+
+export const arrayAndNetworkOk = ["Get-Process -Name a,b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
+
+// Texts that only pwsh 7 can parse: `&&` and `||` chains. powershell-7.json is recorded with pwsh 7 in Docker, the rest
+// with Windows PowerShell 5.1.
+export const chain = ["Get-ChildItem && Get-Content a", "Get-Content a || Get-Content b", "Get-ChildItem && Get-ChildItem"]

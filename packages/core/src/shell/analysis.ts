@@ -407,6 +407,7 @@ class BashWalk {
     const walked = body ? this.node(body, scope, origin) : { last: this.record([], [], [], "", origin) }
     if (!walked.last) fail("redirected:none")
     walked.last.redirects.push(...redirects)
+    if (this.rebuilt.has(walked.last)) walked.last.text = render(walked.last.env, walked.last.argv.map((word) => word.value), walked.last.redirects)
     return walked
   }
 
@@ -415,6 +416,8 @@ class BashWalk {
     const name = kids(node).find((child) => child.type === "variable_name")
     if (!name) fail("for:shape")
     if (name.text === "PS4" || name.text === "IFS") fail("for:variable")
+    // The variable takes the loop's words, so it changes how programs are found exactly as an assignment does.
+    if (SENSITIVE.test(name.text)) this.sensitive = true
     const marker = kids(node).findIndex((child) => child.type === "in")
     const body = kids(node).find((child) => child.type === "do_group")
     if (!body) fail("for:shape")
@@ -425,30 +428,40 @@ class BashWalk {
         if (child.type === "command_substitution") this.substitution(child, scope)
         else this.word(child, scope, "arg", "top")
       }
+    // After the loop the variable holds the last word, or its old value when there were none: unknown either way.
+    scope.set(name.text, null)
     const inner = new Map(scope)
-    inner.set(name.text, null)
     this.sequence(kids(body), inner, "body")
     return {}
   }
 
   until(node: Node, scope: Scope): Walked {
     this.feature.loop = true
-    for (const child of kids(node)) {
-      if (!child.isNamed || child.type === "comment") continue
-      if (child.type === "do_group") this.sequence(kids(child), new Map(scope), "body")
-      else this.node(child, scope, "condition")
-    }
+    const children = kids(node)
+    children.forEach((child, index) => {
+      if (!child.isNamed || child.type === "comment") return
+      if (child.type === "do_group") return this.sequence(kids(child), new Map(scope), "body")
+      this.condition(child, children[index + 1], scope)
+    })
     return {}
+  }
+
+  // A condition runs in the real scope, unless `&` sends it to the background: that copy's assignments are lost.
+  condition(node: Node, next: Node | undefined, scope: Scope) {
+    if (next?.type !== "&") return this.node(node, scope, "condition")
+    this.feature.background = true
+    this.node(node, new Map(scope), "condition")
   }
 
   // The body of `if`, `elif` and `else`: conditions run in the real scope, bodies in a copy.
   branches(nodes: Node[], scope: Scope) {
     let body = false
-    for (const child of nodes) {
+    for (const [index, child] of nodes.entries()) {
       if (child.type === "then") body = true
       if (!child.isNamed || child.type === "comment") continue
       if (child.type === "elif_clause") {
-        this.branches(kids(child), scope)
+        // The elif may not run, so what its condition assigns must not reach the real scope.
+        this.branches(kids(child), new Map(scope))
         continue
       }
       if (child.type === "else_clause") {
@@ -456,7 +469,7 @@ class BashWalk {
         continue
       }
       if (body) this.node(child, new Map(scope), "body")
-      else this.node(child, scope, "condition")
+      else this.condition(child, nodes[index + 1], scope)
     }
   }
 
@@ -506,9 +519,7 @@ class BashWalk {
     const unwrapped = unwrap(values)
     const rebuilt = /\$[A-Za-z_]|\n/.test(text) || text === ""
     const command: Command = {
-      text: rebuilt
-        ? [...env.map((item) => `${item.name}=${quote(item.value)}`), ...values.map(quote), ...redirects.map((item) => item.op + (item.target ?? ""))].join(" ")
-        : text,
+      text: rebuilt ? render(env, values, redirects) : text,
       argv,
       env,
       redirects,
@@ -520,9 +531,13 @@ class BashWalk {
       origin,
       readOnly: false,
     }
+    if (rebuilt) this.rebuilt.add(command)
     this.commands.push(command)
     return command
   }
+
+  // Commands whose text is rebuilt from argv; the redirects of an enclosing redirected_statement arrive later.
+  rebuilt = new Set<Command>()
 
   declaration(node: Node, scope: Scope, origin: Command["origin"]) {
     const builtin = kids(node)[0].text
@@ -824,6 +839,17 @@ function unescapedGlob(text: string) {
   return false
 }
 
+// The command as a person reads it: values substituted, a part that is not known shown as a placeholder.
+function render(env: Command["env"], values: string[], redirects: Redirect[]) {
+  return [
+    ...env.map((item) => `${item.name}=${quote(item.value)}`),
+    ...values.map(quote),
+    ...redirects.map((item) => `${item.fd ?? ""}${item.op}${item.target ?? ""}`),
+  ]
+    .join(" ")
+    .replaceAll(UNKNOWN, "<unknown>")
+}
+
 function quote(value: string) {
   if (/^[A-Za-z0-9_@%+=:,./~-]+$/.test(value)) return value
   return `'${value.replaceAll("'", "'\\''")}'`
@@ -1018,7 +1044,6 @@ format-hex: fhx
 get-alias: gal
 get-history: h history ghy
 get-module: gmo
-get-timezone: gtz
 get-command: gcm
 invoke-expression: iex
 invoke-command: icm
@@ -1055,6 +1080,7 @@ remove-pssession: rsn
 clear-host: cls
 push-location: pushd
 pop-location: popd
+new-psdrive: ndr
 `)
 const WINDOWS = aliases(`
 get-childitem: ls
@@ -1073,10 +1099,10 @@ clear-host: clear
 add-content: ac
 compare-object: diff compare
 copy-itemproperty: cpp
-new-psdrive: mount ndr
+new-psdrive: mount
 get-service: gsv
 start-service: sasv
-set-service: spsv
+stop-service: spsv
 out-gridview: ogv
 out-printer: lp
 `)
@@ -1099,12 +1125,22 @@ function powershellHead(written: string, kind: Dialect, platform: NodeJS.Platfor
     const name = qualified ? lower.slice(lower.lastIndexOf("\\") + 1) : lower
     return { head: /[\\/]/.test(name) ? name : name.replace(EXTENSIONS, ""), application: true }
   }
+  return { head: aliasTarget(lower, kind, platform) ?? lower, application: false }
+}
+
+/** The cmdlet a lower-case name stands for on this edition and platform, or undefined when PowerShell defines no such alias. */
+export function aliasTarget(name: string, kind: Dialect, platform: NodeJS.Platform) {
   const windows = platform === "win32"
-  const resolved =
-    EVERYWHERE.get(lower) ??
-    (windows ? WINDOWS.get(lower) : undefined) ??
-    (windows && kind === "powershell-5.1" ? WINDOWS_POWERSHELL.get(lower) : undefined)
-  return { head: resolved ?? lower, application: false }
+  return (
+    EVERYWHERE.get(name) ??
+    (windows ? WINDOWS.get(name) : undefined) ??
+    (windows && kind === "powershell-5.1" ? WINDOWS_POWERSHELL.get(name) : undefined)
+  )
+}
+
+/** Every name in the alias table, for the fixture recorder. */
+export function aliasNames() {
+  return [...new Set([...EVERYWHERE.keys(), ...WINDOWS.keys(), ...WINDOWS_POWERSHELL.keys()])]
 }
 
 const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])

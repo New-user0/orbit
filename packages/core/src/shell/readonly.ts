@@ -157,10 +157,11 @@ const BASH: Record<string, Spec> = {
   },
   ps: {
     flags: table(
-      "-A -a -d -e -N -T -r -x -f -F -l -y -j -M -c -L -m -w -H -Z -h -V --version --help --info --forest --no-headers --headers --noheader --cumulative --width= -n= --sort= -C= -G= -g= -p= --pid= -q= --quick-pid= -s= --sid= -t= --tty= -U= -u= --user= -o= -O=",
+      "-A -a -d -e -N -T -f -F -l -y -j -c -L -m -w -H -V --version --help --info --forest --no-headers --headers --width= -n= --sort= -C= -G= -g= -p= --pid= -q= --quick-pid= -s= --sid= -t= --tty= -U= -u= --user=",
     ),
-    // A BSD word with an e prints the environment of every process.
-    check: (args) => positionals(args, table("-n= -C= -G= -g= -p= -q= -s= -t= -U= -u= -o= -O= --width= --sort= --pid= --quick-pid= --sid= --tty= --user=")).some((arg) => /^[A-Za-z]+$/.test(arg) && arg.includes("e")),
+    // A BSD word with an e prints the environment of every process. Digits are included (`e1`), which is stricter than
+    // letters only.
+    check: (args) => positionals(args, table("-n= -C= -G= -g= -p= -q= -s= -t= -U= -u= --width= --sort= --pid= --quick-pid= --sid= --tty= --user=")).some((arg) => /^[A-Za-z0-9]+$/.test(arg) && arg.includes("e")),
     operands: { read: false },
   },
   base64: {
@@ -414,7 +415,14 @@ function jq(args: string[]): Verdict {
       ends = true
       continue
     }
-    if (["-f", "--from-file", "--rawfile", "--slurpfile", "--run-tests", "--library-path"].includes(token) || token.startsWith("-L"))
+    // A token that contains --from-file or --library-path is refused whatever follows it (`--from-file=x`); so is a
+    // short bundle that holds f or L.
+    if (
+      ["--rawfile", "--slurpfile", "--run-tests"].includes(token) ||
+      token.includes("--from-file") ||
+      token.includes("--library-path") ||
+      /^-[A-Za-z0-9]*[fL]/.test(token)
+    )
       return refuse("jq:file")
     if (token === "--arg" || token === "--argjson") index += 2
     else if (token === "--indent") index += 1
@@ -430,7 +438,8 @@ export function expandHome(value: string, ctx: ShellAnalysis.Context) {
   return value
 }
 
-const UNC = /^(?:\\\\|\/\/|\/\\|\\\/)[^\\/]/
+// Anywhere in the word, so `--from-file=//host/share/x` counts. `scheme://` does not: a colon before the slashes.
+const UNC = /(?<!:)(?:\\\\|\/\/|\/\\|\\\/)[^\\/]/
 const WEBDAV = /@SSL@\d+|@\d+@SSL|DavWWWRoot/i
 
 /** A word that names a network share on Windows, or a WebDAV marker. */
@@ -440,7 +449,7 @@ export function networkPath(value: string) {
 
 /** Files that are not files: another process's environment, and the network through bash's /dev/tcp and /dev/udp. */
 export function special(value: string) {
-  return /\/proc\/[^/]*\/environ|\/dev\/(?:tcp|udp)\//.test(value.replaceAll("\\", "/"))
+  return /\/proc\/.*\/environ|\/dev\/(?:tcp|udp)\//.test(value.replaceAll("\\", "/"))
 }
 
 /** True when a bare head could be a program in the working folder: a relative PATH entry, or the locator says so. */
@@ -544,7 +553,9 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       if (bound && !(CONSTANT.has(bound.kind) && bound.value !== undefined)) return refuse("bound")
       const name = (arg.parameter ?? "").toLowerCase()
       if (spec.native) {
-        if (bound || spec.flags === "any") continue
+        // `-s:host` is the flag `-s` with a value (tasklist and getmac take a remote system that way), so the name is
+        // checked bound or not.
+        if (spec.flags === "any") continue
         if (spec.flags === "none" || !spec.flags.has(`-${name}`)) return refuse("flag")
         continue
       }
@@ -559,11 +570,15 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
     }
     if (arg.kind === "ArrayLiteralAst") {
       if (/[$(@{[]/.test(arg.text)) return refuse("argument")
+      // The reads of an array in a path position cannot be told apart from one relative path, so they are not validated.
+      if (pending === "path" || (pending === undefined && spec.reads)) return refuse("array:path")
+      if (arg.text.split(",").some(provider)) return refuse("provider")
     } else if (!CONSTANT.has(arg.kind) || arg.value === undefined) return refuse("argument")
     const text = arg.value ?? arg.text
     if (provider(text)) return refuse("provider")
     if (spec.native && (text.startsWith("-") || (ctx.platform === "win32" && text.startsWith("/")))) {
-      if (spec.flags !== "any" && (spec.flags === "none" || !spec.flags.has(text.toLowerCase()))) return refuse("flag")
+      // `/s:host` is `/s` with a value: the flag is what comes before the colon.
+      if (spec.flags !== "any" && (spec.flags === "none" || !spec.flags.has(text.toLowerCase().split(":")[0]))) return refuse("flag")
       continue
     }
     if (spec.flags === "none" && !spec.native) return refuse("flag")

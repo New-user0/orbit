@@ -3,6 +3,7 @@ import { ShellAnalysis } from "../../src/shell/analysis"
 import { ShellParse } from "../../src/shell/parse"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import rows from "./powershell.json"
+import rows7 from "./powershell-7.json"
 
 // The parsers load once per test file. Bash cases use real tree-sitter trees; PowerShell cases use PowerShell's own
 // recorded answers (see record-powershell.ts), so no host is needed and the same rows run on every platform.
@@ -33,15 +34,17 @@ export function windows(over: Partial<ShellAnalysis.Context> = {}): ShellAnalysi
 }
 
 export function bash(command: string, ctx: ShellAnalysis.Context = linux()) {
-  const tree = parsers.bash.parse(command)
-  if (!tree) throw new Error("the parser returned no tree")
+  // The same 50 ms deadline `inspect` uses: a parse that loops fails the test instead of hanging it.
+  const deadline = performance.now() + 50
+  const tree = parsers.bash.parse(command, null, { progressCallback: () => performance.now() > deadline })
+  if (!tree) throw new Error("the parser returned no tree before its deadline")
   const result = ShellAnalysis.analyze(command, ctx, tree.rootNode)
   tree.delete()
   return result
 }
 
 export function powershell(text: string, ctx: ShellAnalysis.Context) {
-  const row = (rows as Record<string, { code: number; output: string }>)[text]
+  const row = ({ ...rows, ...rows7 } as Record<string, { code: number; output: string }>)[text]
   if (!row) throw new Error(`not recorded: ${JSON.stringify(text)}`)
   return ShellAnalysis.analyze(text, ctx, PowerShellParse.interpret(row.code, row.output))
 }
