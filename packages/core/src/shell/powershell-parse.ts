@@ -38,6 +38,8 @@ export type Argument = {
   // CommandParameterAst only: the parameter name without its dash, and the value bound with -Name:value.
   parameter?: string
   bound?: { kind: string; text: string; value?: string }
+  // ArrayLiteralAst only: each element's AST kind and constant value, as the parser sees them.
+  elements?: { kind: string; value?: string }[]
 }
 export type CommandClass = "cmdlet" | "application" | "unknown"
 export type Command = {
@@ -176,7 +178,9 @@ for ($c = 0; $c -lt $cmds.Count; $c++) {
       if ($v) { $bound = [ordered]@{ kind = K $v; text = $v.Extent.Text; value = Value $v } }
       $args1 += [ordered]@{ kind = 'CommandParameterAst'; text = $a.Extent.Text; parameter = $a.ParameterName; bound = $bound }
     } else {
-      $args1 += [ordered]@{ kind = K $a; text = $a.Extent.Text; value = Value $a }
+      $arg = [ordered]@{ kind = K $a; text = $a.Extent.Text; value = Value $a }
+      if ($a -is [System.Management.Automation.Language.ArrayLiteralAst]) { $arg.elements = @($a.Elements | ForEach-Object { [ordered]@{ kind = K $_; value = Value $_ } }) }
+      $args1 += $arg
     }
   }
   $commands += [ordered]@{
@@ -410,6 +414,7 @@ const RawArgument = Schema.Struct({
   value: optional(Schema.String),
   parameter: optional(Schema.String),
   bound: optional(RawValue),
+  elements: list(Schema.Struct({ kind: Schema.String, value: optional(Schema.String) })),
 })
 const RawCommand = Schema.Struct({
   name: optional(Schema.String),
@@ -530,6 +535,14 @@ function command(raw: RawCommandType): Command {
                 ? { value: argument.bound.value }
                 : {}),
             },
+          }
+        : {}),
+      ...(argument.kind === "ArrayLiteralAst"
+        ? {
+            elements: many(argument.elements).map((element) => ({
+              kind: element.kind,
+              ...(element.value !== null && element.value !== undefined ? { value: element.value } : {}),
+            })),
           }
         : {}),
     })),

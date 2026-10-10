@@ -616,10 +616,11 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
       continue
     }
     if (arg.kind === "ArrayLiteralAst") {
-      if (/[$(@{[]/.test(arg.text)) return refuse("argument")
+      // Decided from the parser's elements, never from the array's text: a space, comment or continuation after a comma hides an element from a split.
+      if (!arg.elements?.length || arg.elements.some((item) => !CONSTANT.has(item.kind) || item.value === undefined)) return refuse("argument")
       // The reads of an array in a path position cannot be told apart from one relative path, so they are not validated.
       if (pending === "path" || (pending === undefined && spec.reads)) return refuse("array:path")
-      if (arg.text.split(",").some((item) => namedProvider(item) || share(item, ctx))) return refuse("provider")
+      if (arg.elements.some((item) => namedProvider(item.value!) || share(item.value!, ctx))) return refuse("provider")
     } else if (!CONSTANT.has(arg.kind) || arg.value === undefined) return refuse("argument")
     const text = arg.value ?? arg.text
     if (namedProvider(text) || share(text, ctx)) return refuse("provider")

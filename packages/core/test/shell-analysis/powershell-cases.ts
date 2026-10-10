@@ -129,9 +129,23 @@ export const arrayAndNetwork = [
   "Get-Module -ListAvailable -FullyQualifiedName FileSystem::\\\\evil\\share\\m",
   "Get-Module -ListAvailable -Name Microsoft.PowerShell.Core\\FileSystem::\\\\evil\\share\\m",
   "Get-Module -ListAvailable -Name FileSystem:://evil/share/m",
+  // An element after a comma that raw text cannot see: whitespace, a tab, a newline, a continuation, comments (class 6).
+  "Get-Module -ListAvailable -Name a, FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a,\tFileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a,\nFileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a,`\nFileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a,<#c#>FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a,<#x,y#>FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a, # c\nFileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a, 'FileSystem:://evil/share/m'",
+  "Get-Module -ListAvailable a, FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -FullyQualifiedName a, FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a, Microsoft.PowerShell.Core\FileSystem:://evil/share/m",
+  "Get-Module -ListAvailable -Name a, FileSystem::\\evil\share\m",
+  "Get-Process -Name a, env:X",
 ]
 
-export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
+export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH:mm", "Get-Process -Name a,b", "Get-Process -Name a, b", "tasklist /fo:csv", "tasklist /FI:x", "getmac /fo:csv /nh"]
 
 // Texts that only pwsh 7 can parse: `&&` and `||` chains. powershell-7.json is recorded with pwsh 7 in Docker, the rest
 // with Windows PowerShell 5.1.
