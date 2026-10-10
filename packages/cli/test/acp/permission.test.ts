@@ -85,7 +85,8 @@ describe("acp permissions over the wire", () => {
         status: "pending",
         title: "/workspace/file.ts",
         kind: "read",
-        locations: [{ path: path.resolve("/workspace/file.ts") }],
+        // The place the server resolved, as it named it.
+        locations: [{ path: "/workspace/file.ts" }],
         rawInput: { paths: ["/workspace/file.ts"] },
       },
     })

@@ -151,6 +151,7 @@ function permissionTitle(
 ) {
   const metadata: ToolInput = request.metadata ?? {}
   const diffs = previews.filter((item) => item.type === "diff")
+  const files = request.resources.filter(isPath)
   if (diffs.length > 1 && isEditFamily(toolName)) return `${diffs.length} files`
   switch (PermissionView.action(request.action)) {
     case "external_directory": {
@@ -179,8 +180,9 @@ function permissionTitle(
     case "notebook_edit":
     case "list":
     case "lsp":
-      // The place the server resolved names the request, whatever the calling tool's input spelled.
-      return view.places.length === 1 ? view.places[0] : (view.places[0] ?? view.files[0]?.file)
+      // The file the server named for its rules: relative to the project inside it, absolute outside it. Whatever the
+      // calling tool's input spelled changes nothing.
+      return files.length === 1 ? files[0] : (view.places[0] ?? view.files[0]?.file)
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
       return owned ? undefined : [toolName, ...request.resources.filter((resource) => resource !== "*")].join(" ")
