@@ -119,7 +119,7 @@ for (const row of home)
             expect(run.permissions).toHaveLength(1)
             expect(shown(run.permissions[0]?.toolCall.locations)).toEqual([place])
             // The ordinary updates once the call's input is known: running and completed.
-            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update" && item.locations)
+            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update" && item.locations?.length)
             expect(updates.map((item) => item.status)).toContain("completed")
             for (const update of updates) expect(shown(update.locations)).toEqual([place])
             expect(await row.acted(run.root, run.bodies)).toBe(true)
@@ -1031,7 +1031,7 @@ for (const trusted of [false, true])
           expect((call.locations as { path: string }[]).map((item) => path.resolve(item.path))).toEqual([place])
           for (const item of call.content ?? []) if (item.type === "diff") expect(path.resolve(item.path)).toBe(place)
           const later = run.updates.filter(
-            (item) => item.sessionUpdate === "tool_call_update" && item.toolCallId === "call_2" && item.locations,
+            (item) => item.sessionUpdate === "tool_call_update" && item.toolCallId === "call_2" && item.locations?.length,
           )
           expect(later.map((item) => item.status)).toContain("completed")
           for (const item of later) {
