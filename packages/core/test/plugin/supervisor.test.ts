@@ -292,6 +292,14 @@ describe("PluginSupervisor", () => {
         )
         return root
       })
+    // The 8.3 short name of an existing folder, or undefined when this machine cannot report one.
+    const shortName = (folder: string) => {
+      const result = Bun.spawnSync(
+        ["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"],
+        { env: { ...process.env, P: folder } },
+      )
+      return result.stdout.toString().trim() || undefined
+    }
     const exists = (file: string) => Effect.promise(() => Bun.file(file).exists())
     const inventory = (restrictions: ConfigManaged.Restrictions, operations: ConfigPluginSource.Operation[]) =>
       Effect.gen(function* () {
@@ -472,6 +480,27 @@ describe("PluginSupervisor", () => {
           const list = yield* inventory({ plugins: { allow: [allow] } }, [add(target)])
           expect(state(list, "corp.real")).toEqual({ status: "active" })
         }
+      }),
+    )
+
+    // Classes 3 and 4: the same folder spelled with its Windows 8.3 short name. The TUI resolves with the native realpath, which
+    // expands it, so the server must too. (UNC admin-share spellings keep their form under realpath; docs/upgrading.md says
+    // that a path block matches the real path only, and that only an allow list holds against another spelling.)
+    it.live("matches a target spelled with its 8.3 short name by the real path", () =>
+      Effect.gen(function* () {
+        if (process.platform !== "win32") return
+        const tmp = (yield* tmpdirScoped()).path
+        const long = yield* plugin(tmp, "longpluginname", "corp.long")
+        const short = shortName(long)
+        // The volume may not create short names; the row then has nothing to spell.
+        if (short === undefined || short.toLowerCase() === long.toLowerCase()) return
+        const add = { type: "add" as const, target: short, options: {} }
+        const blocked = yield* inventory({ plugins: { block: [long] } }, [add])
+        expect(failedTargets(blocked)).toEqual([short])
+        expect(yield* exists(path.join(tmp, "longpluginname.top"))).toBe(false)
+        // The controls: an allow list on the long path admits the short spelling, and nothing blocks it without the block.
+        const allowed = yield* inventory({ plugins: { allow: [long] } }, [add])
+        expect(state(allowed, "corp.long")).toEqual({ status: "active" })
       }),
     )
 

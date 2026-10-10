@@ -390,11 +390,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
             () => ({ target: fileURLToPath(local), verified: false }),
           )
         : PluginRestriction.identify(target))
-      if (
-        !PluginRestriction.check(limits, identity).allowed ||
-        // A link can lead a blocked path under another name, so a path as written is held to the block list too.
-        (local && !PluginRestriction.check({ block: limits.block }, { target: fileURLToPath(local) }).allowed)
-      ) {
+      if (!PluginRestriction.check(limits, identity).allowed) {
         failures.push({ target, status: "failed", error: managedMessage(limits.organization) })
         continue
       }

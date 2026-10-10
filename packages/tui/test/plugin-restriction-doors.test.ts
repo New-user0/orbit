@@ -156,6 +156,42 @@ test("a cli.json entry spelled through a link is checked by the real folder it l
   })
 })
 
+// Classes 3 and 4: the same folder spelled with its Windows 8.3 short name meets a block written with the long one.
+// (UNC admin-share spellings keep their form under realpath; docs/upgrading.md says a path block matches the real path only.)
+test("a cli.json entry spelled with its 8.3 short name is blocked by the long path", async () => {
+  if (process.platform !== "win32") return
+  const { fixture, marks, real } = await outside()
+  await using _ = fixture
+  const short = Bun.spawnSync(
+    ["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"],
+    { env: { ...process.env, P: real } },
+  )
+    .stdout.toString()
+    .trim()
+  // The volume may not create short names; the row then has nothing to spell.
+  if (!short || short.toLowerCase() === real.toLowerCase()) return
+  // The control: an allow list on the long path admits the short spelling.
+  await run({
+    plugins: { allow: [real] },
+    config: { plugins: [short] },
+    root: fixture.path,
+    check: async (setup) => {
+      await setup.waitFor(async () => await Bun.file(marks).exists(), { maxPasses: 200 })
+      expect(await Bun.file(marks).exists()).toBe(true)
+    },
+  })
+  await Bun.file(marks).delete()
+  await run({
+    plugins: { block: [real] },
+    config: { plugins: [short] },
+    root: fixture.path,
+    check: async (setup) => {
+      await setup.flush()
+      expect(await Bun.file(marks).exists()).toBe(false)
+    },
+  })
+})
+
 test("an allow list written through a link admits the real folder (control)", async () => {
   await using fixture = await tmpdir()
   const plugin = path.join(fixture.path, ".orbit", "plugins", "hello")

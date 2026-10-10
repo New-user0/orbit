@@ -3,6 +3,7 @@ export * as PluginSupervisor from "./supervisor.js"
 import { Event } from "@orbit/schema/config"
 import { Cause, Effect, Layer, Queue, Stream } from "effect"
 import path from "path"
+import { realpath } from "node:fs/promises"
 import { ConfigPluginSource } from "../config/plugin/source.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Bus } from "../bus.js"
@@ -79,12 +80,7 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
     // `modules.load` when the organization blocks it or leaves it off its allow list. It is reported, not dropped, and a
     // copy that was running is not kept.
     const identity = yield* managed.identify(operation.target)
-    const restricted = [
-      PluginRestriction.check(managed.restrictions, identity),
-      // A link can lead a blocked path under another name, so the path as written is held to the block list too.
-      PluginRestriction.check({ block: managed.restrictions.block }, { target: operation.target }),
-    ].find((checked) => !checked.allowed)
-    if (restricted) {
+    if (!PluginRestriction.check(managed.restrictions, identity).allowed) {
       failures.set(operation.target, blockedFailure(operation.target, managed.message))
       continue
     }
@@ -168,7 +164,6 @@ export const layer = Layer.effectDiscard(
     const bus = yield* Bus.Service
     const updates = yield* PluginUpdate.Service
     const policy = yield* ManagedPolicy.Service
-    const fs = yield* FSUtil.Service
     const internal = yield* PluginInternal.list()
     let release: Effect.Effect<void> | undefined = yield* registry.hold()
     yield* Effect.addFinalizer(() => release ?? Effect.void)
@@ -199,20 +194,15 @@ export const layer = Layer.effectDiscard(
       }))
       const operations = yield* sources.operations()
       const org = policy.current()
+      const unresolved: string[] = []
       const managed: Managed = {
         restrictions: yield* Effect.promise(() =>
-          PluginRestriction.real(
-            org.restrictions.plugins ?? {},
-            (file) => Effect.runPromise(fs.resolve(file)),
-            (file) =>
-              Effect.runFork(
-                Effect.logWarning("managed plugin selector could not be resolved; using it as written", { file }),
-              ),
-          ),
+          // The native realpath expands Windows 8.3 short names, which is what the terminal UI's check does too.
+          PluginRestriction.real(org.restrictions.plugins ?? {}, (file) => realpath(file), (file) => unresolved.push(file)),
         ),
         identify: (target) =>
           path.isAbsolute(target)
-            ? fs.resolve(target).pipe(
+            ? Effect.promise(() => realpath(target)).pipe(
                 Effect.map((real) => ({ target: real, verified: true })),
                 // An unresolvable path is one unverified entry (refused under an allow list), not a failed activation.
                 Effect.catchCause(() =>
@@ -227,6 +217,9 @@ export const layer = Layer.effectDiscard(
             ? "Blocked by managed settings"
             : `Blocked by ${org.organization}'s managed settings`,
       }
+      yield* Effect.forEach(unresolved, (file) =>
+        Effect.logWarning("managed plugin selector could not be resolved; using it as written", { file }),
+      )
       // Activate everything available locally before waiting on missing package installs.
       const immediate = yield* resolve(modules, pre, post, operations, false, running, managed)
       const source = (source: Plugin.Source) =>
