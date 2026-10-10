@@ -4,6 +4,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FileMutation } from "@orbit/core/file-mutation"
 import { FileLedger } from "@orbit/core/file-ledger"
+import { readNow } from "./fixture/ledger"
 import { Formatter } from "@orbit/core/formatter"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -520,9 +521,12 @@ describe("WriteTool", () => {
                   },
                 })
 
-                yield* (yield* FileLedger.Service).record(sessionID, target)
+                yield* readNow(sessionID, target)
                 const later = new Date(Date.now() + 60_000)
-                yield* Effect.promise(() => fs.utimes(target, later, later))
+                yield* Effect.promise(async () => {
+                  await fs.appendFile(target, "!")
+                  await fs.utimes(target, later, later)
+                })
                 expect(yield* executeTool(registry, call({ file_path: "ledger.txt", content: "after" }))).toEqual({
                   status: "error",
                   error: {
@@ -532,7 +536,41 @@ describe("WriteTool", () => {
                 })
                 expect(fixture.assertions).toEqual([])
                 expect(fixture.writes).toEqual([])
-                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before")
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("before!")
+              }),
+            false,
+            "real",
+          ),
+        ),
+      )
+    }),
+  )
+
+  it.live("lets a file that was only touched since the session read it be written, and records the write", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      const target = path.join(tmp.path, "touched.txt")
+      return Effect.promise(() => fs.writeFile(target, "before")).pipe(
+        Effect.andThen(
+          withTool(
+            tmp.path,
+            fixture,
+            (registry) =>
+              Effect.gen(function* () {
+                yield* readNow(sessionID, target)
+                const later = new Date(Date.now() + 60_000)
+                yield* Effect.promise(() => fs.utimes(target, later, later))
+                const input = { file_path: "touched.txt", content: "after" }
+                expect(yield* executeTool(registry, call(input))).toMatchObject({ status: "completed" })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after")
+
+                // The write recorded the file with its digest, so touching it again does not block the next write.
+                const much = new Date(Date.now() + 120_000)
+                yield* Effect.promise(() => fs.utimes(target, much, much))
+                expect(yield* executeTool(registry, call({ ...input, content: "again" }))).toMatchObject({
+                  status: "completed",
+                })
+                expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("again")
               }),
             false,
             "real",

@@ -74,10 +74,12 @@ export const Plugin = {
               // Before anything is asked or done, so a client names the place the tool acts on even when no rule asks.
               yield* context.progress({ places: [target.place] })
               yield* access.authorizeExternal([target], context)
-              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path)
-              const current = yield* FileMutation.readText(environment.files, target.absolute).pipe(
+              yield* ledger.assertRead(context.sessionID, target.absolute, input.file_path)
+              const current = yield* FileMutation.readSnapshot(environment.files, target.absolute).pipe(
                 Effect.catchTag("Environment.NotFound", () => Effect.undefined),
               )
+              // A new file has nothing to be stale against; for an existing one the same read serves as the current state.
+              yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path, current)
               const next = Bom.split(input.content)
               const preview = fileDiff(target.resource, current?.text ?? "", next.text, current ? "modified" : "added")
               yield* permission.assert({
@@ -91,11 +93,13 @@ export const Plugin = {
                 source,
               })
               const result = yield* fileMutation.writeTextPreservingBom({ target, content: input.content })
-              const bom = (yield* FileMutation.readText(environment.files, target.absolute)).bom
-              if (yield* formatter.file(target.absolute)) {
-                yield* FileMutation.syncTextBom(environment.files, target.absolute, bom)
-              }
-              yield* ledger.record(context.sessionID, target.absolute)
+              const written = yield* FileMutation.readSnapshot(environment.files, target.absolute)
+              const final = (yield* formatter.file(target.absolute))
+                ? yield* FileMutation.syncTextBom(environment.files, target.absolute, written.bom).pipe(
+                    Effect.andThen(FileMutation.readSnapshot(environment.files, target.absolute)),
+                  )
+                : written
+              yield* ledger.recordWrite(context.sessionID, target.absolute, final)
               return result
             }).pipe(
               Effect.map((output) => ({ output, content: toModelContent(output) })),

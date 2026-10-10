@@ -2057,6 +2057,14 @@ The Read, Grep and Glob tools now refuse a device or stream path with a message 
 
 **What to do:** Nothing for ordinary files. Continue a truncated read from the offset it names, or use Grep to find what you need.
 
+### A touched file no longer blocks an edit, and a repeat read is short
+
+The file tools remember what a Session read of a file and what its own edits left behind. When a file's modification time is newer than the one remembered but its bytes are the same (a touch, a checkout that rewrote the same content, a formatter that changed nothing), Edit, Write, NotebookEdit and Patch now go ahead instead of reporting that the file changed. This applies to files of up to 256 KiB that the Session read, whatever range it asked for, and files it last edited or wrote; a larger file still compares modification times only. A file whose content changed is refused as before, and a change of line endings alone (CRLF to LF) counts as no change while adding or removing a byte order mark does not. A file that was never read is refused before any of it is loaded. A file reached through a symbolic link is compared by the link target's modification time, as its read recorded it. Separately, reading the same range of an unchanged text file or notebook again in the same Session answers with a short "unchanged since your last read" note instead of the text; the tool's structured output is unchanged and its metadata says `unchanged: true`. Only the last range read of a file is remembered, so reading range A, then range B, then A again returns A in full. The note is never used for a directory listing, an image or a PDF, and never skips the permission check. The note is not used after the Session is compacted or a revert is committed, nor after any Edit, Write, Patch or NotebookEdit of that file. A completed compaction also forgets that the Session read any file: a file has to be read again after a compaction before Edit, Write, Patch or NotebookEdit may change it (a failed compaction changes nothing).
+
+**Affects:** people who run formatters, version control or build tools while a Session is open, and clients that show Read results.
+
+**What to do:** Nothing.
+
 ### Grep returns up to 250 matches in a token-bounded page, and clips long lines
 
 Grep used to return 100 matches per call and cut a line at 2,000 characters. Its default page is now 250 matches, but
