@@ -8,6 +8,7 @@ import path from "node:path"
 import { expect, test } from "bun:test"
 import { permissionItem } from "../src/controller"
 import { approvalCard } from "../src/webview/approval"
+import { excerpt } from "../src/webview/present"
 
 type Row = {
   id: string
@@ -53,7 +54,49 @@ for (const row of rows)
     if (row.truth.arguments) expect(shown).toContain(JSON.stringify(row.truth.arguments).slice(1, -1))
     for (const file of (row.request.metadata?.files ?? []) as { from?: string }[])
       if (file.from) expect(shown).toContain(file.from)
+    // What a rule matches on a command or a search is on the card, beside the folder: the command is what a person approves.
+    if (["Bash", "PowerShell", "Glob", "Grep"].includes(row.tool))
+      for (const resource of row.request.resources.filter((item) => item !== "*"))
+        expect(shown).toContain(JSON.stringify(resource).slice(1, -1))
+    // The diff is the request's patch of each file, and the lines drawn for it are that patch's changed lines.
+    const patches = ((row.request.metadata?.files ?? []) as { patch: string }[]).map((file) => file.patch)
+    expect(item.files.map((file) => file.patch)).toEqual(patches)
+    expect(item.files.flatMap((file) => excerpt(file.patch, 6))).toEqual(patches.flatMap((patch) => excerpt(patch, 6)))
+    for (const line of item.files.flatMap((file) => excerpt(file.patch, 6))) expect(line.text).not.toContain("DECOY")
   })
+
+const cardOf = (request: Row["request"]) =>
+  approvalCard(permissionItem({ id: "per_card", sessionID: "ses_card", ...request }))
+
+test("a shell approval names its command and its folder, a search its pattern and its folder", () => {
+  const shell = cardOf({ action: "Bash", resources: ["rm -rf ~/important"], metadata: { workdir: "/home/u/project" } })
+  expect(shell.title).toContain("rm -rf ~/important")
+  expect(shell.lines.join("\n")).toContain("rm -rf ~/important")
+  expect(shell.lines).toContain("Folder: /home/u/project")
+  const search = cardOf({ action: "Grep", resources: ["needle"], metadata: { path: "/home/u/project" } })
+  expect(search.lines.join("\n")).toContain("needle")
+  expect(search.lines).toContain("Folder: /home/u/project")
+})
+
+test("the card writes out the characters that reorder or hide text", () => {
+  const card = cardOf({
+    action: "mcp__chat__post",
+    resources: ["*"],
+    metadata: { arguments: { text: "safe‮/etc/passwd\u001b[2K" } },
+  })
+  expect(JSON.stringify(card)).not.toContain("‮")
+  expect(JSON.stringify(card)).not.toContain("\u001b")
+  expect(card.lines.join("\n")).toContain("\\u{202e}")
+})
+
+test("the card shows every argument of an MCP call, including the ones after a long value", () => {
+  const card = cardOf({
+    action: "mcp__chat__post",
+    resources: ["*"],
+    metadata: { arguments: { note: "x".repeat(2100), channel: "#leak-HIDDEN", text: "secrets" } },
+  })
+  expect(card.lines.join("\n")).toContain("#leak-HIDDEN")
+})
 
 test("the matrix reaches every request kind the card draws", () => {
   expect(rows.some((row) => row.truth.folder)).toBe(true)

@@ -174,14 +174,18 @@ describe("approval values: the request carries what the tool acts on", () => {
                             : { file_path: spelled }
                 const call = withAdded(input)
                 const assertions: Permission.AssertInput[] = []
+                // The places the tool reports as its first act, for a client to name when no rule asks about the call.
+                const reported: Tool.Metadata[] = []
+                const progress = (update: Tool.Metadata) => Effect.sync(() => void reported.push(update))
                 yield* withTools(project.path, assertions, trusted, (registry, access) =>
                   tool === "Read" || tool === "LSP"
                     ? // Read and LSP ask through the same door: the place is resolved once, for both.
                       access
-                        .authorizeRead(spelled, { sessionID, ...toolIdentity, id: Tool.CallID.make("call-values") })
+                        .authorizeRead(spelled, { sessionID, ...toolIdentity, id: Tool.CallID.make("call-values"), progress })
                         .pipe(Effect.asVoid)
                     : executeTool(registry, {
                         sessionID,
+                        progress,
                         ...toolIdentity,
                         call: {
                           type: "tool-call",
@@ -203,6 +207,9 @@ describe("approval values: the request carries what the tool acts on", () => {
                 const same = (items: readonly string[]) => items.map((item) => FSUtil.resolve(item))
                 expect(same(request!.metadata?.paths as string[])).toEqual(same(places))
                 expect(JSON.stringify(request)).not.toContain(decoy)
+                // The tool reported the same places before it asked or acted (the last report is the whole of a patch).
+                expect(same(reported.at(-1)?.places as string[])).toEqual(same(places))
+                expect(JSON.stringify(reported)).not.toContain(decoy)
 
                 // The runner acted where the request says, and on no decoy.
                 const content = (name: string) => fs.readFile(name, "utf8")

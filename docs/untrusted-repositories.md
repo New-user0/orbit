@@ -873,7 +873,10 @@ runs" is a permission.
   the terminal interface's and Mini's.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
-  as a folder of the project (class 4).
+  as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
+  and Grep also report the place they resolved in their progress (`places`) before they ask or act, and ACP names it in
+  the updates of the call (`packages/cli/test/acp/permission-files.subprocess.test.ts`, default rules, untrusted folder,
+  with a trusted control).
 - An allow that Orbit adds by itself is not the person's: it never decides a place that a link leads out to, and only
   the person's own rules and saved approvals do (`Permission.AssertInput.escaped`, class 4).
 - A rule keyed on one field does not cover the others. Grep and Glob ask their own rules about the pattern, so the path
@@ -1699,10 +1702,10 @@ fixes it or asks.
   real `orbit.agent` plugin with an editor that does not copy and fails when Explore copies its rules. The copying
   `agentHost` of the test fixtures does not keep the mark.
 - **Parts of a pending ACP tool call still come from its input.** The approval and the updates after it name the places the
-  server put on the request. A tool call that is shown before any request exists, and one that no rule asks about, still
-  gets its place from the fields the tool declares, resolved as the tool resolves them. In an untrusted project a link that
-  leads out of it is asked about first, so its place is served before the tool acts; a person's own allow rule for the
-  folder is the one case that shows the link's spelling until the tool finishes.
+  server put on the request or that the tool reported in its progress. The pending call, sent while the model is still
+  writing its input, shows the place from the fields the tool declares, and the running update that follows names none
+  until the tool reports one. The finished call's own diff is still built from the input's `old_string` and `new_string` (not an
+  approval), at the reported place.
 
 ## Review checklist
 

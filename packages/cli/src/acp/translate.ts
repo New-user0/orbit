@@ -297,7 +297,9 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             toolName: tool.name,
             state: { input: tool.input },
             cwd: ctx.cwd,
-            places: tool.places,
+            // The tools report the places they resolved as their first act, so until they do no place is named: the
+            // input's spelling of a path can be a link that the tool leads somewhere else.
+            places: tool.places ?? [],
           }),
         }),
       }
@@ -306,8 +308,18 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
       const key = toolKey(event.data.sessionID, event.data.id)
       const current = state.tools.get(key)
       if (!current) return { state, outputs: [] }
+      // The tool reports the places it resolved before it asks or acts, so they are known even when no rule asks about
+      // the call (the permission request carries them only when it is asked).
+      const reported = event.data.metadata?.places
+      const places =
+        Array.isArray(reported) && reported.length > 0 && reported.every((item) => typeof item === "string")
+          ? (reported as string[])
+          : current.places
       return {
-        state: { ...state, tools: new Map(state.tools).set(key, { ...current, metadata: event.data.metadata }) },
+        state: {
+          ...state,
+          tools: new Map(state.tools).set(key, { ...current, metadata: event.data.metadata, places }),
+        },
         outputs: send({
           sessionUpdate: "tool_call_update",
           ...runningToolUpdate({
@@ -315,7 +327,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
             toolName: current.name,
             state: { input: current.input },
             cwd: ctx.cwd,
-            places: current.places,
+            places,
           }),
         }),
       }

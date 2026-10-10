@@ -319,6 +319,65 @@ for (const row of linkRows)
       90_000,
     )
 
+// Under the default rules (no rule of the person's) nothing but the folder question asks about a call through a link, and
+// that question does not carry the tool's place. Each tool reports the place it resolved as its first act, so every update
+// of the call still names the real place: the folder the link leads to in an untrusted project, the link itself in a
+// trusted one (the control). No update names the link's own path (class 4, class 8, class 12).
+const defaultRows = [
+  {
+    name: "Read",
+    tool: "Read",
+    args: { file_path: "cfg/orbit.json" },
+    place: (root: string, trusted: boolean) =>
+      path.join(root, trusted ? path.join("workspace", "cfg") : "config", "orbit.json"),
+  },
+  {
+    name: "Write",
+    tool: "Write",
+    args: { file_path: "cfg/notes.md", content: "notes\n" },
+    place: (root: string, trusted: boolean) =>
+      path.join(root, trusted ? path.join("workspace", "cfg") : "config", "notes.md"),
+  },
+  {
+    name: "Edit",
+    tool: "Edit",
+    args: { file_path: "cfg/AGENTS.md", old_string: "own", new_string: "OWN" },
+    place: (root: string, trusted: boolean) =>
+      path.join(root, trusted ? path.join("workspace", "cfg") : "config", "AGENTS.md"),
+  },
+  {
+    name: "Bash workdir",
+    tool: "Bash",
+    args: { command: "echo ran", workdir: "cfg" },
+    place: (root: string, trusted: boolean) => path.join(root, trusted ? path.join("workspace", "cfg") : "config"),
+  },
+]
+for (const row of defaultRows)
+  for (const trusted of [false, true])
+    test(
+      `${trusted ? "a trusted" : "an untrusted"} ${row.name} through a junction under the default rules names the place in every update`,
+      () =>
+        approval(
+          {
+            tool: row.tool,
+            permissions: [],
+            trusted,
+            reply: "once",
+            args: () => row.args,
+            setup: linkSetup("junction"),
+          },
+          async (run) => {
+            const place = row.place(run.root, trusted)
+            const updates = run.updates.filter((item) => item.sessionUpdate === "tool_call_update")
+            const located = updates.filter((item) => (item.locations ?? []).length > 0)
+            // Untrusted, the call's running update and its last one both name the place (a trusted Edit is refused in validation).
+            expect(located.length).toBeGreaterThanOrEqual(trusted ? 1 : 2)
+            for (const update of located) expect(shownAt(update.locations)).toEqual([place])
+          },
+        ),
+      90_000,
+    )
+
 // On Windows a data stream (`.env::$DATA`, `new.sh:x`), an 8.3 short name (`ENV~1`) and trailing periods (`new.sh.`)
 // name a file that the person's rule for `*.env` or `*.sh` is written for. In a folder that is not trusted, over a real
 // `orb acp`, a stream is refused and every other spelling meets the rule; the plain names are the controls (class 4,

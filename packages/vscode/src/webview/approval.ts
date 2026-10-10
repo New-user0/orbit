@@ -1,4 +1,5 @@
 import type { PermissionView } from "@orbit/schema/permission-view"
+import { body } from "@orbit/flow/plain"
 import type { FileChange } from "../protocol.js"
 
 // What the approval card says, from the request's own values alone: the places, folder, pattern, method, URL, arguments
@@ -11,6 +12,18 @@ export interface Card {
 }
 
 export function approvalCard(item: {
+  readonly action: string
+  readonly resources: ReadonlyArray<string>
+  readonly view: PermissionView.View
+  readonly files: ReadonlyArray<FileChange>
+}): Card {
+  const card = build(item)
+  // Every string here can come from a model or a file (a command, an MCP argument), so control characters, including the
+  // ones that reorder text, are written out before the card is drawn (class 9).
+  return { title: body(card.title), lines: card.lines.map(body) }
+}
+
+function build(item: {
   readonly action: string
   readonly resources: ReadonlyArray<string>
   readonly view: PermissionView.View
@@ -30,13 +43,16 @@ export function approvalCard(item: {
       title: `${verb} ${view.method && view.method !== "GET" ? `${view.method} ` : ""}${view.url}`,
       lines: [...(view.method ? [`Method: ${view.method}`] : []), `URL: ${view.url}`],
     }
+  // The request's resources are what the rule matches: the command of a shell approval, the pattern of a search.
+  const resources = item.resources.filter((resource) => resource !== "*")
   const lines = [
+    ...resources.filter((resource) => resource !== view.pattern && !view.places.includes(resource)).map((resource) => `Resource: ${resource}`),
     ...view.places.map((place) => `Path: ${place}`),
     ...(view.pattern === undefined ? [] : [`Pattern: ${view.pattern}`]),
     ...(view.folder === undefined ? [] : [`Folder: ${view.folder}`]),
     ...(view.arguments === undefined ? [] : [`Arguments: ${view.arguments}`]),
   ]
-  const target = view.places[0] ?? view.pattern ?? (lines.length === 0 ? item.resources.join(", ") : "")
+  const target = view.places[0] ?? view.pattern ?? (resources.length > 0 ? resources.join(", ") : "")
   return {
     title: `${verb} ${target}`.trim(),
     lines: lines.length > 0 ? lines : item.resources,

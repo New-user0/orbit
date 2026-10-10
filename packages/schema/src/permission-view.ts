@@ -45,7 +45,6 @@ export interface Request {
 // resources, relative to the project or absolute.
 const fileActions = new Set(["read", "edit", "write", "patch", "notebook_edit", "list", "lsp"])
 const folderActions = new Set(["glob", "grep"])
-const maxArguments = 2000
 
 export function action(name: string) {
   const old = ToolNames.legacy(name).toLowerCase()
@@ -92,12 +91,10 @@ function file(value: unknown): File[] {
   return [{ file: name, place: string(item.place), from: string(item.from), patch }]
 }
 
+// The whole text: the model picks the key order, so a cap would let it push the deciding value out of sight.
 function serialize(value: unknown) {
   if (value === undefined) return undefined
-  const text = JSON.stringify(value) ?? String(value)
-  return text.length > maxArguments
-    ? `${text.slice(0, maxArguments)}... (${text.length - maxArguments} more characters)`
-    : text
+  return JSON.stringify(value) ?? String(value)
 }
 
 function strings(value: unknown) {

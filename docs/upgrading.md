@@ -1236,8 +1236,11 @@ approval is for; an MCP call made through Code Mode shows its arguments, where i
 Code and ACP take a NotebookEdit's file from the request; and an ACP approval and the updates of the call after it show the
 place the tool acts on, where an ordinary tool call showed the path as the model spelled it, a link's own path included. A
 key the model adds to its input, such as a `cwd`, a `files` array or an old field name, changes nothing that is shown.
-ACP no longer works out a diff from the `old_string` and `new_string` of the input: it shows the server's diffs only, so a
-request without one shows none. An ACP tool call's `rawInput` is still the call's input, as before.
+An approval over ACP shows the server's diffs only. The finished call's own update of an Edit still builds its diff from the `old_string`
+and `new_string` of the input, now at the place the tool reported. A file tool, a shell command, a Glob or a Grep reports the place
+it resolved before it asks or acts (a `places` entry in its progress), so over ACP the updates of a call name the real place
+even when no rule asks about it. An ACP tool call's `rawInput` is still the call's input, as before. The argument text of an MCP
+call is shown whole, where it was cut at 2000 characters: in the terminal interface the body of the prompt scrolls and the fullscreen view shows more, and the VS Code card writes out control characters and keeps the command of a shell approval beside its folder.
 
 **Affects:** people who approve calls in the terminal interface, Mini, VS Code or an ACP client, ACP clients that read the
 locations, title or content of a tool call or an approval, and plugins or SDK callers that read the metadata of a

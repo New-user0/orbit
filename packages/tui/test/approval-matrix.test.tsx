@@ -29,13 +29,22 @@ type Row = {
 
 const home = os.tmpdir().replaceAll("\\", "/")
 const world = { project: `${home}/matrix-project`, outside: `${home}/matrix-outside`, outsideName: "matrix-outside" }
-const instantiate = (row: Row): Row =>
-  JSON.parse(
+// The calling tool's input also spells the change itself (old_string, new_string, content, patchText), and here it spells
+// a change other than the one the request carries: a client that built a diff from it would draw a decoy.
+const decoyChange = { old_string: "DECOY-OLD", new_string: "DECOY-NEW", content: "DECOY-CONTENT", patchText: "DECOY-PATCH" }
+const instantiate = (row: Row): Row => {
+  const result: Row = JSON.parse(
     JSON.stringify(row)
       .replaceAll("{project}", world.project)
       .replaceAll("{outsideName}", world.outsideName)
       .replaceAll("{outside}", world.outside),
   )
+  return { ...result, input: { ...result.input, ...decoyChange } }
+}
+// What a rule matches on a command or a search, which a person must see to approve it.
+const resourcesOf = (row: Row) =>
+  ["Bash", "PowerShell", "Glob", "Grep"].includes(row.tool) ? row.request.resources.filter((item) => item !== "*") : []
+const patchesOf = (row: Row) => ((row.request.metadata?.files ?? []) as { patch: string }[]).map((file) => file.patch)
 
 const fixture = path.join(import.meta.dir, "../../core/test/fixture")
 const load = async (name: string) => ((await Bun.file(path.join(fixture, name)).json()) as Row[]).map(instantiate)
@@ -87,6 +96,10 @@ for (const row of rows)
     if (row.truth.url) expect(shown).toContain(row.truth.url)
     if (row.truth.method && row.truth.method !== "GET") expect(shown).toContain(row.truth.method)
     if (row.truth.arguments) expect(shown).toContain(JSON.stringify(row.truth.arguments).slice(1, -1))
+    for (const resource of resourcesOf(row)) expect(shown).toContain(JSON.stringify(resource).slice(1, -1))
+    // The diffs drawn are the request's patches, one per file, and no other.
+    const drawn = present(row)
+    expect(drawn.diffs?.map((item) => item.diff) ?? (drawn.diff ? [drawn.diff] : [])).toEqual(patchesOf(row))
     // A moved file shows its source as well as its destination.
     for (const file of (row.request.metadata?.files ?? []) as { from?: string }[])
       if (file.from) expect(shown).toContain(file.from)
@@ -101,6 +114,11 @@ for (const row of rows)
       if (row.truth.folder) expect(shown).toContain(toolPath(row.truth.folder, { home: true }))
       if (row.truth.url) expect(shown).toContain(row.truth.url)
       if (row.truth.arguments) expect(shown).toContain(JSON.stringify(row.truth.arguments).slice(1, -1))
+      for (const resource of resourcesOf(row)) expect(shown).toContain(JSON.stringify(resource).slice(1, -1))
+      // As text the diffs are drawn on their own; as mono they lead the lines.
+      const info = permissionInfo(request(row), undefined, mono)
+      const diffs = mono ? info.lines.slice(0, patchesOf(row).length) : (info.diffs?.map((item) => item.diff) ?? (info.diff ? [info.diff] : []))
+      if (patchesOf(row).length > 0) expect(diffs).toEqual(patchesOf(row))
     }
   })
 
@@ -130,9 +148,54 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
         const expected = [...(row.truth.places ?? []), ...(row.truth.folder ? [row.truth.folder] : [])]
         for (const place of expected) expect(frame).toContain(toolPath(place, { home: true }))
         if (row.truth.url) expect(frame).toContain(row.truth.url)
+        for (const resource of resourcesOf(row)) expect(frame).toContain(resource)
+        // Every changed line of the request's patches is on the screen, as the changed text, and no decoy change is.
+        if (!mono)
+          for (const patch of patchesOf(row))
+            for (const line of patch.split("\n"))
+              if (/^[+-](?![+-])/.test(line) && line.slice(1).trim() !== "") expect(frame).toContain(line.slice(1).trim())
       } finally {
         app.renderer.destroy()
       }
     }
   })
 }
+
+// The model picks the order of an MCP call's arguments, so the value that matters can come after a long one. The argument
+// text is whole in the presentation and on Mini's screen.
+const longArguments: Row = {
+  id: "MCP/long-arguments",
+  tool: "mcp__chat__post",
+  input: {},
+  request: {
+    action: "mcp__chat__post",
+    resources: ["*"],
+    metadata: { arguments: { note: "x".repeat(2100), channel: "#leak-HIDDEN", text: "secrets" } },
+  },
+  truth: {},
+}
+test("an MCP call's arguments are shown whole by the presentation and by Mini, whatever comes first", async () => {
+  expect(text(present(longArguments))).toContain("#leak-HIDDEN")
+  expect(text(present(longArguments))).not.toContain("more characters")
+  expect(text(permissionInfo(request(longArguments), undefined, true))).toContain("#leak-HIDDEN")
+  const app = await testRender(
+    () => (
+      <RunPermissionBody
+        request={request(longArguments)}
+        theme={RUN_THEME_FALLBACK.footer}
+        block={RUN_THEME_FALLBACK.block}
+        mono={false}
+        onReply={() => {}}
+      />
+    ),
+    { width: 200, height: 60 },
+  )
+  try {
+    await app.renderOnce()
+    await Bun.sleep(0)
+    await app.renderOnce()
+    expect(app.captureCharFrame().replace(/\s+/g, "")).toContain("#leak-HIDDEN")
+  } finally {
+    app.renderer.destroy()
+  }
+})

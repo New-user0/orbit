@@ -131,8 +131,12 @@ export const Plugin = {
               }
               const prepared: Prepared[] = []
               const updates = new Map<string, string>()
+              const places: string[] = []
               const resolveTarget = Effect.fnUntraced(function* (value: string) {
                 const target = yield* access.resolve({ path: value, kind: "file" })
+                // Every file the patch reaches so far, a move's source and destination included, before anything is asked.
+                places.push(target.place)
+                yield* context.progress({ places: [...new Set(places)] })
                 if (!target.externalDirectory) return target
                 yield* access.authorizeExternal([target], context, {
                   filepath: target.place,

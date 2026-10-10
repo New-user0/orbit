@@ -55,9 +55,14 @@ test("MCP arguments are text, and a long set is cut with its length said", () =>
   expect(
     PermissionView.of({ action: "slack_post", resources: ["*"], metadata: { arguments: { text: "hi" } } }).arguments,
   ).toBe('{"text":"hi"}')
-  const long = PermissionView.of({ action: "x", resources: ["*"], metadata: { arguments: { text: "a".repeat(5000) } } })
-  expect(long.arguments!.length).toBeLessThan(2100)
-  expect(long.arguments).toContain("more characters")
+  // The model picks the key order, so nothing is cut: a deciding value after a long one is still in the text.
+  const long = PermissionView.of({
+    action: "x",
+    resources: ["*"],
+    metadata: { arguments: { note: "a".repeat(5000), channel: "#leak-HIDDEN" } },
+  })
+  expect(long.arguments).toContain("#leak-HIDDEN")
+  expect(long.arguments).not.toContain("more characters")
 })
 
 test("files keep their diff and place, and an entry without both is dropped", () => {

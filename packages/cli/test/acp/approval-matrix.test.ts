@@ -30,16 +30,20 @@ const fixture = path.join(import.meta.dir, "../../../core/test/fixture")
 const load = async (name: string) => (await Bun.file(path.join(fixture, name)).json()) as Row[]
 const all = [...(await load("approval-matrix.json")), ...(await load("approval-matrix-pinned.json"))]
 
+// The calling tool's input also spells the change itself, and here it spells another change than the request carries: an
+// approval or a call update that built a diff from it would show a decoy.
+const decoyChange = { old_string: "DECOY-OLD", new_string: "DECOY-NEW", content: "DECOY-CONTENT", patchText: "DECOY-PATCH" }
+
 function rows(world: { project: string; outside: string }): Row[] {
-  return all.map(
-    (row): Row =>
-      JSON.parse(
-        JSON.stringify(row)
-          .replaceAll("{project}", world.project)
-          .replaceAll("{outsideName}", path.basename(world.outside))
-          .replaceAll("{outside}", world.outside),
-      ),
-  )
+  return all.map((row): Row => {
+    const result: Row = JSON.parse(
+      JSON.stringify(row)
+        .replaceAll("{project}", world.project)
+        .replaceAll("{outsideName}", path.basename(world.outside))
+        .replaceAll("{outside}", world.outside),
+    )
+    return { ...result, input: { ...result.input, ...decoyChange } }
+  })
 }
 
 // One session folder for the module, so a row's relative spellings resolve where the server resolved them.
@@ -99,8 +103,20 @@ describe("acp approvals show what the request carries", () => {
       // A diff is the request's, at the place the request names.
       for (const item of call.content ?? [])
         if (item.type === "diff") expect(places.map((place) => path.resolve(place))).toContain(path.resolve(item.path))
-      const files = (row.request.metadata?.files ?? []) as unknown[]
-      expect((call.content ?? []).filter((item) => item.type === "diff")).toHaveLength(files.length)
+      const files = (row.request.metadata?.files ?? []) as { patch: string }[]
+      const diffs = (call.content ?? []).flatMap((item) => (item.type === "diff" ? [item] : []))
+      expect(diffs).toHaveLength(files.length)
+      // Each diff is its file's patch: every removed or context line is in the old text, every added or context line in the
+      // new one, and nothing else is.
+      diffs.forEach((item, index) => {
+        const lines = files[index]!.patch.split("\n")
+        const body = lines.slice(lines.findIndex((line) => line.startsWith("@@")) + 1)
+        const kept = (text: string | null | undefined) => (text ?? "").split("\n").filter((line) => line !== "")
+        const wanted = (pattern: RegExp) =>
+          body.filter((line) => pattern.test(line)).map((line) => line.slice(1)).filter((line) => line !== "")
+        expect(kept(item.oldText)).toEqual(wanted(/^[- ]/))
+        expect(kept(item.newText)).toEqual(wanted(/^[+ ]/))
+      })
 
       // After the ask, the call's own updates name the same place.
       const later = acp.updates
@@ -112,7 +128,10 @@ describe("acp approvals show what the request carries", () => {
         .slice(-2)
       expect(later.length).toBeGreaterThan(0)
       for (const update of later) {
-        expect(JSON.stringify({ ...update, rawInput: undefined })).not.toContain("DECOY")
+        // The finished call of an Edit draws the Edit's own old and new text (not an approval); no other tool draws a diff
+        // from its input, so a key added to it shows nothing.
+        const drawn = { ...update, rawInput: undefined, content: row.tool === "Edit" ? undefined : update.content }
+        expect(JSON.stringify(drawn)).not.toContain("DECOY")
         if (places.length > 0) expect(same(update.locations)).toEqual(places.map((item) => path.resolve(item)))
       }
     })

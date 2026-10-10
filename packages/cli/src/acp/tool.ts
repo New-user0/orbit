@@ -206,8 +206,11 @@ export function completedToolUpdate(input: {
     read === undefined
       ? normalized.filter((part) => !images.includes(part))
       : [{ type: "content" as const, content: { type: "text" as const, text: read } }]
-  const oldText = stringValue(input.input.old_string) ?? stringValue(input.input.oldString)
-  const newText = stringValue(input.input.new_string) ?? stringValue(input.input.newString)
+  // Only a tool that declares the fields (Edit) has an old and a new text; a key the model adds to another tool's input
+  // draws no diff.
+  const declaredInput = declaredFields(input.toolName, input.input)
+  const oldText = stringValue(declaredInput.old_string) ?? stringValue(declaredInput.oldString)
+  const newText = stringValue(declaredInput.new_string) ?? stringValue(declaredInput.newString)
   // The place the server named, else the declared fields of the input: not a key the model added.
   const path = input.places?.[0] ?? filePath(declaredFields(input.toolName, input.input))
   const diff: ToolCallContent[] =

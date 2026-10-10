@@ -2,7 +2,7 @@ import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
-import { canonicalToolName, finiteNumber, legacyToolInput, webSearchProviderLabel } from "./tool-display"
+import { canonicalToolName, legacyToolInput, webSearchProviderLabel } from "./tool-display"
 
 type Dict = Record<string, unknown>
 
@@ -156,23 +156,6 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
       icon: "◈",
       title: query ? `${title} "${query}"` : title,
       lines: query ? [`Query: ${query}`] : [],
-    }
-  }
-
-  if (action === "lsp") {
-    const file = text(input.path)
-    const operation = text(input.operation) || "request"
-    const line = finiteNumber(input.line)
-    const character = finiteNumber(input.character)
-    const position = line !== undefined && character !== undefined ? `${line}:${character}` : undefined
-    return {
-      icon: "→",
-      title: `LSP ${operation}${file ? ` ${formatPath(file)}${position ? `:${position}` : ""}` : ""}`,
-      lines: [
-        ...(input.operation ? [`Operation: ${operation}`] : []),
-        ...(file ? [`Path: ${formatPath(file)}`] : []),
-        ...(position ? [`Position: ${position}`] : []),
-      ],
     }
   }
 

@@ -131,6 +131,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     stage: "permission" as PermissionStage,
   })
   const pathFormatter = usePathFormatter()
+  const config = useConfig().data
   const session = createMemo(() => data.session.get(props.request.sessionID))
 
   const source = createMemo(() => {
@@ -195,21 +196,34 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 </box>
               </Show>
             ) : (
-              <box paddingLeft={1}>
-                <For each={current.lines}>
-                  {(line) => (
-                    <text
-                      fg={
-                        view() === "shell" || view() === "subagent" || view() === "task"
-                          ? theme.text.base
-                          : theme.text.muted
-                      }
-                    >
-                      {line}
-                    </text>
-                  )}
-                </For>
-              </box>
+              // Scrollable, never cut: a long argument or command wraps, and the rest is reached by scrolling or by the
+              // fullscreen view, so a value the model put after a long one is not hidden from the person approving.
+              <scrollbox
+                flexShrink={1}
+                scrollAcceleration={getScrollAcceleration(config)}
+                verticalScrollbarOptions={{
+                  trackOptions: {
+                    backgroundColor: theme.background.base,
+                    foregroundColor: theme.scrollbar.base,
+                  },
+                }}
+              >
+                <box paddingLeft={1}>
+                  <For each={current.lines}>
+                    {(line) => (
+                      <text
+                        fg={
+                          view() === "shell" || view() === "subagent" || view() === "task"
+                            ? theme.text.base
+                            : theme.text.muted
+                        }
+                      >
+                        {line}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </scrollbox>
             )
 
           const changes = () =>
