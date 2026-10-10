@@ -146,7 +146,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/util/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
 - The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
   command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
-  `which` (never the working folder) and started by its full path through `CrossSpawnSpawner`, in the system temp folder,
+  `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
+  `CrossSpawnSpawner`. Only a snap launcher that `PATH` did find is swapped, on Linux, for the real binary at a fixed
+  package path. The host runs in the system temp folder,
   with `-NoProfile -NonInteractive -NoLogo -EncodedCommand`, nothing on stdin and no temp file. The command text is a
   base64 string literal that the script decodes, so it cannot close a quote, and the script only parses. Every failure
   (no host, spawn, timeout, exit, empty output, bad JSON, too long, parse errors) is an invalid result that callers read

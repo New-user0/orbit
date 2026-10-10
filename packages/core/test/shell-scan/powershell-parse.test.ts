@@ -78,7 +78,8 @@ const hiddenCommand: Array<[string, string]> = [
   ["a function body", "function f { Remove-Item a }"],
   ["a trap body", "trap { Remove-Item a }"],
   ["a param default", "param($a = (Remove-Item x))\nGet-Date"],
-  ["a backtick in a command name", "Remove-It`em x"],
+  // `m is not an escape in either edition (PowerShell 6 and later read `e as ESC), so this spelling is portable.
+  ["a backtick in a command name", "Remove-Ite`m x"],
 ]
 
 // A member call that the tokenizer did not see as one: the summary has to say that the statement reaches a member.
@@ -124,6 +125,22 @@ const moreHiddenCommand: Array<[string, string]> = [
   ["a glued comment after a member before |", "$x.y<# c #>| Remove-Item"],
   ["a backtick before ; in a parameter name", "Write-Output -a`;b; Remove-Item c"],
   ["a form feed before the break", "Write-Output a\f\nRemove-Item b"],
+  // Review 2: an argument-mode accessor before a line break does not swallow the next line.
+  ['an argument-mode member after a string and a line break', 'Write-Output "s".\nRemove-Item a'],
+  ["an argument-mode member after a paren and a line break", "Write-Output (gi x).\nRemove-Item a"],
+  ["an argument-mode member after a number and a line break", "Write-Output (1).\nRemove-Item a"],
+  // Review 5: a backtick glued to the end of an argument, before CR LF, in each position.
+  ["a glued backtick and CR LF after an argument", "Write-Output a`\r\nRemove-Item b"],
+  ["a glued backtick and CR LF after -a:b", "Write-Output -a:b`\r\nRemove-Item c"],
+  ["a glued backtick and CR LF after a command name", "Write-Output`\r\nRemove-Item b"],
+  ["a glued backtick and CR LF inside an if body", "if ($true) { Write-Output a`\r\nRemove-Item b }"],
+  // A redirect target that ends in a dot, in :: or in an unclosed bracket does not run on into the next line.
+  ["a target ending in . before a line break", "$x > out.\nRemove-Item a"],
+  ["a target ending in :: before a line break", "$x > out::\nRemove-Item a"],
+  ["a target holding [ and a later ]", "$x > f[; Remove-Item a; ]"],
+  ["a glued comment after an expression in argument position", "Write-Output $x.Length<# c #>; Remove-Item a"],
+  ["a target ending in #;", "$x > f#; Remove-Item a"],
+  ["a target ending in <#", "$x > f<#; Remove-Item a"],
 ]
 const moreHiddenMember: Array<[string, string]> = [
   ["a member in an argument after a backtick", "Write-Output $x.`\nLength"],
@@ -215,7 +232,23 @@ const everything = [
   "$x.\nRemove-Item victim",
   "Get-Date && Remove-Item a",
   "'git' status",
+  "$x`\r\nRemove-Item b",
+  "Hyper-V\\Remove-VM x",
+  "posh-git\\Remove-Item x",
+  "a\\b\\Remove-Item x",
+  "Foo\\rm x",
+  "Microsoft.PowerShell.Management\\ls",
+  ".\\Remove-Item x",
+  "..\\a\\Remove-Item x",
+  "\\\\host\\share\\Remove-Item x",
+  "C:\\a\\Remove-Item x",
+  nested(150),
 ]
+
+// Nested script blocks: the script walks the statements of each block, so the work grows with the depth.
+function nested(depth: number) {
+  return "& {".repeat(depth) + " Get-Date " + "}".repeat(depth)
+}
 
 beforeAll(async () => {
   if (!hasHost) return
@@ -439,10 +472,50 @@ describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHo
   test.each([
     ["an unterminated string", 'Write-Output "unterminated'],
     ["an accessor without a member", "$x.\nRemove-Item victim"],
-    ["a pipeline chain operator", "Get-Date && Remove-Item a"],
     ["a quoted command name followed by an argument", "'git' status"],
+    ["a glued backtick and CR LF after a variable", "$x`\r\nRemove-Item b"],
   ])("%s is invalid with parse-errors", (_label, text) => {
     expect(realResult(text)).toEqual({ valid: false, reason: "parse-errors" })
+  })
+
+  // && is a parse error in Windows PowerShell 5.1. PowerShell 7 reads it as a pipeline chain, a statement whose element
+  // is a placeholder with both commands nested in it.
+  test("a pipeline chain operator is a parse error on 5.1 and a chain with both commands nested on 7", () => {
+    const text = "Get-Date && Remove-Item a"
+    const result = realResult(text)
+    if (!PowerShellParse.findHost()?.match(/pwsh(\.exe)?$/i)) {
+      expect(result).toEqual({ valid: false, reason: "parse-errors" })
+      return
+    }
+    expect(result.valid).toBe(true)
+    expect(commandNames(text)).toEqual(["get-date", "remove-item"])
+    expect(summary(text).statements[0]).toMatchObject({ kind: "PipelineChainAst" })
+    expect(summary(text).statements[0].elements[0].command.placeholder).toBe(true)
+    expect(summary(text).commands.map((command) => command.nested)).toEqual([true, true])
+  })
+
+  // A module-qualified name keeps only what follows the last backslash, unless the text is a path (a drive, a UNC path,
+  // .\ or ..\). The class stays application in every case because a backslash makes it a path for PowerShell 5.1.
+  test.each([
+    ["Hyper-V\\Remove-VM x", "remove-vm"],
+    ["posh-git\\Remove-Item x", "remove-item"],
+    ["a\\b\\Remove-Item x", "remove-item"],
+    ["Foo\\rm x", "rm"],
+    ["Microsoft.PowerShell.Management\\ls", "ls"],
+    [".\\Remove-Item x", ".\\remove-item"],
+    ["..\\a\\Remove-Item x", "..\\a\\remove-item"],
+    ["\\\\host\\share\\Remove-Item x", "\\\\host\\share\\remove-item"],
+    ["C:\\a\\Remove-Item x", "c:\\a\\remove-item"],
+  ])("the name of %s is %s", (text, name) => {
+    expect(summary(text).commands[0]).toMatchObject({ name, class: "application" })
+  })
+
+  // 150 levels of nested blocks parse well inside the default deadline (it took 3.8 s at 100 levels with a pass per flag, and timed out
+  // at 150).
+  test("deeply nested script blocks parse inside the deadline", () => {
+    const result = realResult(nested(150))
+    expect(result.valid).toBe(true)
+    expect(result.valid && result.summary.commands.filter((command) => command.name === "get-date")).toHaveLength(1)
   })
 
   test("text that is empty has no statements", () => {
@@ -543,7 +616,7 @@ describe("PowerShellParse normalisation", () => {
     ["..\\Remove-Item", "..\\remove-item", "application"],
     ["C:\\Remove-Item", "c:\\remove-item", "application"],
     ["\\\\host\\Remove-Item", "\\\\host\\remove-item", "application"],
-    ["Microsoft.PowerShell.Management\\ls", "microsoft.powershell.management\\ls", "application"],
+    ["Microsoft.PowerShell.Management\\ls", "ls", "application"],
     ["md", "new-item", "cmdlet"],
     ["mkdir", "new-item", "cmdlet"],
     ["ipmo", "import-module", "cmdlet"],
@@ -952,7 +1025,8 @@ describe("PowerShellParse host lookup", () => {
     expect(PowerShellParse.usableHost("/usr/bin/pwsh", { platform: "linux", real, exists: () => false })).toBeNull()
     expect(PowerShellParse.usableHost("/usr/local/bin/pwsh", { platform: "linux", real, exists })).toBe("/usr/local/bin/pwsh")
     expect(PowerShellParse.usableHost("/snap/bin/pwsh", { platform: "linux", exists })).toBe("/opt/microsoft/powershell/7/pwsh")
-    expect(PowerShellParse.usableHost(null, { platform: "linux", real, exists })).toBe("/opt/microsoft/powershell/7/pwsh")
+    // Nothing on PATH is no host, even when a real binary sits at a fixed path: the fixed paths only get past a launcher.
+    expect(PowerShellParse.usableHost(null, { platform: "linux", real, exists })).toBeNull()
     expect(PowerShellParse.usableHost("C:\\pwsh.exe", { platform: "win32" })).toBe("C:\\pwsh.exe")
   })
 

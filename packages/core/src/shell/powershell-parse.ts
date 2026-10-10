@@ -110,7 +110,6 @@ $errors = $null
 $root = [System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$errors)
 function K($n) { $n.GetType().Name }
 function Under($n) { @($n.FindAll({ param($x) $true }, $true)) }
-function Is($n, $names) { $names -contains $n.GetType().Name }
 function Value($n) { if ($n -is [System.Management.Automation.Language.ConstantExpressionAst]) { return [string]$n.Value }; return $null }
 function Redirect($n) {
   if ($n -is [System.Management.Automation.Language.FileRedirectionAst]) {
@@ -147,14 +146,20 @@ foreach ($e in $statements) {
       $els += [ordered]@{ kind = $(if ($paren) { 'parenthesized' } elseif ($i -ge 0) { 'command' } else { 'expression' }); text = $p.Extent.Text; command = $i }
     }
   }
+  # One pass over the subtree decides every flag; a pass per flag made deep nesting cost many times more.
+  $reds = @()
+  $fm = $false; $fs = $false; $fe = $false; $fb = $false; $fa = $false
+  foreach ($x in $d) {
+    if ($x -is [System.Management.Automation.Language.RedirectionAst]) { $reds += Redirect $x }
+    elseif ($x -is [System.Management.Automation.Language.MemberExpressionAst]) { $fm = $true }
+    elseif ($x -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) { $fe = $true }
+    elseif ($x -is [System.Management.Automation.Language.ScriptBlockExpressionAst]) { $fb = $true }
+    elseif ($x -is [System.Management.Automation.Language.AssignmentStatementAst]) { $fa = $true }
+    elseif ($x -is [System.Management.Automation.Language.SubExpressionAst] -or $x -is [System.Management.Automation.Language.ArrayExpressionAst] -or $x -is [System.Management.Automation.Language.ParenExpressionAst]) { $fs = $true }
+  }
   $out += [ordered]@{
-    kind = K $s; text = $s.Extent.Text; top = $e.top; elements = $els
-    redirects = @($d | Where-Object { $_ -is [System.Management.Automation.Language.RedirectionAst] } | ForEach-Object { Redirect $_ })
-    memberAccess = [bool]@($d | Where-Object { $_ -is [System.Management.Automation.Language.MemberExpressionAst] }).Count
-    subexpression = [bool]@($d | Where-Object { Is $_ @('SubExpressionAst', 'ArrayExpressionAst', 'ParenExpressionAst') }).Count
-    expandable = [bool]@($d | Where-Object { $_ -is [System.Management.Automation.Language.ExpandableStringExpressionAst] }).Count
-    scriptBlock = [bool]@($d | Where-Object { $_ -is [System.Management.Automation.Language.ScriptBlockExpressionAst] }).Count
-    assignment = [bool]@($d | Where-Object { $_ -is [System.Management.Automation.Language.AssignmentStatementAst] }).Count
+    kind = K $s; text = $s.Extent.Text; top = $e.top; elements = $els; redirects = $reds
+    memberAccess = $fm; subexpression = $fs; expandable = $fe; scriptBlock = $fb; assignment = $fa
   }
 }
 $commands = @()
@@ -232,7 +237,7 @@ function timeoutFromEnv() {
 }
 
 // A launcher such as the snap shim starts a confined copy through a daemon and can hang without a terminal, so it is
-// not a usable host. The real binary is looked for in the places the packages install it.
+// not a usable host. When PATH names one, the real binary is looked for in the places the packages install it.
 const REAL_LINUX_HOSTS = ["/opt/microsoft/powershell/7/pwsh", "/usr/local/microsoft/powershell/7/pwsh"]
 
 export function isLauncher(file: string, platform: NodeJS.Platform = process.platform) {
@@ -254,7 +259,9 @@ export function usableHost(
 ) {
   const platform = options.platform ?? process.platform
   const real = options.real ?? realPath
-  if (first && !isLauncher(real(first), platform)) return first
+  // No PowerShell on PATH is no host: the fixed paths are tried only to get past a launcher that PATH did find.
+  if (!first) return null
+  if (!isLauncher(real(first), platform)) return first
   if (platform !== "linux") return first
   const exists = options.exists ?? fs.existsSync
   return REAL_LINUX_HOSTS.find((candidate) => exists(candidate) && !isLauncher(real(candidate), platform)) ?? null
@@ -605,9 +612,9 @@ const ALIASES = new Map(
 const EXTENSIONS = /\.(exe|cmd|bat|com)$/i
 // A module qualifier (Module\Name) makes the command a path, so the class is decided on the name as written: Windows
 // PowerShell 5.1 runs a script file of that path in the working folder before it looks for the cmdlet. For the name
-// only, any module qualifier is dropped, so a deny rule on remove-item also meets Foo\Remove-Item. A drive, a UNC path
-// and .\ or ..\ are paths, not modules, so a qualifier must start with a letter, digit or underscore.
-const QUALIFIER = /^[A-Za-z0-9_][A-Za-z0-9_.]*\\(?=[A-Za-z]+-[A-Za-z0-9]+$)/
+// only, everything up to the last backslash is dropped, so a deny rule on remove-vm also meets Hyper-V\Remove-VM. A
+// drive, a UNC path and a name that starts with .\ or ..\ are paths, not modules, and keep their text.
+const PATH_START = /^([A-Za-z]:|\\\\|\.{1,2}\\)/
 const CMDLET = /^[A-Za-z]+-[A-Za-z][A-Za-z0-9]*$/
 
 function classify(name: string | undefined, written: string): Pick<Command, "name" | "written" | "class"> {
@@ -616,7 +623,10 @@ function classify(name: string | undefined, written: string): Pick<Command, "nam
   // A dot, a path separator or a character outside ASCII (a look-alike letter) means a program, never a cmdlet.
   const program = /[./\\]|[^\x00-\x7f]/.test(given)
   // An extension comes off a bare name only: C:\tools\git.exe stays as written.
-  const lower = (/[\\/]/.test(given) ? given.replace(QUALIFIER, "") : given.replace(EXTENSIONS, "")).toLowerCase()
+  const qualified = given.includes("\\") && !PATH_START.test(given) && !given.endsWith("\\")
+  const lower = (
+    qualified ? given.slice(given.lastIndexOf("\\") + 1) : /[\\/]/.test(given) ? given : given.replace(EXTENSIONS, "")
+  ).toLowerCase()
   if (program) return { name: lower, written, class: "application" }
   if (name === undefined) return { name: lower, written, class: "unknown" }
   return {
