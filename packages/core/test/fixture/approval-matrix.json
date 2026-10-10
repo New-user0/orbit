@@ -1,0 +1,5252 @@
+[
+  {
+    "id": "Edit/absolute path outside/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/absolute path outside/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/absolute path/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{project}/src/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/absolute path/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{project}/src/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/dot-dot path/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "../{outsideName}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/dot-dot path/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "../{outsideName}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/git bash drive path/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/git bash drive path/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/link/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "linked/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "linked/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/linked/file.txt"
+        ],
+        "files": [
+          {
+            "file": "linked/file.txt",
+            "patch": "Index: linked/file.txt\n===================================================================\n--- linked/file.txt\n+++ linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/linked/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/linked/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/link/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "linked/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/relative path/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "src/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/relative path/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "src/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/tilde path/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "~/tmp/{outsideName}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/tilde path/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "~/tmp/{outsideName}/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "LSP/absolute path outside/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/absolute path outside/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/absolute path/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "{project}/src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/absolute path/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "{project}/src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/dot-dot path/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "../{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/dot-dot path/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "../{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/git bash drive path/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/git bash drive path/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/link/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "linked/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "linked/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/linked/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/link/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "linked/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/relative path/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/relative path/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/tilde path/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "~/tmp/{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/tilde path/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "~/tmp/{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "NotebookEdit/absolute path outside/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "{outside}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/absolute path outside/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "{outside}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/absolute path/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "{project}/src/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "src/file.ipynb",
+            "patch": "Index: src/file.ipynb\n===================================================================\n--- src/file.ipynb\n+++ src/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/src/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/absolute path/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "{project}/src/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "src/file.ipynb",
+            "patch": "Index: src/file.ipynb\n===================================================================\n--- src/file.ipynb\n+++ src/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/src/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/dot-dot path/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "../{outsideName}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/dot-dot path/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "../{outsideName}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/git bash drive path/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "{outside}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/git bash drive path/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "{outside}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/link/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "linked/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "linked/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/linked/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "linked/file.ipynb",
+            "patch": "Index: linked/file.ipynb\n===================================================================\n--- linked/file.ipynb\n+++ linked/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/linked/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/linked/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/link/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "linked/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/relative path/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "src/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "src/file.ipynb",
+            "patch": "Index: src/file.ipynb\n===================================================================\n--- src/file.ipynb\n+++ src/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/src/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/relative path/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "src/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "src/file.ipynb",
+            "patch": "Index: src/file.ipynb\n===================================================================\n--- src/file.ipynb\n+++ src/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/src/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/tilde path/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "~/tmp/{outsideName}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/tilde path/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "~/tmp/{outsideName}/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{outside}/file.ipynb"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/absolute path outside/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/absolute path outside/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/absolute path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n*** Move to: {project}/src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt",
+        "src/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt, src/file-moved.txt",
+        "paths": [
+          "{project}/src/file.txt",
+          "{project}/src/file-moved.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file-moved.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file-moved.txt",
+            "from": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt",
+        "{project}/src/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file-moved.txt",
+          "from": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/absolute path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n*** Move to: {project}/src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt",
+        "src/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt, src/file-moved.txt",
+        "paths": [
+          "{project}/src/file.txt",
+          "{project}/src/file-moved.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file-moved.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file-moved.txt",
+            "from": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt",
+        "{project}/src/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file-moved.txt",
+          "from": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/dot-dot path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n*** Move to: ../{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/dot-dot path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n*** Move to: ../{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/git bash drive path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/git bash drive path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/link/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n*** Move to: linked/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "linked/file.txt",
+        "linked/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "linked/file.txt, linked/file-moved.txt",
+        "paths": [
+          "{project}/linked/file.txt",
+          "{project}/linked/file-moved.txt"
+        ],
+        "diff": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "linked/file-moved.txt",
+            "patch": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/linked/file-moved.txt",
+            "from": "{project}/linked/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.txt",
+        "{project}/linked/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/linked/file-moved.txt",
+          "from": "{project}/linked/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/link/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n*** Move to: linked/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/relative path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n*** Move to: src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt",
+        "src/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt, src/file-moved.txt",
+        "paths": [
+          "{project}/src/file.txt",
+          "{project}/src/file-moved.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file-moved.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file-moved.txt",
+            "from": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt",
+        "{project}/src/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file-moved.txt",
+          "from": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/relative path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n*** Move to: src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt",
+        "src/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt, src/file-moved.txt",
+        "paths": [
+          "{project}/src/file.txt",
+          "{project}/src/file-moved.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file-moved.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file-moved.txt",
+            "from": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt",
+        "{project}/src/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file-moved.txt",
+          "from": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/tilde path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n*** Move to: ~/tmp/{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/tilde path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n*** Move to: ~/tmp/{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt, {outside}/file-moved.txt",
+        "paths": [
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file-moved.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/absolute path outside/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/absolute path outside/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/absolute path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt",
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/absolute path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt",
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/dot-dot path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/dot-dot path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/git bash drive path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/git bash drive path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/link/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "linked/file.txt"
+      ],
+      "metadata": {
+        "filepath": "linked/file.txt",
+        "paths": [
+          "{project}/linked/file.txt"
+        ],
+        "diff": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "linked/file.txt",
+            "patch": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/linked/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/linked/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/link/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/relative path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt",
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/relative path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "filepath": "src/file.txt",
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "diff": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: {project}/src/file.txt\n===================================================================\n--- {project}/src/file.txt\n+++ {project}/src/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/tilde path/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/tilde path/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "filepath": "{outside}/file.txt",
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Read/absolute path outside/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/absolute path outside/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/absolute path/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{project}/src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/absolute path/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{project}/src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/dot-dot path/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "../{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/dot-dot path/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "../{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/git bash drive path/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/git bash drive path/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/link/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "linked/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "linked/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/linked/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/link/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "linked/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/relative path/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/relative path/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "src/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/tilde path/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "~/tmp/{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/tilde path/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "~/tmp/{outsideName}/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Write/absolute path outside/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/absolute path outside/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/absolute path/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{project}/src/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/absolute path/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{project}/src/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/dot-dot path/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "../{outsideName}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/dot-dot path/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "../{outsideName}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/git bash drive path/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/git bash drive path/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "{outside}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/link/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "linked/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "linked/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/linked/file.txt"
+        ],
+        "files": [
+          {
+            "file": "linked/file.txt",
+            "patch": "Index: linked/file.txt\n===================================================================\n--- linked/file.txt\n+++ linked/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/linked/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/linked/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/linked/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/link/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "linked/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/relative path/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "src/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/relative path/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "src/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "src/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/src/file.txt"
+        ],
+        "files": [
+          {
+            "file": "src/file.txt",
+            "patch": "Index: src/file.txt\n===================================================================\n--- src/file.txt\n+++ src/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/src/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/src/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/src/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/tilde path/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "~/tmp/{outsideName}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/tilde path/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "~/tmp/{outsideName}/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "{outside}/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{outside}/file.txt"
+        ],
+        "files": [
+          {
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{outside}/file.txt"
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{outside}/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{outside}/file.txt"
+        }
+      ]
+    }
+  }
+]

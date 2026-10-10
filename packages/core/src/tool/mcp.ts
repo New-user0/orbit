@@ -81,7 +81,9 @@ export const layer = Layer.effect(
                       action: name(tool.server, tool.name),
                       resources: ["*"],
                       save: ["*"],
-                      metadata: {},
+                      // The arguments the server receives, so an MCP call through Code Mode, whose caller is the Execute tool,
+                      // is approved with what it sends.
+                      metadata: { arguments: input ?? {} },
                       sessionID: context.sessionID,
                       agent: context.agent,
                       source: {

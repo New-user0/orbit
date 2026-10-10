@@ -130,6 +130,8 @@ export const Plugin = {
       }
       const target = yield* access.resolve({ path: invocation.cwd, kind: "directory" })
       invocation.cwd = target.absolute
+      // The folder as resolved, before anything is asked, so a client names where the command runs even when no rule asks.
+      yield* context.progress({ places: [target.place] })
       const timeout = invocation.timeout
       const portable = Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
       const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, { portable })

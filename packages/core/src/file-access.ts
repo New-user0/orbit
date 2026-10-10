@@ -53,7 +53,8 @@ export interface Target {
   readonly externalDirectory?: ExternalDirectoryAuthorization
 }
 
-export type Invocation = Pick<Tool.Context, "sessionID" | "agent" | "messageID" | "id">
+export type Invocation = Pick<Tool.Context, "sessionID" | "agent" | "messageID" | "id"> &
+  Partial<Pick<Tool.Context, "progress">>
 
 export interface ReadOptions {
   /** A target already authorized by this invocation, used for filename recovery. */
@@ -299,11 +300,16 @@ const layer = Layer.effect(
         options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
 
       // Filename recovery shares the directory approval, but checks the recovered file's own read rules.
+      // The place as resolved, before anything is asked, so a client names what the tool reads even when no rule asks.
+      if (context.progress) yield* context.progress({ places: [target.place] })
       if (!sibling) yield* authorizeExternal([target], context)
       yield* permission.assert({
         action: "Read",
         resources: [target.resource],
         save: ["*"],
+        // The place as resolved here, absolute, so a client shows it rather than the input's spelling, and the real place
+        // when a link in an untrusted project leads there.
+        metadata: { paths: [target.place] },
         ...invocation(context),
       })
       return target
