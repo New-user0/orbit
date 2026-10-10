@@ -74,6 +74,10 @@ class Paused extends Error {}
 
 const BUDGET_GATE = "budget"
 
+// What the agent of an `auto` node is told when managed settings turned the mode off.
+const MANAGED =
+  "Skipping permission prompts is turned off by your organization's managed settings, so this request was rejected."
+
 const REJECTED =
   "This workflow runs unattended and does not approve actions that need permission. Continue without this action, or explain what you would need."
 
@@ -143,7 +147,11 @@ export async function run(options: RunOptions): Promise<RunResult> {
     return done
   }
   const used = new Set<string>()
-  const policies = new Map<string, "reject" | "auto">()
+  const policies = new Map<string, Policy>()
+  // Managed settings can turn bypass off. It is read once per run, so an `auto` policy anywhere in it (a node, a team
+  // member, the run's default) is downgraded here and nowhere else.
+  const bypass = options.client && !source ? await bypassAllowed(options.client, options.directory) : true
+  const policy = (wanted: "reject" | "auto"): Policy => (wanted === "auto" && !bypass ? "managed" : wanted)
   const listener = new AbortController()
   if (options.client && !source) void answerPermissions(options.client, policies, listener.signal)
   log(`${source ? `replaying ${source.id} as` : previous ? "resuming" : "started"} ${id}`)
@@ -266,7 +274,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
           timeout: agentOptions.timeout,
           started: (session) => {
             sessions.push(session)
-            policies.set(session, agentOptions.permissions ?? options.permissions ?? "reject")
+            policies.set(session, policy(agentOptions.permissions ?? options.permissions ?? "reject"))
           },
         }).catch(
           (error: unknown): Attempt => ({
@@ -472,7 +480,7 @@ export async function run(options: RunOptions): Promise<RunResult> {
       agent: input.agent,
       session: input.session,
       timeout: input.timeout,
-      started: (session) => policies.set(session, input.permissions),
+      started: (session) => policies.set(session, policy(input.permissions)),
     }).catch(
       (error: unknown): Attempt => ({
         session: input.session ?? "",
@@ -819,9 +827,19 @@ async function pool<T>(tasks: ReadonlyArray<() => Promise<T>>, concurrency: numb
   return results
 }
 
+// `managed` is an `auto` policy that managed settings turned into a rejection with its own feedback.
+type Policy = "reject" | "auto" | "managed"
+
+// Whether the server's managed settings leave the mode that approves every ask open. A server that cannot say, or does
+// not report it, counts as closed: a run then rejects what an `auto` node asks for instead of approving it.
+async function bypassAllowed(client: OrbitClient, directory: string) {
+  const effective = await client.config.effective({ location: { directory } }).catch(() => undefined)
+  return effective?.permissions?.bypass === true
+}
+
 // The run answers permission requests for its own sessions and their subagents, by the node's policy.
-async function answerPermissions(client: OrbitClient, policies: Map<string, "reject" | "auto">, signal: AbortSignal) {
-  const owner = async (session: string, depth = 0): Promise<"reject" | "auto" | undefined> => {
+async function answerPermissions(client: OrbitClient, policies: Map<string, Policy>, signal: AbortSignal) {
+  const owner = async (session: string, depth = 0): Promise<Policy | undefined> => {
     const known = policies.get(session)
     if (known || depth > 8) return known
     const info = await client.session.get({ sessionID: session }).catch(() => undefined)
@@ -836,7 +854,7 @@ async function answerPermissions(client: OrbitClient, policies: Map<string, "rej
         sessionID: event.data.sessionID,
         requestID: event.data.id,
         decision: policy === "auto" ? "once" : "reject",
-        ...(policy === "reject" ? { message: REJECTED } : {}),
+        ...(policy === "reject" ? { message: REJECTED } : policy === "managed" ? { message: MANAGED } : {}),
       })
       .catch(() => undefined)
   }

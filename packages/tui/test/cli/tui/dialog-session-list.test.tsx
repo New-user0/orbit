@@ -75,7 +75,7 @@ async function mountList(file: object, options: { initialSearch?: string; title?
                   <ToastProvider>
                     <RouteProvider>
                       <ClientProvider api={createApi(calls.fetch)}>
-                        <PermissionProvider>
+                        <PermissionProvider directory={process.cwd()}>
                           <DataProvider directory={process.cwd()}>
                             <LocationProvider>
                               <SessionTabsProvider>
@@ -235,7 +235,7 @@ test("scopes sessions to the active session location", async () => {
                   <ToastProvider>
                     <RouteProvider>
                       <ClientProvider api={createApi(calls.fetch)}>
-                        <PermissionProvider>
+                        <PermissionProvider directory={process.cwd()}>
                           <DataProvider directory={process.cwd()}>
                             <LocationProvider>
                               <SessionTabsProvider>

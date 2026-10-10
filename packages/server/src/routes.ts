@@ -33,6 +33,7 @@ import { WellKnown } from "@orbit/core/wellknown"
 import { Workspace } from "@orbit/core/workspace"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { ManagedSettings } from "@orbit/core/managed-settings"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -53,6 +54,8 @@ import type { ServerOptions } from "./options"
 
 const applicationServiceNodes = [
   Global.node,
+  // The effective-settings handler reports what the managed policy leaves open.
+  ManagedPolicy.node,
   Database.node,
   Bus.node,
   EventLogger.node,
@@ -172,6 +175,7 @@ function makeRoutes<AuthError, AuthServices>(
           Context.pick(
             Database.Service,
             Credential.Service,
+            ManagedPolicy.Service,
             PermissionSaved.Service,
             PluginUpdate.Service,
             Project.Service,

@@ -86,7 +86,8 @@ const rule = (effect: "allow" | "deny" | "ask", resource: string) => ({ action: 
 // Follows keys through a decoded value without asserting its shape.
 const field = (value: unknown, ...keys: string[]) =>
   keys.reduce<unknown>(
-    (current, key) => (typeof current === "object" && current !== null ? Object.fromEntries(Object.entries(current))[key] : undefined),
+    (current, key) =>
+      typeof current === "object" && current !== null ? Object.fromEntries(Object.entries(current))[key] : undefined,
     value,
   )
 
@@ -497,6 +498,7 @@ describe("ManagedSettings service", () => {
         "managed-settings.json": {
           permissions: [rule("deny", "rm *")],
           experimental: { policies: [{ action: "provider.use", resource: "openai", effect: "deny" }] },
+          agents: { reviewer: { permissions: [rule("deny", "curl *")] }, plain: { description: "no rules" } },
           managed: { organization: "Acme", network: { denied_domains: ["bad.example"] } },
         },
       })
@@ -506,8 +508,59 @@ describe("ManagedSettings service", () => {
 
         expect(policy.statements).toEqual([{ action: "provider.use", resource: "openai", effect: "deny" }])
         expect(policy.rules).toEqual([rule("deny", "rm *")])
+        expect(policy.agentRules).toEqual({ reviewer: [rule("deny", "curl *")] })
         expect(policy.restrictions).toEqual({ organization: "Acme", network: { denied_domains: ["bad.example"] } })
         expect(policy.organization).toBe("Acme")
+      }).pipe(Effect.provide(layers(tmp.path)))
+    }),
+  )
+
+  // Class 4: the managed layer matches resolved absolute paths, so `~` and `$HOME` must be expanded as config rules are.
+  const home =
+    (...parts: string[]) =>
+    (root: string) =>
+      path.join(root, "home", ...parts)
+  for (const row of [
+    { spelling: "~", resource: "~", expected: home() },
+    { spelling: "~/.ssh/*", resource: "~/.ssh/*", expected: home(".ssh", "*") },
+    { spelling: "$HOME/.ssh/*", resource: "$HOME/.ssh/*", expected: home(".ssh", "*") },
+    {
+      spelling: "$HOME\\.ssh\\*",
+      resource: "$HOME\\.ssh\\*", // A backslash separates only on Windows.
+      expected: process.platform === "win32" ? home(".ssh", "*") : home(".ssh\\*"),
+    },
+    { spelling: "$HOME", resource: "$HOME", expected: home() },
+  ]) {
+    for (const action of ["Read", "Edit", "external_directory"]) {
+      it.live(`expands ${row.spelling} in a managed ${action} rule, at top level and for an agent`, () =>
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          const managed = path.join(tmp.path, "managed")
+          const deny = [{ action, resource: row.resource, effect: "deny" as const }]
+          yield* write(managed, {
+            "managed-settings.json": { permissions: deny, agents: { reviewer: { permissions: deny } } },
+          })
+          yield* Effect.gen(function* () {
+            yield* Config.Service
+            const policy = (yield* ManagedPolicy.Service).current()
+            const expected = [{ action, resource: row.expected(tmp.path), effect: "deny" as const }]
+            expect(policy.rules).toEqual(expected)
+            expect(policy.agentRules).toEqual({ reviewer: expected })
+          }).pipe(Effect.provide(layers(tmp.path)))
+        }),
+      )
+    }
+  }
+
+  it.live("leaves a managed Bash rule that names ~ as shell text", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(path.join(tmp.path, "managed"), {
+        "managed-settings.json": { permissions: [rule("deny", "cat ~/.ssh/*")] },
+      })
+      yield* Effect.gen(function* () {
+        yield* Config.Service
+        expect((yield* ManagedPolicy.Service).current().rules).toEqual([rule("deny", "cat ~/.ssh/*")])
       }).pipe(Effect.provide(layers(tmp.path)))
     }),
   )
@@ -743,7 +796,9 @@ describe("ManagedSettings.read records of whole definitions", () => {
     {
       name: "lsp env",
       key: "lsp",
-      first: { "ls-a": { command: ["a"], env: { TOKEN: "secret-a" }, initialization: { endpoint: "https://a.example" } } },
+      first: {
+        "ls-a": { command: ["a"], env: { TOKEN: "secret-a" }, initialization: { endpoint: "https://a.example" } },
+      },
       second: { "ls-a": { command: ["b"] } },
       expected: { command: ["b"] },
     },
@@ -943,7 +998,11 @@ describe("ManagedSettings.read unknown keys at every depth", () => {
 
 describe("ManagedSettings.read unknown keys outside managed", () => {
   const rows = [
-    { name: "a misspelled permissions", file: { permisions: [rule("deny", "rm *")], shell: "kept" }, at: "$.permisions" },
+    {
+      name: "a misspelled permissions",
+      file: { permisions: [rule("deny", "rm *")], shell: "kept" },
+      at: "$.permisions",
+    },
     {
       name: "a misspelled experimental.policies",
       file: { experimental: { policy: [{ action: "provider.use", resource: "x", effect: "deny" }] } },
@@ -992,8 +1051,16 @@ describe("ManagedSettings.read unknown keys outside managed", () => {
 
 describe("ManagedSettings.read broken links", () => {
   const rows = [
-    { name: "a drop-in", link: "managed-settings.d/10-link.json", sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } } },
-    { name: "the base file", link: "managed-settings.json", sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } } },
+    {
+      name: "a drop-in",
+      link: "managed-settings.d/10-link.json",
+      sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } },
+    },
+    {
+      name: "the base file",
+      link: "managed-settings.json",
+      sibling: { "managed-settings.d/20-ok.json": { shell: "ok" } },
+    },
     // Only where file names ignore case does a differently cased link name the base file.
     ...(process.platform === "win32" || process.platform === "darwin"
       ? [
@@ -1042,7 +1109,9 @@ describe("ManagedSettings paths in a drop-in", () => {
       yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const entries = yield* config.entries()
-        const document = entries.find((entry): entry is Document => entry.type === "document" && entry.scope === "managed")
+        const document = entries.find(
+          (entry): entry is Document => entry.type === "document" && entry.scope === "managed",
+        )
 
         expect(document?.path).toBe(AbsolutePath.make(path.join(tmp.path, "managed", "managed-settings.json")))
       }).pipe(Effect.provide(layers(tmp.path)))

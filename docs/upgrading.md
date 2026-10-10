@@ -284,13 +284,43 @@ A file or an entry that does not decode is skipped on its own and never drops wh
 Orbit does not know, at any depth of the native settings (`sandbox.enabeld`, a server's `disable`, an agent's `permisions`), is
 reported instead of ignored. The legacy top-level spellings (`agent`, `provider`, `permission` and the rest) are not
 checked, and neither is a key that another variant of the same value knows (`headers` on a local server). `orb doctor` lists
-the managed files by name and each problem it found. This release loads and merges the settings and hands the
-permission rules and restrictions to the policy service; enforcing them follows separately.
+the managed files by name and each problem it found. The permission rules and restrictions go to the policy service,
+which enforces them (see "Managed permission rules, hook limits and the bypass switch are enforced").
 
 **Affects:** machines that already have a file at one of those paths, and people who run a server with
 `ORBIT_MANAGED_DIR` set.
 
 **What to do:** Nothing unless your organization manages Orbit.
+
+### Managed permission rules, hook limits and the bypass switch are enforced
+
+Managed settings now take effect. Permission checks end in a managed layer that runs in core after the plugin hooks, so
+no plugin can override it. In order of precedence: a configured deny (agent rules, session rules and every non-managed
+config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
+then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
+`managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
+upgrades an ask, but never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a managed `Read` or `Edit` rule also decides a file inside the session's folder by its absolute place, so a deny on `~/.ssh/*` holds when Orbit runs in the home folder. The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
+managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
+
+- `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
+  approvals, drops allow rules from a session's own permissions, offers no "always" on a request, and treats an
+  "always" reply as "once". The built-in rules of the agents stay.
+- `disable_hooks` runs no declarative hook, and `managed_hooks_only` runs only the hooks of managed settings. The managed file's own `hooks.disabled` and `hooks.managed_only` mean the same.
+- `disable_bypass_permissions` makes `orb`, `orb run`, `orb -p`, `orb loop`, `orb flow run`, `orb flow resume` and
+  `orb eval` refuse `--auto`, `--yolo` and `--dangerously-skip-permissions`. A workflow or suite node whose
+  `permissions` is `auto` (including a team member's) has its requests rejected, with the managed message as feedback.
+  The terminal interface keeps asking for permission and shows a notice when auto-accept was requested. A server that
+  cannot say whether bypass is allowed counts as refusing it.
+- `GET /api/config/effective` also reports `permissions: { bypass, always }`, so clients can read these switches.
+- `orb flow clean` now compares a worktree's folder with the run's folder the way the platform compares paths, so a
+  run is cleaned up when the repository path is spelled with other case on Windows.
+
+Bypass is refused by the clients until a durable permission mode in the server reads the managed settings itself.
+
+**Affects:** organizations that ship managed settings, and people on their machines who use `--auto` or workflows with
+`permissions: auto`.
+
+**What to do:** nothing unless your organization manages Orbit.
 
 ## Clients
 

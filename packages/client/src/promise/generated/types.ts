@@ -495,7 +495,7 @@ export type ConfigWorktree = { directory: string }
 
 export type ConfigModelCapabilities = { tools?: boolean; input?: Array<string>; output?: Array<string> }
 
-export type ConfigEffective = { compatibility: boolean }
+export type ConfigEffective = { compatibility: boolean; permissions?: { bypass: boolean; always: boolean } }
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 

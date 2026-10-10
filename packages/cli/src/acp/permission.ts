@@ -78,7 +78,8 @@ const ask = Effect.fnUntraced(function* (input: Input) {
       locations: permissionLocations(toolName, view, request, input.cwd),
       ...(previews.length > 0 ? { content: previews } : {}),
     },
-    options,
+    // A request with nothing to save offers no "always": the server would treat it as once.
+    options: request.save?.length ? options : options.filter((option) => option.optionId !== "always"),
   })
   const selected = result.outcome.outcome === "selected" ? result.outcome.optionId : undefined
   return selected === "once" || selected === "always" ? selected : "reject"

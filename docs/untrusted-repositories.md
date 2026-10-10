@@ -799,7 +799,7 @@ against a service that was started before the upgrade (#18, #22). The pattern re
 - For a command that checks trust, the older-server row is explicit. A command that only checks held-back config goes
   ahead with a warning on stderr. One that would import a file or run what a file defines stops with `unanswered(...)`,
   which names `orb service restart`, `--standalone` and `--trust` (`packages/cli/src/util/trust.ts`).
-- A setting that validates is enforced, or it warns once that it is not: `hooks.disabled`, `managed_only` and `http` do
+- A setting that validates is enforced, or it warns once that it is not: `hooks.http`, and `hooks.disabled` and `managed_only` outside the managed file, do
   (`UNENFORCED_POLICIES` in `packages/core/src/config/plugin/lifecycle-hooks.ts`).
 - Parse a switch as its siblings are parsed (`1` and `true`, case-insensitive; `ORBIT_DISABLE_COMPAT` once took only
   `1`).
@@ -1605,7 +1605,8 @@ fixes it or asks.
   `trust.updated` event. The structural fix is to walk from the server's project root (the owner's call, #20 re-review).
 - **A headless run with no trust check.** `runV1Bridge` in `packages/cli/src/run/v1.ts`, exported from `@orbit/cli/run`,
   starts a run without `requireTrust`. Nothing calls it except an import-boundary test, so it is dormant. Whoever wires
-  it in calls `requireTrust` first.
+  it in calls `requireTrust` first. It and `runNonInteractive({ auto })` also select the mode that skips permission prompts
+  without the managed-settings check that the command handlers make (`bypassRefusal`), so whoever wires them in adds it too.
 - **A typed refusal that a public error flattens.** `ConfigCommandPlugin.UntrustedError` reaches a client only as what
   `Command.execute` makes of every failure, because a Protocol change was declined as out of scope (#15). A client
   cannot tell a trust refusal from any other failure of a command.

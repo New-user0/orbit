@@ -6,6 +6,7 @@ import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
 import { errorMessage } from "../../util/error"
 import { findResumeSession } from "../../session-target"
+import { bypassRefusal } from "../../util/managed-bypass"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -84,10 +85,19 @@ export function headlessInput(input: HeadlessInput) {
     // Checks the folder the run happens in, which is the folder of the session when --session or --resume names one
     // that exists. A refusal, and a request that fails, go out the way any error before a session exists does, so a
     // script that asked for JSON gets JSON.
-    const stopped = yield* trustRefusal(client, directory(), { grant: input.trust, session, strict: input.strict }).pipe(
-      Effect.catch((error) => Effect.succeed(errorMessage(error))),
-    )
+    const stopped = yield* trustRefusal(client, directory(), {
+      grant: input.trust,
+      session,
+      strict: input.strict,
+    }).pipe(Effect.catch((error) => Effect.succeed(errorMessage(error))))
     if (stopped !== undefined) return reportRunError({ format, envelope: input.envelope }, stopped)
+    // Before the first prompt, and in the format that was asked for, like the trust refusal above.
+    const bypass = yield* bypassRefusal(
+      client,
+      directory(),
+      input.auto || input.yolo || input.dangerouslySkipPermissions,
+    )
+    if (bypass !== undefined) return reportRunError({ format, envelope: input.envelope }, bypass)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,
