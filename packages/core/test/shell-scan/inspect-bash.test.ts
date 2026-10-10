@@ -222,6 +222,14 @@ describe("ShellScan.inspect nesting", () => {
     expect(command.nested.map((node) => [node.words, node.origin])).toEqual([[["a"], "heredoc"]])
   })
 
+  test.each(["<<EOF\n$(z)\nEOF", "A=1 <<EOF\n$(z)\nEOF", "{ cat; } <<EOF\n$(z)\nEOF"])(
+    "a heredoc on a commandless statement puts its substitutions at the top level: %p",
+    (input) => {
+      const found = scanned(input).commands.find((command) => command.words[0] === "z")
+      expect(found?.origin).toBe("heredoc")
+    },
+  )
+
   test("a quoted heredoc keeps its body and nests nothing", () => {
     const command = only("psql <<'SQL'\nselect $(a);\nSQL")
     expect(command.heredocs).toEqual([{ delimiter: "SQL", quoted: true, tabs: false, body: "select $(a);\n" }])
@@ -295,6 +303,22 @@ describe("ShellScan.inspect expansion positions", () => {
     ["echo ${x:-$(a)}", { parameter: true, command: true }],
     ["echo $((1+$(b)))", { arithmetic: true, command: true }],
     ["echo @(a|$(d))", { glob: true, command: true }],
+    ['echo "${x:-$(a)}"', { parameter: true, command: true }],
+    ['echo "${y:-`c`}"', { parameter: true, command: true }],
+    ['echo "$((1+$(b)))"', { arithmetic: true, command: true }],
+    ['echo "${a[$(x)]}"', { parameter: true, command: true }],
+    ["echo {a, b}", {}],
+    ["echo []a] [[] []] a[\" \"]b", { glob: true }],
+    ["echo [a b]", {}],
+    ["echo []", {}],
+    ["echo [!]a]", { glob: true }],
+    ['echo "[a]" \\[a\\] [a"]"', {}],
+    ["echo \\$* \\$? \\$[ab]", { glob: true }],
+    ["echo $* $? $#", { parameter: true }],
+    ["unset A=*", { glob: true }],
+    ["export B={a,b}", { brace: true }],
+    ["declare D={x,y}", { brace: true }],
+    ["export E={1..3}", { brace: true }],
   ]
   test.each(argument)("argument %s", (input, expected) => {
     const flags = only(input).flags.slice(1)
@@ -304,7 +328,8 @@ describe("ShellScan.inspect expansion positions", () => {
   test("a prefix assignment and a declaration argument are exempt from glob and brace, not from tilde", () => {
     expect(only("A=* B={a,b} env").assignments.map((assignment) => assignment.flags)).toEqual([{}, {}])
     expect(only("A=~/x:~/y env").assignments[0].flags).toEqual({ tilde: true })
-    expect(only("export A=* B={a,b}").flags.slice(1)).toEqual([{}, {}])
+    expect(only("export A=* B=[ab]").flags.slice(1)).toEqual([{}, {}])
+    expect(only("export B={a,b}").flags.slice(1)).toEqual([{ brace: true }])
     expect(only("declare -x A=*").flags.slice(1)).toEqual([{}, {}])
   })
 
@@ -314,6 +339,11 @@ describe("ShellScan.inspect expansion positions", () => {
     ["a=(*)", { glob: true }],
     ["a=({b,c})", { brace: true }],
     ["a=(x $y)", { parameter: true }],
+    ["a=(~/x)", { tilde: true }],
+    ["a=([ab] x)", { glob: true }],
+    ["a=([a b])", {}],
+    ["a=('*' \"?\" {b})", {}],
+    ["a=($(a=($(x))))", { command: true }],
   ] as Array<[string, ShellScan.WordFlags]>)("assignment %s", (input, expected) => {
     expect(scanned(input).statements[0].assignments[0].flags).toEqual(expected)
   })
@@ -325,6 +355,12 @@ describe("ShellScan.inspect expansion positions", () => {
     ["echo x > \\~/f", false],
     ["echo x > a~/f", false],
     ["echo x > A=*", true],
+    ["echo x > B=~/f", true],
+    ["echo x > A=x:~/f", true],
+    ["echo x >> C=~", true],
+    ["echo x > .[]m]cp.json", true],
+    ["echo x > []p]re-commit", true],
+    ["echo x > [a b]", false],
     ["echo x > f", false],
   ])("redirect target %s dynamic=%p", (input, dynamic) => {
     expect(only(input).redirects[0].dynamic).toBe(dynamic)
@@ -358,6 +394,9 @@ describe("ShellScan.inspect cost", () => {
     ["open brackets", `"[".repeat(60000)`],
     ["brace ranges", `"echo " + "{a..".repeat(8000)`],
     ["array values", `"a=(" + "{,".repeat(8000) + ")"`],
+    ["array chain", `"a=($(".repeat(15) + "x" + "))".repeat(15)`],
+    ["array chain on lines", `Array.from({ length: 8 }, () => "a=($(".repeat(15) + "x" + "))".repeat(15)).join("\\n")`],
+    ["array tree", `(() => { let x = "a"; for (let i = 0; i < 10; i++) x = "a=($(" + x + ") $(" + x + "))"; return x })()`],
   ]
   test.each(hostile)("%s finish under a deadline", async (_name, expression) => {
     const source = new URL("../../src/shell/scan.ts", import.meta.url).href
@@ -373,4 +412,34 @@ describe("ShellScan.inspect cost", () => {
     })
     expect(await child.exited).toBe(0)
   }, 15000)
+
+  test("a nested array tree still scans, once per substitution", () => {
+    const tree = Array.from({ length: 10 }).reduce<string>((x) => "a=($(" + x + ") $(" + x + "))", "a")
+    const result = ShellScan.scan(tree)
+    expect(result.kind).toBe("scanned")
+    if (result.kind === "scanned") expect(result.commands).toHaveLength(1024)
+  })
+
+  test("bracket checks grow linearly", async () => {
+    const source = new URL("../../src/shell/scan.ts", import.meta.url).href
+    const time = async (count: number) => {
+      const child = Bun.spawn({
+        cmd: [
+          process.execPath,
+          "-e",
+          `const { ShellScan } = await import(${JSON.stringify(source)});
+           const input = "[".repeat(${count}); ShellScan.inspect(input);
+           const start = performance.now(); for (let run = 0; run < 20; run++) ShellScan.inspect(input); console.log(performance.now() - start)`,
+        ],
+        stdout: "pipe",
+        stderr: "ignore",
+        timeout: 8000,
+      })
+      return Number(await new Response(child.stdout).text())
+    }
+    const small = await time(15000)
+    const large = await time(60000)
+    // Linear growth gives a ratio near 4. Quadratic growth gives near 16.
+    expect(large / Math.max(small, 1)).toBeLessThan(10)
+  }, 20000)
 })

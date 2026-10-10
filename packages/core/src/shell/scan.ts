@@ -78,9 +78,10 @@ type Opaque = Extract<Inspection, { kind: "opaque" }>
 
 const BASH_REDIRECTS = ["&>>", "&>", "<<<", "<<-", "<<", "<>", "<&", ">&", ">|", ">>", ">", "<"]
 const BASH_DECLARATIONS = new Set(["declare", "typeset", "export", "readonly", "local", "unset", "unsetenv"])
+// Builtins whose assignment arguments skip globbing. Bash still globs the arguments of unset.
+const BASH_ASSIGNING_DECLARATIONS = new Set(["declare", "typeset", "export", "readonly", "local"])
 const MAX_INPUT_LENGTH = 64 * 1024
 const MAX_SUBSTITUTION_DEPTH = 32
-
 
 export function inspect(input: string): Inspection {
   const result = inspectBash(input)
@@ -143,6 +144,10 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
   let flags: WordFlags = {}
   // One entry per open unquoted brace in the current word; true once it holds a comma or a range.
   const braces: boolean[] = []
+  // Bracket expression state of the current word: 0 none, 1 after "[", 2 after the negation, 3 inside the set.
+  let bracket: 0 | 1 | 2 | 3 = 0
+  // True while the next character names the parameter of the unquoted "$" just read.
+  let parameterName = false
   let redirectOperator: string | undefined
   let redirectFd: string | undefined
   const words: string[] = []
@@ -213,15 +218,31 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
 
   // Only a prefix assignment or an argument of a declaration builtin is exempt from globbing and brace expansion.
   // Anywhere else an assignment-looking word (echo A=*) expands like any other argument.
-  const assignmentExempt = () => {
+  // Bash still brace-expands a declaration argument (export B={a,b} runs as export B=a B=b), so only the glob check
+  // accepts a declaration builtin.
+  const assignmentExempt = (brace: boolean) => {
     if (!assignmentWord || redirectTarget) return false
-    const name = commandName
-    return name < 0 || BASH_DECLARATIONS.has(rawWords[name])
+    return commandName < 0 || (!brace && BASH_ASSIGNING_DECLARATIONS.has(rawWords[commandName]))
   }
 
+  // Feeds one literal character of the word to the bracket expression matcher. A set needs a member before its
+  // closing "]", and a first "]" is that member ("[]a]"). Quoted characters are members and never close a set.
+  const feedBracket = (char: string, quoted: boolean) => {
+    if (bracket === 0) {
+      if (!quoted && char === "[") bracket = 1
+      return
+    }
+    if (bracket === 1 && !quoted && (char === "!" || char === "^")) bracket = 2
+    else if (bracket < 3) bracket = 3
+    else if (!quoted && char === "]") {
+      bracket = 0
+      if (!assignmentExempt(false)) flags.glob = true
+    }
+  }
   const finishWord = () => {
     if (!wordStarted) return
     braces.length = 0
+    bracket = 0
     if (!redirectTarget) {
       words.push(word)
       // Unquoted trailing continuations are ignored syntax, not part of the raw token.
@@ -543,7 +564,10 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
       wordStarted = true
       wordEnd = index + 1
       if (char === "'") quote = undefined
-      else word += char
+      else {
+        feedBracket(char, true)
+        word += char
+      }
       continue
     }
     if (quote === "double") {
@@ -553,18 +577,28 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
         const next = input[index + 1]
         if ('$`"\\\n'.includes(next)) {
           index++
-          if (next !== "\n") word += next
-        } else word += char
+          if (next !== "\n") {
+            feedBracket(next, true)
+            word += next
+          }
+        } else {
+          feedBracket(char, true)
+          word += char
+        }
       } else if ((char === "$" && "({[".includes(input[index + 1] ?? "\0")) || char === "`") {
         flags[expansionFlag(input, index)] = true
         const substitution = bashExpansion(budget, input, index, depth, undefined, true)
         if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
         const failure = addSubstitutions(substitution)
         if (failure) return failure
+        // A command substitution nested in another expansion is still a command.
+        if (substitution.substitutions?.length) flags.command = true
+        feedBracket("$", true)
         word += input.slice(index, substitution.end + 1)
         index = substitution.end
       } else {
         if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) flags.parameter = true
+        feedBracket(char, true)
         word += char
       }
       wordEnd = index + 1
@@ -575,6 +609,7 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
       if (!literal) return syntax("unterminated-quote")
       wordStarted = true
       if (!assignmentWord) assignmentHeadUnsafe = true
+      feedBracket("$", true)
       word += literal.value
       index = literal.end
       wordEnd = index + 1
@@ -607,6 +642,7 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
       else {
         wordStarted = true
         if (!assignmentWord) assignmentHeadUnsafe = true
+        feedBracket(input[index + 1], true)
         word += input[++index]
         wordEnd = index + 1
       }
@@ -633,15 +669,9 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
       if (failure) return failure
       // A command substitution nested in another expansion is still a command.
       if (substitution.substitutions?.length) flags.command = true
-      if (char === "(" && assignmentWord) {
-        // Array values are words of their own: they glob, brace-expand and substitute like arguments.
-        const values = scanBash(": " + substitution.source, depth + 1, budget)
-        if (values.kind === "opaque") flags.glob = true
-        else
-          values.roots
-            .filter((root) => !root.origin)
-            .forEach((root) => root.flags.forEach((entry) => Object.assign(flags, entry)))
-      }
+      // Array values are words of their own: they glob, brace-expand and substitute like arguments.
+      if (char === "(" && assignmentWord) Object.assign(flags, arrayValueFlags(substitution.source))
+      feedBracket("$", true)
       wordStarted = true
       word += input.slice(index, substitution.end + 1)
       index = substitution.end
@@ -654,6 +684,7 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
       if (!substitution || depth >= MAX_SUBSTITUTION_DEPTH) return fail("command-substitution")
       const failure = addSubstitutions(substitution)
       if (failure) return failure
+      feedBracket("$", true)
       wordStarted = true
       word += input.slice(index, substitution.end + 1)
       index = substitution.end
@@ -686,6 +717,7 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
         wordStarted = false
         flags = {}
         braces.length = 0
+        bracket = 0
       } else finishWord()
       // Trailing redirects wrap a whole list/pipeline in the legacy grammar, not its last command.
       // Prefix redirects remain part of the command, and later words remain redirect destinations.
@@ -759,7 +791,7 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
             if (!heredoc.quoted) {
               const expansion = bashExpansion(budget, body.source, 0, depth, "heredoc")
               if (!expansion) return fail("command-substitution")
-              const failure = addSubstitutions(expansion, heredoc.node?.nested ?? roots, "heredoc")
+              const failure = addSubstitutions(expansion, heredoc.node && !heredoc.node.commandless ? heredoc.node.nested : roots, "heredoc")
               if (failure) return failure
               commands.push(...nestedCommands.splice(0))
             }
@@ -785,23 +817,19 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
     wordStarted = true
     if (char === "=" && !assignmentHeadUnsafe && /^[A-Za-z_][A-Za-z0-9_]*(?:\[.*\])?\+?$/.test(word))
       assignmentWord = true
-    const exempt = assignmentExempt()
-    if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) flags.parameter = true
-    else if (
-      !exempt &&
-      input[index - 1] !== "$" &&
-      (char === "*" || char === "?" || (char === "[" && matchAt(BRACKET_GLOB, input, index)))
-    )
-      flags.glob = true
-    else if (
-      char === "~" &&
-      (index === wordStart || (assignmentWord && !redirectTarget && ":=".includes(input[index - 1])))
-    )
+    const afterParameter = parameterName
+    parameterName = false
+    feedBracket(char, false)
+    if (char === "$" && /[A-Za-z0-9_@*#?!$-]/.test(input[index + 1] ?? "")) {
+      flags.parameter = true
+      parameterName = true
+    } else if (!afterParameter && !assignmentExempt(false) && (char === "*" || char === "?")) flags.glob = true
+    else if (char === "~" && (index === wordStart || (assignmentWord && ":=".includes(input[index - 1]))))
       flags.tilde = true
     // Braces are tracked as a stack so every check stays linear in the word.
     else if (char === "{") braces.push(false)
     else if (char === "}" && braces.length) {
-      if (braces.pop() && !exempt) flags.brace = true
+      if (braces.pop() && !assignmentExempt(true)) flags.brace = true
     } else if (braces.length && (char === "," || (char === "." && input[index + 1] === ".")))
       braces[braces.length - 1] = true
     word += char
@@ -823,12 +851,75 @@ function scanBash(input: string, depth: number, budget: Budget): Scanned | Opaqu
   return { kind: "scanned", commands, roots, features }
 }
 
-// Linear: the class excludes both brackets, so a failed match never rescans.
-const BRACKET_GLOB = /\[[^\][\s]+\]/y
-
-function matchAt(pattern: RegExp, input: string, index: number) {
-  pattern.lastIndex = index
-  return pattern.test(input)
+// Flags of the values in an array assignment, read lexically so a nested substitution is scanned only once, by
+// addSubstitutions. It over-reports inside a substitution, which costs only an approval, never a missed expansion.
+function arrayValueFlags(source: string) {
+  const flags: WordFlags = {}
+  const braces: boolean[] = []
+  let quote: "single" | "double" | undefined
+  let wordStart = true
+  // Same states as the bracket matcher of the word loop.
+  let bracket = 0
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index]
+    if (quote === "single") {
+      if (char === "'") quote = undefined
+      else if (bracket) bracket = 3
+      continue
+    }
+    const quoted = quote === "double"
+    if (char === "\\") {
+      index++
+      wordStart = false
+      if (bracket) bracket = 3
+      continue
+    }
+    if (char === "$" || char === "`") {
+      const next = source[index + 1] ?? ""
+      if (char === "`" || "({[".includes(next)) flags[expansionFlag(source, index)] = true
+      else if (/[A-Za-z0-9_@*#?!$-]/.test(next)) {
+        flags.parameter = true
+        index++
+      }
+      wordStart = false
+      if (bracket) bracket = 3
+      continue
+    }
+    if (char === '"') {
+      quote = quoted ? undefined : "double"
+      wordStart = false
+      continue
+    }
+    if (!quoted && char === "'") {
+      quote = "single"
+      wordStart = false
+      continue
+    }
+    if (!quoted && /\s/.test(char)) {
+      wordStart = true
+      braces.length = 0
+      bracket = 0
+      continue
+    }
+    if (!quoted && char === "~" && wordStart) flags.tilde = true
+    wordStart = false
+    if (bracket === 0) {
+      if (!quoted && char === "[") bracket = 1
+    } else if (bracket === 1 && !quoted && (char === "!" || char === "^")) bracket = 2
+    else if (bracket < 3) bracket = 3
+    else if (!quoted && char === "]") {
+      bracket = 0
+      flags.glob = true
+    }
+    if (quoted) continue
+    if (char === "*" || char === "?") flags.glob = true
+    else if (char === "{") braces.push(false)
+    else if (char === "}" && braces.length) {
+      if (braces.pop()) flags.brace = true
+    } else if (braces.length && (char === "," || (char === "." && source[index + 1] === ".")))
+      braces[braces.length - 1] = true
+  }
+  return flags
 }
 
 // Which expansion a backtick or dollar sign at index starts.
