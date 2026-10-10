@@ -22,6 +22,8 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Job } from "@orbit/core/job"
 import { Session } from "@orbit/core/session"
 import { SessionExecution } from "@orbit/core/session/execution"
+import { Config } from "@orbit/core/config"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Permission } from "@orbit/core/permission"
 import { Plugin } from "@orbit/core/plugin"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
@@ -55,7 +57,7 @@ const executionNode = makeGlobalNode({
   deps: [],
 })
 
-const it = testEffect(
+const graph = (replacements: Parameters<typeof AppNodeBuilder.build>[1] = []) =>
   AppNodeBuilder.build(
     LayerNode.group([
       Database.node,
@@ -74,8 +76,17 @@ const it = testEffect(
       Permission.node.replace(permission),
       Global.node.replace(tempGlobalLayer),
       offlineModels,
+      ...replacements,
     ],
-  ),
+  )
+
+const it = testEffect(graph())
+// The link rows need an untrusted project: only there does FileAccess refuse a repository link that leads to a share.
+const untrusted = testEffect(
+  graph([
+    Config.node.replace(Config.testLayer()),
+    WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
+  ]),
 )
 
 const withTools = <A, E, R>(directory: string, body: (registry: Tool.Interface) => Effect.Effect<A, E, R>) =>
@@ -147,6 +158,47 @@ describe.skipIf(process.platform !== "win32")("file tools lock a file only after
                   // An unreachable host takes about 21 seconds to give up on.
                   expect([entry.tool, share, elapsed < 5000]).toEqual([entry.tool, share, true])
                 }
+            }),
+          ),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 120_000 },
+  )
+
+  // The spelling is ordinary and only the real place is a share, so a lock key resolved before FileAccess checked
+  // would connect to the host (about 21 seconds). Hosts .101 and up are not used by the share rows (Windows caches a
+  // failed host).
+  untrusted.live(
+    "a repository link whose real place is a share is refused before any lock resolves it",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) =>
+          withTools(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "a.txt"), "a\n"))
+              let row = 100
+              for (const entry of calls("SHARE/x.txt")) {
+                row++
+                const link = `shared${row}`
+                yield* Effect.promise(() => fs.symlink(`\\\\192.0.2.${row}\\share`, path.join(tmp.path, link), "dir"))
+                const input = JSON.parse(JSON.stringify(entry.input).replaceAll("SHARE", link))
+                asked.length = 0
+                const started = Date.now()
+                const result = yield* executeTool(registry, {
+                  sessionID,
+                  ...toolIdentity,
+                  call: { type: "tool-call", id: `call-link-${row}`, name: entry.tool, input },
+                })
+                const elapsed = Date.now() - started
+                expect([entry.tool, link, result]).toMatchObject([
+                  entry.tool,
+                  link,
+                  { status: "error", error: { type: "file.spelling" } },
+                ])
+                expect([entry.tool, link, asked]).toEqual([entry.tool, link, []])
+                expect([entry.tool, link, elapsed < 5000]).toEqual([entry.tool, link, true])
+              }
             }),
           ),
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
