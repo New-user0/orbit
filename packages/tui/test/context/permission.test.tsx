@@ -5,6 +5,11 @@ import { ClientProvider, useClient } from "../../src/context/client"
 import { createPermissionMode, type PermissionMode } from "../../src/context/permission"
 import { createApi, createEventStream, createFetch, directory, json } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
+import { ConfigProvider } from "../../src/config"
+import { ThemeProvider } from "../../src/context/theme"
+import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
+import { emptyThemeSource } from "../fixture/fixture"
+import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
 async function wait(condition: () => boolean, timeout = 3_000, label = "condition") {
   const started = Date.now()
@@ -120,6 +125,52 @@ test("counts a server that does not report it, or fails, as refusing", async () 
     } finally {
       setup.destroy()
     }
+  }
+})
+
+test("draws the managed-bypass toast on screen", async () => {
+  const events = createEventStream()
+  const calls = createFetch(
+    (url) => (url.pathname === "/api/config/effective" ? answering({ bypass: false, always: true })() : undefined),
+    events,
+  )
+  let connected: (() => boolean) | undefined
+  function Probe() {
+    const client = useClient()
+    connected = () => client.connection.status() === "connected"
+    createPermissionMode({ client, directory, requested: () => "autoaccept", toast: useToast() })
+    return <Toast />
+  }
+  // The real toast needs a theme and the resolved config, as the application provides them.
+  const setup = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig({})}>
+          <ThemeProvider mode="dark" source={emptyThemeSource}>
+            <ToastProvider>
+              <ClientProvider api={createApi(calls.fetch)}>
+                <Probe />
+              </ClientProvider>
+            </ToastProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 20 },
+  )
+  try {
+    await wait(() => connected?.() === true, 3_000, "the event stream")
+    const started = Date.now()
+    let frame = ""
+    while (!frame.includes("managed") && Date.now() - started < 3_000) {
+      await Bun.sleep(20)
+      await setup.renderOnce()
+      frame = setup.captureCharFrame()
+    }
+    expect(frame).toContain("Auto-accept is turned off")
+    expect(frame).toContain("managed settings")
+  } finally {
+    setup.renderer.destroy()
   }
 })
 

@@ -12,6 +12,7 @@ import { Permission } from "@orbit/core/permission"
 import { PermissionTable } from "@orbit/core/permission/sql"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { ConfigPermissionExpand } from "@orbit/core/config/expand-permissions"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
 import { ProjectTable } from "@orbit/core/project/sql"
@@ -1433,6 +1434,61 @@ describe("Permission under managed settings", () => {
       expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "allow" })
     }),
   )
+
+  it.effect("applies a named agent's managed rules to an ask and a session that name no agent", () =>
+    Effect.gen(function* () {
+      // The session has no agent, so `test` is only the default agent that agents.resolve(undefined) falls back to.
+      yield* setup([{ action: "bash", resource: "*", effect: "allow" }])
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ agent: null })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => editor.default(Agent.ID.make("test")))
+      yield* managed({ agentRules: { test: deny } })
+      const service = yield* Permission.Service
+      expect(yield* service.ask(rm({ ...next(), agent: Agent.ID.make("test") }))).toMatchObject({ effect: "deny" })
+      expect(yield* service.ask(rm(next()))).toMatchObject({ effect: "deny" })
+    }),
+  )
+
+  // Class 4 end to end: a rule written with a home spelling must decide the path a tool resolved to. The resource below
+  // is what FSUtil.resolveFrom gives for the matching spelling.
+  const home = path.join(path.parse(process.cwd()).root, "users", "tester")
+  const key = path.join(home, ".ssh", "id_rsa")
+  for (const row of [
+    { spelling: "~/.ssh/*", action: "Read", windows: false },
+    { spelling: "~\\.ssh\\*", action: "Read", windows: true },
+    { spelling: "~/.ssh/*", action: "*", windows: false },
+    { spelling: "~\\.ssh\\*", action: "*", windows: true },
+    { spelling: "~/.ssh/*", action: "Read*", windows: false },
+    { spelling: "$HOME/.ssh/*", action: "*", windows: false },
+  ]) {
+    if (row.windows && process.platform !== "win32") continue
+    for (const where of ["top level", "agent"]) {
+      it.effect(`denies a Read of the home key under ${row.action} ${row.spelling} at ${where}`, () =>
+        Effect.gen(function* () {
+          yield* setup([{ action: "*", resource: "*", effect: "allow" }])
+          const rules = ConfigPermissionExpand.expandPermissions(
+            [{ action: row.action, resource: row.spelling, effect: "deny" }],
+            home,
+          )
+          yield* managed(where === "agent" ? { agentRules: { test: rules } } : { rules })
+          const service = yield* Permission.Service
+          expect(yield* service.ask(assertion({ ...next(), action: "Read", resources: [key] }))).toMatchObject({
+            effect: "deny",
+          })
+          // The rule keeps naming Bash as written; only a path action sees the expanded copy.
+          expect(yield* service.ask(assertion({ ...next(), action: "bash", resources: ["ls"] }))).toMatchObject({
+            effect: "allow",
+          })
+        }),
+      )
+    }
+  }
 
   describe("managed_permissions_only", () => {
     const only = { restrictions: { managed_permissions_only: true } }

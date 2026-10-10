@@ -214,7 +214,9 @@ const layer = Layer.effect(
       const agent = yield* agents.resolve(name)
       const own = session.permissions ?? []
       return {
-        agent: name,
+        // The agent the config rules came from, so an ask or session that names none still gets the default agent's
+        // managed rules.
+        agent: agent?.id ?? name,
         rules: merge(
           agent?.permissions ?? missingAgentPermissions,
           managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,

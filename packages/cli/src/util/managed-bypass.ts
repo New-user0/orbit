@@ -25,8 +25,8 @@ export const bypassRefusal = Effect.fn("cli.managedBypass")(function* (
   }).pipe(Effect.catch((reason) => Effect.succeed(reason)))
   if (typeof effective === "string")
     return `Cannot confirm that managed settings allow skipping permission prompts (${plain(effective)}), so the request is refused.`
-  // A server older than this answer has no `permissions`, and the type does not say so: read it as unknown, not as allowed.
-  const bypass: boolean | undefined = (effective as { permissions?: { bypass?: boolean } }).permissions?.bypass
+  // A server older than this answer has no `permissions`: read that as unknown, not as allowed.
+  const bypass = effective.permissions?.bypass
   if (bypass === true) return undefined
   return bypass === false
     ? MANAGED_BYPASS_MESSAGE
