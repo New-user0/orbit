@@ -111,6 +111,11 @@ const resolve = Effect.fn("PluginSupervisor.resolve")(function* (
       // The new revision never became a generation, so the one already running keeps its place.
       const retained = packages.get(operation.target) ?? running.get(operation.target)
       if (!retained) continue
+      // An ID the organization blocked after the old revision started does not stay active because the new one failed.
+      if (!PluginRestriction.check({ block: managed.restrictions.block }, { id: retained.id }).allowed) {
+        failures.set(operation.target, blockedFailure(operation.target, managed.message))
+        continue
+      }
       packages.set(operation.target, retained)
       enabled.add(retained.id)
       continue
@@ -195,7 +200,9 @@ export const layer = Layer.effectDiscard(
       const operations = yield* sources.operations()
       const org = policy.current()
       const managed: Managed = {
-        restrictions: org.restrictions.plugins ?? {},
+        restrictions: yield* Effect.promise(() =>
+          PluginRestriction.real(org.restrictions.plugins ?? {}, (file) => Effect.runPromise(fs.resolve(file))),
+        ),
         identify: (target) =>
           path.isAbsolute(target)
             ? fs.resolve(target).pipe(Effect.map((real) => ({ target: real, verified: true })))

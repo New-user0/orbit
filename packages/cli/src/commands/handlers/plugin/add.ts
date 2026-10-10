@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { Effect } from "effect"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
 import { Global } from "@orbit/util/global"
+import { ManagedPath } from "@orbit/util/managed-path"
 import { Npm } from "@orbit/util/npm"
 import { Host } from "@orbit/plugin/host"
 import { Commands } from "../../commands"
@@ -16,6 +17,13 @@ export default Runtime.handler(
   Effect.fn("cli.plugin.add")(function* (input) {
     if (!(yield* Effect.promise(() => Npm.isInstallablePackage(input.package))))
       return yield* Effect.fail(new Error("Plugin target must be an npm registry package or Git package specifier"))
+    // Before the registry is contacted: a package the organization holds back is never downloaded.
+    const { ServerManaged } = yield* Effect.promise(() => import("@orbit/server/managed"))
+    const refusal = yield* ServerManaged.pluginRefusal(
+      ManagedPath.directory(process.platform, process.env),
+      input.package,
+    )
+    if (refusal) return yield* Effect.fail(new Error(refusal))
     const npm = yield* Npm.Service
     const installed = yield* npm.add(input.package)
     const entrypoints = Host.resolve(installed)

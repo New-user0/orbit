@@ -16,6 +16,7 @@ import { ConfigVariable } from "./config/variable.js"
 import { Watcher } from "./filesystem/watcher.js"
 import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
+import { PluginRestriction } from "@orbit/plugin/restriction"
 
 /** A problem found in one managed settings file. It costs only the file or the entry it names. */
 export interface Diagnostic {
@@ -307,6 +308,10 @@ function cleanRestrictions(raw: unknown) {
       kept[key] = entries.flatMap((entry, index) => {
         if (typeof entry !== "string") {
           bad(`${group}.${key}.${index}`, "ignored an entry that is not a string")
+          return []
+        }
+        if (group === "plugins" && key !== "marketplaces" && entry.includes("*") && !PluginRestriction.wildcard(entry)) {
+          bad(`${group}.${key}.${index}`, "ignored a selector whose * is not the whole entry or the end of a .* or /* prefix")
           return []
         }
         if (group !== "network") return [entry]

@@ -262,6 +262,24 @@ describe("ManagedSettings.read", () => {
     }),
   )
 
+  it.live("reports a plugin selector whose * the matcher would never act on, and keeps the ones it understands", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": {
+          managed: { plugins: { block: ["*", "acme.*", "@corp/*", "@corp/*-tools", "a*b"], allow: ["@scope/x*"] } },
+        },
+      })
+      const snapshot = yield* read(tmp.path)
+      expect(snapshot.restrictions.plugins).toEqual({ block: ["*", "acme.*", "@corp/*"], allow: [] })
+      expect(snapshot.diagnostics.map((item) => [item.path, item.kind]).toSorted()).toEqual([
+        ["$.managed.plugins.allow.0", "invalid"],
+        ["$.managed.plugins.block.3", "invalid"],
+        ["$.managed.plugins.block.4", "invalid"],
+      ])
+    }),
+  )
+
   it.live("yields an empty snapshot for a missing directory and does not create it", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

@@ -1,6 +1,7 @@
+import fs from "node:fs/promises"
 import path from "node:path"
 import { describe, expect } from "bun:test"
-import { Context, Deferred, Duration, Effect, Layer, LayerMap, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, LayerMap, Schedule, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { define } from "@orbit/plugin/effect/plugin"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -413,6 +414,64 @@ describe("PluginSupervisor", () => {
         const list = yield* inventory({ plugins: { allow: ["@other/pkg"] } }, [{ type: "add", target: named, options: {} }])
         expect(yield* exists(path.join(tmp, "named.top"))).toBe(false)
         expect(failedTargets(list)).toEqual([named])
+      }),
+    )
+
+    it.live("does not keep a plugin running whose ID was blocked after it started, when its new revision fails", () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const kept = yield* plugin(tmp, "kept", "corp.kept")
+        const policy = sharedPolicy
+        yield* policy.set("file", { statements: [], restrictions: {} })
+        source.operations = [{ type: "add", target: kept, options: {} }]
+        const sdk = yield* SdkPlugins.Service
+        const locations = yield* LocationServiceMap.Service
+        yield* Effect.gen(function* () {
+          const plugins = yield* Plugin.Service
+          yield* plugins.awaitActivation
+          // The control: before the block, the same plugin is active.
+          expect(state(yield* plugins.list(), "corp.kept")).toEqual({ status: "active" })
+          yield* Effect.promise(() => Bun.write(path.join(kept, "index.ts"), "export default ("))
+          yield* policy.set("file", { statements: [], restrictions: { plugins: { block: ["corp.kept"] } } })
+          yield* sdk.register(greeter("trigger", "host.trigger"))
+          const stopped = plugins.list().pipe(
+            Effect.map((list) => list.every((item) => item.state.status !== "active" || item.id !== "corp.kept")),
+            Effect.filterOrFail((ok) => ok),
+            Effect.retry({ times: 100, schedule: Schedule.spaced("50 millis") }),
+          )
+          yield* stopped
+          expect(state(yield* plugins.list(), "corp.kept")?.status).not.toBe("active")
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(tmp) }))),
+          Effect.ensuring(Effect.sync(() => (source.operations = []))),
+        )
+      }),
+    )
+
+    it.live("matches a target and a selector by real path, whichever of them is spelled through a link", () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const real = yield* plugin(tmp, "real", "corp.real")
+        const link = path.join(tmp, "link")
+        yield* Effect.promise(() => fs.symlink(real, link, "junction"))
+        const add = (target: string) => ({ type: "add" as const, target, options: {} })
+        for (const [name, restrictions, target] of [
+          ["a real selector and a link target", { plugins: { block: [real] } }, link],
+          ["a link selector and a real target", { plugins: { block: [link] } }, real],
+        ] as const) {
+          const blocked = yield* inventory(restrictions, [add(target)])
+          expect(failedTargets(blocked), name).toEqual([target])
+          expect(yield* exists(path.join(tmp, "real.top")), name).toBe(false)
+        }
+        // The controls: an allow list written through the link admits the real path, and the other way around.
+        for (const [allow, target] of [
+          [link, real],
+          [real, link],
+        ] as const) {
+          const list = yield* inventory({ plugins: { allow: [allow] } }, [add(target)])
+          expect(state(list, "corp.real")).toEqual({ status: "active" })
+        }
       }),
     )
 

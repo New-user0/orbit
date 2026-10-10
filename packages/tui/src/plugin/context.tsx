@@ -113,15 +113,28 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
   // What the server says the organization restricts. A server that does not report it, or a read that fails, leaves no
   // external plugin to load: built-in plugins still do. Undefined until the first answer, so nothing imports before it.
   const [restrictions, setRestrictions] = createSignal<
-    { readonly allow?: readonly string[]; readonly block?: readonly string[] } | "unreadable" | undefined
+    | { readonly allow?: readonly string[]; readonly block?: readonly string[]; readonly organization?: string }
+    | "unreadable"
+    | undefined
   >(undefined)
+  // The skip is logged once per change of the answer, not once per plugin on every reconcile.
+  let skippedLogged = false
   const syncRestrictions = () =>
     client.api.config
       .effective({ location: data.location.default() })
-      .then((effective) => {
+      .then(async (effective) => {
         if (effective.plugins === undefined)
           log.warn("the server does not report plugin restrictions, so no external plugin will load")
-        setRestrictions(effective.plugins ?? "unreadable")
+        skippedLogged = false
+        // Absolute selectors are made real once per answer, so one written through a link meets the real path of a target.
+        setRestrictions(
+          effective.plugins === undefined
+            ? "unreadable"
+            : {
+                ...(await PluginRestriction.real(effective.plugins, (file) => realpath(file).catch(() => file))),
+                ...(effective.plugins.organization === undefined ? {} : { organization: effective.plugins.organization }),
+              },
+        )
       })
       .catch((error) => {
         log.warn("failed to read the plugin restrictions, so no external plugin will load", { error })
@@ -365,7 +378,10 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
       // this one must pass.
       const limits = restrictions()
       if (limits === undefined || limits === "unreadable") {
-        log.warn("skipped an external plugin because the plugin restrictions could not be read", { target })
+        if (!skippedLogged) {
+          skippedLogged = true
+          log.warn("skipped the external plugins because the plugin restrictions could not be read")
+        }
         continue
       }
       const identity = await (local
@@ -379,7 +395,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
         // A link can lead a blocked path under another name, so a path as written is held to the block list too.
         (local && !PluginRestriction.check({ block: limits.block }, { target: fileURLToPath(local) }).allowed)
       ) {
-        failures.push({ target, status: "failed", error: managedMessage })
+        failures.push({ target, status: "failed", error: managedMessage(limits.organization) })
         continue
       }
       if (
@@ -423,13 +439,15 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
           status: "failed",
           error: previous?.active ? `${resolved.error} (previous version still active)` : resolved.error,
         })
-        if (previous) desired.set(previous.plugin.id, toDesired(previous))
+        // A copy whose ID the organization has blocked since it started is not kept running by a failed reload.
+        if (previous && PluginRestriction.check({ block: limits.block }, { id: previous.plugin.id }).allowed)
+          desired.set(previous.plugin.id, toDesired(previous))
         continue
       }
       // An ID is known only once the module is imported, so this stops setup but not the module's top-level code. To
       // stop code from running at all, block the target. Checked for an unchanged plugin too, so a new block takes it down.
       if (!PluginRestriction.check({ block: limits.block }, { id: resolved.plugin.id }).allowed) {
-        failures.push({ target, id: resolved.plugin.id, status: "failed", error: managedMessage })
+        failures.push({ target, id: resolved.plugin.id, status: "failed", error: managedMessage(limits.organization) })
         continue
       }
       const setupFailure = setupFailures.get(target)
@@ -721,7 +739,8 @@ async function setup(plugin: Plugin.Definition, context: Plugin.Context, owned: 
   }
 }
 
-const managedMessage = "Blocked by managed settings"
+const managedMessage = (organization?: string) =>
+  organization === undefined ? "Blocked by managed settings" : `Blocked by ${organization}'s managed settings`
 
 function matches(selector: string, id: string) {
   return selector === "*" || selector === id || (selector.endsWith(".*") && id.startsWith(selector.slice(0, -1)))

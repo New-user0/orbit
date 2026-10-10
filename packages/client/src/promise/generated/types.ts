@@ -498,7 +498,7 @@ export type ConfigModelCapabilities = { tools?: boolean; input?: Array<string>; 
 export type ConfigEffective = {
   compatibility: boolean
   permissions?: { bypass: boolean; always: boolean }
-  plugins?: { allow?: Array<string>; block?: Array<string> }
+  plugins?: { allow?: Array<string>; block?: Array<string>; organization?: string }
 }
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }

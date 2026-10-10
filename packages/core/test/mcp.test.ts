@@ -3181,7 +3181,9 @@ describe("MCP servers under the organization's lists", () => {
   const withPolicy = <A, E, R>(
     restrictions: ConfigManaged.Restrictions,
     body: (policy: ManagedPolicy.Interface) => Effect.Effect<A, E, R>,
-    entries?: readonly Entry[],
+    // Always given, so the layer never falls back to the test config's remote server and its real connection.
+    entries: readonly Entry[] = [],
+    subscribe?: Bus.Interface["subscribe"],
   ) =>
     Effect.gen(function* () {
       const context = yield* Layer.build(ManagedPolicy.layer)
@@ -3191,7 +3193,8 @@ describe("MCP servers under the organization's lists", () => {
         Effect.provide(
           resourceMcpLayer("https://unused.example", undefined, undefined, {
             managed: Layer.succeedContext(context),
-            ...(entries ? { entries: () => Effect.succeed([...entries]) } : {}),
+            entries: () => Effect.succeed([...entries]),
+            ...(subscribe ? { subscribe } : {}),
           }),
         ),
       )
@@ -3289,20 +3292,32 @@ describe("MCP servers under the organization's lists", () => {
   )
 
   testEffect(Layer.empty).live("stops a running server when a deny arrives and starts it when the deny is lifted", () =>
-    withPolicy({}, (policy) =>
-      Effect.gen(function* () {
-        const service = yield* Mcp.Service
-        yield* service.transform((editor) => editor.set("flip", live("a")))
-        expect(yield* names(service)).toContain("flip")
-        yield* policy.set("file", { statements: [], restrictions: { mcp: { deny: ["flip"] } } })
-        yield* service.reload()
-        expect(yield* names(service)).not.toContain("flip")
-        expect(yield* service.tools()).toEqual([])
-        yield* policy.set("file", { statements: [], restrictions: {} })
-        yield* service.reload()
-        expect((yield* service.servers()).find((server) => server.name === "flip")?.status.status).toBe("connected")
-      }),
-    ),
+    Effect.gen(function* () {
+      // A managed change reaches Mcp the way it does in the server: as config.updated, which the MCP config plugin turns
+      // into a reload. Nothing here calls reload itself.
+      const events = yield* PubSub.unbounded<{ type: string }>()
+      const changed = (policy: ManagedPolicy.Interface, restrictions: ConfigManaged.Restrictions) =>
+        policy
+          .set("file", { statements: [], restrictions })
+          .pipe(Effect.andThen(PubSub.publish(events, { type: "config.updated" })))
+      yield* withPolicy(
+        {},
+        (policy) =>
+          Effect.gen(function* () {
+            const service = yield* Mcp.Service
+            yield* service.transform((editor) => editor.set("flip", live("a")))
+            expect(yield* names(service)).toContain("flip")
+            yield* changed(policy, { mcp: { deny: ["flip"] } })
+            yield* waitFor(names(service).pipe(Effect.map((all) => !all.includes("flip"))))
+            expect(yield* service.tools()).toEqual([])
+            yield* changed(policy, {})
+            yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("flip"))))
+            expect((yield* settled(service, "flip"))?.status).toBe("connected")
+          }),
+        [],
+        (() => Stream.fromPubSub(events)) as Bus.Interface["subscribe"],
+      )
+    }),
   )
 
   testEffect(Layer.empty).live("logs a blocked server once when its state changes, by name and reason only", () =>
@@ -3326,8 +3341,8 @@ describe("MCP servers under the organization's lists", () => {
           yield* policy.set("file", { statements: [], restrictions: { mcp: { allow: ["other"] } } })
           yield* service.reload()
           yield* service.reload()
-          // The denied server changed reason and the default one was blocked for the first time; nothing logs twice.
-          expect(blocked()).toHaveLength(3)
+          // The denied server changed reason, so it logs once more; nothing logs twice.
+          expect(blocked()).toHaveLength(2)
         }),
       ).pipe(Effect.provide(Logger.layer([logger])))
     }),

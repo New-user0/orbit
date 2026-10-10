@@ -287,6 +287,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
         if (sandboxed.type === "missing")
           return yield* Effect.fail(new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`))
         if (sandboxed.type === "unsupported") return yield* Effect.fail(new Error(sandboxed.reason))
+        if (sandboxed.type === "unwrapped") yield* ManagedNetwork.unbound(network)
         const launch = sandboxed.type === "wrapped" ? sandboxed : { command: shell, args }
         return ChildProcess.make(launch.command, launch.args, { cwd, stdin: "ignore" })
       }).pipe(

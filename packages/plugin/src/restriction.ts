@@ -20,7 +20,7 @@ export interface Subject {
 export type Result = { readonly allowed: true } | { readonly allowed: false; readonly reason: "blocked" | "not_allowed" }
 
 /**
- * Whether a plugin may run. A selector is `*` (everything), `prefix.*` (every name that starts with `prefix.`) or exact;
+ * Whether a plugin may run. A selector is `*` (everything), `prefix.*` / `@scope/*` (every name that starts with the prefix) or exact;
  * an absolute path selector matches only the same absolute path, so compare real paths. `block` wins and an empty one
  * does nothing. With no `allow` nothing is held back, an empty `allow` allows no external plugin, and otherwise a target
  * must match an entry. An ID is checked against `block` only. The caller decides what is exempt (built-in, SDK and
@@ -31,9 +31,10 @@ export function check(restrictions: Restrictions, subject: Subject): Result {
   if (subjects.some((item) => (restrictions.block ?? []).some((selector) => selects(selector, item))))
     return { allowed: false, reason: "blocked" }
   const allow = restrictions.allow
-  if (allow === undefined || subject.target === undefined) return { allowed: true }
+  const target = subject.target
+  if (allow === undefined || target === undefined) return { allowed: true }
   if (subject.verified === false) return { allowed: false, reason: "not_allowed" }
-  return allow.some((selector) => selects(selector, subject.target!))
+  return allow.some((selector) => selects(selector, target))
     ? { allowed: true }
     : { allowed: false, reason: "not_allowed" }
 }
@@ -48,11 +49,32 @@ export async function identify(spec: string): Promise<Required<Pick<Subject, "ta
   return name === undefined ? { target: spec, verified: false } : { target: name, verified: true }
 }
 
+/**
+ * Whether a selector that holds a `*` is one the matcher understands: the whole entry, or the end of a `.*` or `/*`
+ * prefix (`corp.*`, `@corp/*`). Any other `*` would match nothing, so the caller reports it instead of loading it.
+ */
+export function wildcard(selector: string) {
+  return selector === "*" || ((selector.endsWith(".*") || selector.endsWith("/*")) && !selector.slice(0, -1).includes("*"))
+}
+
+/**
+ * The lists with every absolute path selector made real, so a selector written through a link (a Windows junction, macOS
+ * `/tmp`) meets the real path that a target is identified by. Call it once per activation, not once per target.
+ */
+export async function real(restrictions: Restrictions, resolve: (file: string) => Promise<string>): Promise<Restrictions> {
+  const each = (selectors: readonly string[] | undefined) =>
+    selectors && Promise.all(selectors.map((selector) => (path.isAbsolute(selector) ? resolve(selector) : selector)))
+  const [allow, block] = await Promise.all([each(restrictions.allow), each(restrictions.block)])
+  return { ...(allow ? { allow } : {}), ...(block ? { block } : {}) }
+}
+
 function selects(selector: string, subject: string) {
   if (selector === "*") return true
   if (path.isAbsolute(selector) || path.isAbsolute(subject))
     return path.isAbsolute(selector) && path.isAbsolute(subject) && normalize(selector) === normalize(subject)
-  return selector.endsWith(".*") ? subject.startsWith(selector.slice(0, -1)) : selector === subject
+  return selector.endsWith(".*") || selector.endsWith("/*")
+    ? subject.startsWith(selector.slice(0, -1))
+    : selector === subject
 }
 
 function normalize(file: string) {

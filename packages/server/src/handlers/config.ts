@@ -14,6 +14,7 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
         const config = yield* Config.Service
         const managed = yield* ManagedPolicy.Service
         const restrictions = managed.current().restrictions
+        const organization = managed.current().organization
         return {
           compatibility: yield* config.compatEnabled(),
           permissions: {
@@ -24,6 +25,7 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
           plugins: {
             ...(restrictions.plugins?.allow === undefined ? {} : { allow: restrictions.plugins.allow }),
             ...(restrictions.plugins?.block === undefined ? {} : { block: restrictions.plugins.block }),
+            ...(organization === undefined ? {} : { organization }),
           },
         }
       }),

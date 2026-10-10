@@ -49,13 +49,13 @@ import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { which } from "@orbit/core/util/which"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
-
-type ManagedNetwork = NonNullable<ConfigManaged.Restrictions["network"]>
 import { offlineModels } from "./fixture/models"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
 import { Expected } from "./lib/session-message"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
+
+type ManagedNetwork = NonNullable<ConfigManaged.Restrictions["network"]>
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = Model.Ref.make({ id: Model.ID.make("test"), providerID: Provider.ID.make("test") })
@@ -2373,7 +2373,7 @@ describe("ShellTool", () => {
       : it.live.skip
   bwrapTest("has no network interface but the loopback when domain settings force the network off", () =>
     Effect.gen(function* () {
-      const tmp = yield* Effect.promise(() => tmpdir())
+      const tmp = yield* tmpdirScoped()
       yield* Effect.promise(() =>
         Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ sandbox: { enabled: true, network: true } })),
       )
