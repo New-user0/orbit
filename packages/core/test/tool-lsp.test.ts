@@ -191,10 +191,10 @@ describe("LSP tool", () => {
     project({}, ({ call }) =>
       Effect.gen(function* () {
         expect((yield* call(at("prepare_call_hierarchy", "fn"))).text).toBe(
-          "2 call hierarchy items:\n  first (Function) at src/fn.fake:6 [(a: number)]\n  second (Method) at src/fn.fake:21",
+          "2 functions at that position:\n  first (Function) at src/fn.fake:6 [(a: number)]\n  second (Method) at src/fn.fake:21",
         )
         expect((yield* call(at("prepare_call_hierarchy", "plain"))).text).toBe(
-          "No call hierarchy item at that position.",
+          "Nothing callable at that position.",
         )
       }),
     ),
@@ -236,7 +236,7 @@ describe("LSP tool", () => {
       Effect.gen(function* () {
         const found = yield* call(at("incoming_calls", "plain"))
         expect(found.failed).toBe(false)
-        expect(found.text).toContain("No call hierarchy item")
+        expect(found.text).toContain("Nothing callable")
         expect((yield* requests(log)).map((item) => item.method)).toEqual(["textDocument/prepareCallHierarchy"])
       }),
     ),

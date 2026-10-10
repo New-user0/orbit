@@ -220,12 +220,14 @@ const layer = Layer.effect(
           const repository = yield* git.repo.discover(location.directory)
           if (!repository || files.length === 0) return new Set<string>()
           // git reports the real worktree, while results use the Location's own spelling (a junction, a link or a
-          // subst drive), so each path is re-rooted from the Location onto the real folder before it is compared.
+          // subst drive). The worktree is re-spelled the way the Location spells it, so a path anywhere in the
+          // repository, not only under the Location, is compared in its own spelling.
           const real = yield* fs.resolve(location.directory)
+          const spelled = path.resolve(location.directory, path.relative(real, repository.worktree))
           // A path outside the worktree is not asked about: git would refuse the whole batch.
           const inside = files.flatMap((file) => {
-            const within = path.relative(location.directory, file)
-            const relative = path.relative(repository.worktree, outside(within) ? file : path.join(real, within))
+            const within = path.relative(spelled, file)
+            const relative = outside(within) ? path.relative(repository.worktree, file) : within
             return relative === "" || outside(relative)
               ? []
               : [{ file, relative: RelativePath.make(relative.split(path.sep).join("/")) }]

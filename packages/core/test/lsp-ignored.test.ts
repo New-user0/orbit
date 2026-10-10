@@ -92,6 +92,23 @@ describe("Lsp.ignored", () => {
     }),
   )
 
+  // The Location is a subfolder, so the ignored file at the repository root is outside the Location.
+  for (const spelling of ["real", "link"] as const)
+    it.live(`hides an ignored file outside the Location, Location at the ${spelling} subfolder`, () =>
+      Effect.gen(function* () {
+        const { real, link } = yield* repository
+        yield* Effect.promise(() => fs.mkdir(path.join(real, "sub"), { recursive: true }))
+        const base = spelling === "real" ? real : link
+        const service = yield* lsp(path.join(base, "sub"))
+        const file = path.join(base, "ignored", "a.fake")
+        // In the link Location, the real spelling of the same file is handled too.
+        const other = path.join(real, "ignored", "a.fake")
+        expect([...(yield* service.ignored([file, other, path.join(base, "src", "b.fake")]))].sort()).toEqual(
+          [...new Set([file, other])].sort(),
+        )
+      }),
+    )
+
   it.live("a failing git check shows every result", () =>
     Effect.gen(function* () {
       const { root, real } = yield* repository

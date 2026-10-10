@@ -129,7 +129,7 @@ export const Plugin = {
               })
               if (result === NO_CALL_ITEM)
                 return {
-                  content: "No call hierarchy item at that position. Point at the name of a function or method.",
+                  content: "Nothing callable at that position. Point at the name of a function or method.",
                 }
 
               const shown = FILTERED.has(input.action) ? yield* visible(lsp, result) : result
@@ -374,14 +374,14 @@ function workspaceSymbols(entries: Entry[], show: Show) {
 }
 
 function items(entries: Entry[], show: Show) {
-  if (entries.length === 0) return "No call hierarchy item at that position."
+  if (entries.length === 0) return "Nothing callable at that position."
   const text = (item: Entry) => {
     const line = lineOf(item.range)
     const detail = one(item.detail)
     return `${one(item.name) || "?"} (${kind(item.kind)}) at ${show(string(item.uri))}${line === undefined ? "" : `:${line}`}${detail ? ` [${detail}]` : ""}`
   }
   if (entries.length === 1) return `Function at that position: ${text(entries[0]!)}`
-  return [`${entries.length} call hierarchy items:`, ...entries.map((item) => `  ${text(item)}`)].join("\n")
+  return [`${entries.length} functions at that position:`, ...entries.map((item) => `  ${text(item)}`)].join("\n")
 }
 
 function calls(direction: "incoming" | "outgoing", entries: Entry[], show: Show) {
