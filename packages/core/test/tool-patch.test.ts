@@ -491,6 +491,74 @@ describe("PatchTool", () => {
     ),
   )
 
+  // What the approval and the result show must match what the runner does to a target that is absent or exists.
+  const overwriteRows = [
+    {
+      name: "Add File, target absent",
+      patch: "*** Begin Patch\n*** Add File: t.txt\n+new\n*** End Patch",
+      seed: false,
+      files: [{ file: "t.txt", status: "added", additions: 1, deletions: 0, removed: [] }],
+      final: "new\n",
+    },
+    {
+      name: "Add File, target exists",
+      patch: "*** Begin Patch\n*** Add File: t.txt\n+new\n*** End Patch",
+      seed: true,
+      files: [{ file: "t.txt", status: "modified", additions: 1, deletions: 2, removed: ["keep me", "important"] }],
+      final: "new\n",
+    },
+    {
+      name: "Move to, destination absent",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n*** Move to: t.txt\n@@\n-src\n+SRC\n*** End Patch",
+      seed: false,
+      files: [{ file: "t.txt", status: "modified", additions: 1, deletions: 1, removed: ["src"] }],
+      final: "SRC\n",
+    },
+    {
+      name: "Move to, destination exists",
+      patch: "*** Begin Patch\n*** Update File: s.txt\n*** Move to: t.txt\n@@\n-src\n+SRC\n*** End Patch",
+      seed: true,
+      files: [
+        { file: "t.txt", status: "modified", additions: 1, deletions: 1, removed: ["src"] },
+        { file: "t.txt", status: "modified", additions: 1, deletions: 2, removed: ["keep me", "important"] },
+      ],
+      final: "SRC\n",
+    },
+  ]
+  for (const row of overwriteRows) {
+    it.live(`shows ${row.name} as what the runner does`, () =>
+      withTempTool((directory, registry) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.writeFile(path.join(directory, "s.txt"), "src\n"))
+          if (row.seed) yield* Effect.promise(() => fs.writeFile(path.join(directory, "t.txt"), "keep me\nimportant\n"))
+          const settled = yield* executeTool(registry, call(row.patch))
+          expect(settled.status).toBe("completed")
+          if (settled.status !== "completed") return
+          const shown = (files: ReadonlyArray<{ file: string; patch: string }> | undefined) =>
+            (files ?? []).map((item) => ({
+              ...item,
+              removed: item.patch
+                .split("\n")
+                .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+                .map((line) => line.slice(1)),
+            }))
+          const edit = assertions.find((input) => input.action === "Edit")
+          for (const files of [shown(edit?.metadata?.files as never), shown(settled.output.files)])
+            expect(
+              files.map((item) => ({
+                file: item.file,
+                status: (item as { status?: string }).status,
+                additions: (item as { additions?: number }).additions,
+                deletions: (item as { deletions?: number }).deletions,
+                removed: item.removed,
+              })),
+            ).toEqual(row.files)
+          expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "t.txt"), "utf8"))).toBe(row.final)
+        }),
+      ),
+    )
+  }
+
   it.live("moves a file without changing its contents", () =>
     withTempTool((directory, registry) =>
       Effect.gen(function* () {

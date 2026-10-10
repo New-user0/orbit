@@ -74,7 +74,11 @@ export const assertUnchanged = Effect.fn("FileMutation.assertUnchanged")(functio
 ) {
   const now = yield* readSnapshot(files, target).pipe(
     Effect.catchTag("Environment.NotFound", () => Effect.undefined),
-    Effect.catch(() => Effect.succeed("unreadable" as const)),
+    Effect.catch((error) =>
+      Effect.logWarning(`could not read ${target} again after approval`, error).pipe(
+        Effect.as("unreadable" as const),
+      ),
+    ),
   )
   // The digest folds line endings; the decoded text keeps them, so both together mean the same bytes.
   const same =

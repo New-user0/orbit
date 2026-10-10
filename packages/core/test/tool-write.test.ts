@@ -646,13 +646,18 @@ describe("WriteTool", () => {
       const fixture = makeWriteFixture()
       return Effect.gen(function* () {
         const release = yield* Deferred.make<void>()
-        fixture.afterApproval = () => (fixture.assertions.length === 1 ? Deferred.await(release) : Effect.void)
+        const entered = yield* Deferred.make<void>()
+        fixture.afterApproval = () =>
+          fixture.assertions.length === 1
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void
         return yield* withTool(tmp.path, fixture, (registry) =>
           Effect.gen(function* () {
             const first = yield* executeTool(registry, call({ file_path: "f.txt", content: "first" }, "call-1")).pipe(
               Effect.forkChild,
             )
-            yield* Effect.sleep("100 millis")
+            // The second call starts only once the first holds the lock and waits in its approval.
+            yield* Deferred.await(entered)
             const second = yield* executeTool(registry, call({ file_path: "f.txt", content: "second" }, "call-2")).pipe(
               Effect.forkChild,
             )

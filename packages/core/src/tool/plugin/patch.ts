@@ -51,6 +51,7 @@ type Prepared =
       readonly content: string
       readonly before: string
       readonly after: string
+      readonly existed: boolean
     })
   | (Extract<Patch.Hunk, { readonly type: "delete" }> & {
       readonly target: FileAccess.Target
@@ -63,6 +64,8 @@ type Prepared =
       readonly before: string
       readonly after: string
       readonly moveTarget?: FileAccess.Target
+      /** The destination's text when a move replaces a file that already exists. */
+      readonly replaced?: string
     })
 
 export const Plugin = {
@@ -174,8 +177,10 @@ export const Plugin = {
                       ...hunk,
                       target,
                       content,
-                      before: "",
+                      // A file that already exists is replaced, so its text is what the approval shows as removed.
+                      before: existing?.text ?? "",
                       after: Bom.split(content).text,
+                      existed: existing !== undefined,
                     })
                     return
                   }
@@ -211,7 +216,16 @@ export const Plugin = {
                     catch: (error) => new ToolFailure({ message: `patch verification failed: ${errorMessage(error)}` }),
                   })
                   const moveTarget = hunk.movePath ? yield* resolveTarget(hunk.movePath) : undefined
-                  if (moveTarget && hunk.movePath) yield* probe(moveTarget, hunk.movePath)
+                  // The destination follows the same sequence as an Add File target: read, probe, freshness.
+                  const replaced =
+                    moveTarget && hunk.movePath && moveTarget.absolute !== target.absolute
+                      ? yield* ledger.assertRead(context.sessionID, moveTarget.absolute, hunk.movePath).pipe(
+                          Effect.andThen(probe(moveTarget, hunk.movePath)),
+                          Effect.tap((existing) =>
+                            ledger.assertFresh(context.sessionID, moveTarget.absolute, hunk.movePath!, existing),
+                          ),
+                        )
+                      : undefined
                   prepared.push({
                     ...hunk,
                     target,
@@ -219,6 +233,7 @@ export const Plugin = {
                     before,
                     after: update.content,
                     moveTarget,
+                    replaced: replaced?.text,
                   })
                   if (!moveTarget) updates.set(target.absolute, Patch.joinBom(update.content, update.bom))
                 }).pipe(
@@ -230,7 +245,7 @@ export const Plugin = {
                 )
               }
 
-              const patchFiles = prepared.map((change) => patchFile(change))
+              const patchFiles = prepared.flatMap((change) => [patchFile(change), ...replacedFile(change)])
               const targets = prepared.flatMap((change) => [
                 change.target,
                 ...(change.type === "update" && change.moveTarget ? [change.moveTarget] : []),
@@ -244,11 +259,14 @@ export const Plugin = {
                   // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
                   paths: [...new Set(targets.map((target) => target.place))],
                   diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
-                  files: patchFiles.map((file, index) => {
-                    const change = prepared[index]!
+                  files: prepared.flatMap((change) => {
+                    const [file, ...replaced] = [patchFile(change), ...replacedFile(change)]
                     return change.type === "update" && change.moveTarget
-                      ? { ...file, place: change.moveTarget.place, from: change.target.place }
-                      : { ...file, place: change.target.place }
+                      ? [
+                          { ...file!, place: change.moveTarget.place, from: change.target.place },
+                          ...replaced.map((item) => ({ ...item, place: change.moveTarget!.place })),
+                        ]
+                      : [{ ...file!, place: change.target.place }]
                   }),
                 },
                 sessionID: context.sessionID,
@@ -328,10 +346,11 @@ export const Plugin = {
                   }),
                 { discard: true },
               )
-              const files = prepared.map((change) => {
-                if (change.type === "delete") return patchFile(change)
+              const files = prepared.flatMap((change) => {
+                if (change.type === "delete") return [patchFile(change)]
                 const target = change.type === "update" && change.moveTarget ? change.moveTarget : change.target
-                return patchFile(change, formatted.get(target.absolute))
+                const after = formatted.get(target.absolute)
+                return [patchFile(change, after), ...replacedFile(change, after)]
               })
               return { applied, files }
             }).pipe(
@@ -381,13 +400,20 @@ function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info
     change.target.place,
     change.before,
     after,
-    change.type === "add" ? "added" : change.type === "delete" ? "deleted" : "modified",
+    change.type === "add" && !change.existed ? "added" : change.type === "delete" ? "deleted" : "modified",
   )
   return {
     ...diff,
     file: target,
     patch: trimDiff(diff.patch),
   }
+}
+
+/** A move onto an existing file replaces it, so the destination's current text is shown as removed beside the move. */
+function replacedFile(change: Prepared, after?: string): ReadonlyArray<typeof FileDiff.Info.Type> {
+  if (change.type !== "update" || !change.moveTarget || change.replaced === undefined) return []
+  const diff = fileDiff(change.moveTarget.place, change.replaced, after ?? change.after, "modified")
+  return [{ ...diff, file: change.moveTarget.resource, patch: trimDiff(diff.patch) }]
 }
 
 function trimDiff(diff: string) {

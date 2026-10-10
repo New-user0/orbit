@@ -397,6 +397,48 @@ describe("Read repeat stubs and the freshness of the edit tools", () => {
     }
   })
 
+  describe("Patch Move to an existing file", () => {
+    const move = (name: string, to: string) => ({
+      patchText: `*** Begin Patch\n*** Update File: ${name}\n*** Move to: ${to}\n@@\n-two\n+TWO\n*** End Patch`,
+    })
+    const cases = [
+      { name: "never read", code: "file.unread", read: false, change: false },
+      { name: "read and then changed", code: "file.stale", read: true, change: true },
+    ] as const
+    for (const item of cases) {
+      it.live(`refuses a destination that was ${item.name} with ${item.code} and leaves both files`, () =>
+        Effect.gen(function* () {
+          const { name, file, run, later } = yield* setup(tools[2])
+          const destination = path.join(path.dirname(file), "dest.txt")
+          yield* Effect.promise(() => fs.writeFile(destination, "keep\n"))
+          yield* run("rs", "Read", { file_path: name })
+          if (item.read) yield* run("rd", "Read", { file_path: "dest.txt" })
+          if (item.change) {
+            yield* Effect.promise(() => fs.writeFile(destination, "other\n"))
+            yield* Effect.promise(() =>
+              fs.utimes(destination, new Date(Date.now() + 5_000_000), new Date(Date.now() + 5_000_000)),
+            )
+          }
+          expect(errorType(yield* run("p", "Patch", move(name, "dest.txt")))).toBe(item.code)
+          expect(yield* Effect.promise(() => Bun.file(destination).text())).toBe(item.change ? "other\n" : "keep\n")
+          expect(yield* Effect.promise(() => Bun.file(file).text())).toBe(tools[2].initial)
+        }),
+      )
+    }
+
+    it.live("moves onto a destination that was read and is unchanged", () =>
+      Effect.gen(function* () {
+        const { name, file, run } = yield* setup(tools[2])
+        const destination = path.join(path.dirname(file), "dest.txt")
+        yield* Effect.promise(() => fs.writeFile(destination, "keep\n"))
+        yield* run("rs", "Read", { file_path: name })
+        yield* run("rd", "Read", { file_path: "dest.txt" })
+        expect(yield* run("p", "Patch", move(name, "dest.txt"))).toMatchObject({ status: "completed" })
+        expect(yield* Effect.promise(() => Bun.file(destination).text())).toBe(tools[2].changed)
+      }),
+    )
+  })
+
   it.live("forgets freshness and marks for a deleted or moved Session, and keeps the other Session", () =>
     Effect.gen(function* () {
       const { name, file, bus, location, registry } = yield* setup()

@@ -94,4 +94,4 @@ Producer capture remains local to producers. Shell stores combined process outpu
 - Future Session-scoped registrations still need an explicit canonical registration design.
 - `Snapshot.traits` runs before the `execute.before` hooks. A hook that turns a read-only call into a mutating one is seen only in `Tool.Context.traits`, not in the answer that orders work.
 - A trait predicate that never answers holds its call, because resolution has no time limit. A `validate` that never answers does the same.
-- Only `Edit` has a `validate`. `Write`, `Patch` and `NotebookEdit` report `file.unread` and `file.stale` from the ledger inside `execute`, and their other failures carry no code yet.
+- Only `Edit` has a `validate`. `Write`, `Patch` and `NotebookEdit` report `file.unread` and `file.stale` from the ledger and `edit.stale` from the post-approval re-check inside `execute`, and their other failures carry no code yet.
