@@ -49,26 +49,81 @@ import { executeTool, registerToolPlugin } from "./lib/tool"
  * The real Read, Edit, Write, Patch and NotebookEdit over one real FileLedger, Bus and file system. Only the permission
  * prompt (denied on request), the formatter (off) and a counter on whole-file reads are replaced.
  */
-const deps = [
-  Config.node,
-  Environment.node,
-  FileLedger.node,
-  FileMutation.node,
-  Formatter.node,
-  Tool.node,
-  ReadToolFileSystem.node,
-  FileAccess.node,
-  Image.node,
-  Permission.node,
-  SessionInstructions.node,
-  FSUtil.node,
-  Location.node,
-]
-const pluginNode = (
-  name: string,
-  plugin: Parameters<typeof registerToolPlugin>[0],
-  overrides: Parameters<typeof registerToolPlugin>[1] = {},
-) => makeLocationNode({ name, layer: Layer.effectDiscard(registerToolPlugin(plugin, overrides)), deps })
+const readNode = makeLocationNode({
+  name: "test/matrix-read",
+  layer: Layer.effectDiscard(registerToolPlugin(ReadTool.Plugin)),
+  deps: [
+    Config.node,
+    Environment.node,
+    FileLedger.node,
+    Tool.node,
+    ReadToolFileSystem.node,
+    FileAccess.node,
+    Image.node,
+    Permission.node,
+    SessionInstructions.node,
+    FSUtil.node,
+    Location.node,
+  ],
+})
+const editNode = makeLocationNode({
+  name: "test/matrix-edit",
+  layer: Layer.effectDiscard(registerToolPlugin(EditTool.Plugin)),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Location.node,
+    Permission.node,
+  ],
+})
+const writeNode = makeLocationNode({
+  name: "test/matrix-write",
+  layer: Layer.effectDiscard(registerToolPlugin(WriteTool.Plugin)),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Permission.node,
+  ],
+})
+const notebookNode = makeLocationNode({
+  name: "test/matrix-notebook",
+  layer: Layer.effectDiscard(registerToolPlugin(NotebookEditTool.Plugin)),
+  deps: [
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    FileLedger.node,
+    Environment.node,
+    Location.node,
+    Permission.node,
+  ],
+})
+const patchNode = makeLocationNode({
+  name: "test/matrix-patch",
+  layer: Layer.effectDiscard(
+    registerToolPlugin(PatchTool.Plugin, {
+      session: { hook: () => Effect.succeed({ dispose: Effect.void }) },
+    }),
+  ),
+  deps: [
+    FileLedger.node,
+    Tool.node,
+    FileAccess.node,
+    FileMutation.node,
+    Environment.node,
+    Formatter.node,
+    Location.node,
+    Permission.node,
+  ],
+})
 
 const state = { denied: new Set<string>(), wholeReads: [] as string[] }
 
@@ -85,11 +140,11 @@ const it = testEffect(
       FSUtil.node,
       FileAccess.node,
       ReadToolFileSystem.node,
-      pluginNode("test/matrix-read", ReadTool.Plugin),
-      pluginNode("test/matrix-edit", EditTool.Plugin),
-      pluginNode("test/matrix-write", WriteTool.Plugin),
-      pluginNode("test/matrix-notebook", NotebookEditTool.Plugin),
-      pluginNode("test/matrix-patch", PatchTool.Plugin),
+      readNode,
+      editNode,
+      writeNode,
+      notebookNode,
+      patchNode,
       FileLedger.node,
       FileMutation.node,
       Tool.node,
@@ -218,7 +273,7 @@ const setup = (tool: (typeof tools)[number] = tools[0]) =>
   })
 
 describe("Read repeat stubs and the freshness of the edit tools", () => {
-  describe.each(tools)("$name", (tool) => {
+  describe.each([...tools])("$name", (tool) => {
     it.live("passes a file that was only touched after a whole read", () =>
       Effect.gen(function* () {
         const { name, file, run, later } = yield* setup(tool)
