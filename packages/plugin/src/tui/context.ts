@@ -303,6 +303,8 @@ export interface AttentionNotifyOptions {
   readonly message: string
   readonly notification?: AttentionNotification
   readonly sound?: AttentionSound
+  /** When the terminal bell may ring; defaults to blurred or unknown focus. Only matters when the bell is on. */
+  readonly bell?: { readonly when?: AttentionWhen }
 }
 
 export type AttentionNotifySkipReason =

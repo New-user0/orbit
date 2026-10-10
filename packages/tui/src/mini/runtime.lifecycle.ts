@@ -17,7 +17,7 @@ import {
   type ScrollbackWriter,
 } from "@opentui/core"
 import { isFallbackTitle } from "@orbit/util/session-title-fallback"
-import { terminalTitle } from "../util/renderer"
+import { createMiniTitle } from "../util/renderer"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -173,17 +173,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     clearOnShutdown: false,
   })
   if (mono) renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, monoSnapshot)
-  let titled: string | undefined
-  let activity: "working" | "needs input" | undefined
-  const writeTitle = () => {
-    if (input.host.platform !== "linux") return
-    renderer.setTerminalTitle(terminalTitle(!titled || isFallbackTitle(titled) ? undefined : titled, activity))
-  }
-  const setTitle = (title?: string) => {
-    titled = title
-    writeTitle()
-  }
-  setTitle(input.sessionTitle)
+  const title = createMiniTitle(renderer, input.host.platform, input.sessionTitle)
   const theme = await resolveRunTheme(renderer, tuiConfig.theme, mono)
   renderer.setBackgroundColor(theme.background)
   const state: SplashState = {
@@ -237,9 +227,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       update: input.onMiniSettingChange,
     },
     onActivity: (next) => {
-      if (activity === next) return
-      activity = next
-      if (!renderer.isDestroyed) writeTitle()
+      title.setActivity(next)
     },
     onMonoChange: (mono) => {
       if (mono) {
@@ -358,7 +346,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     refreshTheme() {
       footer.refreshTheme()
     },
-    setTitle,
+    setTitle: title.setTitle,
     onResize(fn) {
       let width = renderer.terminalWidth
       let height = renderer.terminalHeight

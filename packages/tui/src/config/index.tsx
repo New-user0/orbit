@@ -104,9 +104,9 @@ export const Info = Schema.Struct({
       bell: Schema.optional(Schema.Boolean).annotate({
         description: "Ring the terminal bell for attention events while the terminal is blurred or its focus is unknown",
       }),
-      idle_reminder: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+      idle_reminder: Schema.optional(Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(86400))).annotate({
         description:
-          "Seconds after a session finishes, with no keypress, before reminding you that Orbit is waiting; 0 turns the reminder off",
+          "Seconds (at most 86400) after a session finishes, with no keypress, before reminding you that Orbit is waiting; 0 turns the reminder off",
       }),
       volume: Schema.optional(
         Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(1)),

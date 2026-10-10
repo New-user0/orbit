@@ -488,3 +488,17 @@ test("reloads the keybindings file when it changes, and a broken one does not di
     app.renderer.destroy()
   }
 })
+
+test("attention defaults: the bell is off and the idle reminder waits 60 seconds", () => {
+  const attention = resolve({}, { terminalSuspend: true }).attention
+  expect(attention.bell).toBe(false)
+  expect(attention.idle_reminder).toBe(60)
+})
+
+test("idle_reminder is bounded to a day so the timer cannot overflow", () => {
+  expect(decodeInfo({ attention: { idle_reminder: 86400 } })).toEqual({ attention: { idle_reminder: 86400 } })
+  expect(decodeInfo({ attention: { idle_reminder: 0 } })).toEqual({ attention: { idle_reminder: 0 } })
+  expect(() => decodeInfo({ attention: { idle_reminder: 86401 } })).toThrow()
+  expect(() => decodeInfo({ attention: { idle_reminder: 3e6 } })).toThrow()
+  expect(() => decodeInfo({ attention: { idle_reminder: -1 } })).toThrow()
+})

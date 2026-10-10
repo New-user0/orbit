@@ -635,7 +635,12 @@ function App() {
 
     if (route.data.type === "session") {
       const sessionID = route.data.sessionID
-      const waiting = (data.session.permission.list(sessionID)?.length ?? 0) + (data.session.form.list(sessionID)?.length ?? 0) > 0
+      // The same requests the session view draws: the session and its descendants, plus global forms for its location.
+      const family = [sessionID, ...data.session.family(sessionID).filter((id) => id !== sessionID)]
+      const waiting =
+        family.some(
+          (id) => (data.session.permission.list(id)?.length ?? 0) + (data.session.form.list(id)?.length ?? 0) > 0,
+        ) || (data.session.form.list("global", session?.location)?.length ?? 0) > 0
       const activity = waiting ? "needs input" : data.session.status(sessionID) === "running" ? "working" : undefined
       const title = session?.title
       renderer.setTerminalTitle(terminalTitle(!title || isFallbackTitle(title) ? undefined : title, activity))

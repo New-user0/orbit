@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { MarkdownRenderable, SyntaxStyle, TextRenderable, type CliRenderer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { bodyText, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
+import { bodyText, createMiniTitle, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
 
 // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
 // a model, a tool or a stored prompt can put into a message body.
@@ -116,4 +116,37 @@ test("still clears the title after renderer destruction", () => {
     },
   })
   expect(calls).toEqual(["title:"])
+})
+
+// The Mini footer reports its activity; the window title follows it, and the session title is cleaned like the full
+// interface's.
+test("the Mini title follows the footer's activity and cleans the session title", () => {
+  const titles: string[] = []
+  const renderer = { isDestroyed: false, setTerminalTitle: (title: string) => titles.push(title) }
+  const mini = createMiniTitle(renderer, "linux", "Fix the build")
+  mini.setActivity("working")
+  mini.setActivity("working")
+  mini.setActivity("needs input")
+  mini.setActivity(undefined)
+  expect(titles).toEqual([
+    "Orbit · Fix the build",
+    "Orbit · Fix the build · working",
+    "Orbit · Fix the build · needs input",
+    "Orbit · Fix the build",
+  ])
+  mini.setTitle("work\u0007\u001b]0;pwned\u0007\u001b[2K\u009b\u{202e}done")
+  expect(titles.at(-1)).toBe("Orbit · work]0;pwned[2Kdone")
+  expect(titles.filter((title) => /\p{C}/u.test(title))).toEqual([])
+})
+
+test("the Mini title is written only on Linux, and not after the renderer is destroyed", () => {
+  const titles: string[] = []
+  const renderer = { isDestroyed: false, setTerminalTitle: (title: string) => titles.push(title) }
+  const other = createMiniTitle(renderer, "win32", "Fix the build")
+  other.setActivity("working")
+  expect(titles).toEqual([])
+  const linux = createMiniTitle(renderer, "linux", "Fix the build")
+  renderer.isDestroyed = true
+  linux.setActivity("working")
+  expect(titles).toEqual(["Orbit · Fix the build"])
 })

@@ -45,6 +45,7 @@ export default Plugin.define({
           message: "Orbit is waiting for your input",
           notification: { when: "blurred" },
           sound: { name: "default", when: "blurred" },
+          bell: { when: "blurred" },
         })
       }, seconds * 1000)
     }

@@ -309,6 +309,7 @@ describe("idle reminder", () => {
     message: "Orbit is waiting for your input",
     notification: { when: "blurred" },
     sound: { name: "default", when: "blurred" },
+    bell: { when: "blurred" },
   }
   const waiting = (harness: Awaited<ReturnType<typeof setup>>) =>
     harness.notifications.filter((item) => item.message === reminder.message)
