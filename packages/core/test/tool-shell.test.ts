@@ -982,7 +982,8 @@ describe("ShellTool", () => {
     ),
   )
 
-  it.live("schedules a PowerShell call alone, whatever the command", () =>
+  // Needs a real PowerShell: elsewhere "powershell" falls back to a bash shell, where `ls` is a read-only command.
+  ;(isWindows ? it.live : it.live.skip)("schedules a PowerShell call alone, whatever the command", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
