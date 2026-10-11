@@ -52,6 +52,7 @@ it.live("lists what an untrusted repository holds back, then trusts it for good 
           { path: path.join(folders.repo, "orbit.json"), kinds: ["hooks"] },
           { path: path.join(folders.repo, ".orbit"), kinds: ["plugins"] },
         ],
+        changed: [],
       })
       expect(await api.location.trust.list()).toEqual([])
 
@@ -63,6 +64,7 @@ it.live("lists what an untrusted repository holds back, then trusts it for good 
         persistent: true,
         source: "saved",
         withheld: [],
+        changed: [],
       })
       expect(await api.location.trust.get({ location })).toEqual(granted)
 
@@ -135,6 +137,7 @@ it.live("trusts the home directory only until the server restarts, and never sto
             trusted: false,
             persistent: false,
             withheld: [],
+            changed: [],
           })
 
           // Asking to persist is not refused: the grant is made, and the status says what kind of grant it is.
@@ -145,6 +148,7 @@ it.live("trusts the home directory only until the server restarts, and never sto
             persistent: false,
             source: "session",
             withheld: [],
+            changed: [],
           })
           expect(await api.location.trust.list()).toEqual([])
 
@@ -171,6 +175,7 @@ it.live("trusts a repository for this server process alone when the grant is not
         persistent: true,
         source: "session",
         withheld: [],
+        changed: [],
       })
       // Nothing was stored, so no later server knows about it.
       expect(await api.location.trust.list()).toEqual([])
@@ -190,6 +195,31 @@ it.live("lists grants without loading a location", () =>
       // The same listing does show a location once a request that needs one has booted it.
       await api.location.trust.get({ location: { directory: folders.repo } })
       expect(await api.debug.location.list()).toHaveLength(1)
+    })
+  }),
+)
+
+it.live("revokes a stored grant by the folder's name, and trusts a holder only where the location holds config back for it", () =>
+  Effect.gen(function* () {
+    const folders = yield* layout
+    const server = yield* startServer(folders.config, untrusted)
+    const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+    const location = { directory: folders.repo }
+    yield* Effect.promise(async () => {
+      // A folder that holds nothing back here is not trusted through this location, whatever the request names.
+      const stray = await api.location.trust.update({ location, trust: true, holder: folders.home })
+      expect(stray).toMatchObject({ directory: folders.repo, trusted: false })
+      expect(await api.location.trust.list()).toEqual([])
+
+      // The project's own root is a holder, and the answer is the location's status.
+      const granted = await api.location.trust.update({ location, trust: true, holder: folders.repo })
+      expect(granted).toMatchObject({ directory: folders.repo, trusted: true, source: "saved" })
+
+      // By name: the folder is deleted, and the grant goes with its records.
+      await fs.rm(folders.repo, { recursive: true, force: true })
+      expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([folders.repo])
+      expect(await api.location.trust.list()).toEqual([])
+      expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([])
     })
   }),
 )

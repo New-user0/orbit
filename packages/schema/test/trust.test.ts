@@ -18,6 +18,7 @@ describe("Trust", () => {
       "formatter",
       "lsp",
       "sandbox",
+      "skills",
       "network",
       "settings",
     ])
@@ -49,6 +50,27 @@ describe("Trust", () => {
     }
     expect(() => decode({ ...untrusted, source: "remembered" })).toThrow()
     expect(() => decode({ ...untrusted, withheld: [{ path: "/repo/orbit.json", kinds: ["environment"] }] })).toThrow()
+  })
+
+  test("round-trips what changed since the grant, and a status from a server that sends no such list", () => {
+    const encode = Schema.encodeSync(Trust.Status)
+    const decode = Schema.decodeUnknownSync(Trust.Status)
+    const changed = {
+      directory: "/repo",
+      trusted: true,
+      persistent: true,
+      source: "saved",
+      withheld: [
+        { path: "/repo/orbit.json", kinds: ["hooks"] },
+        // A holder that can never be trusted for good says so.
+        { path: "/orbit.json", kinds: ["hooks"], directory: "/", persistent: false },
+      ],
+      changed: [{ path: "/repo/orbit.json", kinds: ["hooks", "skills"] }],
+    }
+    expect<unknown>(encode(decode(changed))).toEqual(changed)
+    const { changed: _, ...older } = changed
+    expect(encode(decode(older))).not.toHaveProperty("changed")
+    expect(() => decode({ ...changed, changed: [{ path: "/repo/orbit.json", kinds: ["environment"] }] })).toThrow()
   })
 
   test("round-trips a grant and rejects a negative time", () => {
