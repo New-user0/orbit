@@ -5,12 +5,13 @@
 import path from "node:path"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { which } from "../../src/util/which"
+import { pathCases } from "./path-cases"
 import { arrayAndNetwork, arrayAndNetworkOk, chain, notReadOnly, platform, readOnly, toolNotReadOnly, toolPlatform, toolReadOnly } from "./powershell-cases"
 
 const seven = process.argv[2] === "linux7"
 const host = seven ? undefined : (which("pwsh") ?? which("powershell"))
 if (!seven && !host) throw new Error("no pwsh or powershell on PATH")
-const texts = seven ? [...new Set([...chain, ...toolPlatform])] : [...new Set([...readOnly, ...notReadOnly, ...platform, ...arrayAndNetwork, ...arrayAndNetworkOk, ...toolReadOnly, ...toolNotReadOnly, ...toolPlatform])]
+const texts = seven ? [...new Set([...chain, ...toolPlatform, ...pathCases])] : [...new Set([...readOnly, ...notReadOnly, ...platform, ...arrayAndNetwork, ...arrayAndNetworkOk, ...toolReadOnly, ...toolNotReadOnly, ...toolPlatform, ...pathCases])]
 const rows = Object.fromEntries(
   await Promise.all(
     texts.map(async (text) => {
