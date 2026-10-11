@@ -11,6 +11,8 @@ describe("the doctor's sandbox probe", () => {
     { name: "wsl1", platform: "linux", release: "4.4.0-19041-Microsoft", env: {}, type: "unsupported" },
     { name: "wsl2", platform: "linux", release: "5.15.90.1-microsoft-standard-WSL2", env: {}, type: "any" },
     { name: "custom wsl2 kernel", platform: "linux", release: "6.6.0-custom", env: { WSL_DISTRO_NAME: "Ubuntu" }, type: "any" },
+    { name: "linux", platform: "linux", release: "6.1.0-generic", env: {}, type: "any" },
+    { name: "darwin", platform: "darwin", release: "23.0.0", env: {}, type: "any" },
     { name: "win32", platform: "win32", release: "10.0.26200", env: {}, type: "unwrapped" },
     { name: "freebsd", platform: "freebsd", release: "14.0", env: {}, type: "unwrapped" },
   ] as const
@@ -26,13 +28,13 @@ describe("the doctor's sandbox probe", () => {
         settings: { enabled: true },
         shell: "sh",
         args: [],
-        cwd: ".",
+        cwd: process.cwd(),
         writable: [],
         tool: probed.type === "wrapped" ? probed.command : undefined,
       })
       expect(probed).toEqual(direct)
       if (row.type !== "any") expect(probed.type).toBe(row.type)
-      // WSL2 sandboxes like Linux: it is never refused as unsupported.
+      // Plain Linux, macOS and WSL2 are never refused as unsupported.
       else expect(probed.type).not.toBe("unsupported")
     })
 

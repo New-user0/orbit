@@ -208,16 +208,18 @@ function names(list: readonly string[]) {
 
 // Every label and detail is escaped here, at the sink: a PATH folder, a model ID, a provider error or a model name can
 // hold control characters, and no check should have to remember to escape its own.
-function print(checks: readonly Check[]) {
+export function lines(checks: readonly Check[]) {
   const width = Math.max(...checks.map((check) => plain(check.label).length))
-  process.stdout.write(
-    checks
-      .map(
-        (check) =>
-          `${check.ok === undefined ? "  " : check.ok ? "ok" : "!!"} ${plain(check.label).padEnd(width)}  ${plain(check.detail)}${EOL}`,
-      )
-      .join(""),
-  )
+  return checks
+    .map(
+      (check) =>
+        `${check.ok === undefined ? "  " : check.ok ? "ok" : "!!"} ${plain(check.label).padEnd(width)}  ${plain(check.detail)}${EOL}`,
+    )
+    .join("")
+}
+
+function print(checks: readonly Check[]) {
+  process.stdout.write(lines(checks))
 }
 
 function finish(checks: readonly Check[]) {

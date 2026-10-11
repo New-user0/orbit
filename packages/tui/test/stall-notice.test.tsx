@@ -30,6 +30,14 @@ test.each([40, 120])("a waiting shell notice reads as waiting, never finished, a
       metadata: { source: "shell", state: "waiting", shellID: "sh_1" },
       time: { created: 1 },
     },
+    ...(["completed", "error", "cancelled"] as const).map((state, index) => ({
+      id: `notice-${state}`,
+      type: "synthetic",
+      text: "",
+      description: `other ${state}`,
+      metadata: { source: "shell", state, shellID: `sh_${state}` },
+      time: { created: 2 + index },
+    })),
   ]
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -60,13 +68,25 @@ test.each([40, 120])("a waiting shell notice reads as waiting, never finished, a
     const frame = setup.captureCharFrame()
     expect(frame).toContain("Shell waiting for input")
     expect(frame).toContain("npm")
-    expect(frame).not.toContain("failed")
-    expect(frame).not.toContain("cancelled")
-    expect(frame).not.toContain("Shell finished")
+    expect(frame).toContain("Shell finished")
+    expect(frame).toContain("Shell failed")
+    expect(frame).toContain("Shell cancelled")
     expect(frame).not.toContain("OVERWRITTEN")
     expect(frame).not.toContain("pwned")
     expect(frame).not.toContain("\u001b")
     expect(frame).not.toContain("\r")
+    // The stalled command is neither an outcome nor a warning: it takes the informational colour of a finished one.
+    const colour = (heading: string) =>
+      setup
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .find((span) => span.text.includes(heading))
+        ?.fg.toInts()
+    const waiting = colour("Shell waiting for input")
+    expect(waiting).toBeDefined()
+    expect(waiting).toEqual(colour("Shell finished"))
+    expect(waiting).not.toEqual(colour("Shell failed"))
+    expect(waiting).not.toEqual(colour("Shell cancelled"))
   } finally {
     setup.renderer.destroy()
     await task

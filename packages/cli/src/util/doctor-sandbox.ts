@@ -20,6 +20,10 @@ export function sandboxCheck(probe: SandboxProbe, state: SandboxState) {
   const label = "sandbox"
   const source = state === "on" ? "on in managed settings; " : state === "off" ? "off in managed settings; " : ""
   const failing = state === "on" ? false : undefined
+  const install = (tool: string) =>
+    tool === "bwrap"
+      ? "install the distribution's bubblewrap package"
+      : `${tool} ships with macOS in /usr/bin, so PATH must include it`
   if (probe.type === "wrapped")
     return {
       ok: state === "on" ? true : undefined,
@@ -32,7 +36,7 @@ export function sandboxCheck(probe: SandboxProbe, state: SandboxState) {
       label,
       detail:
         state === "on"
-          ? `${source}${probe.tool} is not on PATH, so every shell command fails until it is installed (install the distribution's bubblewrap package) or the sandbox is turned off`
+          ? `${source}${probe.tool} is not on PATH, so every shell command fails until it is available (${install(probe.tool)}) or the sandbox is turned off`
           : state === "off"
             ? `${source}turning it on needs ${probe.tool}, which is not on PATH`
             : `${probe.tool} is not on PATH; shell commands would fail if the sandbox were turned on`,

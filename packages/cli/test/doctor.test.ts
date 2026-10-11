@@ -60,7 +60,7 @@ async function doctor(managed: Record<string, unknown> | string, env: Record<str
     stderr: "pipe",
   })
   const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-  return { stdout, exitCode, line: stdout.split("\n").find((line) => /^\S?\S? sandbox /.test(line.replace(/^ /, ""))) }
+  return { stdout, exitCode }
 }
 
 describe("orb doctor on this host", () => {
@@ -95,7 +95,7 @@ describe("orb doctor on this host", () => {
       await fs.chmod(path.join(dir, "bwrap"), 0o755)
     }
     const managed = { sandbox: { enabled: true } }
-    const relative = await doctor(managed, { PATH: `node_modules/.bin:${empty}` })
+    const relative = await doctor(managed, { PATH: `${path.relative(path.join(import.meta.dir, ".."), bin)}:${empty}` })
     expect(relative.stdout).toMatch(/!! sandbox\s+on in managed settings; bwrap is not on PATH/)
     const control = await doctor(managed, { PATH: `${absolute}:${empty}` })
     expect(control.stdout).toContain(path.join(absolute, "bwrap"))
@@ -125,4 +125,23 @@ describe("orb doctor escapes at the sink", () => {
     expect(result.stdout.replaceAll("\r\n", "\n")).not.toContain("\r")
     expect(result.stdout).toContain("\\x1b")
   })
+})
+
+describe("orb doctor prints checks through the escaping sink", () => {
+  const marker = "\u001b]0;x\u0007\u001b[2K\r"
+  // A label (a model ID the user typed) and a detail (a probe reply or provider error) are both untrusted text.
+  const cases = [
+    { name: "label", check: { ok: true, label: `ollama/m${marker}`, detail: "ok" } },
+    { name: "detail", check: { ok: false, label: "ollama/m", detail: `${marker}failed` } },
+    { name: "both", check: { ok: undefined, label: `a${marker}`, detail: `b${marker}` } },
+  ]
+  for (const row of cases)
+    test(row.name, async () => {
+      const { lines } = await import("../src/commands/handlers/doctor")
+      const text = lines([row.check])
+      expect(text).not.toContain("\u001b")
+      expect(text).not.toContain("\u0007")
+      expect(text.replaceAll(os.EOL, "\n")).not.toContain("\r")
+      expect(text).toContain("\\x1b")
+    })
 })
