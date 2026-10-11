@@ -74,6 +74,13 @@ export interface Interface {
    */
   readonly escapes: (file: string) => Effect.Effect<string | undefined>
   /**
+   * Where a path really leads once every link in it is followed, whether or not the project is trusted. A path that is not
+   * there yet leads where the nearest folder of its name that exists does, with the missing tail kept, and a link that
+   * points nowhere leads where it points. A link to a network share is named as the share, without opening it. It decides
+   * nothing by itself: a caller compares the result with folders that are real too (`FSUtil.contains`).
+   */
+  readonly leads: (file: string) => Effect.Effect<string>
+  /**
    * Whether a file that a config directory, or a root of another product, holds may be read now: its agents, commands,
    * skills and output styles. Any file may while the folder that holds the source is trusted. Until then only a file
    * whose real path is inside the folders that decision covers may, which are the project's for a source in them and
@@ -253,6 +260,7 @@ const layer = Layer.effect(
         if ((yield* trust.status(root)).trusted) return true
         return yield* stays([...folders, ...real], file)
       }),
+      leads: Effect.fn("ProjectTrust.leads")((file) => lead(file)),
       escapes: Effect.fn("ProjectTrust.escapes")(function* (file) {
         if ((yield* trust.status(root)).trusted) return undefined
         const leads = yield* lead(file)

@@ -17,7 +17,15 @@ import { ShellWrappers } from "./wrappers.js"
 // The lexical comparisons here only ever ADD an ask or a deny. None of them decides that a path is inside the project for an
 // allow: that stays with the guard, on real paths (class 4).
 
-export type Kind = "critical-removal" | "too-complex" | "cd-git" | "bare-repo" | "git-internal" | "powershell"
+export type Kind =
+  | "critical-removal"
+  | "too-complex"
+  | "directory"
+  | "cd-git"
+  | "bare-repo"
+  | "git-internal"
+  | "provider"
+  | "powershell"
 
 export type Reason =
   | PowerShellReason
@@ -49,6 +57,13 @@ export type Reason =
   | "git-dir"
   | "internal-write"
   | "archive"
+  | "unresolved-path"
+  | "unvalidatable"
+  | "glob-write"
+  | "multiple-cd"
+  | "cd-write"
+  | "location-path"
+  | "provider-path"
 
 export type Finding = {
   kind: Kind
@@ -115,6 +130,13 @@ const MESSAGES: Record<Reason, string> = {
   "unverified-gitdir": "Git would follow a .git file that points to a git directory Orbit could not verify, and that directory's hooks could run.",
   "git-dir": "This command names a git directory on the command line, and that directory's hooks could run.",
   "internal-write": "This command creates git's own files (HEAD, objects, refs or hooks) and then runs git, which could run a planted hook.",
+  "unresolved-path": `${COMPLEX}: a file it writes or removes is a network share, a device, a data stream, or a name that could not be resolved.`,
+  unvalidatable: `${COMPLEX}: it takes options or input that hide which files it touches.`,
+  "glob-write": `${COMPLEX}: it writes or removes through a wildcard, so the files it reaches are not known.`,
+  "multiple-cd": "This command changes folder more than once, so its relative paths cannot be placed.",
+  "cd-write": "This command changes folder and then writes, so its relative paths cannot be placed.",
+  "location-path": "This command changes location and then names a path, so the path cannot be placed.",
+  "provider-path": "It names a registry, environment, function or other non-file location, or a drive that may map anywhere.",
   archive: "This command unpacks an archive and then runs git. The archive can plant git's own files, and git could run a planted hook.",
   "invoke-expression": "It runs text as code.",
   "encoded-command": "It runs an encoded script that cannot be read.",
@@ -146,10 +168,22 @@ const MESSAGES: Record<Reason, string> = {
 }
 const REFUSED = "Orbit refuses to let PowerShell remove this place (the root, a drive, the home folder, a direct child of either, or everything in a folder). Choose a narrower target."
 
-const ORDER: Kind[] = ["critical-removal", "too-complex", "cd-git", "bare-repo", "git-internal", "powershell"]
+const ORDER: Kind[] = ["critical-removal", "too-complex", "directory", "cd-git", "bare-repo", "git-internal", "provider", "powershell"]
 const MAX_COMMANDS = 50
 
 type Level = { analysis: Analysis; text: string; outer?: number }
+
+/** A finding of the guard's own (an unplaceable path, a folder change before a write), with the fixed sentence of its reason. */
+export function finding(kind: Kind, reason: Reason, command?: number): Finding {
+  return { kind, reason, message: MESSAGES[reason], decision: "ask", exact: kind === "too-complex", ...(command === undefined ? {} : { command }) }
+}
+
+/** Whether the input runs git at any level of nesting: by name, by path, through `xargs` or `find -exec`. */
+export function runsGit(analysis: Analysis, platform: NodeJS.Platform) {
+  return collect(analysis, "").some((level) =>
+    level.analysis.commands.some((command) => gitName(command, platform) || gitIndirect(command, platform)),
+  )
+}
 
 /**
  * Every finding for `analysis` and the scripts nested in it, strongest first: refusals, then the other kinds in the order of

@@ -17,6 +17,8 @@ const POWERSHELL_PATH_FLAGS = new Set(["-literalpath", "-path"])
 export type Result = {
   commands: Array<{ resource: string; save: string }>
   directories: string[]
+  /** Bash: the text of each redirected statement that has no command body (`> file`), which creates or truncates a file. */
+  bare?: string[]
 }
 
 const ARITY: Record<string, number> = {
@@ -179,8 +181,8 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),
     (tree) =>
-      Effect.sync(() =>
-        tree.rootNode.descendantsOfType("command").reduce(
+      Effect.sync(() => ({
+        ...tree.rootNode.descendantsOfType("command").reduce(
           (result, node) => {
             if (!node) return result
             const command = parts(node)
@@ -199,7 +201,12 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
           },
           { commands: [] as Array<{ resource: string; save: string }>, directories: [] as string[] },
         ),
-      ),
+        bare: powershell
+          ? []
+          : tree.rootNode.descendantsOfType("redirected_statement").flatMap((node) =>
+              node && node.childForFieldName("body") === null ? [node.text.trim()] : [],
+            ),
+      })),
     (tree) => Effect.sync(() => tree.delete()),
   )
 })
@@ -348,7 +355,11 @@ function directoryArgs(command: Part[], powershell: boolean, cwd: string, shell:
   return directories
 }
 
-function directoryArgument(value: string, powershell: boolean, cwd: string, shell: string) {
+/**
+ * The folder a `cd` or `Set-Location` argument names when that is known before the command runs: quotes removed, `~` and the
+ * environment variables and automatic variables PowerShell defines for folders expanded. Undefined for anything else.
+ */
+export function directoryArgument(value: string, powershell: boolean, cwd: string, shell: string) {
   const quote = value[0]
   const text = (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value
   if (!powershell) return expandKnownDirectory(text)
@@ -383,7 +394,8 @@ function environment(key: string) {
   return name ? process.env[name] : undefined
 }
 
-function prefix(tokens: string[]) {
+/** The words of a command that an "always" grant names: the program, plus the subcommand words its arity covers. */
+export function prefix(tokens: string[]) {
   for (let length = tokens.length; length > 0; length--) {
     const arity = ARITY[tokens.slice(0, length).join(" ")]
     if (arity !== undefined) return tokens.slice(0, arity)

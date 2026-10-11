@@ -23,7 +23,13 @@ import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
 import { ShellAnalysis } from "../../shell/analysis.js"
+import { FSUtil } from "@orbit/util/fs-util"
+import { ProjectTrust } from "../../project-trust.js"
+import { ManagedNetwork } from "../../managed-network.js"
+import { ManagedPolicy } from "../../managed-policy.js"
 import { ShellDestructive } from "../../shell/destructive.js"
+import { ShellGuard } from "../../shell/guard.js"
+import { ShellSandbox } from "../../shell/sandbox.js"
 import { ShellExit } from "../../shell/exit.js"
 import { ShellParse } from "../../shell/parse.js"
 import { PowerShellParse } from "../../shell/powershell-parse.js"
@@ -173,6 +179,17 @@ export function destructive(command: string, ctx: Pick<ShellAnalysis.Context, "s
   return ShellDestructive.matches(command, ShellAnalysis.dialect(ctx.shell, ctx))
 }
 
+// The bash scanner's view of the input. The legacy scan reads what the analysis could not, and always supplies the
+// redirected statements without a command and the folders to change to; the portable scanner replaces its commands when it
+// is configured and can read the input, and a scanner that cannot never fails the call.
+const scanBash = Effect.fnUntraced(function* (command: string, shell: string, cwd: string, portable: boolean) {
+  const none = () => Effect.succeed(undefined)
+  const legacy = yield* ShellParse.scan(command, shell, cwd).pipe(Effect.catch(none))
+  if (!portable) return legacy
+  const native = yield* ShellParse.scan(command, shell, cwd, { portable }).pipe(Effect.catch(none))
+  return native ? { ...native, bare: legacy?.bare ?? [] } : legacy
+})
+
 export const Plugin = {
   id: "orbit.tool.shell",
   effect: Effect.fn("ShellTool.Plugin")(function* (ctx: Context) {
@@ -188,6 +205,9 @@ export const Plugin = {
     const config = yield* Config.Service
     const powershellParse = yield* PowerShellParse.Service
     const location = yield* Location.Service
+    const managed = yield* ManagedPolicy.Service
+    // What the guard reads from the disk, captured here so a call needs none of it from its caller.
+    const guarded = yield* Effect.context<FSUtil.Service | ProjectTrust.Service>()
 
     const prepare = Effect.fn("ShellTool.prepare")(function* (
       invocation: ShellCreateBefore,
@@ -203,49 +223,88 @@ export const Plugin = {
       invocation.cwd = target.absolute
       // The folder as resolved, before anything is asked, so a client names where the command runs even when no rule asks.
       yield* context.progress({ places: [target.place] })
-      const portable = Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
-      const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, { portable })
-      const directories = yield* Effect.forEach(parsed.directories, (directory) =>
-        access.resolve({
-          path: FileAccess.resolvePath(target.absolute, directory),
-          kind: "directory",
-        }),
+      const entries = yield* config.entries()
+      const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
+      const ctx: ShellAnalysis.Context = {
+        shell: invocation.shell,
+        platform: process.platform,
+        path: process.platform === "win32" ? path.win32 : path.posix,
+        home: os.homedir(),
+        cwd: target.absolute,
+        env: invocation.env,
+      }
+      // The one parse of the call. Input that cannot be analysed is a value here, never an error: it is asked about below.
+      const analysis = yield* ShellAnalysis.inspect(invocation.command, ctx, { nested: true }).pipe(
+        Effect.provideService(PowerShellParse.Service, powershellParse),
       )
+      const powershell = analysis.dialect === "powershell-5.1" || analysis.dialect === "pwsh"
+      const scanned = powershell
+        ? undefined
+        : yield* scanBash(invocation.command, invocation.shell, target.absolute, portable && !analysis.opaque)
+      const directories = powershell
+        ? analysis.opaque
+          ? ShellGuard.locations(invocation.command, analysis.dialect, process.platform)
+          : ShellGuard.expansions(analysis, target.absolute, invocation.shell)
+        : (scanned?.directories ?? [])
+      // The folders the command may write when it runs inside the sandbox; unset when it runs without one.
+      const sandbox = yield* ManagedNetwork.sandboxSettings(
+        Config.latest(entries, "sandbox"),
+        managed.current().restrictions.network,
+      )
+      const writable =
+        ShellSandbox.launch({
+          settings: sandbox,
+          shell: invocation.shell,
+          args: ShellSelect.args(invocation.shell, invocation.command),
+          cwd: target.absolute,
+          writable: [],
+        }).type === "wrapped"
+          ? [location.project.directory, target.absolute, os.tmpdir(), ...(sandbox.write ?? [])]
+          : undefined
+      const facts = yield* ShellGuard.facts({
+        analysis,
+        text: invocation.command,
+        ctx,
+        cwd: target,
+        directories: directories.map((directory) => FileAccess.resolvePath(target.absolute, directory)),
+        writable,
+      }).pipe(Effect.provideContext(guarded), Effect.provideService(Location.Service, location), Effect.provideService(FileAccess.Service, access))
       // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
       // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
-      const operands = yield* access.escaped(
-        (yield* ShellParse.operands(invocation.command, invocation.shell)).map((operand) =>
-          FileAccess.resolvePath(target.absolute, operand),
+      const words = powershell
+        ? ShellGuard.words(analysis)
+        : yield* ShellParse.operands(invocation.command, invocation.shell)
+      const escaped = yield* access.escaped(words.map((operand) => FileAccess.resolvePath(target.absolute, operand)))
+      const targets = [target, ...facts.external, ...escaped]
+      const invoked = { sessionID: context.sessionID, agent: context.agent, source }
+      const requested = ShellGuard.request(analysis, invocation.command, scanned, facts.findings)
+      const shellInput: Permission.AssertInput | undefined = requested && {
+        action: name,
+        resources: requested.resources,
+        ...(requested.save.length > 0 ? { save: requested.save } : {}),
+        ...(requested.aliases ? { aliases: requested.aliases } : {}),
+        // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling, and
+        // the real folder when a link in an untrusted project leads there. The findings only describe, for now.
+        metadata: { workdir: target.place, findings: facts.findings },
+        ...invoked,
+      }
+      // Every request of the call is checked for a deny before the first question, so a call that a rule blocks shows none.
+      const requests = [
+        ...(shellInput ? [shellInput] : []),
+        ...[access.externalRequest(targets, context)].flatMap((item) => (item ? [item] : [])),
+        ...facts.probes.map(
+          (probe): Permission.AssertInput => ({ action: probe.action, resources: probe.resources, ...invoked }),
         ),
+      ]
+      yield* Effect.forEach(requests, (input) =>
+        permission.denied(input).pipe(Effect.flatMap((denied) => (denied ? permission.assert(input) : Effect.void))),
       )
-      yield* access.authorizeExternal([target, ...directories, ...operands], context)
-      if (parsed.commands.length > 0)
-        yield* permission.assert({
-          action: name,
-          resources: parsed.commands.map((command) => command.resource),
-          save: parsed.commands.map((command) => command.save),
-          // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling, and
-          // the real folder when a link in an untrusted project leads there.
-          metadata: { workdir: target.place },
-          sessionID: context.sessionID,
-          agent: context.agent,
-          source,
-        })
+      yield* access.authorizeExternal(targets, context)
+      if (shellInput) yield* permission.assert(shellInput)
       // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
       // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
       // be analysed counts as not sleep-led, so it is moved and never killed.
       const deadline = invocation.timeout
-      // The analysis of the command that runs, also used to read its exit code, so every foreground call has one.
-      const analysis = foreground
-        ? yield* ShellAnalysis.inspect(invocation.command, {
-              shell: invocation.shell,
-              platform: process.platform,
-              path: process.platform === "win32" ? path.win32 : path.posix,
-              home: os.homedir(),
-              cwd: target.absolute,
-              env: invocation.env,
-            }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
-        : undefined
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
         Effect.catchTag("Environment.NotFound", () =>
@@ -254,7 +313,9 @@ export const Plugin = {
       )
       if (workdir !== "directory")
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
-      if (!analysis || deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
+      // The analysis also reads the exit code of a foreground call.
+      if (!foreground) return { budget: deadline, autoBackground: false, analysis: undefined }
+      if (deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
       invocation.timeout = 0
       return { budget: deadline, autoBackground: true, analysis }
     })

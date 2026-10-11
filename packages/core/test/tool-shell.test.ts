@@ -32,6 +32,7 @@ import { SessionMessage } from "@orbit/core/session/message"
 import { SessionStore } from "@orbit/core/session/store"
 import { Permission } from "@orbit/core/permission"
 import { PermissionSaved } from "@orbit/core/permission/saved"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Shell } from "@orbit/core/shell"
@@ -151,8 +152,11 @@ const shellPluginSupervisor = makeLocationNode({
     Config.node,
     Environment.node,
     FileAccess.node,
+    FSUtil.node,
     Location.node,
+    ManagedPolicy.node,
     Permission.node,
+    ProjectTrust.node,
     Session.node,
     Job.node,
     Shell.node,
@@ -835,13 +839,49 @@ describe("ShellTool ordinary shell syntax", () => {
   const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
   const test = pwsh ? permissionIt.live : permissionIt.live.skip
   for (const portable of [false, true]) {
+    // A statement that is not a pipeline of commands (an assignment, a conditional, a loop, a definition) is asked about by
+    // its own text, which no saved grant for the commands inside it covers.
     for (const command of [
-      'Write-Output "$(Write-Output hello)"',
       '$value = "hello"; Write-Output $value',
       "if ($true) { Write-Output hello } else { Write-Output other }",
       "foreach ($value in @('hello')) { Write-Output $value }",
       "ForEach-Object { Write-Output hello }",
       "function Show-Value { Write-Output hello }; Show-Value",
+    ]) {
+      test(
+        `PowerShell ${portable ? "native" : "legacy"}: ordinary syntax asks for the statement: ${command}`,
+        () =>
+          withScanner(
+            portable,
+            (registry, directory) =>
+              Effect.gen(function* () {
+                const saved = yield* PermissionSaved.Service
+                const location = yield* Location.Service
+                yield* saved.add({
+                  projectID: location.project.id,
+                  action: "Bash",
+                  resources: ["Write-Output *", "Show-Value *"],
+                })
+                const result = yield* runPermissionCommand(registry, command, path.join(directory.active, "marker"), [
+                  "once",
+                ])
+                expect(result.requests).toHaveLength(1)
+                const statement = command.startsWith("$value") ? '$value = "hello"' : command.split("; ")[0]!
+                expect(result.requests[0]?.resources).toContain(statement)
+                expect(result.exit).toMatchObject({
+                  _tag: "Success",
+                  value: { status: "completed", metadata: { exit: 0 } },
+                })
+                if (Exit.isSuccess(result.exit))
+                  expect(result.exit.value.content?.[0]).toEqual(Expected.text(isWindows ? "hello\r\n" : "hello\n"))
+              }),
+            pwsh ?? "pwsh",
+          ),
+        { timeout: 15_000 },
+      )
+    }
+    for (const command of [
+      'Write-Output "$(Write-Output hello)"',
       "Write-Output `\n  hello",
       "Write-Output @'\nhello\n'@",
     ]) {
@@ -877,8 +917,9 @@ describe("ShellTool ordinary shell syntax", () => {
   }
 
   for (const [command, pattern] of [
-    ["Write-Output\thello", "Write-Output\t*"],
-    ["& 'Write-Output' hello", "& 'Write-Output' *"],
+    // The grant names the cmdlet, not the spelling: the repeat meets it through the cmdlet's canonical spelling.
+    ["Write-Output\thello", "Write-Output *"],
+    ["& 'Write-Output' hello", "Write-Output *"],
     ["Write-Output `\n  hello", "Write-Output *"],
   ]) {
     test(
@@ -1125,12 +1166,17 @@ describe("ShellTool", () => {
                 {
                   sessionID,
                   action: "Bash",
-                  resources: [isWindows ? "Start-Sleep -Milliseconds 100" : helloCommand],
+                  // A .NET call is not a command, so PowerShell input asks for it by its own statement text.
+                  resources: isWindows
+                    ? ["Start-Sleep -Milliseconds 100", "[Console]::Out.Write('hello')"]
+                    : [helloCommand],
                   agent: toolIdentity.agent,
                   source: { type: "tool", messageID: toolIdentity.messageID, id: "call-shell" },
                 },
               ])
-              expect(assertions[0]?.save).toEqual([isWindows ? "Start-Sleep *" : "printf *"])
+              expect(assertions[0]?.save).toEqual(
+                isWindows ? ["Start-Sleep *", "[Console]::Out.Write('hello')"] : ["printf *"],
+              )
             }),
           )
         },
@@ -1282,6 +1328,12 @@ describe("ShellTool", () => {
             Effect.andThen(
               Effect.sync(() => {
                 expect(assertions).toHaveLength(1)
+                // Windows PowerShell 5.1 has no `&&`, so its parse fails and the input is asked about whole and by fragment,
+                // with nothing to save.
+                if (isWindows) {
+                  expect(assertions[0]?.resources).toEqual(expect.arrayContaining(["printf one", "printf two"]))
+                  return
+                }
                 expect(assertions[0]).toMatchObject({
                   resources: ["printf one", "printf two"],
                   save: ["printf *", "printf *"],
@@ -1407,9 +1459,9 @@ describe("ShellTool", () => {
                 ).pipe(
                   Effect.andThen(
                     Effect.sync(() =>
-                      expect([row.workdir, assertions.find((item) => item.action === "Bash")?.metadata]).toEqual([
+                      expect([row.workdir, assertions.find((item) => item.action === "Bash")?.metadata?.workdir]).toEqual([
                         row.workdir,
-                        { workdir: row.runs },
+                        row.runs,
                       ]),
                     ),
                   ),
@@ -1484,7 +1536,7 @@ describe("ShellTool", () => {
   // link is its own (class 4, class 8).
   for (const trusted of [false, true])
     (trusted ? it : untrustedIt).live(
-      `${trusted ? "a trusted" : "an untrusted"} project's link into the global config folder ${trusted ? "is the project's own" : "is asked about and shown as that folder"}`,
+      `${trusted ? "a trusted" : "an untrusted"} project's link into the global config folder ${trusted ? "is the workdir's own and a path in the command is judged where it leads" : "is asked about and shown as that folder"}`,
       () =>
         Effect.acquireUseRelease(
           Effect.promise(() => tmpdir()),
@@ -1519,11 +1571,15 @@ describe("ShellTool", () => {
                     expect(yield* executeTool(registry, call(row.input, "call-link"))).toMatchObject({
                       status: "completed",
                     })
+                    // A trusted project's own workdir is its own, but a path in the command is judged where it really is
+                    // in either, so a link that leads to the global config folder is asked about as that folder.
+                    const workdirRow = "workdir" in row.input
                     expect(assertions.map((item) => item.action)).toEqual(
-                      trusted ? ["Bash"] : ["external_directory", "Bash"],
+                      trusted && workdirRow ? ["Bash"] : ["external_directory", "Bash"],
                     )
                     if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
-                    expect(assertions.at(-1)?.metadata).toEqual({ workdir: row.workdir })
+                    if (trusted && !workdirRow) expect(assertions[0]).toMatchObject({ resources: [folder] })
+                    expect(assertions.at(-1)?.metadata?.workdir).toEqual(row.workdir)
                   }),
                 ),
               )
