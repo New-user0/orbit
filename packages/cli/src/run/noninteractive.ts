@@ -1103,6 +1103,38 @@ export async function runNonInteractivePrompt(input: Input) {
 
     const waiting = input.client.session.wait({ sessionID: input.sessionID })
     await Promise.race([waiting, completed.then(() => waiting)])
+    // A command that was moved to the background outlives the step that started it, and its completion notice starts
+    // another step. The run is not over until each of this session's commands has ended and its notice has been
+    // answered. The grace bounds a notice that never arrives, for instance one lost with a server restart.
+    const background = new Set<string>()
+    let seen = Date.now()
+    while (!interrupted && !permissionRejected && !formCancelled && !emittedError) {
+      const listed = await input.client.shell
+        .list({ location: { directory: input.location.directory } })
+        .catch(() => undefined)
+      const running = (listed?.data ?? []).filter(
+        (item) => item.status === "running" && item.metadata.sessionID === input.sessionID,
+      )
+      if (running.length > 0) {
+        running.forEach((item) => background.add(item.id))
+        seen = Date.now()
+        await Bun.sleep(500)
+        continue
+      }
+      if (background.size === 0) break
+      const noticed = (await projectedMessages()).messages.flatMap((message) =>
+        message.type === "synthetic" && message.metadata?.source === "shell" && message.metadata.state !== "waiting"
+          ? [message.metadata.shellID]
+          : [],
+      )
+      noticed.forEach((id) => typeof id === "string" && background.delete(id))
+      if (background.size > 0 && Date.now() - seen > 10_000) break
+      if (background.size > 0) {
+        await Bun.sleep(250)
+        continue
+      }
+      await input.client.session.wait({ sessionID: input.sessionID })
+    }
     finalizing = true
     const projected = await reconcile()
     const unsettled = !projected.responded

@@ -2634,3 +2634,11 @@ A project plugin folder is now fingerprinted by every regular file in it, not on
 **Affects:** projects with plugin folders that hold more than the entry files, under a trust grant made before this change.
 
 **What to do:** Nothing; grant the folder again if it asks.
+
+### `orb run` and `-p` wait for commands that moved to the background
+
+A shell command that outlives its timeout now keeps running in the background, and the model is told when it ends. A headless run (`orb run`, `orb -p`) used to stop at the first idle moment, which killed such a command with the standalone server, or left it running unwatched in a service, while the run reported success. It now keeps waiting while the session owns a running command, then waits for the step that the completion notice starts, so the final answer reflects the command's result. A notice that does not arrive within ten seconds after the last command ended stops the wait.
+
+**Affects:** scripts and CI jobs that run `orb run` or `orb -p` with commands longer than the shell timeout, or that start a long-lived command in the background (a dev server) and expect the run to end without it.
+
+**What to do:** Nothing for commands that end. Stop a long-lived command before the model's last step, or interrupt the run.
