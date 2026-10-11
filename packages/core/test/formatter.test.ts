@@ -19,7 +19,7 @@ import { Location } from "../src/location"
 import { tempGlobalLayer } from "./fixture/global"
 import { offlineModels } from "./fixture/models"
 import { tmpdir } from "./fixture/tmpdir"
-import { plant } from "./fixture/decoy"
+import { expectOneSpelling, filterSource, spellingEnv, withLookupVariable } from "./fixture/child-env"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
@@ -117,52 +117,36 @@ describe("Formatter", () => {
     ),
   )
 
-  // Class 10: a formatter named by a bare name is looked up on PATH only. No spelling of the lookup variable in the
-  // top-level env turns the working-folder lookup back on, and a decoy of every kind Windows runs sits in the folder.
+  // Class 10, one spelling: a formatter gets one PATH, the config's `path` and its own `Path` merged as one variable, and
+  // never a lookup variable the config blanked. Decoys cannot pin this: Windows stops the working-folder lookup for any
+  // value of the variable, so only an absent variable runs one, and nothing in `env` can remove it.
   if (process.platform === "win32")
-    for (const [name, value] of [
-      ["NoDefaultCurrentDirectoryInExePath", ""],
-      ["NoDefaultCurrentDirectoryInExePath", "0"],
-      ["nodefaultcurrentdirectoryinexepath", ""],
-    ] as const)
-      it.live(
-        `does not run a program of the folder when the top-level env sets ${name} to ${JSON.stringify(value)}`,
-        () =>
-          withFormatter(
-            {
-              decoyed: { command: ["orbit-fake-fmt", "$FILE"], extensions: [".decoy"] },
+    it.live("starts a formatter with one spelling of PATH and the lookup variable at 1", () =>
+      withLookupVariable(
+        withFormatter(
+          {
+            probe: {
+              command: [
+                process.execPath,
+                "-e",
+                `require('fs').writeFileSync(process.argv.at(-1), JSON.stringify(${filterSource}))`,
+                "$FILE",
+              ],
+              environment: { Path: spellingEnv.path },
+              extensions: [".envprobe"],
             },
-            (formatter, directory) =>
-              Effect.gen(function* () {
-                const saved = process.env.NoDefaultCurrentDirectoryInExePath
-                delete process.env.NoDefaultCurrentDirectoryInExePath
-                const ran = yield* Effect.promise(() => plant(directory, "orbit-fake-fmt"))
-                const marks = path.join(directory, "batch-ran.txt")
-                yield* Effect.promise(() =>
-                  Promise.all(
-                    [".bat", ".cmd"].map((extension) =>
-                      fs.writeFile(
-                        path.join(directory, `orbit-fake-fmt${extension}`),
-                        `@echo off\r\necho ran> "${marks}"\r\n`,
-                      ),
-                    ),
-                  ),
-                )
-                const file = path.join(directory, "test.decoy")
-                yield* Effect.promise(() => fs.writeFile(file, "x"))
-                try {
-                  expect(yield* formatter.file(file)).toBe(false)
-                } finally {
-                  if (saved === undefined) delete process.env.NoDefaultCurrentDirectoryInExePath
-                  else process.env.NoDefaultCurrentDirectoryInExePath = saved
-                }
-                expect(yield* Effect.promise(ran)).toEqual([])
-                expect(yield* Effect.promise(() => Bun.file(marks).exists())).toBe(false)
-              }),
-            { env: { [name]: value } },
-          ),
-        30_000,
-      )
+          },
+          (formatter, directory) =>
+            Effect.gen(function* () {
+              const file = path.join(directory, "test.envprobe")
+              yield* Effect.promise(() => fs.writeFile(file, "x"))
+              expect(yield* formatter.file(file)).toBe(true)
+              expectOneSpelling(JSON.parse(yield* Effect.promise(() => fs.readFile(file, "utf8"))))
+            }),
+          { env: spellingEnv },
+        ),
+      ),
+    )
 
   it.live("does not run formatters marked as disabled in config", () =>
     withFormatter(

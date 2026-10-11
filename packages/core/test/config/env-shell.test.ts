@@ -9,6 +9,7 @@ import { Shell } from "@orbit/core/shell"
 import { Document, Info } from "@orbit/schema/config"
 import { WorkspaceID } from "@orbit/schema/workspace-id"
 import { Global } from "@orbit/util/global"
+import { spellingEnv, withLookupVariable } from "../fixture/child-env"
 import { hostEnvironmentLayer } from "../fixture/environment"
 import { tempGlobalLayer } from "../fixture/global"
 import { location } from "../fixture/location"
@@ -94,3 +95,22 @@ it.live("gives a workspace-bound location no settings overlay", () =>
     expect((yield* environmentOf).ZZ_ENV_A).toBeUndefined()
   }).pipe(Effect.provide(harness(WorkspaceID.make("wrk_envtest")))),
 )
+
+// Windows keeps one variable per name whatever its case, so the shell's environment must too: with the inherited `Path`
+// and a settings `path` side by side, programs would disagree on which one is the search path.
+if (process.platform === "win32")
+  it.live("gives a shell command one spelling of PATH and no lookup variable from the settings", () =>
+    withLookupVariable(
+      Effect.gen(function* () {
+        entries = [settings(spellingEnv, "user")]
+
+        const env = yield* environmentOf
+
+        expect(Object.entries(env).filter(([name]) => /^path$/i.test(name))).toEqual([["path", spellingEnv.path]])
+        // The settings' blank value never reached the environment: the inherited variable is still the one in it.
+        expect(Object.entries(env).filter(([name]) => /^nodefaultcurrentdirectoryinexepath$/i.test(name))).toEqual([
+          ["NoDefaultCurrentDirectoryInExePath", "1"],
+        ])
+      }).pipe(Effect.provide(harness())),
+    ),
+  )

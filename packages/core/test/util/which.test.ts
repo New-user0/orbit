@@ -157,12 +157,21 @@ describe("util.which", () => {
       await Promise.all(folders.map((folder) => fs.mkdir(folder, { recursive: true })))
       return Promise.all(folders.map((folder) => cmd(folder, "relhit")))
     }
-    const relative = [".", "./", "bin", "node_modules/.bin", "node_modules/.bin/"]
-    const windowsOnly = ["C:relhit", "\\relhit", "\\"]
+    const relative = [".", "./", "bin", "node_modules/.bin", "node_modules/.bin/"].map((entry) => ({
+      name: JSON.stringify(entry),
+      spell: () => entry,
+    }))
+    // Spelled from the test folder so that they reach its `bin` from the working folder, where the decoy is: `D:bin` is
+    // the working folder's `bin` on its drive, and `\path\to\bin` is the same folder without a drive.
+    const windowsOnly = [
+      { name: "a drive-relative entry", spell: (root: string) => `${path.parse(root).root.slice(0, 2)}bin` },
+      { name: "a root-relative entry", spell: (root: string) => path.join(root, "bin").slice(2) },
+    ]
 
-    for (const entry of [...relative, ...(process.platform === "win32" ? windowsOnly : [])]) {
-      test(`skips ${JSON.stringify(entry)}`, async () => {
+    for (const { name, spell } of [...relative, ...(process.platform === "win32" ? windowsOnly : [])]) {
+      test(`skips ${name}`, async () => {
         await using tmp = await tmpdir()
+        const entry = spell(tmp.path)
         await plant(tmp.path)
 
         expect(inside(tmp.path, () => which("relhit", env(entry)))).toBeNull()

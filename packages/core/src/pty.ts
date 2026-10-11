@@ -36,6 +36,27 @@ type Active = {
   listeners: Disp[]
 }
 
+/**
+ * The environment of a terminal: the process environment, then the settings' `env` (host-local locations only), then the
+ * caller's, then Orbit's own variables. Each step replaces every spelling of a name Windows would treat as the same.
+ */
+export function environment(
+  base: Readonly<Record<string, string | undefined>>,
+  settings: Readonly<Record<string, string>>,
+  caller: Readonly<Record<string, string>>,
+  platform: NodeJS.Platform = process.platform,
+) {
+  return ConfigEnv.applyTo(
+    ConfigEnv.applyTo(ConfigEnv.applyTo({ ...base }, settings, platform), caller, platform),
+    {
+      TERM: "xterm-256color",
+      ORBIT_TERMINAL: "1",
+      ...(platform === "win32" ? { LC_ALL: "C.UTF-8", LC_CTYPE: "C.UTF-8", LANG: "C.UTF-8" } : {}),
+    },
+    platform,
+  ) as Record<string, string>
+}
+
 export const ID = Pty.ID
 export type ID = Pty.ID
 
@@ -171,21 +192,11 @@ const layer = Layer.effect(
       const command = input.command || (yield* shell.resolve({ priority: "config" }))
       const args = ShellSelect.login(command) ? [...(input.args ?? []), "-l"] : [...(input.args ?? [])]
       const cwd = input.cwd || location.directory
-      // The process environment, then the settings' `env` (host-local locations only), then the caller's, then Orbit's.
-      const env = ConfigEnv.applyTo(
-        ConfigEnv.applyTo(
-          ConfigEnv.applyTo(
-            { ...process.env },
-            location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
-          ),
-          input.env ?? {},
-        ),
-        {
-          TERM: "xterm-256color",
-          ORBIT_TERMINAL: "1",
-          ...(process.platform === "win32" ? { LC_ALL: "C.UTF-8", LC_CTYPE: "C.UTF-8", LANG: "C.UTF-8" } : {}),
-        },
-      ) as Record<string, string>
+      const env = environment(
+        process.env,
+        location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
+        input.env ?? {},
+      )
       yield* Effect.logInfo("creating session", { id, cmd: command, args, cwd })
       const { spawn } = yield* Effect.promise(() => pty())
       const proc = yield* Effect.sync(() => spawn(command, args, { name: "xterm-256color", cwd, env }))

@@ -86,9 +86,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - The `env` setting (`Config.Info.env`): it can put `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, proxies, CA bundles or provider
   keys into every program Orbit starts, so `ConfigTrust.classification` withholds it whole (kind `env`) from an
   untrusted project or local document, compat settings files included. It is read at each spawn through
-  `ConfigEnv.resolve` for the shell, terminals, hooks, MCP servers, language servers and formatters of a host-local
+  `ConfigEnv.resolve` for the shell, terminals, hooks, the shell snippets of slash commands, MCP servers, language
+  servers and formatters of a host-local
   location, under each program's own variables and Orbit's. `NoDefaultCurrentDirectoryInExePath` cannot be set from it
-  in any spelling. Proof: `test/config/env.test.ts`, `test/config/config-trust.test.ts`.
+  in any spelling, and each program receives one spelling of `PATH` and that variable at 1 (the shell in
+  `test/config/env-shell.test.ts`, terminals and hooks in `test/config/env-spelling.test.ts`, MCP in `test/mcp.test.ts`,
+  language servers in `test/lsp-spawn.test.ts`, formatters in `test/formatter.test.ts`; decoy programs cannot pin this,
+  because Windows stops the working-folder lookup for any value of the variable). Proof: `test/config/env.test.ts`,
+  `test/config/config-trust.test.ts`.
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`.
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
@@ -1666,8 +1671,8 @@ fixes it or asks.
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
   a program in the working folder that way (`util.which` in `core/test/util/which.test.ts`). A child that is handed a
-  `PATH` with an explicit relative entry still searches it: `cmd.exe` ran a project `.cmd` through a `.` entry even
-  with `NoDefaultCurrentDirectoryInExePath` set. That needs the person's own `PATH` or the person's own config to name
+  `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
+  project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).
 - **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
   on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and

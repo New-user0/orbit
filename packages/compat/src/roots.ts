@@ -41,6 +41,11 @@ export const discover = Effect.fn("CompatRoots.discover")(function* (input: {
   const fs = yield* FSUtil.Service
   const global = yield* Global.Service
   const home = yield* fs.resolve(global.home)
+  // A run that isolates its home (ORBIT_TEST_HOME) is still on a machine that has a real one, with foreign settings in
+  // it. The walk of such a run stops one folder above the isolated home it named, where the test folders live, so it
+  // never reads files the person keeps for their own work.
+  const ceiling =
+    process.env.ORBIT_TEST_HOME === undefined ? undefined : path.dirname(yield* fs.resolve(process.env.ORBIT_TEST_HOME))
   const reserved = yield* Effect.forEach(
     [global.config, ...conventions.map((convention) => path.join(global.home, convention.name))],
     (item) => fs.resolve(item),
@@ -70,7 +75,10 @@ export const discover = Effect.fn("CompatRoots.discover")(function* (input: {
       ? reserved.includes(resolved)
       : reserved.some((root) => resolved === root || resolved.startsWith(root + path.sep))
   const visible = candidates.filter(
-    (candidate) => path.relative(candidate.parent, home) !== "" && !reenters(candidate.resolved),
+    (candidate) =>
+      path.relative(candidate.parent, home) !== "" &&
+      (ceiling === undefined || FSUtil.contains(ceiling, candidate.parent)) &&
+      !reenters(candidate.resolved),
   )
 
   const root = (location: string, kind: Kind, scope: Root["scope"]): Root => ({

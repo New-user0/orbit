@@ -8,6 +8,7 @@ import { Config } from "@orbit/core/config"
 import { Location } from "@orbit/core/location"
 import { Lsp } from "@orbit/core/lsp/index"
 import { AbsolutePath } from "@orbit/core/schema"
+import { expectOneSpelling, filterSource, spellingEnv, withLookupVariable } from "./fixture/child-env"
 import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -18,7 +19,7 @@ const server = path.join(import.meta.dir, "fixtures", "lsp", "fake-server.ts")
 // Class 10: a language server is started by the spawner, which looks a program up on PATH only. The matrix: a
 // configured bare name and a built-in, each with decoys of every kind Windows runs (.exe, .bat, .cmd) in the project
 // folder and the server on PATH as the control; the variable that turns the working-folder lookup off removed from this
-// process and set by the config's `env` to empty.
+// process. What the config's `env` can do to the variable is pinned separately, by the child's own environment.
 describe("starting a language server", () => {
   // A program on PATH that runs the fake server, in a folder of its own put first on PATH while `body` runs.
   const onPath = <A, E, R>(name: string, body: (bin: string) => Effect.Effect<A, E, R>) =>
@@ -135,34 +136,35 @@ describe("starting a language server", () => {
     30_000,
   )
 
-  // The top-level `env` reaches the server too, and no spelling of the lookup variable in it gets through.
-  for (const [name, value] of [
-    ["NoDefaultCurrentDirectoryInExePath", ""],
-    ["NoDefaultCurrentDirectoryInExePath", "0"],
-    ["nodefaultcurrentdirectoryinexepath", ""],
-  ] as const) {
+  // Class 10, one spelling. A server never sees a lookup variable the config blanked, and it gets one PATH: the config's
+  // `path` and the server's own `Path` reach it as a single variable, whatever order the spawner merges them in. (Decoys
+  // cannot pin this: Windows stops the working-folder lookup for any value of the variable, so only an absent variable
+  // runs one, and nothing in `env` can remove it.)
+  if (process.platform === "win32")
     it.live(
-      `does not let the top-level env set ${name} to ${JSON.stringify(value)} and run a program of the project folder`,
+      "starts a server with one spelling of PATH and the lookup variable at 1, whatever the top-level env says",
       () =>
-        Effect.gen(function* () {
-          const directory = (yield* tmpdirScoped()).path
-          const ran = yield* decoys(directory, "orbit-fake-lsp")
-          const target = yield* file(directory, "main.fake")
-          const lsp = { fake: { command: ["orbit-fake-lsp", "--stdio"], extensions: [".fake"] } }
-          yield* withCurrentDirectoryOnPath(
-            withLsp(
-              directory,
-              lsp,
-              (service) =>
-                service.diagnostics([target]).pipe(Effect.tap((found) => Effect.sync(() => expect(found).toEqual({})))),
-              { [name]: value },
-            ),
-          )
-          expect(yield* Effect.promise(ran)).toEqual([])
-        }),
+        withLookupVariable(
+          Effect.gen(function* () {
+            const directory = (yield* tmpdirScoped()).path
+            const target = yield* file(directory, "main.fake")
+            const seen = path.join(directory, "seen.json")
+            const probe = path.join(directory, "probe.ts")
+            yield* Effect.promise(() =>
+              Bun.write(
+                probe,
+                `require("node:fs").writeFileSync(${JSON.stringify(seen)}, JSON.stringify(${filterSource}))\nprocess.exit(0)\n`,
+              ),
+            )
+            const lsp = {
+              fake: { command: [process.execPath, probe], extensions: [".fake"], env: { Path: spellingEnv.path } },
+            }
+            yield* withLsp(directory, lsp, (service) => service.diagnostics([target]).pipe(Effect.ignore), spellingEnv)
+            expectOneSpelling(JSON.parse(yield* Effect.promise(() => Bun.file(seen).text())))
+          }),
+        ),
       30_000,
     )
-  }
 
   it.live(
     "starts a server with the top-level env under the server's own env",

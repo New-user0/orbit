@@ -393,8 +393,8 @@ input, and a foreground command is not watched until its deadline moves it to th
 ### An `env` setting for the programs Orbit starts
 
 `orbit.json` and the managed settings now take a top-level `env`: variable names and values that are added to the
-environment of the shell, terminals, hooks, MCP servers, language servers and formatters that Orbit starts for a
-location. It works in every scope and folds name by name, with the organization's managed value last, so it wins. A
+environment of the shell, terminals, hooks, the shell snippets of slash commands, MCP servers, language servers and
+formatters that Orbit starts for a location. It works in every scope and folds name by name, with the organization's managed value last, so it wins. A
 program's own variables (an MCP server's `environment`, a formatter's `environment`, an LSP server's `env`, a terminal's
 caller) and Orbit's (`ORBIT_PROJECT_DIR`, `TERM`, `ORBIT_TERMINAL`) win over it. A number or boolean is kept as its text.
 An entry with an empty name, a name holding `=` or a NUL, or a value that is not text is skipped on its own, and
@@ -402,9 +402,9 @@ An entry with an empty name, a name holding `=` or a NUL, or a value that is not
 so a later `PATH` replaces an earlier `Path`.
 
 `env` is read each time a program starts, so a name removed from a file stops applying to the next program, which is
-stricter than adding variables until a restart. A running MCP or language server keeps what it started with until it
-reconnects. A project's or local file's `env` waits until the folder is trusted, with the other settings that reach
-programs, and `orb trust` lists it as "environment variables". Workspace-bound locations and the persistent terminal
+stricter than adding variables until a restart. A project's or local file's `env` waits until the folder is trusted,
+with the other settings that reach programs; `orb trust` lists it as `env`, and the terminal interface and VS Code
+name it "environment variables". Workspace-bound locations and the persistent terminal
 panes of the interface get no overlay. The managed `env` is also put into the environment of a server that `orb`
 starts, once at boot, so a change to it needs a restart there; the server's own network requests take proxy and CA
 settings from that environment or from the one the server was started with, not from user or project `env`.
