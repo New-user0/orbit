@@ -1577,7 +1577,7 @@ scanner found, and the folder question held the folders the scanner found.
 - For input Orbit can analyse, a file the command reads, writes, copies from or removes outside the project (a redirect
   target, a `cp` source, a `cat`) asks `external_directory` for its folder, judged where links really lead, in a trusted
   project too. Input that Orbit cannot analyse (see below), or that is over 10,000 characters, is read less closely: it asks for
-  the folders that a `cd`, `pushd`, `Set-Location` or `Push-Location` fragment names (every word that is not a parameter,
+  the folders that a `cd`, `pushd`, `Set-Location` or `Push-Location` fragment names (every word that is not a parameter and comes before a comment; for bash only the first operand,
   the value of `-Path`, `-LiteralPath` and `-PSPath`, and `$HOME`, `$env:NAME`, `${env:NAME}`, `$PWD` and `$PSHOME`
   expanded), and, in a project that is not trusted, for the folder that a link leads to when a plain word of a fragment
   names it. A target built as the command runs asks for the nearest folder before the built part. A file that such input

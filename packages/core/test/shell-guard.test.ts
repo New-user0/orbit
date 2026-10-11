@@ -701,6 +701,60 @@ describe("ShellGuard.authorize", () => {
     }),
   )
 
+  // Text that only looks like the start of a comment or a braced variable (class 3/4/8): a quoted `<#`, a `<#` in a line
+  // comment, a quoted `${` must not hide the folder change after it, padded and short.
+  const hiding = [
+    ["a single-quoted block-comment opener", "Write-Output '<#'; Set-Location ../outside"],
+    ["a double-quoted block-comment opener", 'Write-Output "<#"; Set-Location ../outside'],
+    ["a curly-quoted block-comment opener", "Write-Output “<#”; Set-Location ../outside"],
+    ["a line comment holding an opener", "Write-Output ok # note <#\nSet-Location ../outside"],
+    ["a quoted brace opener", "Write-Output '${'; Set-Location ../outside; Write-Output '}a'"],
+  ] as const
+  for (const [name, spelling] of hiding) {
+    it.live(`asks for the folder after ${name}, padded`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling}; Remove-Item s ${pad}`, () => false, { shell: "pwsh" })
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }),
+    )
+    real(`asks for the folder after ${name}, short`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling}; Remove-Item s`, () => false, { shell: host!, real: true })
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }),
+    )
+  }
+  it.live("asks for a link's folder after a quoted block-comment opener, padded", () =>
+    Effect.gen(function* () {
+      yield* run(`Write-Output '<#'; Get-Content cfg/s ${pad}`, () => false, { shell: "pwsh", link: true })
+      expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+    }),
+  )
+  // Comment words after a folder change are not folders (a colon in one is refused as a data stream on Windows).
+  it.live("asks for the folder, not the comment words, of a folder change with a comment", () =>
+    Effect.gen(function* () {
+      yield* run("cd ../outside # note: build\necho $FOO", () => false)
+      expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      asked.length = 0
+      yield* run(`Set-Location ../outside # see HKLM:\\Software; Remove-Item s #${pad}`, () => false, { shell: "pwsh" })
+      expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+    }),
+  )
+  it.live("keeps text that only looks like an opener out of the split", () =>
+    Effect.sync(() => {
+      for (const text of [
+        "Write-Output '<#'; Set-Location ../a",
+        'Write-Output "<#"; Set-Location ../a',
+        "echo x # <#\nSet-Location ../a",
+        "Write-Output '${'; Set-Location ../a; echo '}a'",
+      ])
+        expect(ShellGuard.locations(text, "pwsh", "win32")).toEqual(["../a"])
+      expect(ShellGuard.locations("cd ../a # b: c", "bash", "linux")).toEqual(["../a"])
+      expect(ShellGuard.locations("cd ../a ../b", "bash", "linux")).toEqual(["../a"])
+      expect(ShellGuard.locations("Set-Location ../a # see HKLM:\\x", "pwsh", "win32")).toEqual(["../a"])
+    }),
+  )
+
   // A word that a link in an untrusted project leads out of: the elements of an array and a colon-bound value come from
   // PowerShell's parser; a block comment before the word and a Unicode dash come from the fragment split.
   for (const command of [

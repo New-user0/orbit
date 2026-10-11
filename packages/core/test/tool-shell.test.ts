@@ -4053,6 +4053,10 @@ describe("ShellTool guard (PowerShell)", () => {
     "Set-Location -PSPath:../outside",
     "Set-Location $env:ORBIT_TOOL_OUT",
     "Set-Location <# c #> ../outside",
+    "Write-Output '<#'; Set-Location ../outside",
+    "Write-Output \"<#\"; Set-Location ../outside",
+    "Write-Output ok # note <#\nSet-Location ../outside",
+    "Set-Location ../outside # see HKLM:\\Software",
   ])
     for (const padded of [false, true])
       test(

@@ -858,7 +858,10 @@ export function locations(text: string, dialect: Analysis["dialect"], platform: 
     const name = ps ? head.replace(/^.*\\/, "").toLowerCase() : head
     const target = ps ? (aliasTarget(name, dialect, platform) ?? name) : head
     if (!(ps ? MOVES.has(target) && target !== "pop-location" : target === "cd" || target === "pushd")) return []
-    return words.slice(1).flatMap((item, index, rest) => {
+    // A comment ends the words; bash takes only the first operand of cd and pushd.
+    const comment = words.findIndex((word, index) => index > 0 && word.raw.startsWith("#"))
+    const operands = words.slice(1, comment === -1 ? undefined : comment)
+    return (ps ? operands : operands.filter((word) => !word.raw.startsWith("-")).slice(0, 1)).flatMap((item, index, rest) => {
       const bound = ps ? colonBound(item, rest[index + 1]) : undefined
       if (bound !== undefined && !pathParameter(bound.name)) return []
       const word = bound?.word ?? item
@@ -908,11 +911,76 @@ export function fragmentWords(text: string, ps = false) {
 
 // PowerShell text before it is split into fragments: block comments are blanks, and `${env:NAME}` is `$env:NAME` (the
 // split would cut at its braces); a braced name followed by more word characters is a variable the scan cannot know.
+// Quoted strings and line comments are copied as written: a `<#` opens nothing inside them, and `${` opens nothing
+// inside single quotes.
 function psText(text: string) {
-  return text
-    .replace(/<#[\s\S]*?(?:#>|$)/g, " ")
-    .replace(/\$\{([^}\r\n]*)\}(?=\w)/g, "$$x")
-    .replace(/\$\{([^}\r\n]*)\}/g, "$$$1")
+  const braced = /\$\{([^}\r\n]*)\}(\w?)/y
+  const variable = (at: number) => {
+    braced.lastIndex = at
+    const match = braced.exec(text)
+    if (match === null) return undefined
+    return { text: match[2] === "" ? "$" + match[1] : "$x" + match[2], length: match[0].length }
+  }
+  let out = ""
+  let at = 0
+  while (at < text.length) {
+    const char = text[at]!
+    if (char === "`") {
+      out += text.slice(at, at + 2)
+      at += 2
+      continue
+    }
+    if (char === "#" && (at === 0 || /[\s;|&(){},]/.test(text[at - 1]!))) {
+      const end = text.slice(at).search(/[\r\n]/)
+      const stop = end === -1 ? text.length : at + end
+      out += text.slice(at, stop)
+      at = stop
+      continue
+    }
+    if (char === "<" && text[at + 1] === "#") {
+      const end = text.indexOf("#>", at + 2)
+      out += " "
+      at = end === -1 ? text.length : end + 2
+      continue
+    }
+    const found = char === "$" && text[at + 1] === "{" ? variable(at) : undefined
+    if (found !== undefined) {
+      out += found.text
+      at += found.length
+      continue
+    }
+    const closing = CLOSING[char]
+    if (closing === undefined) {
+      out += char
+      at++
+      continue
+    }
+    // A quoted string: a doubled closing quote is one quote character; a backtick escapes in double quotes only.
+    const single = closing.startsWith("'")
+    out += char
+    at++
+    while (at < text.length) {
+      const next = text[at]!
+      const inner = !single && next === "$" && text[at + 1] === "{" ? variable(at) : undefined
+      if (inner !== undefined) {
+        out += inner.text
+        at += inner.length
+        continue
+      }
+      if (!single && next === "`") {
+        out += text.slice(at, at + 2)
+        at += 2
+        continue
+      }
+      out += next
+      at++
+      if (!closing.includes(next)) continue
+      if (!closing.includes(text[at] ?? "\0")) break
+      out += text[at]!
+      at++
+    }
+  }
+  return out
 }
 
 // A backslash before a line break joins the words around it in bash, as a backtick does in PowerShell, which `fragments` joins.
