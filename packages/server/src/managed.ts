@@ -26,7 +26,7 @@ export const mcpRefusal = (directory: string, name: string, server: Mcp.ServerCo
       const checked = McpRestriction.admit(snapshot.restrictions.mcp, name, server)
       if (checked.allowed) return undefined
       if (checked.reason === "managed_only")
-        return `MCP server "${name}" was not added: managed settings allow only the MCP servers they define`
+        return `MCP server "${name}" was not added: ${snapshot.restrictions.organization === undefined ? "managed settings allow" : `${snapshot.restrictions.organization}'s managed settings allow`} only the MCP servers they define`
       return checked.reason === "denied"
         ? `MCP server "${name}" is blocked by managed settings`
         : `MCP server "${name}" is not on the allow list in managed settings`

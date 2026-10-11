@@ -354,7 +354,10 @@ describe("acp session lifecycle over the wire", () => {
     await using acp = await startWire({
       fetch: (request) =>
         managedOnly && request.method === "PUT" && request.path === "/api/experimental/mcp/docs"
-          ? Response.json({ _tag: "ForbiddenError", message: "managed settings allow only their own servers" }, { status: 403 })
+          ? Response.json(
+              { _tag: "ForbiddenError", message: "managed settings allow only their own servers" },
+              { status: 403 },
+            )
           : undefined,
     })
     await acp.initialize()

@@ -3610,14 +3610,20 @@ describe("MCP servers under the organization's lists", () => {
               yield* service.reload()
               yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("user") && all.includes("org"))))
               yield* waitFor(size(orgMarker).pipe(Effect.map((bytes) => bytes === 1)))
+              const toolServers = service
+                .tools()
+                .pipe(Effect.map((all) => [...new Set(all.map((tool) => String(tool.server)))].sort()))
+              yield* waitFor(toolServers.pipe(Effect.map((all) => all.length === 2)))
               yield* changed(policy, { mcp: { managed_only: true } })
               yield* waitFor(names(service).pipe(Effect.map((all) => !all.includes("user"))))
               expect(yield* names(service)).toEqual(["org"])
+              expect(yield* toolServers).toEqual(["org"])
               // No restart: the managed server's definition did not change, so its process is the one that was started.
               yield* settle
               expect(yield* size(orgMarker)).toBe(1)
               yield* changed(policy, {})
               yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("user"))))
+              yield* waitFor(toolServers.pipe(Effect.map((all) => all.length === 2)))
               yield* settle
               expect(yield* size(orgMarker)).toBe(1)
             }),

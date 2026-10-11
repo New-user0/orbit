@@ -136,7 +136,10 @@ test("--mcp-config naming a server stops the run when managed settings run only 
   })
   const onlyManaged = path.join(root, "managed-only")
   const open = path.join(root, "managed-open")
-  await Bun.write(path.join(onlyManaged, "managed-settings.json"), JSON.stringify({ managed: { mcp: { managed_only: true } } }))
+  await Bun.write(
+    path.join(onlyManaged, "managed-settings.json"),
+    JSON.stringify({ managed: { mcp: { managed_only: true } } }),
+  )
   await Bun.write(path.join(open, "managed-settings.json"), JSON.stringify({ managed: { mcp: { deny: ["other"] } } }))
   const tools = (requests: Awaited<ReturnType<typeof sent>>["requests"]) =>
     requests.flatMap((request) =>
@@ -161,6 +164,29 @@ test("--mcp-config naming a server stops the run when managed settings run only 
   expect(ran.code).toBe(1)
   expect(ran.stdout + ran.stderr).toContain("Managed settings run only the MCP servers they define")
   expect(model.requests.length).toBe(before)
+
+  // The root command refuses at its own door, before it starts the interface. The controls name no server, or run in
+  // an organization without the rule, so the message is the rule and not what any root run without a terminal prints.
+  const rootRun = await orb(
+    ["--standalone", "--mcp-config", servers],
+    { ORBIT_MANAGED_DIR: onlyManaged },
+    undefined,
+    60_000,
+  )
+  expect(rootRun.code).toBe(1)
+  expect(rootRun.stdout + rootRun.stderr).toContain("Managed settings run only the MCP servers they define")
+  for (const control of [
+    { flag: '{"servers":{}}', managed: onlyManaged },
+    { flag: servers, managed: open },
+  ]) {
+    const result = await orb(
+      ["--standalone", "--mcp-config", control.flag],
+      { ORBIT_MANAGED_DIR: control.managed },
+      undefined,
+      60_000,
+    )
+    expect(result.stdout + result.stderr).not.toContain("Managed settings run only the MCP servers they define")
+  }
 
   // An empty set names no server, so the run goes on.
   const empty = await sent(["--mcp-config", '{"servers":{}}'], { ORBIT_MANAGED_DIR: onlyManaged })

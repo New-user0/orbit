@@ -37,15 +37,26 @@ await Bun.write(
 const only = path.join(root, "only")
 await Bun.write(
   path.join(only, "managed-settings.json"),
-  JSON.stringify({ managed: { mcp: { managed_only: true, deny: ["denied"] } } }),
+  JSON.stringify({ managed: { organization: "Acme", mcp: { managed_only: true, deny: ["denied"] } } }),
 )
 
 async function orb(...args: string[]) {
   return run(managed, args)
 }
 
-async function run(directory: string, args: string[], cwd = path.join(import.meta.dir, "..")) {
-  const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), ...args], {
+// Runs from a temporary folder unless told otherwise, so a project-form add can only ever write there. The package's
+// bunfig preloads by name, which resolves from the folder the run starts in, so a copy with the absolute path is used.
+const bunfig = path.join(root, "bunfig.toml")
+await Bun.write(
+  bunfig,
+  `preload = [${JSON.stringify(Bun.resolveSync("@opentui/solid/preload", path.join(import.meta.dir, "..")))}]
+`,
+)
+
+async function run(directory: string, args: string[], cwd = path.join(root, "project")) {
+  const pkg = path.join(import.meta.dir, "..")
+  await fs.mkdir(cwd, { recursive: true })
+  const child = Bun.spawn([process.execPath, `--config=${bunfig}`, "run", path.join(pkg, "src/index.ts"), ...args], {
     cwd,
     env: isolatedEnv(root, {
       ORBIT_MANAGED_DIR: directory,
@@ -63,7 +74,9 @@ async function run(directory: string, args: string[], cwd = path.join(import.met
 }
 
 const configured = async () =>
-  (await Bun.file(path.join(root, "config", "orbit.json")).text().catch(() => "")) as string
+  (await Bun.file(path.join(root, "config", "orbit.json"))
+    .text()
+    .catch(() => "")) as string
 
 describe("orb mcp add under managed settings", () => {
   test("refuses a server the organization denies and writes nothing", async () => {
@@ -97,22 +110,20 @@ describe("orb mcp add when managed settings run only their own servers", () => {
     for (const global of [true, false]) {
       test(`refuses ${form.name} ${global ? "with --global" : "in a project"} and writes nothing`, async () => {
         const scope = global ? ["--global"] : []
-        // The project is the package folder, where the run starts: bun needs its own tsconfig to start, so the
-        // run cannot be moved to a temporary folder. Nothing may create an orbit.json there.
-        const project = path.join(import.meta.dir, "..", "orbit.json")
-        expect(await Bun.file(project).exists()).toBe(false)
-        if (global) {
-          // The control: the same command in an organization with no such rule writes the file, so the refusal below
-          // is the rule and not a command that cannot write.
-          const control = await run(managed, ["mcp", "add", ...scope, "fresh", ...form.args])
-          expect(control.stdout + control.stderr).toContain("added to")
-          expect(control.exitCode).toBe(0)
-        }
+        const project = path.join(root, "project", "orbit.json")
+        await fs.rm(project, { force: true })
+        // The control: the same command in an organization with no such rule writes the file, so the refusal below is
+        // the rule and not a command that cannot write.
+        const control = await run(managed, ["mcp", "add", ...scope, "fresh", ...form.args])
+        expect(control.stdout + control.stderr).toContain("added to")
+        expect(control.exitCode).toBe(0)
+        if (!global) expect(await Bun.file(project).text()).toContain('"fresh"')
+        await fs.rm(project, { force: true })
         const before = await configured()
 
         const result = await run(only, ["mcp", "add", ...scope, "extra", ...form.args])
         expect(result.exitCode).not.toBe(0)
-        expect(result.stdout + result.stderr).toContain("managed settings allow only the MCP servers they define")
+        expect(result.stdout + result.stderr).toContain("Acme's managed settings allow only the MCP servers they define")
         expect(await configured()).toBe(before)
         expect(await Bun.file(project).exists()).toBe(false)
       })

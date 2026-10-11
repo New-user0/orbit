@@ -312,8 +312,16 @@ function cleanRestrictions(raw: unknown) {
           bad(`${group}.${key}.${index}`, "ignored an entry that is not a string")
           return []
         }
-        if (group === "plugins" && key !== "marketplaces" && entry.includes("*") && !PluginRestriction.wildcard(entry)) {
-          bad(`${group}.${key}.${index}`, "ignored a selector whose * is not the whole entry or the end of a .* or /* prefix")
+        if (
+          group === "plugins" &&
+          key !== "marketplaces" &&
+          entry.includes("*") &&
+          !PluginRestriction.wildcard(entry)
+        ) {
+          bad(
+            `${group}.${key}.${index}`,
+            "ignored a selector whose * is not the whole entry or the end of a .* or /* prefix",
+          )
           return []
         }
         if (group !== "network") return [entry]
@@ -343,7 +351,12 @@ function cleanRestrictions(raw: unknown) {
     const section = raw[group]
     if (!isRecord(section)) return
     Object.keys(section)
-      .filter((key) => !(keys as readonly string[]).includes(key) && !(group === "network" && key === domainsOnly) && !(group === "mcp" && key === mcpOnly))
+      .filter(
+        (key) =>
+          !(keys as readonly string[]).includes(key) &&
+          !(group === "network" && key === domainsOnly) &&
+          !(group === "mcp" && key === mcpOnly),
+      )
       .forEach((key) => unknown(`${group}.${key}`))
   })
   if (raw.env !== undefined)

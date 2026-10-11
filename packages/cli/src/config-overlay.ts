@@ -92,10 +92,10 @@ export async function build(input: Input) {
     : { layer: undefined, file: undefined }
   const mcpLayers = await Promise.all(mcpConfig.map((value) => mcpLayer(value, input.cwd)))
   // Whether the --mcp-config values name a server, counted from the layers the server will read.
-  const named = mcpLayers.some((layer) => Object.keys((layer.mcp as { servers?: Json }).servers ?? {}).length > 0)
+  const named = mcpLayers.some((layer) => layer.count > 0)
   const layers = [
     ...(settings.layer ? [settings.layer] : []),
-    ...mcpLayers,
+    ...mcpLayers.map((layer) => ({ mcp: layer.mcp })),
     ...(input.agents === undefined ? [] : [await agentsLayer(input.agents, input.cwd)]),
   ]
   // A file alone leaves the inherited content where it is: the server still reads it from the environment.
@@ -298,9 +298,10 @@ async function mcpLayer(value: string, cwd: string) {
   const decoded = decodeMcp(document, { onExcessProperty: "error", errors: "all" })
   if (decoded._tag === "Failure") throw new Error(describe(flag, decoded.failure.issue))
   const servers = decoded.success.servers
-  if (servers === undefined) return { mcp: anchorFiles(flag, document, source.directory) }
+  if (servers === undefined) return { count: 0, mcp: anchorFiles(flag, document, source.directory) }
   const raw = document.servers as Record<string, Json>
   return {
+    count: Object.keys(servers).length,
     mcp: anchorFiles(
       flag,
       {
