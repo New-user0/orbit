@@ -2,7 +2,7 @@ export * as PlanPlugin from "./plan.js"
 
 import { Message, ToolFailure } from "@orbit/ai"
 import { define } from "@orbit/plugin/effect/plugin"
-import { Agent } from "@orbit/schema/agent"
+import { Agent } from "../agent.js"
 import type { SessionEvent } from "@orbit/schema/session-event"
 import { Global } from "@orbit/util/global"
 import { Effect, Stream } from "effect"
@@ -38,7 +38,7 @@ export const Plugin = define({
         item.description = "Read-only agent for exploring the codebase and planning work before implementation."
         item.mode = "primary"
         item.permissions.push({ action: "AskUserQuestion", resource: "*", effect: "allow" })
-        item.permissions.push({ action: "Edit", resource: "*", effect: "deny" })
+        item.permissions.push(Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }))
         // Shell commands can change files too, so in Plan mode each one needs the user's approval.
         item.permissions.push({ action: "Bash", resource: "*", effect: "ask" })
         item.permissions.push({ action: "Edit", resource: path.join(directory, "*"), effect: "allow" })

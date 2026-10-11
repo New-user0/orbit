@@ -57,6 +57,9 @@ export const AssertInput = Schema.Struct({
   // agent for its own folders (`Agent.folders`) do not decide them, only the person's own rules and approvals do. They
   // stay off the public Request.
   escaped: Schema.Array(Schema.String).pipe(Schema.optional),
+  // Set on the deny-only checks a shell command makes for the files it names: the rules that a mode puts on an agent
+  // (`Agent.modeRule`) do not apply to them, since the mode asks about the command itself.
+  probe: Schema.Boolean.pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -132,6 +135,14 @@ export interface Interface {
   readonly close: Effect.Effect<void>
   readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError>
   readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
+  /**
+   * Whether `assert` would fail with a block for this input, decided by the configured deny rules (agent, session and
+   * project), the managed rules and the managed denied domains, and nothing else. It asks nobody, creates no request,
+   * publishes nothing, runs no plugin hook and reads no grant. A caller that must show several questions in a row asks it
+   * for every one of them first, so a deny anywhere stops the call before the first question. A hook that turns an ask into
+   * a deny is not seen here; the later `assert` still honours it.
+   */
+  readonly denied: (input: AssertInput) => Effect.Effect<boolean, SessionErrors.NotFoundError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
@@ -248,7 +259,7 @@ const layer = Layer.effect(
       )?.effect
     }
 
-    function denied(
+    function anyDenied(
       input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped">,
       rules: Permission.Ruleset,
     ) {
@@ -264,7 +275,7 @@ const layer = Layer.effect(
       const only = current.restrictions.managed_permissions_only === true
       const configuredRules = yield* configured(input.sessionID, input.agent)
       const rules = configuredRules.rules
-      if (denied(input, rules)) return { effect: "deny" as const, rules }
+      if (anyDenied(input, rules)) return { effect: "deny" as const, rules }
       // Saved approvals are grants; managed_permissions_only ignores every one of them.
       const approvals = only ? [] : yield* savedRules()
       const all = [...rules, ...approvals]
@@ -313,6 +324,26 @@ const layer = Layer.effect(
         decided.length > 0 &&
         decided.every((effect, index) => effect === "allow" && !input.escaped?.includes(input.resources[index]!))
       return { effect: lifted ? ("allow" as const) : event.effect, message: event.message, rules: all }
+    })
+
+    const denied = Effect.fn("Permission.denied")(function* (input: AssertInput) {
+      if (closed) return false
+      const current = managed.current()
+      const configuredRules = yield* configured(input.sessionID, input.agent)
+      const decisive = input.probe
+        ? configuredRules.rules.filter((rule) => !Agent.isModeRule(rule))
+        : configuredRules.rules
+      if (anyDenied(input, decisive)) return true
+      if (
+        ManagedNetwork.bearsUrl(input.action) &&
+        ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
+      )
+        return true
+      const layer = [
+        ...current.rules,
+        ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
+      ]
+      return input.resources.some((resource) => managedEffect(input, resource, layer) === "deny")
     })
 
     function request(input: AssertInput, message?: string): Request {
@@ -491,7 +522,7 @@ const layer = Layer.effect(
       return pending.get(id)?.call
     })
 
-    return Service.of({ ask, assert, reply, get, forSession, list, callOf, close })
+    return Service.of({ ask, assert, denied, reply, get, forSession, list, callOf, close })
   }),
 )
 

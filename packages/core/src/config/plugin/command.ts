@@ -7,7 +7,7 @@ import { Provider } from "@orbit/schema/provider"
 import { AppProcess } from "@orbit/util/process"
 import { tmpdir } from "node:os"
 import path from "path"
-import { Effect, PubSub, Schema, Stream } from "effect"
+import { type Context, Effect, PubSub, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
@@ -20,7 +20,9 @@ import { ProjectTrust } from "../../project-trust.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
 import { SubagentJob } from "../../session/subagent-job.js"
-import { ShellParse } from "../../shell/parse.js"
+import { FileAccess } from "../../file-access.js"
+import { ShellGuard } from "../../shell/guard.js"
+import { PowerShellParse } from "../../shell/powershell-parse.js"
 import { ShellSandbox } from "../../shell/sandbox.js"
 import { ShellSelect } from "../../shell/select.js"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -63,6 +65,10 @@ export const Plugin = define({
     const processes = yield* AppProcess.Service
     const shell = yield* ShellSelect.Service
     const permission = yield* Permission.Service
+    const access = yield* FileAccess.Service
+    const guarded = yield* Effect.context<
+      FSUtil.Service | ProjectTrust.Service | FileAccess.Service | Location.Service | Permission.Service | PowerShellParse.Service
+    >()
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
     const subagents = yield* SubagentJob.make
@@ -125,7 +131,7 @@ export const Plugin = define({
                   command.template,
                   input.prompt.text,
                   input.sessionID,
-                  { config, location, managed, permission, processes, shell },
+                  { access, guarded, config, location, managed, permission, processes, shell },
                   { name, trusted: document.trusted, folder: document.folder },
                 )
                 if (subagent ?? commandAgent?.mode === "subagent") {
@@ -187,6 +193,11 @@ function isCommandSource(entries: Entry[], file: string) {
 }
 
 type Services = {
+  readonly access: FileAccess.Interface
+  /** What the shell guard reads, captured when the plugin is built. */
+  readonly guarded: Context.Context<
+    FSUtil.Service | ProjectTrust.Service | FileAccess.Service | Location.Service | Permission.Service | PowerShellParse.Service
+  >
   readonly config: Config.Interface
   readonly location: Location.Info
   readonly managed: ManagedPolicy.Interface
@@ -260,31 +271,49 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
     const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
     const cwd = services.location.directory
     const settingsEnv = services.location.workspaceID === undefined ? ConfigEnv.resolve(entries) : {}
-    const commands = yield* Effect.forEach(sources, (source) =>
+    const failure = (source: string) => (error: Error) =>
+      interpolationError(source, error instanceof Permission.CorrectedError ? error.feedback : error.message)
+    const planned = yield* Effect.forEach(sources, (source) =>
       Effect.gen(function* () {
-        const parsed = yield* ShellParse.scan(source, shell, cwd, { portable })
-        const resources = parsed.commands.map((command) => command.resource)
-        yield* services.permission.assert({
-          action: "Bash",
-          // Ask about the span as written as well when its commands alone would mislead: the scanner found none (a bare
-          // redirect), or it changes directory, so the commands run somewhere the resources do not show. Saved rules
-          // match single commands, so they never cover such a span.
-          resources: resources.length === 0 || parsed.directories.length > 0 ? [...resources, source] : resources,
-          save: parsed.commands.map((command) => command.save),
-          // ACP titles a shell ask from the command it carries, and with no tool call it can only read it from here.
-          metadata: { command: source },
-          sessionID,
-          // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
-        })
         const args = ShellSelect.args(shell, source)
         const network = services.managed.current().restrictions.network
+        const settings = yield* ManagedNetwork.sandboxSettings(sandbox, network)
         const sandboxed = ShellSandbox.launch({
-          settings: yield* ManagedNetwork.sandboxSettings(sandbox, network),
+          settings,
           shell,
           args,
           cwd,
           writable: [services.location.project.directory, cwd, tmpdir()],
         })
+        // The same gate as the shell tool, so a span is judged by what it does.
+        const prepared = yield* ShellGuard.prepare({
+          command: source,
+          shell,
+          cwd: yield* services.access.resolve({ path: cwd, kind: "directory" }),
+          env: { ...process.env, ...settingsEnv },
+          portable,
+          writable:
+            sandboxed.type === "wrapped"
+              ? [services.location.project.directory, cwd, tmpdir(), ...(settings.write ?? [])]
+              : undefined,
+          // ACP titles a shell ask from the command it carries, and with no tool call it can only read it from here.
+          metadata: { command: source },
+          // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
+          base: { sessionID },
+        }).pipe(Effect.provideContext(services.guarded))
+        return { source, args, network, settings, sandboxed, prepared }
+      }).pipe(Effect.mapError(failure(source))),
+    )
+    // A deny on any span blocks the whole template before the first question about any of them.
+    yield* Effect.forEach(planned, (item) =>
+      ShellGuard.denyPass(item.prepared).pipe(
+        Effect.provideContext(services.guarded),
+        Effect.mapError(failure(item.source)),
+      ),
+    )
+    const commands = yield* Effect.forEach(planned, ({ source, args, network, sandboxed, prepared }) =>
+      Effect.gen(function* () {
+        yield* ShellGuard.ask(prepared).pipe(Effect.provideContext(services.guarded))
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")
           return yield* Effect.fail(new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`))
@@ -298,11 +327,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           extendEnv: true,
           env: settingsEnv,
         })
-      }).pipe(
-        Effect.mapError((error) =>
-          interpolationError(source, error instanceof Permission.CorrectedError ? error.feedback : error.message),
-        ),
-      ),
+      }).pipe(Effect.mapError(failure(source))),
     )
     return yield* Effect.forEach(
       commands,

@@ -84,6 +84,15 @@ export interface Interface {
    * that is below a link to a share (`file.spelling`), and names a file as the disk does.
    */
   readonly resolve: (input: ResolveInput) => Effect.Effect<Target, FSUtil.Error | ToolFailure>
+  /**
+   * The `external_directory` request that `authorizeExternal` makes for these targets, or undefined when none is outside.
+   * It asks nobody; a caller that checks every request of a call for a deny before the first question builds it with this.
+   */
+  readonly externalRequest: (
+    targets: readonly Target[],
+    base: Pick<Permission.AssertInput, "sessionID" | "agent" | "source">,
+    metadata?: Permission.AssertInput["metadata"],
+  ) => Permission.AssertInput | undefined
   /** Approve external directories in one batch, preserving first-seen resource order. */
   readonly authorizeExternal: (
     targets: readonly Target[],
@@ -280,28 +289,37 @@ const layer = Layer.effect(
       } satisfies Target
     })
 
-    const authorizeExternal = Effect.fn("FileAccess.authorizeExternal")(function* (
+    const externalRequest = (
       targets: readonly Target[],
-      context: Invocation,
+      base: Pick<Permission.AssertInput, "sessionID" | "agent" | "source">,
       metadata?: Permission.AssertInput["metadata"],
-    ) {
+    ): Permission.AssertInput | undefined => {
       const external = Array.dedupeWith(
         targets.flatMap((target) => (target.externalDirectory ? [target.externalDirectory] : [])),
         (left, right) => left.resource === right.resource,
       )
-      if (external.length === 0) return
+      if (external.length === 0) return undefined
       // A folder counts as escaped when any target reaches it through a link, even if another names it directly.
       const escaped = Array.dedupe(
         targets.flatMap((target) => (target.externalDirectory?.escaped ? [target.externalDirectory.resource] : [])),
       )
-      yield* permission.assert({
+      return {
         action: "external_directory",
         resources: external.map((item) => item.resource),
         save: external.map((item) => item.save),
         ...(escaped.length === 0 ? {} : { escaped }),
         ...(metadata === undefined ? {} : { metadata }),
-        ...invocation(context),
-      })
+        ...base,
+      }
+    }
+
+    const authorizeExternal = Effect.fn("FileAccess.authorizeExternal")(function* (
+      targets: readonly Target[],
+      context: Invocation,
+      metadata?: Permission.AssertInput["metadata"],
+    ) {
+      const request = externalRequest(targets, invocation(context), metadata)
+      if (request) yield* permission.assert(request)
     })
 
     // Whether the place exists and, followed through links, is neither a file nor a folder. A stat opens nothing.
@@ -368,7 +386,7 @@ const layer = Layer.effect(
       return targets.flat()
     })
 
-    return Service.of({ resolve, authorizeExternal, authorizeRead, escaped })
+    return Service.of({ resolve, externalRequest, authorizeExternal, authorizeRead, escaped })
   }),
 )
 

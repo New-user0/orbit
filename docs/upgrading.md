@@ -1629,6 +1629,48 @@ while a change to it is waiting for approval: the change now fails instead of ov
 
 **What to do:** Read the file again and repeat the change. Nothing for code that does not read the type.
 
+### Shell commands are judged by what they do: files outside the project, commands with no resource, and input Orbit cannot read
+
+The shell tool and the `!` spans of slash commands now go through one gate. It analyses the command once, resolves every file
+the command names to where it really is, and builds the requests from that. Before, the request held the commands the
+scanner found, and the folder question held the folders the scanner found.
+
+- For input Orbit can analyse, a file the command reads, writes, copies from or removes outside the project (a redirect
+  target, a `cp` source, a `cat`) asks `external_directory` for its folder, judged where links really lead, in a trusted
+  project too. Input that Orbit cannot analyse (see below), or that is over 10,000 characters, is read less closely: it asks for
+  the folders that a `cd`, `pushd`, `Set-Location` or `Push-Location` fragment names (every word that is not a parameter and comes before a comment; for bash only the first operand,
+  the value of `-Path`, `-LiteralPath` and `-PSPath`, and `$HOME`, `$env:NAME`, `${env:NAME}`, `$PWD` and `$PSHOME`
+  expanded), and, in a project that is not trusted, for the folder that a link leads to when a plain word of a fragment
+  names it. A target built as the command runs asks for the nearest folder before the built part. A file that such input
+  names in other ways is not asked about. A new file under a link,
+  a dangling link and a numeric link are judged where the write would land. A write under `os.tmpdir()` is outside like any
+  other, unless the call runs in the sandbox, where the sandbox's writable folders count as inside for writes.
+- A statement with no command, such as `> file`, and a PowerShell statement that is not a pipeline of commands (an
+  assignment, an expression such as `[IO.File]::WriteAllText(...)`, an `if`, a loop, a function) is asked about by its own
+  text. Before, its resources were empty and it ran under any `shell *` ask rule. A saved grant for the commands inside it does not cover it.
+- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file, and
+  a deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
+  `!` span of a slash command counts with the others: a deny on any span of the template blocks it before a question about
+  the first. Plan mode's own deny of every edit is not such a rule: a command in Plan mode is still asked about, as it always
+  was, and only an `Edit` deny of your own stops it. `New-PSDrive` is an ordinary PowerShell command that is asked about
+  by its text (it can map a network share), not a change of location.
+- Input Orbit cannot analyse, a syntax error or an unterminated quote included, is asked about as the whole text plus its
+  fragments, with no "always allow", in both scanner modes. Before, the portable scanner refused it with an error and the
+  default scanner asked about the commands it could find. A deny rule still blocks it, on the whole text or on a fragment. Bash
+  that uses an unknown variable, an unquoted heredoc, a function body or an array subscript is in this group, so it asks each time.
+- PowerShell approvals come from PowerShell's own parser: the "always allow" pattern is the cmdlet's name (a program's name
+  plus its subcommand words, and nothing for a shell, an interpreter, `Invoke-Expression` or a name that is a path), and a
+  rule written with an alias meets the cmdlet and the reverse (`rm *` meets `Remove-Item x`) on Windows, where rules ignore case.
+
+**Affects:** anyone who relied on a broad allow rule to run commands that read or write outside the project, a `> file`
+statement or a PowerShell expression without a question, and plugin authors who read the shell request's `metadata`, which
+now also carries `findings`.
+
+**What to do:** Approve the folder once, or add an `external_directory` allow for it. Write an allow rule for the commands you
+mean, such as `Bash printf *`. Until the follow-up that makes these asks unliftable (shell-safety-12), a broad allow rule
+(the default `* *` allow included) still lifts a statement with no command and input Orbit cannot read, because it matches
+every resource of the request.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

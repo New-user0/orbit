@@ -23,7 +23,13 @@ import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
 import { ShellAnalysis } from "../../shell/analysis.js"
+import { FSUtil } from "@orbit/util/fs-util"
+import { ProjectTrust } from "../../project-trust.js"
+import { ManagedNetwork } from "../../managed-network.js"
+import { ManagedPolicy } from "../../managed-policy.js"
 import { ShellDestructive } from "../../shell/destructive.js"
+import { ShellGuard } from "../../shell/guard.js"
+import { ShellSandbox } from "../../shell/sandbox.js"
 import { ShellExit } from "../../shell/exit.js"
 import { ShellParse } from "../../shell/parse.js"
 import { PowerShellParse } from "../../shell/powershell-parse.js"
@@ -188,6 +194,11 @@ export const Plugin = {
     const config = yield* Config.Service
     const powershellParse = yield* PowerShellParse.Service
     const location = yield* Location.Service
+    const managed = yield* ManagedPolicy.Service
+    // What the guard reads from the disk, captured here so a call needs none of it from its caller.
+    const guarded = yield* Effect.context<
+      FSUtil.Service | ProjectTrust.Service | FileAccess.Service | Location.Service | Permission.Service | PowerShellParse.Service
+    >()
 
     const prepare = Effect.fn("ShellTool.prepare")(function* (
       invocation: ShellCreateBefore,
@@ -203,49 +214,36 @@ export const Plugin = {
       invocation.cwd = target.absolute
       // The folder as resolved, before anything is asked, so a client names where the command runs even when no rule asks.
       yield* context.progress({ places: [target.place] })
-      const portable = Config.latest(yield* config.entries(), "experimental")?.portable_shell_scanner === true
-      const parsed = yield* ShellParse.scan(invocation.command, invocation.shell, target.absolute, { portable })
-      const directories = yield* Effect.forEach(parsed.directories, (directory) =>
-        access.resolve({
-          path: FileAccess.resolvePath(target.absolute, directory),
-          kind: "directory",
-        }),
+      const entries = yield* config.entries()
+      // The folders the command may write when it runs inside the sandbox; unset when it runs without one.
+      const sandbox = yield* ManagedNetwork.sandboxSettings(
+        Config.latest(entries, "sandbox"),
+        managed.current().restrictions.network,
       )
-      // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
-      // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
-      const operands = yield* access.escaped(
-        (yield* ShellParse.operands(invocation.command, invocation.shell)).map((operand) =>
-          FileAccess.resolvePath(target.absolute, operand),
-        ),
-      )
-      yield* access.authorizeExternal([target, ...directories, ...operands], context)
-      if (parsed.commands.length > 0)
-        yield* permission.assert({
-          action: name,
-          resources: parsed.commands.map((command) => command.resource),
-          save: parsed.commands.map((command) => command.save),
-          // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling, and
-          // the real folder when a link in an untrusted project leads there.
-          metadata: { workdir: target.place },
-          sessionID: context.sessionID,
-          agent: context.agent,
-          source,
-        })
+      const writable =
+        ShellSandbox.launch({
+          settings: sandbox,
+          shell: invocation.shell,
+          args: ShellSelect.args(invocation.shell, invocation.command),
+          cwd: target.absolute,
+          writable: [],
+        }).type === "wrapped"
+          ? [location.project.directory, target.absolute, os.tmpdir(), ...(sandbox.write ?? [])]
+          : undefined
+      // The one parse of the call, and every question the command needs, asked after every request is checked for a deny.
+      const analysis = yield* ShellGuard.authorize({
+        command: invocation.command,
+        shell: invocation.shell,
+        cwd: target,
+        env: invocation.env,
+        portable: Config.latest(entries, "experimental")?.portable_shell_scanner === true,
+        writable,
+        base: { sessionID: context.sessionID, agent: context.agent, source },
+      }).pipe(Effect.provideContext(guarded))
       // The deadline as the hooks left it. A foreground command is moved to the background at its deadline, so the Shell
       // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
       // be analysed counts as not sleep-led, so it is moved and never killed.
       const deadline = invocation.timeout
-      // The analysis of the command that runs, also used to read its exit code, so every foreground call has one.
-      const analysis = foreground
-        ? yield* ShellAnalysis.inspect(invocation.command, {
-              shell: invocation.shell,
-              platform: process.platform,
-              path: process.platform === "win32" ? path.win32 : path.posix,
-              home: os.homedir(),
-              cwd: target.absolute,
-              env: invocation.env,
-            }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
-        : undefined
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
         Effect.catchTag("Environment.NotFound", () =>
@@ -254,7 +252,9 @@ export const Plugin = {
       )
       if (workdir !== "directory")
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
-      if (!analysis || deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
+      // The analysis also reads the exit code of a foreground call.
+      if (!foreground) return { budget: deadline, autoBackground: false, analysis: undefined }
+      if (deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
       invocation.timeout = 0
       return { budget: deadline, autoBackground: true, analysis }
     })
