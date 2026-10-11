@@ -122,6 +122,39 @@ describe("LifecycleHooksPlugin", () => {
     }),
   )
 
+  it.live("starts a hook with the settings' env under Orbit's own variables, and a removed name stops applying", () =>
+    Effect.gen(function* () {
+      const registry = yield* PluginHooks.Service
+      const config = yield* Config.Test
+      const settings = (env: Record<string, string>) =>
+        new Document({
+          type: "document",
+          info: decode({
+            env,
+            hooks: { UserPromptSubmit: [command(`echo "$ZZ_ENV_A|$ORBIT_PROJECT_DIR"`)] },
+          }),
+        })
+      yield* config.setEntries([settings({ ZZ_ENV_A: "from-settings", ORBIT_PROJECT_DIR: "/evil" })])
+      yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+      const prompt = () => ({
+        sessionID: base.sessionID,
+        messageID: base.messageID,
+        prompt: { text: "go" },
+        delivery: "steer" as const,
+      })
+
+      const first = prompt()
+      yield* registry.trigger("session", "prompt", first)
+      expect(first.prompt.text).toStartWith("go\n\nfrom-settings|")
+      expect(first.prompt.text).not.toContain("/evil")
+
+      yield* config.setEntries([settings({})])
+      const second = prompt()
+      yield* registry.trigger("session", "prompt", second)
+      expect(second.prompt.text).toStartWith("go\n\n|")
+    }),
+  )
+
   for (const item of [
     { name: "nothing set", restrictions: {}, ran: ["user", "managed"] },
     { name: "managed_hooks_only", restrictions: { managed_hooks_only: true }, ran: ["managed"] },

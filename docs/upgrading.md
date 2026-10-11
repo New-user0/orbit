@@ -390,6 +390,39 @@ input, and a foreground command is not watched until its deadline moves it to th
 
 **What to do:** Treat `waiting` as progress. Take the end of a job from the job and shell events.
 
+### An `env` setting for the programs Orbit starts
+
+`orbit.json` and the managed settings now take a top-level `env`: variable names and values that are added to the
+environment of the shell, terminals, hooks, MCP servers, language servers and formatters that Orbit starts for a
+location. It works in every scope and folds name by name, with the organization's managed value last, so it wins. A
+program's own variables (an MCP server's `environment`, a formatter's `environment`, an LSP server's `env`, a terminal's
+caller) and Orbit's (`ORBIT_PROJECT_DIR`, `TERM`, `ORBIT_TERMINAL`) win over it. A number or boolean is kept as its text.
+An entry with an empty name, a name holding `=` or a NUL, or a value that is not text is skipped on its own, and
+`NoDefaultCurrentDirectoryInExePath` cannot be set from `env`. On Windows names are one variable whatever their case,
+so a later `PATH` replaces an earlier `Path`.
+
+`env` is read each time a program starts, so a name removed from a file stops applying to the next program, which is
+stricter than adding variables until a restart. A running MCP or language server keeps what it started with until it
+reconnects. A project's or local file's `env` waits until the folder is trusted, with the other settings that reach
+programs, and `orb trust` lists it as "environment variables". Workspace-bound locations and the persistent terminal
+panes of the interface get no overlay. The managed `env` is also put into the environment of a server that `orb`
+starts, once at boot, so a change to it needs a restart there; the server's own network requests take proxy and CA
+settings from that environment or from the one the server was started with, not from user or project `env`.
+
+With compatibility on (the default), an `env` in another product's settings files now reaches those programs the same
+way, which can carry provider keys into every child; turn it off with `compatibility.enabled = false`. The managed
+settings' `managed.env` is ignored and reported: use the top-level `env`.
+
+`which` now skips every `PATH` entry that is not absolute (`.`, `bin`, `node_modules/.bin`, and on Windows a
+drive-relative or root-relative one), as it already skipped empty ones, so Orbit's own lookups never find a `git` or `rg`
+in the working folder through such an entry.
+
+**Affects:** people who set `env` in any settings file, organizations that manage settings, and people whose `PATH`
+holds a relative entry that Orbit's own lookups used to honor.
+
+**What to do:** Move variables you want in Orbit's child processes into `env`. Replace a relative `PATH` entry with an
+absolute one.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.

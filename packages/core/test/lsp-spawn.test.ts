@@ -48,14 +48,19 @@ describe("starting a language server", () => {
       )
     })
 
-  const withLsp = <A, E>(directory: string, lsp: unknown, body: (service: Lsp.Interface) => Effect.Effect<A, E>) =>
+  const withLsp = <A, E>(
+    directory: string,
+    lsp: unknown,
+    body: (service: Lsp.Interface) => Effect.Effect<A, E>,
+    env: Record<string, string> = {},
+  ) =>
     Effect.gen(function* () {
       return yield* body(yield* Lsp.Service)
     }).pipe(
       Effect.provide(
         AppNodeBuilder.build(Lsp.node, [
           Config.node.replace(
-            Config.testLayer([new Document({ type: "document", info: Schema.decodeUnknownSync(Info)({ lsp }) })]),
+            Config.testLayer([new Document({ type: "document", info: Schema.decodeUnknownSync(Info)({ lsp, env }) })]),
           ),
           Location.node.replace(
             Layer.succeed(
@@ -127,6 +132,68 @@ describe("starting a language server", () => {
         expect(yield* Effect.promise(ran)).toEqual([])
       }),
     // The test compiles its decoy program, which takes longer on a slow disk.
+    30_000,
+  )
+
+  // The top-level `env` reaches the server too, and no spelling of the lookup variable in it gets through.
+  for (const [name, value] of [
+    ["NoDefaultCurrentDirectoryInExePath", ""],
+    ["NoDefaultCurrentDirectoryInExePath", "0"],
+    ["nodefaultcurrentdirectoryinexepath", ""],
+  ] as const) {
+    it.live(
+      `does not let the top-level env set ${name} to ${JSON.stringify(value)} and run a program of the project folder`,
+      () =>
+        Effect.gen(function* () {
+          const directory = (yield* tmpdirScoped()).path
+          const ran = yield* decoys(directory, "orbit-fake-lsp")
+          const target = yield* file(directory, "main.fake")
+          const lsp = { fake: { command: ["orbit-fake-lsp", "--stdio"], extensions: [".fake"] } }
+          yield* withCurrentDirectoryOnPath(
+            withLsp(
+              directory,
+              lsp,
+              (service) =>
+                service.diagnostics([target]).pipe(Effect.tap((found) => Effect.sync(() => expect(found).toEqual({})))),
+              { [name]: value },
+            ),
+          )
+          expect(yield* Effect.promise(ran)).toEqual([])
+        }),
+      30_000,
+    )
+  }
+
+  it.live(
+    "starts a server with the top-level env under the server's own env",
+    () =>
+      Effect.gen(function* () {
+        const directory = (yield* tmpdirScoped()).path
+        const target = yield* file(directory, "main.fake")
+        const seen = path.join(directory, "seen.txt")
+        const probe = path.join(directory, "probe.ts")
+        yield* Effect.promise(() =>
+          Bun.write(
+            probe,
+            `import fs from "node:fs"
+fs.writeFileSync(${JSON.stringify(seen)}, [process.env.ZZ_ENV_A, process.env.ZZ_ENV_B].join("|"))
+process.exit(0)
+`,
+          ),
+        )
+        const lsp = {
+          fake: {
+            command: [process.execPath, probe],
+            extensions: [".fake"],
+            env: { ZZ_ENV_B: "server" },
+          },
+        }
+        yield* withLsp(directory, lsp, (service) => service.diagnostics([target]).pipe(Effect.ignore), {
+          ZZ_ENV_A: "from-settings",
+          ZZ_ENV_B: "from-settings",
+        })
+        expect(yield* Effect.promise(() => Bun.file(seen).text())).toBe("from-settings|server")
+      }),
     30_000,
   )
 

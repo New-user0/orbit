@@ -738,6 +738,42 @@ test("spawns local MCP servers through the location environment", async () => {
   expect(command.options.env).toEqual({ MCP_LOCATION_TEST: "configured" })
 })
 
+test("starts a local MCP server with the settings' env under the server's own environment", async () => {
+  const spawns: Array<ChildProcess.Command> = []
+  const config = new ConfigMCP.Local({
+    type: "local",
+    command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-output-schema.ts")],
+    environment: { ZZ_ENV_B: "server" },
+  })
+  const entries = [
+    new Document({
+      type: "document",
+      info: new Info({
+        env: { ZZ_ENV_A: "from-settings", ZZ_ENV_B: "from-settings" },
+        mcp: new ConfigMCP.Info({ servers: { resources: config } }),
+      }),
+    }),
+  ]
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* Mcp.Service
+      expect(yield* settled(service)).toEqual({ status: "connected" })
+    }).pipe(
+      Effect.provide(
+        resourceMcpLayer(config, undefined, undefined, {
+          entries: () => Effect.succeed(entries),
+          environment: recordingEnvironmentLayer(spawns),
+        }),
+      ),
+    ),
+  )
+
+  const command = spawns[0]
+  if (!command || !ChildProcess.isStandardCommand(command)) throw new Error("Expected a standard process command")
+  expect(command.options.env).toEqual({ ZZ_ENV_A: "from-settings", ZZ_ENV_B: "server" })
+})
+
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
   const config = new ConfigMCP.Local({ type: "local", command: ["example-mcp"] })
   const driver = Environment.makeMemoryDriver()
@@ -2189,8 +2225,10 @@ const shutdownIt = testEffect(
       Environment.node,
       Location.node,
       ManagedPolicy.node,
+      Config.node,
     ]),
     [
+      Config.node.replace(Config.testLayer()),
       Location.node.replace(
         Layer.succeed(
           Location.Service,

@@ -150,6 +150,49 @@ describe("util.which", () => {
     same(which("quoted", env(`"${tmp.path}"`)), file)
   })
 
+  describe("a relative PATH entry", () => {
+    // A decoy in the working folder and in the folders a relative entry can reach from it.
+    const plant = async (root: string) => {
+      const folders = [root, path.join(root, "bin"), path.join(root, "node_modules", ".bin")]
+      await Promise.all(folders.map((folder) => fs.mkdir(folder, { recursive: true })))
+      return Promise.all(folders.map((folder) => cmd(folder, "relhit")))
+    }
+    const relative = [".", "./", "bin", "node_modules/.bin", "node_modules/.bin/"]
+    const windowsOnly = ["C:relhit", "\\relhit", "\\"]
+
+    for (const entry of [...relative, ...(process.platform === "win32" ? windowsOnly : [])]) {
+      test(`skips ${JSON.stringify(entry)}`, async () => {
+        await using tmp = await tmpdir()
+        await plant(tmp.path)
+
+        expect(inside(tmp.path, () => which("relhit", env(entry)))).toBeNull()
+        // Behind an entry that does not resolve, the lookup goes on to the next one.
+        const real = path.join(tmp.path, "real")
+        await fs.mkdir(real)
+        const installed = await cmd(real, "relhit")
+        same(
+          inside(tmp.path, () => which("relhit", env([entry, real].join(path.delimiter)))),
+          installed,
+        )
+      })
+    }
+
+    test("skips .. from a subfolder", async () => {
+      await using tmp = await tmpdir()
+      await plant(tmp.path)
+
+      expect(inside(path.join(tmp.path, "bin"), () => which("relhit", env("..")))).toBeNull()
+    })
+
+    test("still finds the same program through an absolute or quoted entry (control)", async () => {
+      await using tmp = await tmpdir()
+      const [decoy] = await plant(tmp.path)
+
+      same(inside(tmp.path, () => which("relhit", env(tmp.path))), decoy!)
+      same(inside(tmp.path, () => which("relhit", env(`"${tmp.path}"`))), decoy!)
+    })
+  })
+
   test("checks a command that names a directory as given", async () => {
     await using tmp = await tmpdir()
     const file = await cmd(tmp.path, "direct")

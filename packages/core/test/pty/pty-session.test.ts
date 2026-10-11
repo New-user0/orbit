@@ -3,7 +3,9 @@ import { Cause, Deferred, Effect, Exit, Layer, Queue } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Bus } from "@orbit/core/bus"
+import { Config } from "@orbit/core/config"
 import { Location } from "@orbit/core/location"
+import { Document, Info } from "@orbit/schema/config"
 import { Pty } from "@orbit/core/pty"
 import { AbsolutePath } from "@orbit/core/schema"
 import { ShellSelect } from "@orbit/core/shell/select"
@@ -17,7 +19,17 @@ const locationLayer = Layer.succeed(
   Location.Service.of(location({ directory: AbsolutePath.make("/tmp") })),
 )
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([Pty.node, Bus.node]), [Location.node.replace(locationLayer)]),
+  AppNodeBuilder.build(LayerNode.group([Pty.node, Bus.node]), [
+    Location.node.replace(locationLayer),
+    Config.node.replace(
+      Config.testLayer([
+        new Document({
+          type: "document",
+          info: new Info({ env: { ZZ_ENV_A: "from-settings", ZZ_ENV_B: "from-settings", TERM: "dumb" } }),
+        }),
+      ]),
+    ),
+  ]),
 )
 const ptyTest = process.platform === "win32" ? it.live.skip : it.live
 
@@ -102,6 +114,23 @@ describe("pty", () => {
         if (Exit.isFailure(result))
           expect(Cause.squash(result.cause)).toMatchObject({ _tag: "Pty.NotFoundError", ptyID: id })
       }
+    }),
+  )
+
+  ptyTest("starts a terminal with the settings' env, under the caller's variables and Orbit's own", () =>
+    Effect.gen(function* () {
+      const pty = yield* Pty.Service
+      const info = yield* Effect.acquireRelease(
+        pty.create({
+          command: "/usr/bin/env",
+          args: ["sh", "-c", 'echo "probe:$ZZ_ENV_A:$ZZ_ENV_B:$TERM:$ORBIT_TERMINAL"'],
+          cwd: "/tmp",
+          env: { ZZ_ENV_B: "caller" },
+        }),
+        (created) => pty.remove(created.id).pipe(Effect.ignore),
+      )
+      const watching = yield* attachCollecting(info.id)
+      expect(yield* waitForOutput(watching.output, "probe:from-settings:caller:xterm-256color:1")).toContain("probe:")
     }),
   )
 

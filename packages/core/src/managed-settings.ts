@@ -4,13 +4,14 @@ import path from "path"
 import { isDeepStrictEqual } from "node:util"
 import { parse, type ParseError } from "jsonc-parser"
 import { Context, Effect, Layer, Option, PubSub, Schema, SchemaAST, Stream } from "effect"
-import { Info } from "@orbit/schema/config"
+import { Document, Info } from "@orbit/schema/config"
 import { ConfigManaged } from "@orbit/schema/config/managed"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { ManagedPath } from "@orbit/util/managed-path"
 import { ConfigPermissionExpand } from "./config/expand-permissions.js"
+import { ConfigEnv } from "./config/env.js"
 import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigVariable } from "./config/variable.js"
 import { Watcher } from "./filesystem/watcher.js"
@@ -426,6 +427,15 @@ const resolveDirectory = Effect.fnUntraced(function* (override: string | undefin
       directory: requested,
     })
   return ManagedPath.directory(process.platform, process.env)
+})
+
+/**
+ * The managed `env` for the server process itself, read once at boot before the application layer exists. The folder is
+ * resolved as the managed service resolves it. Orbit's own reserved variable was already dropped when the files decoded.
+ */
+export const bootEnvironment = Effect.fn("ManagedSettings.bootEnvironment")(function* (override: string | undefined) {
+  const snapshot = yield* read(yield* resolveDirectory(override))
+  return ConfigEnv.resolve([new Document({ type: "document", info: snapshot.info })])
 })
 
 export const layer = (options?: Options) =>

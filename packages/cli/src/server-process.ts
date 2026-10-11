@@ -128,7 +128,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             file: overlay?.file ?? process.env.ORBIT_CONFIG,
             content: overlay?.content ?? process.env.ORBIT_CONFIG_CONTENT,
           },
-          managed: { directory: process.env.ORBIT_MANAGED_DIR || undefined },
+          managed: managedOptions(process.env),
           trust: trustOptions(options.mode, process.env),
           windows: {
             gitbash: process.env.ORBIT_GIT_BASH_PATH,
@@ -207,6 +207,14 @@ function serviceURL(hostname: string, port: number) {
  */
 export function trustOptions(mode: Mode, env: Readonly<Record<string, string | undefined>>) {
   return { implicit: mode === "service" ? false : truthy(env.ORBIT_TRUST_PROJECT) }
+}
+
+/**
+ * Where the managed settings are read from, and that this server puts their `env` into its own environment at boot: a
+ * server that `orb` starts owns its process, so the model client's proxy and CA set-up and every later child see it.
+ */
+export function managedOptions(env: Readonly<Record<string, string | undefined>>) {
+  return { directory: env.ORBIT_MANAGED_DIR || undefined, applyEnv: true }
 }
 
 /**

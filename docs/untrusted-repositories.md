@@ -83,6 +83,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
+- The `env` setting (`Config.Info.env`): it can put `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, proxies, CA bundles or provider
+  keys into every program Orbit starts, so `ConfigTrust.classification` withholds it whole (kind `env`) from an
+  untrusted project or local document, compat settings files included. It is read at each spawn through
+  `ConfigEnv.resolve` for the shell, terminals, hooks, MCP servers, language servers and formatters of a host-local
+  location, under each program's own variables and Orbit's. `NoDefaultCurrentDirectoryInExePath` cannot be set from it
+  in any spelling. Proof: `test/config/env.test.ts`, `test/config/config-trust.test.ts`.
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`.
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
@@ -1220,7 +1226,8 @@ kind in turn.
   on Windows, where `node:child_process` and `cross-spawn` do pass the live `process.env`). A `Bun.spawn` that starts a
   `cmd.exe`, as the terminal UI's status line and the flow runner's shell step do, passes
   `env: ProgramLookup.environment(undefined)` or goes through the spawner.
-- One member of the class is still open: a relative `PATH` entry. Two more rest on `ProgramLookup.install()` alone,
+- One member of the class stays partly open: a child that is handed a `PATH` with a relative entry still searches it (see
+  Known gaps). Two more rest on `ProgramLookup.install()` alone,
   with no test of their own: the bare `git` fallback and the terminal UI's external editor.
   Known gaps lists each with its task. A change must not widen one.
 - When a dependency or a dynamic import changes, look in the unminified bundle for `__require(`, a `require` that is
@@ -1656,10 +1663,12 @@ fixes it or asks.
   spawner, which sets the variable before it launches. The spawner's tests run under Bun, and the core also runs under
   Node, where only the launcher's test shows that Node's own spawn honors the variable, so a test that plants a
   `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
-- **A relative `PATH` entry.** `which` skips an empty `PATH` entry but resolves a relative one, such as `.` or `bin`,
-  against the working folder with `path.resolve`, so it still finds the `git.exe` or `rg.exe` that a repository ships.
-  It needs the person's own `PATH` to name a relative folder, which is rare, so it is a follow-up and not a blocker
-  (task `foundations-17`).
+- **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
+  `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
+  a program in the working folder that way (`util.which` in `core/test/util/which.test.ts`). A child that is handed a
+  `PATH` with an explicit relative entry still searches it: `cmd.exe` ran a project `.cmd` through a `.` entry even
+  with `NoDefaultCurrentDirectoryInExePath` set. That needs the person's own `PATH` or the person's own config to name
+  the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).
 - **The external editor.** `openEditor` in `packages/tui/src/editor.ts` starts `$VISUAL` or `$EDITOR` with `shell: true`
   on Windows, in the folder of the session's project, so a `cmd.exe` runs it. It runs inside the `orb` process, and
   `node:child_process` passes the live environment, so the `cmd.exe` has `NoDefaultCurrentDirectoryInExePath` and a

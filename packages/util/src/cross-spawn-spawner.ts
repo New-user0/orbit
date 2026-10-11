@@ -18,6 +18,7 @@ import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node.js"
 import { filesystem, path } from "./effect/app-node-platform.js"
+import { Environment } from "./environment.js"
 import { ProgramLookup } from "./program-lookup.js"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
@@ -111,7 +112,9 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
   // cmd.exe runs a .cmd or .bat file however it was started, and looks in the working folder before PATH for what the
   // file runs by name, so every child gets the variable that stops it, not only one that was started by a bare name.
   const env = (opts: ChildProcess.CommandOptions) =>
-    ProgramLookup.environment(opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env)
+    ProgramLookup.environment(
+      opts.extendEnv ? Environment.assign({ ...globalThis.process.env }, opts.env ?? {}) : opts.env,
+    )
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x

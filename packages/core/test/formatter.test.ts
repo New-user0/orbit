@@ -19,6 +19,7 @@ import { Location } from "../src/location"
 import { tempGlobalLayer } from "./fixture/global"
 import { offlineModels } from "./fixture/models"
 import { tmpdir } from "./fixture/tmpdir"
+import { plant } from "./fixture/decoy"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(
@@ -40,10 +41,11 @@ function withTemp<A, E, R>(body: (directory: string) => Effect.Effect<A, E, R>) 
 function withFormatter<A, E, R>(
   configured: ConfigInput["formatter"],
   body: (formatter: Formatter.Interface, directory: string) => Effect.Effect<A, E, R>,
+  extra: Record<string, unknown> = {},
 ) {
   return withTemp((directory) =>
     Effect.promise(() =>
-      fs.writeFile(path.join(directory, "orbit.json"), JSON.stringify({ formatter: configured })),
+      fs.writeFile(path.join(directory, "orbit.json"), JSON.stringify({ ...extra, formatter: configured })),
     ).pipe(
       Effect.andThen(
         Effect.gen(function* () {
@@ -89,6 +91,78 @@ describe("Formatter", () => {
       ),
     ),
   )
+
+  it.live("starts a formatter with the settings' env under the formatter's own environment", () =>
+    withFormatter(
+      {
+        probe: {
+          command: [
+            process.execPath,
+            "-e",
+            "require('fs').writeFileSync(process.argv.at(-1), [process.env.ZZ_ENV_A, process.env.ZZ_ENV_B].join('|'))",
+            "$FILE",
+          ],
+          environment: { ZZ_ENV_B: "formatter" },
+          extensions: [".envprobe"],
+        },
+      },
+      (formatter, directory) =>
+        Effect.gen(function* () {
+          const file = path.join(directory, "test.envprobe")
+          yield* Effect.promise(() => fs.writeFile(file, "x"))
+          expect(yield* formatter.file(file)).toBe(true)
+          expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("from-settings|formatter")
+        }),
+      { env: { ZZ_ENV_A: "from-settings", ZZ_ENV_B: "from-settings" } },
+    ),
+  )
+
+  // Class 10: a formatter named by a bare name is looked up on PATH only. No spelling of the lookup variable in the
+  // top-level env turns the working-folder lookup back on, and a decoy of every kind Windows runs sits in the folder.
+  if (process.platform === "win32")
+    for (const [name, value] of [
+      ["NoDefaultCurrentDirectoryInExePath", ""],
+      ["NoDefaultCurrentDirectoryInExePath", "0"],
+      ["nodefaultcurrentdirectoryinexepath", ""],
+    ] as const)
+      it.live(
+        `does not run a program of the folder when the top-level env sets ${name} to ${JSON.stringify(value)}`,
+        () =>
+          withFormatter(
+            {
+              decoyed: { command: ["orbit-fake-fmt", "$FILE"], extensions: [".decoy"] },
+            },
+            (formatter, directory) =>
+              Effect.gen(function* () {
+                const saved = process.env.NoDefaultCurrentDirectoryInExePath
+                delete process.env.NoDefaultCurrentDirectoryInExePath
+                const ran = yield* Effect.promise(() => plant(directory, "orbit-fake-fmt"))
+                const marks = path.join(directory, "batch-ran.txt")
+                yield* Effect.promise(() =>
+                  Promise.all(
+                    [".bat", ".cmd"].map((extension) =>
+                      fs.writeFile(
+                        path.join(directory, `orbit-fake-fmt${extension}`),
+                        `@echo off\r\necho ran> "${marks}"\r\n`,
+                      ),
+                    ),
+                  ),
+                )
+                const file = path.join(directory, "test.decoy")
+                yield* Effect.promise(() => fs.writeFile(file, "x"))
+                try {
+                  expect(yield* formatter.file(file)).toBe(false)
+                } finally {
+                  if (saved === undefined) delete process.env.NoDefaultCurrentDirectoryInExePath
+                  else process.env.NoDefaultCurrentDirectoryInExePath = saved
+                }
+                expect(yield* Effect.promise(ran)).toEqual([])
+                expect(yield* Effect.promise(() => Bun.file(marks).exists())).toBe(false)
+              }),
+            { env: { [name]: value } },
+          ),
+        30_000,
+      )
 
   it.live("does not run formatters marked as disabled in config", () =>
     withFormatter(

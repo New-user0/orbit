@@ -9,6 +9,7 @@ import { Context, Effect, Layer, Schedule, Schema } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import path from "path"
 import { Config } from "../config.js"
+import { ConfigEnv } from "../config/env.js"
 import { Git } from "../git.js"
 import { Location } from "../location.js"
 import { ProjectTrust } from "../project-trust.js"
@@ -132,7 +133,19 @@ const layer = Layer.effect(
       if (!server) return undefined
       const pending =
         clients.get(server.id) ??
-        LspClient.start({ ...server, root: location.project.directory, spawner }).catch((error: unknown) => {
+        // The settings' `env` sits under the server's own variables.
+        LspClient.start({
+          ...server,
+          env: ConfigEnv.applyTo(
+            ConfigEnv.applyTo(
+              {},
+              location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
+            ),
+            server.env ?? {},
+          ),
+          root: location.project.directory,
+          spawner,
+        }).catch((error: unknown) => {
           console.warn(`language server ${server.id} failed to start`, error)
           return undefined
         })
