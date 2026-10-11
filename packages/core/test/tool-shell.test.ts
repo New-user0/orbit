@@ -3708,6 +3708,12 @@ describe("ShellTool guard", () => {
       ["a read", "cat ../outside/s", true],
       ["a removal", "rm ../outside/s", true],
       ["a removal after a cd, in input over the length limit", `cd ../outside && rm s #${"x".repeat(10_050)}`, true],
+      ...(isWindows
+        ? ([
+            ["a removal after a colon-bound Set-Location, in input over the length limit", `Set-Location -Path:../outside; Remove-Item s #${"x".repeat(10_050)}`, true],
+            ["a removal after a colon-bound Push-Location, in input over the length limit", `Push-Location -LiteralPath:../outside; Remove-Item s #${"x".repeat(10_050)}`, true],
+          ] as const)
+        : []),
       ["a file the system keeps for everyone", `printf x > ${os.tmpdir()}/orbit-guard-test-f`, false],
     ] as const)
       test(`${scanner}: ${name} outside the project asks about the folder first`, () =>
@@ -3723,7 +3729,7 @@ describe("ShellTool guard", () => {
             expect(yield* absent(path.join(fixture.outside, "f"))).toBe(true)
             expect(yield* absent(path.join(os.tmpdir(), "orbit-guard-test-f"))).toBe(true)
             expect(yield* absent(marker)).toBe(true)
-            if (/\brm\b/.test(command)) expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+            if (/\brm\b|Remove-Item/.test(command)) expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
           }),
         ))
 

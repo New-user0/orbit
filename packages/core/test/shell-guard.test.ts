@@ -602,6 +602,16 @@ describe("ShellGuard.authorize", () => {
     ["bash pushd", `pushd ../outside; rm s ${pad}`, "sh", false],
     ["bash quoted cd", `cd "../outside" && rm s ${pad}`, "sh", false],
     ["PowerShell Set-Location", `Set-Location ../outside; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell colon-bound Set-Location", `Set-Location -Path:../outside; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell colon-bound LiteralPath", `Set-Location -LiteralPath:../outside; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell colon-bound Push-Location", `Push-Location -LiteralPath:../outside; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell abbreviated parameter", `sl -l:../outside; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell quote inside the target", `Set-Location ../out"side"; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell quoted colon-bound target", `Set-Location -Path:'../outside'; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell target built after a folder", `Set-Location ../outside/$env:NOPE; Remove-Item s ${pad}`, "pwsh", false],
+    ["PowerShell read with -Path:", `Get-Content -Path:cfg/s ${pad}`, "pwsh", true],
+    ["PowerShell read with a quote inside", `Get-Content cfg"/"s ${pad}`, "pwsh", true],
+    ["PowerShell read of an array element", `Get-Content x,cfg/s ${pad}`, "pwsh", true],
     ["bash read through a link", `cat cfg/s ${pad}`, "sh", true],
     ["PowerShell read through a link", `Get-Content cfg/s ${pad}`, "pwsh", true],
     ["bash read of a quoted word", `cat "cfg/s" ${pad}`, "sh", true],
@@ -614,12 +624,24 @@ describe("ShellGuard.authorize", () => {
         expect(asked.find((input) => input.action === "external_directory")?.resources).toEqual([
           expect.stringMatching(/\/outside\/\*$/),
         ])
+        // The folder shown is the one the command acts on, with no quote character of the spelling in it.
+        expect(asked.filter((input) => input.action === "external_directory").flatMap((input) => input.resources).join("")).not.toMatch(/["']/)
       }),
     )
 
   // The control: a short input names the same folder, so the long one is not asked more or less than it.
   it.live("asks for the folder of the short form of those inputs", () =>
     Effect.gen(function* () {
+      for (const command of [
+        "Get-Content x,cfg/s",
+        "Get-Content -Path:cfg/s",
+        'Get-Content cfg"/"s',
+        "Get-Content -LiteralPath:'cfg/s'",
+      ]) {
+        asked.length = 0
+        yield* run(command, () => false, { shell: "pwsh", link: true })
+        expect(asked.map((input) => input.action)).toContain("external_directory")
+      }
       yield* run("cd ../outside && rm s", () => false)
       expect(asked.map((input) => input.action)).toContain("external_directory")
       yield* run("cat cfg/s", () => false, { link: true })
@@ -635,6 +657,24 @@ describe("ShellGuard.authorize", () => {
       expect(ShellGuard.locations("cd x; Set-Location y; ls z", "pwsh", "win32")).toEqual(["x", "y"])
       expect(ShellGuard.locations("New-PSDrive -Name Q -Root z; Pop-Location y", "pwsh", "win32")).toEqual([])
       expect(ShellGuard.fragmentWords('cat a "b c" -n --file=d $E x # e f\nls g')).toEqual(["a", "b c", "d", "x", "g"])
+      // PowerShell spellings: a colon-bound parameter gives its value, quotes inside a word are joined and never shown.
+      expect(
+        ShellGuard.locations("Set-Location -Path:../a; Push-Location -LiteralPath: ../b; sl -pa:c; pushd -l:d", "pwsh", "win32"),
+      ).toEqual(["../a", "../b", "c", "d"])
+      expect(ShellGuard.locations(`Set-Location ../o"u"t; Set-Location 'a b'x; Set-Location -Path:"../q"`, "pwsh", "win32")).toEqual([
+        "../out",
+        "a bx",
+        "../q",
+      ])
+      expect(ShellGuard.locations("Set-Location -PassThru:$true; Set-Location ../x/$env:Y/z; cd $env:Y", "pwsh", "win32")).toEqual([
+        "../x/",
+      ])
+      expect(ShellGuard.locations("cd ../out/$X; cd $Y/z", "bash", process.platform)).toEqual(["../out/"])
+      expect(ShellGuard.fragmentWords('Get-Content -Path:a/b -LiteralPath: "c d" x"y"z -Force `$q # w', true)).toEqual([
+        "a/b",
+        "c d",
+        "xyz",
+      ])
     }),
   )
 })
