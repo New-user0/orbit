@@ -46,7 +46,7 @@ const changed = {
 const digestsOf = (value: Record<string, unknown>) =>
   Effect.gen(function* () {
     const files = yield* FSUtil.Service
-    return yield* Fingerprint.document(files, "orbit.json", decode(value), [])
+    return yield* Fingerprint.document(files, "orbit.json", decode(value), [], [])
   })
 
 describe("Fingerprint.document", () => {
@@ -116,7 +116,7 @@ describe("Fingerprint.document", () => {
       const digests = (hooks: string) =>
         Effect.promise(() =>
           fs.writeFile(skill, `---\nname: demo\ndescription: d\nhooks:\n  PreToolUse:\n    - command: ${hooks}\n---\nbody\n`),
-        ).pipe(Effect.andThen(Fingerprint.document(files, "orbit.json", decode({ skills: [skills] }), [skills])))
+        ).pipe(Effect.andThen(Fingerprint.document(files, "orbit.json", decode({ skills: [skills] }), [skills], [root])))
       const first = yield* digests("echo a")
       expect(yield* digests("echo a")).toEqual(first)
       const second = yield* digests("echo b")

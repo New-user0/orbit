@@ -264,7 +264,9 @@ export function layer(options?: Options) {
       ) {
         const folder = yield* identify(root)
         const state = yield* status(root)
-        if (!state.trusted || state.source === "implicit") return []
+        // A server that trusts every folder compares nothing, even for a folder that also has a saved grant: revoking
+        // that grant would otherwise turn withholding on for a server that is configured to trust everything.
+        if (!state.trusted || (implicit && folder.persistent)) return []
         const records = session.has(folder.id) ? memory.get(folder.id) : undefined
         const differences = yield* Effect.forEach(observations, (observation) =>
           Effect.gen(function* () {

@@ -228,14 +228,14 @@ const layer = Layer.effect(
     // What a project or local entry holds back now. The entries are stamped by the last config load, which can trail a
     // decision by a moment, so for the project's own files the decision just made counts: a trusted project holds nothing
     // back, and an entry that is not stamped yet is read for what it would lose. An entry above the project follows the
-    // decision for its own folder, which only its stamp knows.
+    // decision for its own folder, which the store knows now and the stamp only as of the last load.
     const heldBack = Effect.fnUntraced(function* (
       entry: Entry,
       file: string,
       trusted: boolean,
       changed: ReadonlyMap<string, readonly Trust.Kind[]>,
     ) {
-      const untrusted = inside(file) ? !trusted : entry.trusted === false
+      const untrusted = !trusted
       // A trusted entry holds back only what changed since its folder was trusted, as the store says it does now.
       if (!untrusted) return changed.get(file) ?? []
       // The files of a directory are not part of its entry, so they are read from the disk.
@@ -247,15 +247,26 @@ const layer = Layer.effect(
     // The observations of the last load that belong to a folder's grant, by the folder's key.
     const observationsOf = Effect.fnUntraced(function* (folder: string) {
       const wanted = WorkspaceTrust.key(yield* fs.resolve(folder))
-      return yield* Effect.filter(yield* (config.fingerprints?.() ?? Effect.succeed([])), (item) =>
+      return yield* Effect.filter(yield* config.fingerprints(), (item) =>
         fs.resolve(item.root).pipe(Effect.map((resolved) => WorkspaceTrust.key(resolved) === wanted)),
       )
     })
 
     // Which sources differ from their folder's grant now, by path: the observations are those of the last load, and the
     // comparison is the store's at this moment, so a grant or a revoke shows before the config has reloaded.
+    // The plugins of a config directory are read from the disk now, not taken from the last load: a client imports them
+    // as soon as a file shows up, before the debounced reload has seen it, so a plugin planted after the grant must
+    // already count as changed.
     const differences = Effect.fnUntraced(function* () {
-      const groups = Map.groupBy(yield* (config.fingerprints?.() ?? Effect.succeed([])), (item) => item.root)
+      const observed = yield* Effect.forEach(yield* config.fingerprints(), (item) =>
+        Effect.gen(function* () {
+          if (!(yield* fs.isDir(item.path))) return item
+          const { plugins: _, ...rest } = item.digests
+          const now = yield* Fingerprint.pluginsOf(fs, item.path)
+          return { ...item, digests: now === undefined ? rest : { ...rest, plugins: now } }
+        }),
+      )
+      const groups = Map.groupBy(observed, (item) => item.root)
       const found = yield* Effect.forEach([...groups], ([folder, items]) => trust.compare(folder, items))
       return new Map(found.flat().map((item) => [item.path, item.kinds] as const))
     })
@@ -279,18 +290,21 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           if (entry.path === undefined) return []
           if (entry.scope !== "project" && entry.scope !== "local") return []
-          const kinds = yield* heldBack(entry, entry.path, state.trusted, changed)
+          // The folder that holds an entry above the project is asked now: its stamp trails a grant or a revoke.
+          const holder = inside(entry.path) ? undefined : ConfigTrust.covered(entry)
+          const decided = holder === undefined ? undefined : yield* trust.status(holder)
+          const kinds = yield* heldBack(entry, entry.path, decided?.trusted ?? state.trusted, changed)
           if (kinds.length === 0) return []
           // What the project's own folders hold is lifted by trusting the project. What sits above them is not, so it
           // names the folder whose trust does lift it, which a caller can tell the person to trust.
-          const directory = inside(entry.path) ? undefined : ConfigTrust.covered(entry)
+          const directory = holder
           return [
             {
               path: entry.path,
               kinds,
               ...(directory === undefined
                 ? {}
-                : { directory: AbsolutePath.make(directory), persistent: (yield* trust.status(directory)).persistent }),
+                : { directory: AbsolutePath.make(directory), persistent: decided?.persistent }),
             },
           ]
         }),

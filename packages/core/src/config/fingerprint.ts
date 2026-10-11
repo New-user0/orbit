@@ -39,7 +39,12 @@ export type Digests = Partial<Record<Trust.Kind, string>>
 const skillFolders = ["skill", "skills"]
 const skillPattern = "{*.md,**/SKILL.md}"
 /** The agent definitions of a config directory, including the legacy folders. Keep in sync with `AgentFile`. */
-const agentPatterns = ["{agent,agents}/**/*.md", "{mode,modes}/*.md"]
+const agentFolders = [
+  { name: "agent", pattern: "**/*.md" },
+  { name: "agents", pattern: "**/*.md" },
+  { name: "mode", pattern: "*.md" },
+  { name: "modes", pattern: "*.md" },
+]
 
 /** The value with object keys sorted at every level and arrays in order, so that formatting and key order do not show. */
 export function canonical(value: unknown): string {
@@ -64,13 +69,15 @@ const digest = (value: unknown) => Hash.sha256(canonical(value))
 /**
  * The digests of a project or local document, one for each kind it sets. `skills` also covers the front matter hooks of
  * the skill files under the paths it names, which are `skillRoots` as the skill plugin resolves them, so that editing
- * a skill that the document points at is a change to the document's `skills`.
+ * a skill that the document points at is a change to the document's `skills`. Only what lies inside `within` is read:
+ * a path that leads out (an absolute one, `~/`, `..`, a network share, a link) counts by its name.
  */
 export const document = Effect.fn("Fingerprint.document")(function* (
   fs: FSUtil.Interface,
   source: string,
   info: Info,
   skillRoots: readonly string[],
+  within: readonly string[],
 ) {
   const fields = {
     hooks: info.hooks,
@@ -90,8 +97,13 @@ export const document = Effect.fn("Fingerprint.document")(function* (
           source,
           "skills",
           Effect.gen(function* () {
-            const files = yield* listFiles(fs, skillRoots, [skillPattern])
-            return digest({ skills: info.skills, hooks: (yield* collect(fs, source, files)).hooks })
+            const bound = yield* bind(fs, within)
+            const listed = yield* listFiles(
+              bound,
+              skillRoots.map((root) => ({ root, patterns: [skillPattern] })),
+            )
+            const found = yield* collect(fs, source, listed)
+            return digest({ skills: info.skills, hooks: found.hooks, ...leaving(found.outside) })
           }),
         )
   return {
@@ -104,7 +116,8 @@ export const document = Effect.fn("Fingerprint.document")(function* (
 
 /**
  * The digests of a config directory: the plugins it keeps (their entry files and `package.json`), the hooks in the front
- * matter of its skill and agent definitions, and the MCP servers in the front matter of its agents.
+ * matter of its skill and agent definitions, and the MCP servers in the front matter of its agents. Nothing outside the
+ * directory is read: a link that leads out counts by its name.
  */
 export const directory = Effect.fn("Fingerprint.directory")(function* (fs: FSUtil.Interface, folder: string) {
   const plugins = yield* pluginsOf(fs, folder)
@@ -112,87 +125,141 @@ export const directory = Effect.fn("Fingerprint.directory")(function* (fs: FSUti
     folder,
     "hooks",
     Effect.gen(function* () {
-      const skills = yield* collect(
-        fs,
-        folder,
-        yield* listFiles(
-          fs,
-          skillFolders.map((name) => path.join(folder, name)),
-          [skillPattern],
-        ),
-      )
-      const agents = yield* collect(fs, folder, yield* listFiles(fs, [folder], agentPatterns))
-      return { hooks: [...skills.hooks, ...agents.hooks], mcp: agents.mcp }
+      const bound = yield* bind(fs, [folder])
+      const listed = yield* listFiles(bound, [
+        ...skillFolders.map((name) => ({ root: path.join(folder, name), patterns: [skillPattern] })),
+        ...agentFolders.map((item) => ({ root: path.join(folder, item.name), patterns: [item.pattern] })),
+      ])
+      const found = yield* collect(fs, folder, listed)
+      return { hooks: found.hooks, mcp: found.mcp, outside: found.outside }
     }),
   )
-  const unset = (found: readonly unknown[]) => found.length === 0
   return {
     ...(plugins === undefined ? {} : { plugins }),
     ...(definitions === unreadable
       ? { hooks: definitions, mcp: definitions }
       : {
-          ...(unset(definitions.hooks) ? {} : { hooks: digest(definitions.hooks) }),
-          ...(unset(definitions.mcp) ? {} : { mcp: digest(definitions.mcp) }),
+          ...(definitions.hooks.length === 0 && definitions.outside.length === 0
+            ? {}
+            : { hooks: digest({ hooks: definitions.hooks, ...leaving(definitions.outside) }) }),
+          ...(definitions.mcp.length === 0 ? {} : { mcp: digest(definitions.mcp) }),
         }),
   } satisfies Digests
 })
 
 /** The digest of the plugins that a config directory keeps, unset when it keeps none. */
 export const pluginsOf = Effect.fn("Fingerprint.plugins")(function* (fs: FSUtil.Interface, folder: string) {
-  const targets = yield* PluginSourceDirectory.discover(fs, folder)
-  if (targets.length === 0) return undefined
   const items = yield* attempt(
     folder,
     "plugins",
-    Effect.forEach(targets, (target) =>
-      Effect.gen(function* () {
-        const found = yield* PluginSourceDirectory.entrypoints(fs, target)
-        const manifest = found !== undefined && (yield* fs.exists(found.manifest)) ? [found.manifest] : []
-        const files = found === undefined ? [] : [...found.files, ...manifest]
-        return {
-          name: relative(folder, target),
-          files: yield* Effect.forEach(files, (file) =>
-            fs
-              .readFile(file)
-              .pipe(Effect.map((bytes) => ({ name: relative(folder, file), sha: Hash.sha256(Buffer.from(bytes)) }))),
-          ),
-        }
-      }),
-    ),
-  )
-  return items === unreadable ? items : digest(items)
-})
-
-// The files under each folder that match, sorted. A folder that is not there holds none.
-const listFiles = Effect.fnUntraced(function* (
-  fs: FSUtil.Interface,
-  roots: readonly string[],
-  patterns: readonly string[],
-) {
-  const found = yield* Effect.forEach(roots, (root) =>
     Effect.gen(function* () {
-      if (!(yield* fs.isDir(root))) return []
-      const files = yield* Effect.forEach(patterns, (pattern) =>
-        fs.scan(pattern, { cwd: root, absolute: true, include: "file", symlink: true, dot: true }),
+      const bound = yield* bind(fs, [folder])
+      // A plugin folder that is itself a link out is not listed: its name is all there is to digest.
+      const leads = yield* Effect.filter(PluginSourceDirectory.names, (name) =>
+        reach(bound, path.join(folder, name)).pipe(Effect.map((verdict) => verdict === "outside")),
       )
-      return files.flatMap((names) => names.toSorted())
+      const names = PluginSourceDirectory.names.filter((name) => !leads.includes(name))
+      const targets = yield* PluginSourceDirectory.discover(fs, folder, names)
+      if (targets.length === 0 && leads.length === 0) return undefined
+      const plugins = yield* Effect.forEach(targets, (target) =>
+        Effect.gen(function* () {
+          if ((yield* reach(bound, target)) !== "inside") return { name: relative(folder, target), outside: true }
+          const found = yield* PluginSourceDirectory.entrypoints(fs, target)
+          const files = found === undefined ? [] : [...found.files, found.manifest]
+          return {
+            name: relative(folder, target),
+            files: yield* Effect.forEach(files, (file) => readInside(bound, folder, file)),
+          }
+        }),
+      )
+      return { plugins, ...leaving(leads.map((name) => relative(folder, path.join(folder, name)))) }
     }),
   )
-  return found.flat()
+  if (items === undefined || items === unreadable) return items
+  return digest(items)
+})
+
+// What may be read: the real paths of the folders that bound it. A file counts when its real path is inside one of
+// them, the same before a folder is trusted and after, so the first grant records what the later load computes.
+type Bound = { readonly fs: FSUtil.Interface; readonly roots: readonly string[] }
+
+const bind = Effect.fnUntraced(function* (fs: FSUtil.Interface, within: readonly string[]) {
+  return { fs, roots: yield* Effect.forEach(within, (root) => fs.resolve(root)) } satisfies Bound
+})
+
+// A path on a network share is never touched, not even to look at it: connecting is a request to a host that the
+// repository chose.
+const network = (file: string) => /^[\\/]{2}/.test(file)
+
+// Where `file` stands: absent, `inside` the bound, or `outside` it (a link out, an absolute path elsewhere, a share).
+const reach = Effect.fnUntraced(function* (bound: Bound, file: string) {
+  if (network(file)) return "outside" as const
+  if (!(yield* bound.fs.exists(file))) return "absent" as const
+  const real = yield* bound.fs.resolve(file)
+  return bound.roots.some((root) => FSUtil.contains(root, real)) ? ("inside" as const) : ("outside" as const)
+})
+
+// The digest of one file's bytes, or just its name when it leads out or is not a regular file (a device, a pipe), which
+// are never read.
+const readInside = Effect.fnUntraced(function* (bound: Bound, from: string, file: string) {
+  const name = relative(from, file)
+  const verdict = yield* reach(bound, file)
+  if (verdict === "absent") return { name }
+  if (verdict === "outside" || !(yield* bound.fs.isFile(file))) return { name, outside: true }
+  return { name, sha: Hash.sha256(Buffer.from(yield* bound.fs.readFile(file))) }
+})
+
+const leaving = (outside: readonly string[]) => (outside.length === 0 ? {} : { outside: outside.toSorted() })
+
+type Listing = { readonly files: readonly string[]; readonly outside: readonly string[] }
+
+// The files under each folder that match, sorted, and the names that lead out of the bound. A folder that is not there
+// holds none; a folder that leads out is not listed, and a link is not followed, so a matched file that leads out is
+// named and left unread.
+const listFiles = Effect.fnUntraced(function* (
+  bound: Bound,
+  places: readonly { readonly root: string; readonly patterns: readonly string[] }[],
+) {
+  const found = yield* Effect.forEach(places, (place) =>
+    Effect.gen(function* () {
+      const verdict = yield* reach(bound, place.root)
+      if (verdict === "absent") return { files: [], outside: [] } satisfies Listing
+      if (verdict === "outside") return { files: [], outside: [place.root] } satisfies Listing
+      if (!(yield* bound.fs.isDir(place.root))) return { files: [], outside: [] } satisfies Listing
+      const matches = (yield* Effect.forEach(place.patterns, (pattern) =>
+        bound.fs.scan(pattern, { cwd: place.root, absolute: true, include: "file", dot: true }),
+      )).flat()
+      const checked = yield* Effect.forEach(matches, (file) => reach(bound, file).pipe(Effect.map((v) => [file, v] as const)))
+      return {
+        files: checked.flatMap(([file, v]) => (v === "inside" ? [file] : [])),
+        outside: checked.flatMap(([file, v]) => (v === "outside" ? [file] : [])),
+      } satisfies Listing
+    }),
+  )
+  return {
+    files: found.flatMap((item) => item.files).toSorted(),
+    outside: found.flatMap((item) => item.outside).toSorted(),
+  } satisfies Listing
 })
 
 // The `hooks` and `mcp_servers` that the front matter of these files carry, with the file each came from. A file whose
-// front matter does not parse carries nothing, as the loaders read it.
-const collect = Effect.fnUntraced(function* (fs: FSUtil.Interface, from: string, files: readonly string[]) {
+// front matter does not parse carries nothing, as the loaders read it. A file that is not a regular file carries
+// nothing and is named with the ones that lead out.
+const collect = Effect.fnUntraced(function* (fs: FSUtil.Interface, from: string, listed: Listing) {
   const hooks: unknown[] = []
   const mcp: unknown[] = []
-  for (const file of files) {
+  const outside = listed.outside.map((file) => relative(from, file))
+  for (const file of listed.files) {
+    if (!(yield* fs.isFile(file))) {
+      outside.push(relative(from, file))
+      continue
+    }
     const markdown = ConfigMarkdown.parseOption(yield* fs.readFileString(file))
     if (markdown === undefined) continue
     if (markdown.data.hooks !== undefined) hooks.push([relative(from, file), markdown.data.hooks])
     if (markdown.data.mcp_servers !== undefined) mcp.push([relative(from, file), markdown.data.mcp_servers])
   }
-  return { hooks, mcp }
+  return { hooks, mcp, outside }
 })
 
 // Whatever fails (a file that cannot be read, a folder that cannot be listed) makes the answer unreadable, once in the

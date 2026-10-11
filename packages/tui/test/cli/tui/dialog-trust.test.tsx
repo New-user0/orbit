@@ -213,6 +213,29 @@ test("config above the folder is listed after the folder's own, with the command
   }
 })
 
+test.each(["$(touch PWNED)", "`touch PWNED`", 'say "hi"', "it's", "a\u001b[2Jb"])(
+  "the command for a folder named %j is quoted for a shell, or left out, and never carries the raw name",
+  async (name) => {
+    const folder = `/tmp/orbit/${name}`
+    const fixture = await renderTrust({
+      ...layered,
+      withheld: [{ path: `${folder}/orbit.json`, kinds: ["hooks"], directory: folder }, ...layered.withheld.slice(1)],
+    })
+
+    try {
+      await fixture.app.waitForFrame((frame) => frame.includes(title))
+      const frame = fixture.app.captureCharFrame()
+      expect(frame).not.toContain("\u001b")
+      expect(frame).toMatch(/Config\s+above\s+this\s+folder/)
+      // The name is never the bare argument of a printed command: it is inside quotes, or there is no command.
+      expect(frame).not.toMatch(/orb\s+trust\s+\/tmp\/orbit\/(\$|`|say|it|a)/)
+      if (name.includes("\u001b")) expect(frame).toContain("\\x1b")
+    } finally {
+      fixture.app.renderer.destroy()
+    }
+  },
+)
+
 test("a folder with no config above it does not mention one", async () => {
   const fixture = await renderTrust(project)
 

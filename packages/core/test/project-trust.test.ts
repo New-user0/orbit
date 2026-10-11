@@ -312,6 +312,24 @@ describe("ProjectTrust.status", () => {
     }),
   )
 
+  it.live("lists nothing for a folder above the project the moment its own grant is made, before the config reloads", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      yield* Effect.promise(() => write(path.join(folders.work, ".orbit", "plugins", "shared.ts"), plugin))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const trust = yield* WorkspaceTrust.Service
+        expect(yield* project.status().pipe(Effect.map((status) => status.withheld.length))).toBe(1)
+        // No wait for the reload: the entry's stamp still says untrusted, and the store says otherwise.
+        yield* project.grant({ persist: false, via: "test", holder: AbsolutePath.make(folders.work) })
+        expect((yield* project.status()).withheld).toEqual([])
+        // And the other way: a revoke lists it again at once, though the stamp still says trusted.
+        yield* trust.revoke(folders.work)
+        expect(held(folders.root, yield* project.status())).toEqual([[path.join("work", ".orbit"), ["plugins"]]])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
   it.live("names the folder around an Orbit file or a file in a `.orbit` directory above the project", () =>
     Effect.gen(function* () {
       const folders = yield* bare
@@ -426,6 +444,29 @@ describe("ProjectTrust.allows", () => {
         yield* project.revoke()
         expect(yield* Effect.forEach(Object.values(own), (file) => project.allows(file))).toEqual(Object.values(own).map(() => false))
         expect(yield* Effect.forEach(Object.values(mine), (file) => project.allows(file))).toEqual(Object.values(mine).map(() => true))
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+})
+
+describe("ProjectTrust.status, plugins planted after the grant", () => {
+  it.live("lists a plugin that shows up in a trusted folder at once, before the config has reloaded", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const config = path.join(folders.repo, ".orbit")
+      yield* Effect.promise(() => write(path.join(config, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nText."))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        const next = yield* nextUpdate
+        yield* grantWithRecords(folders.repo, { persist: false, via: "test" })
+        yield* Fiber.join(next)
+        expect((yield* project.status()).changed).toEqual([])
+
+        // A client that imports plugins on a file event asks before the debounced reload has run.
+        yield* Effect.promise(() => write(path.join(config, "plugins", "late.ts"), plugin))
+        const status = yield* project.status()
+        expect<unknown>(status.changed?.map((item) => [item.path, item.kinds])).toEqual([[config, ["plugins"]]])
+        expect(held(folders.root, status)).toEqual([[path.join("work", "repo", ".orbit"), ["plugins"]]])
       }).pipe(Effect.provide(loader(folders)))
     }),
   )

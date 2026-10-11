@@ -73,7 +73,7 @@ export const layer = Layer.effect(
     return Service.of({
       operations: Effect.fn("ConfigPluginSource.operations")(function* () {
         const entries = yield* config.entries()
-        const operations = yield* scan(fs, location, entries, config.pluginsChanged ?? (() => Effect.succeed(false)))
+        const operations = yield* scan(fs, location, entries, config.pluginsChanged)
         yield* watchConfiguredSources(entries, operations)
         return operations
       }),

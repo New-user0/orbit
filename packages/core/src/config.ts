@@ -94,13 +94,13 @@ export interface Interface {
    * implicitly: what a grant records, and what `WorkspaceTrust.compare` is asked about. Empty when the server trusts
    * every folder.
    */
-  readonly fingerprints?: () => Effect.Effect<readonly Observed[]>
+  readonly fingerprints: () => Effect.Effect<readonly Observed[]>
   /**
    * Whether the plugins that a config directory keeps differ now from what its folder's grant recorded. This reads the
    * disk: the supervisor asks it when a file under the directory changes, which is before the config reloads and so
    * before the directory's entry says so.
    */
-  readonly pluginsChanged?: (directory: string) => Effect.Effect<boolean>
+  readonly pluginsChanged: (directory: string) => Effect.Effect<boolean>
 }
 
 /** A source's observation, and the folder whose grant it belongs to. */
@@ -383,7 +383,7 @@ export const layer = (options?: Options) =>
         const state = yield* stateOf(place.root)
         // The server trusts every folder: nothing is recorded and nothing counts as changed.
         if (state.source === "implicit") return entry
-        const observation = yield* observe(entry)
+        const observation = yield* observe(entry, place.roots)
         if (observation !== undefined) seen.push({ ...observation, root: place.root })
         if (!place.trusted) return ConfigTrust.stamp(entry, place)
         if (observation === undefined) return entry
@@ -400,12 +400,12 @@ export const layer = (options?: Options) =>
           return [path.isAbsolute(expanded) ? expanded : path.join(location.directory, expanded)]
         })
 
-      const observe = Effect.fnUntraced(function* (entry: Entry) {
+      const observe = Effect.fnUntraced(function* (entry: Entry, within: readonly string[]) {
         if (entry.path === undefined) return undefined
         const digests =
           entry.type === "directory"
             ? yield* Fingerprint.directory(fs, entry.path)
-            : yield* Fingerprint.document(fs, entry.path, entry.info, skillRoots(entry.info))
+            : yield* Fingerprint.document(fs, entry.path, entry.info, skillRoots(entry.info), within)
         return { path: entry.path, identity: yield* fs.resolve(entry.path), digests } satisfies WorkspaceTrust.Observation
       })
 

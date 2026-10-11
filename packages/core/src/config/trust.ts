@@ -40,7 +40,9 @@ import { FSUtil } from "@orbit/util/fs-util"
 // A folder that was trusted is held to its config as the grant saw it. `Config` digests the executable parts of every
 // project and local source (`Fingerprint`), `WorkspaceTrust.compare` says which kinds differ from the grant's record, and
 // `partial` cuts those kinds from that source alone: a document loses the fields, a directory lists `withheld`, which the
-// readers below ask. The readers of a directory that carries code ask `ProjectTrust.allows(file, kind)`:
+// readers below ask. `Fingerprint` reads only inside the config directory (and, for a document's `skills`, the project's
+// folders), before trust as after: what leads out is named, never read, and a network path is not touched.
+// The readers of a directory that carries code ask `ProjectTrust.allows(file, kind)`:
 //
 // - `plugins`: `ConfigPluginSource`, which also compares again when it scans;
 // - `hooks` and `mcp` of skill and agent front matter: whoever runs them (hooks-21, agents-extensibility-9).

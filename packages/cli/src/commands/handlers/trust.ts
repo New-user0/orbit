@@ -47,13 +47,22 @@ export default Runtime.handler(
     const folders = [location.directory, ...(holder === undefined ? [] : [holder])]
     const missing =
       Option.isNone(input.server) ? yield* Effect.promise(() => firstMissing(folders)) : undefined
-    if (input.revoke && missing !== undefined) {
-      // A stored grant is named by its folder, which the server matches without looking at the disk, so a folder that
-      // was deleted can still be revoked.
+    // A stored grant is ended by name, which the server matches without looking at the disk: a folder that was deleted can
+    // still be revoked, and so can a folder trusted as the holder of config above a project (--for), where opening a
+    // location for it would end the grant of the project it belongs to instead. A folder that is the project of its own
+    // location is ended through the location, as it always was.
+    const holderGrant =
+      input.revoke && missing === undefined
+        ? (yield* ask((signal) => client.location.trust.list({ signal }))).some((grant) =>
+            sameFolder(grant.directory, location.directory),
+          ) &&
+          !sameFolder((yield* ask((signal) => client.location.trust.get({ location }, { signal }))).directory, location.directory)
+        : false
+    if (input.revoke && (missing !== undefined || holderGrant)) {
       const ended = yield* ask((signal) => client.location.trust.revoke({ directory: location.directory }, { signal }))
       return yield* print([
         ended.length === 0
-          ? `${location.directory} is not trusted.`
+          ? `${plain(location.directory)} is not trusted.`
           : `Stopped trusting ${ended.join(", ")}.`,
       ])
     }
@@ -65,8 +74,8 @@ export default Runtime.handler(
       const status = yield* ask((signal) => client.location.trust.update({ location, trust: false }, { signal }))
       return yield* print([
         status.trusted
-          ? `${status.directory} is still trusted: this server trusts every folder except a home directory and a filesystem root.`
-          : `${status.directory} is not trusted.`,
+          ? `${plain(status.directory)} is still trusted: this server trusts every folder except a home directory and a filesystem root.`
+          : `${plain(status.directory)} is not trusted.`,
       ])
     }
 
@@ -116,7 +125,7 @@ export default Runtime.handler(
     const applied = before.withheld.filter((item) => !status.withheld.some((left) => left.path === item.path))
     return yield* print([
       saved
-        ? `${status.directory} is already trusted.`
+        ? `${plain(status.directory)} is already trusted.`
         : `Trusted ${plain(holder ?? status.directory)}${(before.changed ?? []).length > 0 ? " again" : ""}`,
       ...(applied.length === 0
         ? []
@@ -128,10 +137,21 @@ export default Runtime.handler(
             ...heldLines(status.directory, status.withheld),
             `Look it over, then ${aboveAdvice(status.withheld, location.directory)}.`,
           ]),
-      ...(saved ? [] : [`Stop trusting it with: orb trust --revoke ${quoted(holder ?? status.directory)}`]),
+      ...(saved ? [] : revokeAdvice(holder ?? status.directory)),
     ])
   }),
 )
+
+// How to end the grant just made, with the folder that was granted named exactly. A name that no quoting makes safe
+// to paste gets no command.
+const revokeAdvice = (folder: string) => {
+  const argument = quoted(folder)
+  return [
+    argument === undefined
+      ? `Stop trusting ${plain(folder)} with \`orb trust --revoke <folder>\`; its name is not printed as a command because a shell could act on it.`
+      : `Stop trusting it with: orb trust --revoke ${argument}`,
+  ]
+}
 
 // A server older than workspace trust has no trust routes, and that is worth saying plainly.
 const ask = <A>(request: (signal: AbortSignal) => Promise<A>) =>

@@ -1,4 +1,6 @@
 import type { TrustStatus, TrustWithheld } from "@orbit/client"
+import { plain } from "@orbit/flow/plain"
+import { shellArgument } from "@orbit/util/shell-argument"
 
 /**
  * What trusting the project turns on, apart from what it does not. A file or directory in a folder above the project
@@ -34,16 +36,19 @@ export function holdsBack(status: TrustStatus | undefined) {
  * directory or a filesystem root, which can never be trusted for good, the way it is trusted for one run.
  */
 export function trustCommands(items: readonly TrustWithheld[], location: string) {
-  const quoted = (folder: string) => (/\s/.test(folder) ? `"${folder}"` : folder)
   return [
     ...new Map(
       items.flatMap((item) => (item.directory === undefined ? [] : [[item.directory, item.persistent !== false] as const])),
     ),
   ]
-    .map(([folder, persistent]) =>
-      persistent
-        ? `\`orb trust ${quoted(folder)}${folder === location ? "" : ` --for ${quoted(location)}`}\``
-        : `${folder} (a home directory or filesystem root: \`--trust\` for one run)`,
-    )
+    .map(([folder, persistent]) => {
+      if (!persistent) return `${plain(folder)} (a home directory or filesystem root: \`--trust\` for one run)`
+      const holder = shellArgument(folder)
+      const through = shellArgument(location)
+      // A name that no quoting makes safe to paste is shown escaped, with no command to run.
+      if (holder === undefined || through === undefined)
+        return `${plain(folder)} (its name is not printed as a command because a shell could act on it)`
+      return `\`orb trust ${holder}${folder === location ? "" : ` --for ${through}`}\``
+    })
     .join(", ")
 }

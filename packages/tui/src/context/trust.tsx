@@ -197,6 +197,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         ),
         /** Whether the first answer has come, whatever it was. */
         settled: startup.settled,
+        /** Reads the status again now, for whoever is about to import a plugin and must not act on an older answer. */
+        refresh: startup.refresh,
       },
     }
   },

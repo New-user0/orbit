@@ -11,8 +11,9 @@ export const names = ["plugin", "plugins"] as const
 export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
   fs: FSUtil.Interface,
   directory: string,
+  folders: readonly string[] = names,
 ) {
-  const children = (yield* Effect.forEach(names, (source) =>
+  const children = (yield* Effect.forEach(folders, (source) =>
     fs.readDirectoryEntries(path.join(directory, source)).pipe(
       Effect.orElseSucceed(() => []),
       Effect.map((entries) => entries.map((entry) => ({ ...entry, target: path.join(directory, source, entry.name) }))),
@@ -36,8 +37,9 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
 
 /**
  * The files that make up the plugin at `target` as the supervisor loads it: the entry files, and the `package.json`
- * beside them, which may not exist. Unset when nothing would be loaded: a directory with no server entry, or one whose
- * entry a link leads out of it. `ConfigPluginSource.scan` activates by this and the fingerprints digest by it, so the
+ * beside them, which may not exist. Unset when nothing would be loaded: a directory with no server entry, or one with
+ * an entry file (server, tui or rpc)
+ * that a link leads out of it. `ConfigPluginSource.scan` activates by this and the fingerprints digest by it, so the
  * two never disagree about what a plugin is.
  */
 export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(function* (
@@ -51,8 +53,9 @@ export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(functi
   if (!resolved.server) return undefined
   if (directory) {
     const root = yield* fs.resolve(target)
-    const server = yield* fs.resolve(fileURLToPath(resolved.server))
-    if (!FSUtil.contains(root, server)) return undefined
+    const entries = Object.values(resolved).filter((entry) => entry !== undefined)
+    const real = yield* Effect.forEach(entries, (entry) => fs.resolve(fileURLToPath(entry)))
+    if (real.some((entry) => !FSUtil.contains(root, entry))) return undefined
   }
   return {
     directory,

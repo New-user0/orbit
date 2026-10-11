@@ -1,5 +1,6 @@
 import { ClientError, type OrbitClient, type TrustStatus } from "@orbit/client/promise"
 import { plain } from "@orbit/flow/plain"
+import { shellArgument } from "@orbit/util/shell-argument"
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
@@ -165,7 +166,7 @@ export function refusal(
         : "the file and those files"
   return [
     ...lead(
-      `Orbit stopped before doing any work: ${status.directory} is not trusted`,
+      `Orbit stopped before doing any work: ${plain(status.directory)} is not trusted`,
       status.directory,
       imports,
       defines,
@@ -208,7 +209,7 @@ export function changedRefusal(status: TrustStatus, location: string = status.di
   const own = items.filter((item) => item.directory === undefined)
   const above = items.filter((item) => item.directory !== undefined)
   return [
-    `Orbit stopped before doing any work: the project config in ${status.directory} changed since the folder was trusted, so what changed is held back:`,
+    `Orbit stopped before doing any work: the project config in ${plain(status.directory)} changed since the folder was trusted, so what changed is held back:`,
     "",
     ...heldLines(status.directory, items),
     "",
@@ -253,7 +254,7 @@ export function unanswered(directory: string, imports?: string, defines?: Define
 export function holderRefusal(status: TrustStatus, imports?: string, defines?: Defined) {
   return [
     ...lead(
-      `Orbit stopped before doing any work: ${status.directory} is not trusted`,
+      `Orbit stopped before doing any work: ${plain(status.directory)} is not trusted`,
       status.directory,
       imports,
       defines,
@@ -261,7 +262,11 @@ export function holderRefusal(status: TrustStatus, imports?: string, defines?: D
     "",
     `The file is in another project than the one the command runs in, and each project is trusted on its own. ${
       status.persistent
-        ? `Look the file over, then trust its folder for good with \`orb trust ${quoted(status.directory)}\`, or for this run only with --trust.`
+        ? `Look the file over, then trust its folder for good ${
+            quoted(status.directory) === undefined
+              ? "by typing `orb trust` and the folder (its name is not printed as a command because a shell could act on it)"
+              : `with \`orb trust ${quoted(status.directory)}\``
+          }, or for this run only with --trust.`
         : "Its folder is a home directory or a filesystem root, which Orbit never trusts for good, so `orb trust` refuses it. Pass --trust to trust it for this run only, or keep the file in a project folder."
     }`,
   ].join(EOL)
@@ -282,7 +287,10 @@ export function heldLines(directory: string, items: ReadonlyArray<Withheld>) {
  */
 export function trustCommand(folder: string, location: string) {
   const same = path.resolve(folder) === path.resolve(location)
-  return `orb trust ${quoted(folder)}${same ? "" : ` --for ${quoted(location)}`}`
+  const holder = quoted(folder)
+  const through = quoted(location)
+  if (holder === undefined || through === undefined) return undefined
+  return `orb trust ${holder}${same ? "" : ` --for ${through}`}`
 }
 
 /**
@@ -296,10 +304,20 @@ export function aboveAdvice(items: ReadonlyArray<Withheld>, location: string) {
       items.flatMap((item) => (item.directory === undefined ? [] : [[item.directory, item.persistent !== false] as const])),
     ),
   ]
-  const good = holders.flatMap(([folder, persistent]) => (persistent ? [`\`${trustCommand(folder, location)}\``] : []))
+  const commands = holders.flatMap(([folder, persistent]) =>
+    persistent ? [{ folder, command: trustCommand(folder, location) }] : [],
+  )
+  const good = commands.flatMap((item) => (item.command === undefined ? [] : [`\`${item.command}\``]))
+  // A name that no quoting makes safe to paste is shown escaped, with no command to run.
+  const odd = commands.flatMap((item) => (item.command === undefined ? [plain(item.folder)] : []))
   const never = holders.flatMap(([folder, persistent]) => (persistent ? [] : [plain(folder)]))
   return [
     ...(good.length === 0 ? [] : [`trust ${good.length === 1 ? "it" : "them"} for good with ${good.join(", ")}`]),
+    ...(odd.length === 0
+      ? []
+      : [
+          `${odd.join(", ")} ${odd.length === 1 ? "has a name" : "have names"} that a shell could act on, so no command is printed: type the folder yourself, as \`orb trust <folder> --for <project>\``,
+        ]),
     ...(never.length === 0
       ? []
       : [
@@ -308,10 +326,8 @@ export function aboveAdvice(items: ReadonlyArray<Withheld>, location: string) {
   ].join(", and ")
 }
 
-/** A folder as a shell takes it as one argument. */
-export function quoted(folder: string) {
-  return /\s/.test(folder) ? `"${folder}"` : folder
-}
+/** A folder as a shell takes it as one argument, or undefined when it cannot be quoted so that no shell expands it. */
+export const quoted = (folder: string) => shellArgument(folder)
 
 /** Whether the server has no such route, as one older than the trust routes answers: a command can say so or go without. */
 export const unsupported = (cause: unknown) =>
@@ -340,15 +356,15 @@ function notice(status: TrustStatus, location: string) {
       ? []
       : status.trusted
         ? [
-            `${status.directory} is trusted, but its project config changed since then, so what changed is held back (${summary(status.directory, own)}). Trust the changes with \`orb trust\`.`,
+            `${plain(status.directory)} is trusted, but its project config changed since then, so what changed is held back (${summary(status.directory, own)}). Trust the changes with \`orb trust\`.`,
           ]
         : [
-            `${status.directory} is not trusted, so its project config is held back (${summary(status.directory, own)}). ${status.persistent ? "Trust it with `orb trust`." : "Orbit never trusts that folder for good."}`,
+            `${plain(status.directory)} is not trusted, so its project config is held back (${summary(status.directory, own)}). ${status.persistent ? "Trust it with `orb trust`." : "Orbit never trusts that folder for good."}`,
           ]),
     ...(above.length === 0
       ? []
       : [
-          `Config in a folder above ${status.directory} stays off until that folder is trusted too (${summary(status.directory, above)}): ${aboveAdvice(above, location)}.`,
+          `Config in a folder above ${plain(status.directory)} stays off until that folder is trusted too (${summary(status.directory, above)}): ${aboveAdvice(above, location)}.`,
         ]),
   ].join(" ")
 }

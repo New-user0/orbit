@@ -99,8 +99,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   config above the project asks `ConfigTrust.reach`: a holder that is the home directory or a filesystem root
   (`WorkspaceTrust`'s own `persistent`) reaches only the config container, and a document directly in it nothing.
   `ProjectTrust.supplies` asks the same function. Proof: the `ConfigTrust.reach` table in
-  `test/config/trust-fingerprint.test.ts`, and end to end in `config-trust.test.ts` ("does not let a file reference …
-  reach the drive"), which needs a root the test may write to and returns without testing elsewhere (Linux as root).
+  `test/config/trust-fingerprint.test.ts`; the wiring from the store's answer through `standing()` and `supplies` on every
+  machine, with a store that calls one folder a root (`config-trust.test.ts`, "root-like": two rows, each with a control);
+  and with a real root in "does not let a file reference … reach the drive", which needs a root the test may write to and
+  returns without testing elsewhere (Linux as root). A drive made with `subst` cannot stand in for the real root on
+  Windows: the runtime resolves it to the folder behind it.
 - Executable config that changed after the folder was trusted (`Fingerprint`, `packages/core/src/config/fingerprint.ts`,
   `WorkspaceTrust.compare`): the folder's grant records one SHA-256 of canonical JSON (sorted keys) per kind and source,
   and a kind whose digest differs, or that cannot be read, is cut from that source only (`ConfigTrust.partial`: a document
@@ -113,11 +116,24 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   - `plugins` of a directory: the files `ConfigPluginSource.scan` resolves (`PluginSourceDirectory.entrypoints`) and
     their `package.json`, by content (`fingerprint.test.ts`: edits, a touch, an edit with the old time). `scan` compares
     again when it runs, because its change feed fires before the reload (`config-trust.test.ts`: "offers no plugin planted
-    after the grant"; `supervisor-reload.test.ts`).
+    after the grant"). `ProjectTrust.status` reads the plugins of a config directory from the disk when it answers, so a
+    client that imports plugins on a file event (the terminal UI asks again before it does) sees one planted after the
+    grant before the reload (`project-trust.test.ts`: "lists a plugin that shows up in a trusted folder at once").
   - `hooks` and `mcp` of a directory: the front matter `hooks` of its skills and agents, and `mcp_servers` of its agents
     (`fingerprint.test.ts`). Nothing runs them yet; `ProjectTrust.allows(file, kind)` is what hooks-21 and
     agents-extensibility-9 ask (`project-trust.test.ts`).
   - A digest that cannot be read: `fingerprint.test.ts`, `workspace-trust-records.test.ts`.
+  - What the digests read is bounded (class 1, 4 and 6), the same before a folder is trusted and after, so the first
+    grant records what the trusted load computes: a config directory's own real path for its plugins, skills and agents,
+    and the project's folders for the paths a document's `skills` names. A path that leads out (an absolute one, `~/`,
+    `..`, a link, a junction) is not listed, opened or hashed: its name and the fact that it leads out are. A network path
+    (`\\host\share`, `//host/share`, `\\?\UNC\…`) is not touched at all, not even to look at it. Only regular files are read,
+    so a link to a device is named and not waited on. Glob matches are not followed through links. Proof:
+    `test/config/fingerprint-bounds.test.ts`, one row per spelling (agents/ and skills/ as a link out, a link out inside
+    agents/, a file link in agents/ and plugins/, plugins/ and a plugin as a link out, absolute, `..`, the folder around the
+    project, three network spellings, a device on Linux), each with the outside content changed between two digests and a
+    recorder of every path the file system was given, and trusted controls. `PluginSourceDirectory.entrypoints` loads no
+    plugin whose server, tui or rpc entry leads out of its folder.
   - Records are per source, kept beside the grant and dropped with it (`workspace-trust-records.test.ts`); two locations
     under one root do not invalidate each other (`config-trust.test.ts`).
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
@@ -1057,6 +1073,14 @@ five review rounds for one defect.
 **Ask early:** when the escaping is first written, for the refusal, start a sink inventory for every command that prints
 repository text.
 
+**The advice that names a folder** is a sink too, and a worse one, because a person pastes it: the folder names in
+`orb trust <folder> --for <location>` and `orb trust --revoke <folder>` come from folders inside the clone. Every name goes
+through `plain`, and a command is printed only when `shellArgument` (`packages/util/src/shell-argument.ts`) can quote the
+name so that no shell expands it (POSIX single quotes; on Windows only names that neither PowerShell nor cmd would expand);
+otherwise the advice says there is no command and shows the escaped name. Proof: `shell-argument.test.ts` (reads each name
+back through `sh`), `packages/cli/test/trust.test.ts` ("quoted so that no shell runs the name"), and a frame row in
+`dialog-trust.test.tsx`.
+
 **How to comply:**
 
 - `plain(text)`, `progress(line)` and `json(value)` live in `@orbit/util/plain` (`packages/util/src/plain.ts`, which
@@ -1648,9 +1672,13 @@ fixes it or asks.
   hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested
   either, only the entry files and `package.json`. And a change that lands between the config's last load and the grant
   is accepted with the grant: binding a grant to the contents a client displayed is hooks-22.
-- **A filesystem root as holder, end to end.** `ConfigTrust.reach` is tabled everywhere, but the test that plants a config
-  file in a real root writes outside the sandbox of the test, so it returns without testing unless the root is writable
-  (Linux as root, `tools/linux-test`). Run it there before a milestone closes.
+- **A filesystem root as holder, end to end.** `ConfigTrust.reach` is tabled everywhere and its wiring is pinned on every
+  machine with a store that calls one folder a root ("root-like" in `config-trust.test.ts`), but the test that plants a
+  config file in a real root writes outside the sandbox of the test, so it returns without testing unless the root is
+  writable (Linux as root, `tools/linux-test`). Run it there before a milestone closes.
+- **A link to a folder nested inside agents/ or skills/ is not followed by the fingerprints.** The loaders follow it, the
+  digest names nothing for it (a glob does not descend a link), so a hook planted behind such a link is not asked about.
+  Planting a file link, or making agents/ or skills/ itself a link out, is named and so is a change.
 - **VS Code gives the advice for the folder above a project without a command to run.** It names the folder and says
   that each folder is trusted on its own (`packages/vscode/test/trust-text.test.ts`); the terminal UI, Mini, `orb run` and
   `orb trust` print the `orb trust <folder> --for <location>` command.

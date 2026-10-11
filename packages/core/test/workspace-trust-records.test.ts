@@ -132,6 +132,24 @@ describe("WorkspaceTrust records", () => {
     }),
   )
 
+  it.live("compares nothing on a server that trusts every folder, even for a folder that also has a saved grant", () =>
+    Effect.gen(function* () {
+      const folders = yield* fixture
+      const seen = [observation(folders.first, { hooks: "h" })]
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        // A grant saved with no record of the source: on a server that asks, the source would read as changed.
+        yield* trust.grant(folders.repo, { persist: true, via: "test", observations: [] })
+        expect(yield* trust.compare(folders.repo, seen)).toEqual([{ path: folders.first, kinds: ["hooks"] }])
+      }).pipe(Effect.provide(build(folders)))
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        expect((yield* trust.status(folders.repo)).source).toBe("saved")
+        expect(yield* trust.compare(folders.repo, seen)).toEqual([])
+      }).pipe(Effect.provide(build({ ...folders, implicit: true })))
+    }),
+  )
+
   it.live("leaves the records of other sources alone and drops those of files that no longer exist", () =>
     Effect.gen(function* () {
       const folders = yield* fixture

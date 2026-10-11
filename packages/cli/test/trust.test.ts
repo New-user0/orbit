@@ -4,7 +4,7 @@ import os, { EOL } from "node:os"
 import path from "node:path"
 import type { TrustStatus } from "@orbit/client/promise"
 import { SessionID } from "@orbit/schema/session-id"
-import { holderRefusal, quoted, refusal, unanswered } from "../src/util/trust"
+import { holderRefusal, quoted, refusal, trustCommand, unanswered } from "../src/util/trust"
 import { isolatedEnv } from "./fixture/environment"
 
 // `orb run` and its siblings against a real private server and a scripted model, in repositories that hold something
@@ -1734,7 +1734,7 @@ test("orb run stops when the config of a trusted folder changed, names what chan
   succeeded(await orb(repository, ["run", "--standalone", "--model", model, "say ok"]))
   expect(runs).toBeGreaterThan(before)
 
-  // A pull adds a second hook to the settings of the folder, and a plugin to its config directory.
+  // A pull adds a second hook to the settings of the folder.
   await Bun.write(
     path.join(repository, "orbit.json"),
     JSON.stringify({
@@ -1817,6 +1817,75 @@ test("the command the refusal prints for a folder above the project works as pri
   expect(lifted.stdout).toContain(`Trusted ${middle}`)
   succeeded(await orb(inner, ["run", "--standalone", "--model", model, "say ok"]))
 }, 300_000)
+
+test("trusting a folder above the project lists nothing of it as still held back, and the revoke it prints ends that folder only", async () => {
+  const { outer, middle, inner } = await nested("nested-revoke")
+  succeeded(await orb(root, ["trust", "--standalone", outer]))
+  const granted = await orb(root, ["trust", "--standalone", middle, "--for", inner])
+  succeeded(granted)
+  expect(granted.stdout).toContain(`Trusted ${middle}`)
+  // Right after its own grant, the folder is not listed as holding anything back, and nobody is told to trust it again.
+  expect(granted.stdout).not.toContain("Still held back")
+  expect(granted.stdout).not.toContain(`orb trust ${quoted(middle)} --for`)
+
+  // The revoke is typed as printed. It names the folder that was granted, which exists and is not the project of its
+  // own location: revoking it through a location would end the grant of the outer repository and leave this one.
+  const advice = granted.stdout.match(/Stop trusting it with: orb trust --revoke (.+)/)?.[1]
+  expect(advice).toBe(quoted(middle))
+  const revoked = await orb(root, ["trust", "--standalone", "--revoke", middle])
+  succeeded(revoked)
+  expect(revoked.stdout).toContain("Stopped trusting")
+  const listed = (await orb(root, ["trust", "--standalone", "--list"])).stdout
+    .split(/\r?\n/)
+    .map((line) => line.split("  ")[0])
+  expect(listed).toContain(outer)
+  expect(listed).not.toContain(middle)
+}, 300_000)
+
+// Names that a repository can give a folder. On Windows a name cannot hold a quote or a control character.
+const hostile = ["$(touch PWNED)", "`touch PWNED`", "it's", ...(process.platform === "win32" ? [] : ['a"b', "a\u001bb", "a\nb"])]
+
+test("the commands the advice prints for a folder name are quoted so that no shell runs the name, or are not printed", async () => {
+  const location = path.join(root, "work", "advice-location")
+  const marker = path.join(root, "PWNED")
+  const sh = Bun.which("sh")
+  for (const name of hostile) {
+    const folder = path.join(root, "work", "advice-holders", name)
+    const text = refusal(
+      {
+        directory: location,
+        trusted: false,
+        persistent: true,
+        withheld: [{ path: path.join(folder, "orbit.json"), kinds: ["hooks"], directory: folder }],
+      } satisfies TrustStatus,
+      undefined,
+      undefined,
+      undefined,
+      location,
+    )
+    // Whatever is printed carries no raw control character, line break or escape sequence of the name.
+    expect(text).not.toContain("\u001b")
+    expect(text).not.toContain(`${path.sep}a\nb`)
+    const command = trustCommand(folder, location)
+    if (command === undefined) {
+      // No command is printed, and the advice says so.
+      expect(text).toContain("no command is printed")
+      continue
+    }
+    expect(text).toContain(command)
+    if (process.platform === "win32") {
+      // Neither PowerShell nor cmd gets a name with anything either would expand.
+      expect(command).not.toMatch(/[$`]/)
+      continue
+    }
+    // Run the printed text as a shell would, with the command swapped for a program that only prints its arguments.
+    if (sh === null) continue
+    const ran = Bun.spawnSync([sh, "-c", command.replace(/^orb trust/, "printf '%s\\n'")], { cwd: root })
+    expect(ran.exitCode).toBe(0)
+    expect(await Bun.file(marker).exists()).toBe(false)
+    expect(ran.stdout.toString().split("\n")[0]).toBe(folder)
+  }
+})
 
 test("orb trust --for trusts only a folder that the location holds config back for", async () => {
   const { middle, inner } = await nested("nested-other")

@@ -13,7 +13,7 @@ export const grantWithRecords = (folder: string, input: { readonly persist: bool
     const trust = yield* WorkspaceTrust.Service
     const config = yield* Config.Service
     const wanted = WorkspaceTrust.key(yield* Effect.promise(() => realpath(folder)))
-    const observations = yield* Effect.filter(yield* config.fingerprints?.() ?? Effect.succeed([]), (item) =>
+    const observations = yield* Effect.filter(yield* config.fingerprints(), (item) =>
       Effect.promise(() => realpath(item.root)).pipe(Effect.map((real) => WorkspaceTrust.key(real) === wanted)),
     )
     return yield* trust.grant(folder, { ...input, observations })

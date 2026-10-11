@@ -1315,6 +1315,12 @@ deleted.
 
 **What to do:** Copy the printed command as it is. Nothing otherwise.
 
+The printed command quotes the folder names: a name with a space, a quote, `$(` or a backtick is wrapped so that no
+shell runs it, and a name that no quoting makes safe (a control character, a line break, or on Windows anything PowerShell
+or cmd would expand) gets no command, only its escaped name and the way to type it yourself. `orb trust --revoke <folder>`
+now ends a folder that is a stored grant by its own name, wherever it is a location: after `orb trust M --for I`, the
+revoke it prints removes M and leaves the grant of the repository around it.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
