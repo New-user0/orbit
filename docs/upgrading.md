@@ -2200,6 +2200,29 @@ entry (a trailing `;` in the Windows `Path` is enough) no command counts as read
 
 **What to do:** Nothing. To keep shell calls serial, set `tool_execution.max_concurrency` to 1.
 
+### A failing shell command cancels the shell calls beside it
+
+Before, a foreground `Bash` call that exited with a non-zero code left the other calls of its step alone. Now, under
+`bash`, `sh` and the other POSIX shells (Git Bash included), it cancels the calls of that step that are still running
+and the ones not started yet, because commands in a step often depend on each other. The exit code is read by the
+program that ends the command line, as written: `grep`, `rg`, `find`, `diff`, `test` and `[` only fail at exit code 2 or
+more, since 1 means no match, differences, unreadable folders or a false condition. `grep x f && echo found` is judged
+by `echo`, and a line the analysis cannot model (a `$(...)`, an unknown variable, a syntax error) fails on any non-zero
+code. Under PowerShell an exit code never cancels anything, and under `cmd.exe` any non-zero code does. The text the
+model sees is unchanged. Timeouts, signals and commands that cannot start already cancelled their siblings. Background
+commands are not affected.
+
+The shell tool also reports `readOnly` and `destructive` for each call (advisory; nothing
+is allowed or asked differently because of them). `rm -rf x`, `git reset --hard`, `git push --force`, `DROP TABLE` and
+similar are destructive; every command under `cmd.exe` or an unrecognised shell is. `destructive` is read from the command
+text alone; `readOnly` also depends on where each program would be found, so a program on a relative `PATH` entry or in
+the working folder is not read-only.
+
+**Affects:** people whose model issues several shell commands in one step, and plugins or SDK code that read the
+`error` field of a shell result's metadata.
+
+**What to do:** Nothing. Put commands that must not cancel each other in separate steps, or end them with `|| true`.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.

@@ -23,6 +23,8 @@ import { Shell } from "../../shell.js"
 import { ToolNames } from "../names.js"
 import { STYLE_HEADING } from "../../plugin/output-style.js"
 import { ShellAnalysis } from "../../shell/analysis.js"
+import { ShellDestructive } from "../../shell/destructive.js"
+import { ShellExit } from "../../shell/exit.js"
 import { ShellParse } from "../../shell/parse.js"
 import { PowerShellParse } from "../../shell/powershell-parse.js"
 import { ShellSelect } from "../../shell/select.js"
@@ -118,15 +120,29 @@ const resultMessages = (output: Output) => {
   return [...(output.output ? [output.output] : []), ...(notice ? [notice] : [])]
 }
 
-const toolResult = (output: Output) => {
+/**
+ * Whether a finished foreground run is a failure by its exit code. A run that timed out or was killed by a signal is a
+ * failure elsewhere. Under PowerShell an exit code never is one: a PowerShell call cancels no sibling, and `-Command`
+ * reports every native code other than 0 as 1, so the code carries no meaning to judge. Every other shell is judged by
+ * `ShellExit` on the analysis of the command that ran.
+ */
+const exitFailed = (output: Output, analysis: ShellAnalysis.Analysis | undefined, powershell: boolean) =>
+  !powershell &&
+  output.status === "completed" &&
+  output.exit !== undefined &&
+  output.timeout !== true &&
+  output.signal === undefined &&
+  ShellExit.failed(analysis, output.exit)
+
+const toolResult = (output: Output, failed = false) => {
   return {
     output,
     content: resultMessages(output).map((text) => ({ type: "text" as const, text })),
     metadata: {
       status: output.status,
       ...ShellResult.metadata(output),
-      // A timeout or a kill by signal counts as a failure that cancels sibling calls. Exit codes do not yet.
-      ...(output.timeout === true || output.signal !== undefined ? { error: true } : {}),
+      // A timeout, a kill by signal and an exit code that reads as a failure (see `exitFailed`) cancel sibling calls.
+      ...(output.timeout === true || output.signal !== undefined || failed ? { error: true } : {}),
       ...(output.shellID !== undefined ? { shellID: output.shellID } : {}),
     },
   }
@@ -148,6 +164,14 @@ export const concurrent = Effect.fn("ShellTool.concurrent")(function* (command: 
   if (ShellAnalysis.dialect(ctx.shell, ctx) !== "bash") return false
   return (yield* ShellAnalysis.inspect(command, ctx)).readOnly
 })
+
+/**
+ * Whether the command text is in the destructive catalogue of the shell's dialect. Pure text, no parse. A shell with no
+ * catalogue (cmd.exe, any unrecognised shell) answers true.
+ */
+export function destructive(command: string, ctx: Pick<ShellAnalysis.Context, "shell" | "platform" | "path">) {
+  return ShellDestructive.matches(command, ShellAnalysis.dialect(ctx.shell, ctx))
+}
 
 export const Plugin = {
   id: "orbit.tool.shell",
@@ -211,9 +235,9 @@ export const Plugin = {
       // service never kills it on a timer; only a command made of sleeps alone is left to be killed. An input that cannot
       // be analysed counts as not sleep-led, so it is moved and never killed.
       const deadline = invocation.timeout
-      const analysis =
-        foreground && deadline > 0
-          ? yield* ShellAnalysis.inspect(invocation.command, {
+      // The analysis of the command that runs, also used to read its exit code, so every foreground call has one.
+      const analysis = foreground
+        ? yield* ShellAnalysis.inspect(invocation.command, {
               shell: invocation.shell,
               platform: process.platform,
               path: process.platform === "win32" ? path.win32 : path.posix,
@@ -221,7 +245,7 @@ export const Plugin = {
               cwd: target.absolute,
               env: invocation.env,
             }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
-          : undefined
+        : undefined
       // Approval can outlive the directory, so validate immediately before spawning.
       const workdir = yield* Environment.typeFollowing(environment.files, target.absolute).pipe(
         Effect.catchTag("Environment.NotFound", () =>
@@ -230,9 +254,9 @@ export const Plugin = {
       )
       if (workdir !== "directory")
         return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.absolute}`))
-      if (!analysis || analysis.sleepLed) return { budget: deadline, autoBackground: false }
+      if (!analysis || deadline <= 0 || analysis.sleepLed) return { budget: deadline, autoBackground: false, analysis }
       invocation.timeout = 0
-      return { budget: deadline, autoBackground: true }
+      return { budget: deadline, autoBackground: true, analysis }
     })
 
     const notifyWhenDone = Effect.fn("ShellTool.notifyWhenDone")(
@@ -299,6 +323,18 @@ export const Plugin = {
       Effect.forkIn(scope, { startImmediately: true }),
     )
 
+    const commandReadOnly = (input: { command: string; workdir?: string }) =>
+      Effect.gen(function* () {
+        return yield* concurrent(input.command, {
+          shell: yield* compatibleShell,
+          platform: process.platform,
+          path: process.platform === "win32" ? path.win32 : path.posix,
+          home: os.homedir(),
+          cwd: input.workdir ? FileAccess.resolvePath(location.directory, input.workdir) : location.directory,
+          env: process.env,
+        }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
+      })
+
     yield* ctx.tool
       .transform((editor) =>
         editor.add({
@@ -308,17 +344,20 @@ export const Plugin = {
             cancelSiblingsOnFailure: true,
             // Decided on the input the model sent, before any hook, from the command text alone: not the background
             // flag, the timeout or the paths it reads. The scheduler runs a call that answers false by itself.
-            concurrencySafe: (input) =>
+            concurrencySafe: (input) => commandReadOnly(input),
+            // The same verdict as `concurrencySafe`, and like it a verdict on the command text alone: it ignores the
+            // paths the command reads, the background flag and permission rules. Nothing relaxes a permission on it, and
+            // a consumer that wants to must first add the read-path conditions that shell-safety owns.
+            readOnly: (input) => commandReadOnly(input),
+            destructive: (input) =>
               Effect.gen(function* () {
-                return yield* concurrent(input.command, {
+                return destructive(input.command, {
                   shell: yield* compatibleShell,
                   platform: process.platform,
                   path: process.platform === "win32" ? path.win32 : path.posix,
-                  home: os.homedir(),
-                  cwd: input.workdir ? FileAccess.resolvePath(location.directory, input.workdir) : location.directory,
-                  env: process.env,
-                }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
+                })
               }),
+            // interruptBehavior stays "block": a new user message does not cancel a running shell call.
           },
           description: description(undefined, limits()),
           input: Input,
@@ -329,12 +368,15 @@ export const Plugin = {
               const timeout = budget(input, limits(Config.latest(yield* config.entries(), "shell_tool")))
               let finalTimeout = timeout
               let autoBackground = false
+              let analysis: ShellAnalysis.Analysis | undefined
+              const selected = yield* compatibleShell
+              const powershell = ["powershell", "pwsh"].includes(ShellSelect.name(selected))
               const info = yield* shell.create(
                 {
                   command: input.command,
                   cwd: input.workdir,
                   timeout,
-                  shell: yield* compatibleShell,
+                  shell: selected,
                   metadata: { sessionID: context.sessionID },
                 },
                 (invocation) =>
@@ -346,6 +388,7 @@ export const Plugin = {
                     const prepared = yield* prepare(invocation, context, input.run_in_background !== true)
                     finalTimeout = prepared.budget
                     autoBackground = prepared.autoBackground
+                    analysis = prepared.analysis
                   }),
               )
               yield* context.progress({ shellID: info.id })
@@ -385,7 +428,7 @@ export const Plugin = {
               if (input.run_in_background === true) {
                 yield* jobs.background(job.id)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
-                return backgroundResult(info.id, info.file)
+                return toolResult(backgroundResult(info.id, info.file))
               }
 
               // The deadline of a command that is not killed on a timer. Measured from just after the spawn. It moves the
@@ -423,7 +466,7 @@ export const Plugin = {
               if (result?.type === "backgrounded" && !(yield* Deferred.isDone(settled))) {
                 if (!timerMoved) yield* shell.timeout(info.id, 0)
                 yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
-                return backgroundResult(info.id, info.file, timerMoved ? finalTimeout : undefined)
+                return toolResult(backgroundResult(info.id, info.file, timerMoved ? finalTimeout : undefined))
               }
               if (notificationID) yield* jobs.completeBackground(notificationID)
               if (result?.info.status === "error")
@@ -433,9 +476,9 @@ export const Plugin = {
                 })
               if (result?.info.status === "cancelled") return yield* Effect.fail(new Error("Command cancelled"))
 
-              return yield* Deferred.await(settled)
+              const output = yield* Deferred.await(settled)
+              return toolResult(output, exitFailed(output, analysis, powershell))
             }).pipe(
-              Effect.map(toolResult),
               Effect.mapError(
                 (error) =>
                   new ToolFailure({
