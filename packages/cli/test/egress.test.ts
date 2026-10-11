@@ -125,7 +125,7 @@ test(
       })()
       await seen
       await Bun.sleep(1_000)
-      child.stdin.end()
+      child.stdin?.end()
       const [code, stdout, stderr] = await Promise.all([
         child.exited,
         stdoutText,
