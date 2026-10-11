@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import path from "node:path"
 import { ShellPaths } from "../../src/shell/paths"
+import { CMDLETS, type Entry } from "../../src/shell/paths-table"
 import { bash, linux, powershell, pwsh, pwshLinux, windows } from "./helper"
 import { pathCases } from "./path-cases"
 import win51 from "./cmdlets-win51.json"
@@ -289,6 +290,56 @@ describe("fileEdit in bash", () => {
     expect(bash(text, windows()).paths.fileEdit).toBe(false)
   })
 
+  // Class 4: a reader's operands are reads whatever its redirects are, and a program in the working folder is no `rm`.
+  const reading = (text: string, ctx = linux()) =>
+    bash(text, ctx)
+      .paths.files.filter((item) => item.role === "read")
+      .map(cell)
+  test.each([
+    ["cat ~/.ssh/id_rsa > notes.txt", ["read /home/u/.ssh/id_rsa"], ["write< /work/notes.txt"]],
+    ["cat < /etc/shadow > notes", ["read /etc/shadow"], ["write< /work/notes"]],
+    ["grep -r secret /etc > out", ["read /etc"], ["write< /work/out"]],
+    ["cat /etc/shadow >> log 2>&1", ["read /etc/shadow"], ["write< /work/log"]],
+  ])("%s reports the read beside the redirect", (text, read, written) => {
+    expect(reading(text)).toEqual(read)
+    expect(files(bash(text))).toEqual(written)
+  })
+
+  test("a reader that is not read-only asks, so it is not an edit", () => {
+    for (const text of ["find /etc -delete", "sort -o out /etc/shadow"]) expect(bash(text).paths.fileEdit).toBe(false)
+  })
+
+  test("mkdir --context takes an optional value, so the next word is a path", () => {
+    const result = bash("mkdir --context /tmp/evil")
+    expect(files(result)).toEqual(["create /tmp/evil"])
+    expect(reasons(result)).toEqual([])
+    expect(files(bash("mkdir --context=x d"))).toEqual(["create /work/d"])
+  })
+
+  test.each([
+    ["rm x", linux({ local: (head: string) => head === "rm" })],
+    ["rm x", linux({ env: { PATH: ":/usr/bin" } })],
+    ["rm x", linux({ env: { PATH: "bin:/usr/bin" } })],
+    ["cp a b", linux({ env: { PATH: "/usr/bin:" } })],
+  ])("%s is no edit when the program may be the project's own", (text, ctx) => {
+    expect(bash(text, ctx).paths.fileEdit).toBe(false)
+  })
+
+  test("the same commands are edits with a system PATH", () => {
+    expect(bash("rm x", linux({ local: (head: string) => head === "other" })).paths.fileEdit).toBe(true)
+    expect(bash("rm x", linux({ env: { PATH: "/usr/bin" } })).paths.fileEdit).toBe(true)
+  })
+
+  test.each([
+    ["rm '~/x'", ["remove /work/~/x"]],
+    ["rm ~/x", ["remove /home/u/x"]],
+    ["touch --reference=~/x f", ["source /work/~/x", "create /work/f"]],
+    ["dd if=~/x of=~/y", ["source /home/u/x", "write /home/u/y"]],
+    ["echo a > ~/x", ["write< /home/u/x"]],
+  ])("%s", (text, expected) => {
+    expect(files(bash(text))).toEqual(expected)
+  })
+
   test("an opaque input has no facts", () => {
     const result = bash("rm {a,b}")
     expect(result.paths).toEqual(ShellPaths.empty())
@@ -378,7 +429,7 @@ describe("PowerShell redirects", () => {
     ['Get-Date > "a b"', ["write< C:\\work\\a b"]],
     ["Get-Date > $null", []],
     ["Get-Date 2>&1", []],
-    ["Get-Date > a`b", ["write< C:\\work\\a\b [escape]"]],
+    ["Get-Date > a`b", ["write< a� [escape] (dynamic)"]],
     ["Get-Date > $p", ["write< $p (dynamic)"]],
     ["if ($true) { Get-Date > inner }", ["write< C:\\work\\inner"]],
     ["if ($true) { Remove-Item inner }", ["remove C:\\work\\inner"]],
@@ -421,6 +472,42 @@ describe("PowerShell forms", () => {
       const item = powershell("Get-Content *.txt", ctx).paths.files[0]
       expect([item.role, item.form, item.prefix]).toEqual(["read", "glob", "."])
     }
+  })
+})
+
+// PowerShell opens a path as Windows does, so a Git Bash, WSL or Cygwin drive spelling is a folder on the current drive.
+describe("PowerShell drive spellings", () => {
+  const win51 = windows({ shell: "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })
+  test.each([
+    ["Remove-Item /c/work/x", "remove C:\\c\\work\\x", "remove /c/work/x"],
+    ["Remove-Item /x", "remove C:\\x", "remove /x"],
+    ["Remove-Item /mnt/c/x", "remove C:\\mnt\\c\\x", "remove /mnt/c/x"],
+    ["Remove-Item /cygdrive/d/x", "remove C:\\cygdrive\\d\\x", "remove /cygdrive/d/x"],
+  ])("%s", (text, onWindows, onLinux) => {
+    expect(files(powershell(text, pwsh()))).toEqual([onWindows])
+    expect(files(powershell(text, win51))).toEqual([onWindows])
+    expect(files(powershell(text, pwshLinux()))).toEqual([onLinux])
+  })
+
+  test("the same spellings in Git Bash are the drive's folders", () => {
+    expect(files(bash("rm /c/work/x", windows()))).toEqual(["remove C:\\work\\x"])
+  })
+
+  test("an alias that only Windows PowerShell 5.1 defines binds there", () => {
+    expect(files(powershell("sc f x", win51))).toEqual(["write C:\\work\\f"])
+  })
+})
+
+// A named -LiteralPath fills the slot of the first bare argument, so that argument is the next parameter.
+describe("PowerShell positional binding beside a named path", () => {
+  test.each([
+    ["Copy-Item -LiteralPath a b", ["source C:\\work\\a", "write C:\\work\\b"]],
+    ["Copy-Item -LP a b", ["source C:\\work\\a", "write C:\\work\\b"]],
+    ["Rename-Item -LiteralPath C:\\dir\\a b", ["remove C:\\dir\\a", "write C:\\dir\\b"]],
+    ["Set-Content -LiteralPath f '/etc/x'", ["write C:\\work\\f"]],
+    ["Out-File -LiteralPath o x", ["write C:\\work\\o"]],
+  ])("%s", (text, expected) => {
+    expect(files(powershell(text, pwsh()))).toEqual(expected)
   })
 })
 
@@ -494,21 +581,15 @@ describe("the cmdlet table against recorded hosts", () => {
   const common = new Set(
     "Verbose Debug ErrorAction WarningAction InformationAction ErrorVariable WarningVariable InformationVariable OutVariable OutBuffer PipelineVariable ProgressAction WhatIf Confirm UseTransaction".split(" "),
   )
-  const source = fs.readFileSync(path.join(import.meta.dir, "../../src/shell/paths-table.ts"), "utf8")
-  // The table is data in a file of its own, so it can be read back here without importing its helpers.
-  const table = Object.fromEntries(
-    [...source.matchAll(/^ {2}"([a-z-]+)": \{\n([\s\S]*?)\n {2}\},$/gm)].map((match) => [match[1], match[2]]),
-  )
+  const table = CMDLETS
   const spellings = (text: string) => text.split(" ").filter(Boolean).map((item) => item.split("|").map((name) => name.toLowerCase()))
-  function describeCmdlet(body: string) {
-    const get = (key: string) => new RegExp(`${key}: (\\[.*?\\]|".*?")`).exec(body)?.[1]
-    const list = (key: string) => (get(key) ? (JSON.parse(get(key)!) as string[] | string) : [])
-    const paths = (list("paths") as string[]).map((item) => item.slice(0, item.lastIndexOf(" ")).toLowerCase().split("|"))
-    const leaf = (list("leaf") as string[]).map((item) => item.toLowerCase().split("|"))
-    const sibling = (list("sibling") as string[]).map((item) => item.toLowerCase().split("|"))
-    const switches = spellings(list("switches") as string)
-    const values = spellings(list("values") as string)
-    return { all: [...paths, ...leaf, ...sibling, ...switches, ...values], switches, positional: (list("positional") as string[]).map((item) => item.toLowerCase()) }
+  function describeCmdlet(entry: Entry) {
+    const paths = entry.paths.map((item) => item.slice(0, item.lastIndexOf(" ")).toLowerCase().split("|"))
+    const leaf = (entry.leaf ?? []).map((item) => item.toLowerCase().split("|"))
+    const sibling = (entry.sibling ?? []).map((item) => item.toLowerCase().split("|"))
+    const switches = spellings(entry.switches)
+    const values = spellings(entry.values)
+    return { all: [...paths, ...leaf, ...sibling, ...switches, ...values], switches, positional: entry.positional.map((item) => item.toLowerCase()) }
   }
 
   test("every cmdlet of the table is in the table module, and every table entry is recorded", () => {

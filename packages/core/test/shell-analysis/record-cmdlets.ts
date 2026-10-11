@@ -3,6 +3,7 @@
 // positions in the parameter sets. The tests compare the table in src/shell/paths.ts with the stored answers. The script
 // reads command metadata only; it runs nothing from a project.
 import path from "node:path"
+import { which as find } from "../../src/util/which"
 
 const names =
   "Set-Content Add-Content Clear-Content Remove-Item Out-File Tee-Object Export-Csv Export-Clixml New-Item Copy-Item Move-Item Rename-Item Set-Item Clear-Item Set-ItemProperty New-ItemProperty Remove-ItemProperty Export-Alias Expand-Archive Compress-Archive Invoke-WebRequest Invoke-RestMethod Set-Location Push-Location Pop-Location New-PSDrive"
@@ -25,26 +26,34 @@ $mk = @('mkdir', 'md') | ForEach-Object { $g = Get-Command -Name $_ | Select-Obj
 [ordered]@{ version = $PSVersionTable.PSVersion.ToString(); cmdlets = @($out); kinds = @($mk) } | ConvertTo-Json -Depth 8 -Compress
 `
 const encoded = Buffer.from(script, "utf16le").toString("base64")
+const host = find("powershell") ?? find("pwsh")
+const docker = find("docker")
+if (!host || !docker) throw new Error("no PowerShell host or docker on PATH")
 const command =
   which === "win51"
-    ? ["powershell", "-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", encoded]
-    : ["docker", "run", "--rm", "orbit-linux-test-pwsh", "pwsh", "-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", encoded]
+    ? [host, "-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", encoded]
+    : [docker, "run", "--rm", "orbit-linux-test-pwsh", "pwsh", "-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", encoded]
 const child = Bun.spawn(command, { stdout: "pipe", stderr: "inherit", stdin: "ignore" })
 const output = await new Response(child.stdout).text()
 if ((await child.exited) !== 0) throw new Error("the host failed")
-const parsed = JSON.parse(output)
+type Recorded = {
+  cmdlet: string
+  parameters: { name: string; aliases: string | string[]; switch: boolean; positions: number | number[] }[]
+}
+type Kind = { name: string; type: string }
+const parsed = JSON.parse(output) as { version: string; kinds: Kind | Kind[]; cmdlets: Recorded | Recorded[] }
 // PowerShell 5.1 collapses a one-element array to the element and an empty one to nothing.
 const many = <T,>(value: T | T[] | null | undefined): T[] => (value === null || value === undefined ? [] : Array.isArray(value) ? value : [value])
 const normal = {
   version: parsed.version,
-  kinds: many<{ name: string; type: string }>(parsed.kinds),
-  cmdlets: many<any>(parsed.cmdlets).map((item) => ({
+  kinds: many(parsed.kinds),
+  cmdlets: many(parsed.cmdlets).map((item) => ({
     cmdlet: item.cmdlet,
-    parameters: many<any>(item.parameters).map((param) => ({
+    parameters: many(item.parameters).map((param) => ({
       name: param.name,
-      aliases: many<string>(param.aliases),
+      aliases: many(param.aliases),
       switch: param.switch,
-      positions: many<number>(param.positions),
+      positions: many(param.positions),
     })),
   })),
 }

@@ -284,7 +284,7 @@ export namespace FSUtil {
    */
   export function windowsTrim(p: string, platform: NodeJS.Platform = process.platform): string {
     if (platform !== "win32") return p
-    const flavor = platform === "win32" ? path.win32 : path.posix
+    const flavor = path.win32
     const root = flavor.parse(p).root
     const parts = p.slice(root.length).split(/[\\/]/)
     return (

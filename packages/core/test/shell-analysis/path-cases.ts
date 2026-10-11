@@ -93,4 +93,13 @@ export const pathCases = [
   "New-Item -ItemType SymbolicLink -Path l -Value x; Set-Content l\\f y",
   "Remove-Item x; Get-Date",
   "Get-ChildItem | Select-Object -First 1",
+  "Remove-Item /c/work/x",
+  "Remove-Item /x",
+  "Remove-Item /mnt/c/x",
+  "Remove-Item /cygdrive/d/x",
+  "Copy-Item -LiteralPath a b",
+  "Rename-Item -LiteralPath C:\\dir\\a b",
+  "Set-Content -LiteralPath f '/etc/x'",
+  "Out-File -LiteralPath o x",
+  "Copy-Item -LP a b",
 ]

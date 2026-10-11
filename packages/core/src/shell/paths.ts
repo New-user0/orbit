@@ -133,13 +133,17 @@ function show(text: string) {
 function operand(state: State, input: Input): Operand {
   const ctx = state.ctx
   const win = ctx.platform === "win32"
+  // PowerShell opens a path as Windows does: it knows nothing of Git Bash, Cygwin or WSL drive spellings (`/c/x` is `\c\x`
+  // on the current drive), so those are not translated for it.
+  const plain = state.powershell && win
   const flags = new Set<Flag>(input.flags)
   let text = input.text
   let dynamic = !input.literal
   // PowerShell on Linux takes both separators; the POSIX path functions only one.
   if (state.powershell && !win) text = text.replaceAll("\\", "/")
 
-  if (!dynamic && text.startsWith("~")) {
+  // A quoted `~` (or one after `--option=`) is not expanded by bash: it is a folder of that name in the working folder.
+  if (!dynamic && text.startsWith("~") && (state.powershell || input.tilde !== false)) {
     if (state.homeChanged && !state.powershell) dynamic = true
     else if (text === "~" || text.startsWith("~/") || ((win || state.powershell) && text.startsWith("~\\"))) text = state.home + text.slice(1)
     else dynamic = true
@@ -185,7 +189,7 @@ function operand(state: State, input: Input): Operand {
     flags.add("provider")
   }
   // After a directory change that leads somewhere unknown, a relative spelling cannot be placed.
-  if (!dynamic && state.lost && !ctx.path.isAbsolute(FSUtil.windowsPath(text, ctx.platform))) {
+  if (!dynamic && state.lost && !ctx.path.isAbsolute(plain ? text : FSUtil.windowsPath(text, ctx.platform))) {
     dynamic = true
     flags.add("directory")
   }
@@ -196,10 +200,11 @@ function operand(state: State, input: Input): Operand {
   const glob = !dynamic && !device && wildcards.test(text) && (input.glob === true || win || state.powershell)
   const closed = dynamic || device || share
   const prefix = glob ? globPrefix(text, wildcards, win || state.powershell) : undefined
-  const place = prefix ?? text
+  // `resolveFrom` would expand a leading `~` itself; one the shell left alone is a folder of that name here.
+  const place = (prefix ?? text).startsWith("~") && !state.powershell && input.tilde === false ? `./${prefix ?? text}` : (prefix ?? text)
   const candidates = closed
     ? []
-    : [...new Set(state.bases.map((base) => FSUtil.resolveFrom(base, place, state.home, ctx.platform)))]
+    : [...new Set(state.bases.map((base) => (plain ? FSUtil.windowsTrim(ctx.path.resolve(base, place), ctx.platform) : FSUtil.resolveFrom(base, place, state.home, ctx.platform))))]
   return {
     command: input.command,
     role: input.role,
@@ -273,67 +278,63 @@ type Parsed = {
 
 const OPTIONAL_VALUE = new Set(["interactive", "preserve-root", "remove", "output-error", "backup", "color", "context"])
 
-function spec(input: Spec): Spec {
-  return input
-}
-
 const SPECS: Record<string, Spec> = {
-  rm: spec({ switches: "frRiIvd", longs: "force recursive interactive verbose dir one-file-system no-preserve-root preserve-root" }),
-  rmdir: spec({ switches: "pv", longs: "parents verbose ignore-fail-on-non-empty" }),
-  unlink: spec({ switches: "", longs: "" }),
-  shred: spec({ switches: "fuvxz", longs: "force remove verbose exact zero", valueShorts: "ns", valueLongs: "iterations size random-source" }),
-  mv: spec({ switches: "", longs: "", valueShorts: "tS", valueLongs: "target-directory suffix", paths: { t: "write", "target-directory": "write" }, loose: true }),
-  cp: spec({ switches: "", longs: "", valueShorts: "tS", valueLongs: "target-directory suffix", paths: { t: "write", "target-directory": "write" }, loose: true }),
-  install: spec({
+  rm: { switches: "frRiIvd", longs: "force recursive interactive verbose dir one-file-system no-preserve-root preserve-root" },
+  rmdir: { switches: "pv", longs: "parents verbose ignore-fail-on-non-empty" },
+  unlink: { switches: "", longs: "" },
+  shred: { switches: "fuvxz", longs: "force remove verbose exact zero", valueShorts: "ns", valueLongs: "iterations size random-source" },
+  mv: { switches: "", longs: "", valueShorts: "tS", valueLongs: "target-directory suffix", paths: { t: "write", "target-directory": "write" }, loose: true },
+  cp: { switches: "", longs: "", valueShorts: "tS", valueLongs: "target-directory suffix", paths: { t: "write", "target-directory": "write" }, loose: true },
+  install: {
     switches: "cCdDpsv",
     longs: "compare directory preserve-timestamps strip verbose",
     valueShorts: "mogSt",
     valueLongs: "mode owner group suffix target-directory strip-program",
     paths: { t: "write", "target-directory": "write" },
-  }),
-  ln: spec({
+  },
+  ln: {
     switches: "sfnviTrbLPdF",
     longs: "symbolic force no-dereference verbose interactive relative no-target-directory logical physical backup directory",
     valueShorts: "tS",
     valueLongs: "target-directory suffix",
     paths: { t: "create", "target-directory": "create" },
-  }),
-  mkdir: spec({ switches: "pvZ", longs: "parents verbose", valueShorts: "m", valueLongs: "mode context" }),
-  touch: spec({
+  },
+  mkdir: { switches: "pvZ", longs: "parents verbose context", valueShorts: "m", valueLongs: "mode" },
+  touch: {
     switches: "acfhm",
     longs: "no-create no-dereference",
     valueShorts: "dtr",
     valueLongs: "date time reference",
     paths: { r: "source", reference: "source" },
-  }),
-  tee: spec({ switches: "aip", longs: "append ignore-interrupts output-error" }),
-  truncate: spec({
+  },
+  tee: { switches: "aip", longs: "append ignore-interrupts output-error" },
+  truncate: {
     switches: "co",
     longs: "no-create io-blocks",
     valueShorts: "sr",
     valueLongs: "size reference",
     paths: { r: "source", reference: "source" },
-  }),
-  chmod: spec({
+  },
+  chmod: {
     switches: "Rhfvc",
     longs: "recursive no-dereference silent quiet verbose changes preserve-root no-preserve-root",
     valueLongs: "reference",
     paths: { reference: "source" },
     operandLike: /^-[rwxXstugoa+=,-]*$/,
-  }),
-  chown: spec({
+  },
+  chown: {
     switches: "RhfvcHLP",
     longs: "recursive no-dereference silent quiet verbose changes preserve-root no-preserve-root dereference",
     valueLongs: "reference from",
     paths: { reference: "source" },
-  }),
-  chgrp: spec({
+  },
+  chgrp: {
     switches: "RhfvcHLP",
     longs: "recursive no-dereference silent quiet verbose changes preserve-root no-preserve-root dereference",
     valueLongs: "reference",
     paths: { reference: "source" },
-  }),
-  dd: spec({ switches: "", longs: "" }),
+  },
+  dd: { switches: "", longs: "" },
 }
 const PATH_COMMANDS = new Set([...Object.keys(SPECS), "sed"])
 
@@ -467,7 +468,8 @@ function dd(words: Word[], sink: Sink) {
       continue
     }
     const key = item.value.slice(0, at)
-    const value = { ...item, value: item.value.slice(at + 1), glob: false, tilde: false }
+    // Bash also expands a tilde after the equals sign of a word shaped like an assignment.
+    const value = { ...item, value: item.value.slice(at + 1), glob: false, tilde: true }
     if (key === "if") sink("source", value)
     else if (key === "of") sink("write", value)
   }
@@ -534,8 +536,6 @@ function sed(words: Word[], sink: Sink) {
 export type BashInput = {
   commands: Command[]
   ctx: Context
-  /** The paths each command's read-only check reported, by command index. */
-  reads: string[][]
   /** `HOME` is assigned somewhere in the input. */
   homeChanged: boolean
   /** The first command is a `cd` into the working folder that the analysis drops. */
@@ -545,8 +545,12 @@ export type BashInput = {
 export function bash(input: BashInput): Facts {
   const state = start(input.ctx, false, input.homeChanged)
   const ctx = input.ctx
+  // A command's reads are judged with its write redirects set aside: the redirect is its own (write) operand, and the files
+  // the command reads are still read, so `cat /etc/shadow > notes` reports both.
+  const verdicts = input.commands.map((command) => bareVerdict(input.commands, command, ctx))
   input.commands.forEach((command, index) => {
-    reads(state, index, input.reads[index] ?? [])
+    const verdict = verdicts[index]
+    reads(state, index, verdict.ok ? verdict.reads : [])
     if (command.wrapper) refuse(state, index, "wrapper")
     const name = headName(command.inner[0] ?? "", ctx)
     const words = command.argv.slice(command.argv.length - command.inner.length + 1)
@@ -560,11 +564,17 @@ export function bash(input: BashInput): Facts {
     }
     for (const redirect of command.redirects) {
       if (!redirect.write || redirect.nullSink || redirect.target === undefined) continue
-      add(state, { command: index, role: "write", via: "redirect", text: redirect.target, literal: redirect.literal, glob: redirect.glob, tilde: false })
+      add(state, { command: index, role: "write", via: "redirect", text: redirect.target, literal: redirect.literal, glob: redirect.glob, tilde: true })
     }
   })
-  state.facts.fileEdit = bashFileEdit(input, state.facts)
+  state.facts.fileEdit = bashFileEdit(input, state.facts, verdicts)
   return state.facts
+}
+
+function bareVerdict(commands: Command[], command: Command, ctx: Context) {
+  const bare = { ...command, redirects: command.redirects.filter((item) => !(item.write && !item.nullSink)) }
+  const producer = command.input?.operator === "|" ? commands[command.input.from] : undefined
+  return ShellReadOnly.bash(bare, ctx, producer)
 }
 
 function headName(raw: string, ctx: Context) {
@@ -597,16 +607,19 @@ function place(state: State, index: number, target: Word) {
 
 // Mirrors the reference: a command that edits files may be allowed in accept-edits mode when it is one of a few plain
 // programs, run directly (no wrapper, no environment prefix), and every other command is read-only.
-function bashFileEdit(input: BashInput, facts: Facts) {
-  const { commands, ctx } = input
-  if (commands.length === 0 || facts.unvalidatable.length > 0 || facts.directoryChanges > 0) return false
+function bashFileEdit(input: BashInput, facts: Facts, verdicts: ShellReadOnly.Verdict[]) {
+  if (input.commands.length === 0 || facts.unvalidatable.length > 0 || facts.directoryChanges > 0) return false
   if (facts.files.some((item) => item.role !== "read" && (item.form !== "literal" || item.flags.length > 0))) return false
-  return commands.every((command) => {
+  return input.commands.every((command, index) => {
     const direct = command.inner.length === command.argv.length && command.env.length === 0 && !command.wrapper
-    if (direct && ["mkdir", "touch", "rm", "rmdir", "mv", "cp"].includes(headName(command.argv[0]?.value ?? "", ctx))) return true
-    const bare = { ...command, redirects: command.redirects.filter((item) => !(item.write && !item.nullSink)) }
-    const producer = command.input?.operator === "|" ? commands[command.input.from] : undefined
-    return ShellReadOnly.bash(bare, ctx, producer).ok
+    // A program in the working folder (a relative PATH entry, or a local file of that name) is not the system's `rm`.
+    if (
+      direct &&
+      ["mkdir", "touch", "rm", "rmdir", "mv", "cp"].includes(headName(command.argv[0]?.value ?? "", input.ctx)) &&
+      !ShellReadOnly.projectLocal(command.argv[0].value, input.ctx)
+    )
+      return true
+    return verdicts[index].ok
   })
 }
 
@@ -791,7 +804,9 @@ function bind(state: State, table: Compiled, head: string, command: Command, sou
   }
 
   // Bare arguments bind to the cmdlet's positional parameters in order, skipping any that were given by name.
-  const slots = table.positional.filter((item) => !given.has(item))
+  // A named -LiteralPath fills the place that the first bare argument would take, so that argument binds to the next one.
+  const filled = [...given].some((name) => table.params.find((item) => item.name === name)?.names.some((alias) => alias === "literalpath" || alias === "pspath"))
+  const slots = table.positional.filter((item) => !given.has(item) && !(filled && (item === "path" || item === "filepath")))
   bare.forEach((argument, at) => {
     const slot = slots[at]
     const param = slot === undefined ? undefined : table.params.find((item) => item.name === slot)
@@ -800,13 +815,12 @@ function bind(state: State, table: Compiled, head: string, command: Command, sou
   })
 
   const paths = found.filter((item) => item.role !== "chdir")
-  const literal = (item: Value) => item.text
   for (const item of paths) {
     const made = add(state, { command: index, role: item.role as Role, text: item.value.text, literal: item.value.literal, flags: item.value.escape ? ["escape"] : [] })
     if (stream) made.flags.push("stream")
   }
   // A new name is reported as given and joined with each path that it is created in.
-  const parents = paths.filter((item) => item.value.literal && item.role === "create").map((item) => literal(item.value))
+  const parents = paths.filter((item) => item.value.literal && item.role === "create").map((item) => item.value.text)
   for (const leaf of leaves) {
     add(state, { command: index, role: "create", text: leaf.text, literal: true })
     for (const parent of parents) add(state, { command: index, role: "create", text: join(parent, leaf.text), literal: true })
@@ -851,7 +865,7 @@ function redirects(state: State, input: PowerShellInput) {
     if (seen.has(key)) return
     seen.add(key)
     if (item.value !== undefined && state.ctx.platform !== "win32" && ShellReadOnly.nullSink(item.value)) return
-    add(state, { command, role: "write", via: "redirect", text: item.value ?? item.target ?? "", literal: item.value !== undefined, flags: item.target?.includes("`") ? ["escape"] : [] })
+    add(state, { command, role: "write", via: "redirect", text: item.value ?? item.target ?? "", literal: item.value !== undefined && !item.target?.includes("`"), flags: item.target?.includes("`") ? ["escape"] : [] })
   }
   input.commands.forEach((command, index) => command.source?.redirects.forEach((item) => each(item, index)))
   for (const statement of input.summary.statements) {
@@ -863,10 +877,11 @@ function redirects(state: State, input: PowerShellInput) {
 // Mirrors the reference: only a plain pipeline of commands, each a content edit or a harmless output step, with no
 // redirect to a file and nothing that moves the working folder or creates a link.
 function powershellFileEdit(input: PowerShellInput, facts: Facts) {
-  const { commands, summary } = input
+  const commands = input.commands
+  const summary = input.summary
   if (commands.length === 0 || facts.unvalidatable.length > 0 || facts.directoryChanges > 0) return false
   if (facts.links && commands.length > 1) return false
-  if (facts.files.some((item) => item.role !== "read" && (item.form !== "literal" || item.flags.length > 0 || item.via === "redirect"))) return false
+  if (facts.files.some((item) => item.role !== "read" && (item.form !== "literal" || item.flags.length > 0))) return false
   if (summary.stopParsing) return false
   const top = summary.statements.filter((statement) => statement.top)
   if (top.length === 0 || !top.every((statement) => statement.kind === "PipelineAst" && statement.elements.every((element) => element.kind === "command"))) return false

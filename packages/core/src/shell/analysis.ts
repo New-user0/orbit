@@ -328,7 +328,6 @@ class BashWalk {
     const paths = ShellPaths.bash({
       commands: this.commands,
       ctx,
-      reads: verdicts.map((verdict) => (verdict.ok ? verdict.reads : [])),
       homeChanged: this.homeAssigned,
       dropped,
     })
