@@ -427,6 +427,23 @@ absolute one.
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
 
+### `orb doctor` prints a `sandbox` line, and the TUI says a stalled command waits for input
+
+`orb doctor` now has a `sandbox` line. It asks the same code the shell runner uses, so it names the program a sandboxed
+command would run through (`bwrap` on Linux and WSL2, `sandbox-exec` on macOS) and says when it is missing, when WSL1
+cannot sandbox (convert the distribution to WSL2), or when the platform (Windows and others) has no OS sandbox. The line
+turns red, with exit code 1, only when managed settings turn the sandbox on and it cannot work. The offline doctor reads
+managed settings only, so with no managed `sandbox` setting the line is informational and says what would happen if the
+sandbox were turned on. Every label and detail it prints is now written out through the same escaping as other untrusted
+text, so a `PATH` folder, a model ID or a provider error cannot send control characters to the terminal.
+
+In the TUI, the row for a background command that stopped at a prompt now reads `! Shell waiting for input · <command>`
+in the informational colour, never as finished or failed. It still shows only the command, not the end of its output.
+
+**Affects:** anyone who parses `orb doctor` output, and the TUI session view.
+
+**What to do:** Nothing; a blank `sandbox` line is informational, and a new `!!` line appears only where managed settings enable the sandbox.
+
 ### The TUI no longer finds another product's IDE extension, and reads Zed only with compatibility on
 
 The TUI used to look for the lock files that another agent product's IDE extension writes under the home directory, and
