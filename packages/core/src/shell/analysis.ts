@@ -95,6 +95,8 @@ export type Command = {
    */
   piped?: true
   readOnly: boolean
+  /** The command sits under `!`, which inverts its status. */
+  negated?: true
 }
 
 export type Features = {
@@ -400,7 +402,10 @@ class BashWalk {
         return this.pipeline(node, scope)
       case "negated_command":
         // The inverted status belongs to no single command.
-        return { last: this.node(kids(node).filter((item) => item.isNamed).find((child) => child.type !== "comment")!, scope, origin).last }
+        const first = this.commands.length
+        const negated = this.node(kids(node).filter((item) => item.isNamed).find((child) => child.type !== "comment")!, scope, origin)
+        this.commands.slice(first).forEach((command) => (command.negated = true))
+        return { last: negated.last }
       case "redirected_statement":
         return this.redirected(node, scope, origin)
       case "subshell":
