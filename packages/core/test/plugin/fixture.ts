@@ -27,6 +27,8 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Permission } from "@orbit/core/permission"
 import { ProjectTrust } from "@orbit/core/project-trust"
+import { FileAccess } from "@orbit/core/file-access"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { Reference } from "@orbit/core/reference"
 import { Rpc } from "@orbit/core/rpc"
 import { Skill } from "@orbit/core/skill"
@@ -95,7 +97,9 @@ export const PluginTestLayer = AppNodeBuilder.build(
     Session.node,
     PersistentPty.node,
     LocationServiceMap.node,
+    FileAccess.node,
     Permission.node,
+    PowerShellParse.node,
     ProjectTrust.node,
     PluginHooks.node,
     Reference.node,

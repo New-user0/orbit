@@ -22,8 +22,6 @@ import { Provider } from "@orbit/core/provider"
 import { Reference } from "@orbit/core/reference"
 import { Skill } from "@orbit/core/skill"
 import { ShellSelect } from "@orbit/core/shell/select"
-import { FileAccess } from "@orbit/core/file-access"
-import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { Job } from "@orbit/core/job"
 import { Global } from "@orbit/util/global"
 import { Location } from "@orbit/core/location"
@@ -41,7 +39,7 @@ import { location } from "../fixture/location"
 import { tmpdir } from "../fixture/tmpdir"
 
 const it = testEffect(
-  Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, ShellSelect.node, Job.node, FileAccess.node, PowerShellParse.node]))),
+  Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, ShellSelect.node, Job.node]))),
 )
 const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "orbit.json")
