@@ -3,6 +3,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+// The options of the release build itself, so this test cannot drift from them.
+import { autoload } from "../../cli/script/autoload"
 
 // A binary made by `bun build --compile` has no node_modules of its own, and Bun looks a name that the binary does not
 // bundle up in the folder it was started in, whatever the autoload options are. That folder can be a repository that is
@@ -11,13 +13,6 @@ import { pathToFileURL } from "node:url"
 // a folder and look for the marker that each package leaves when it runs.
 setDefaultTimeout(60_000)
 
-// The autoload options of the release build, in packages/cli/script/autoload.ts.
-const autoload = {
-  autoloadBunfig: false,
-  autoloadDotenv: false,
-  autoloadTsconfig: false,
-  autoloadPackageJson: true,
-} as const
 // The binary is a copy of the Bun runtime, so everything lives in a folder that is removed at the end.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-provider-compiled-"))
 const repository = path.join(root, "repository")

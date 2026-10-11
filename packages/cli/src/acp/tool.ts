@@ -15,7 +15,7 @@ export type ToolInput = Record<string, unknown>
 // arguments: the prompt shows them only as the raw input.
 const shell = ["command", "description", "workdir", "timeout", "run_in_background", "background"]
 const declared: Record<string, readonly string[]> = {
-  Read: ["file_path", "offset", "limit", "path", "filePath"],
+  Read: ["file_path", "offset", "limit", "pages", "path", "filePath"],
   Edit: [
     "file_path",
     "old_string",

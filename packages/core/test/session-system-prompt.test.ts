@@ -7,6 +7,7 @@ test("renders the default system prompt instructions", () => {
   expect(prompt).toContain("Use Edit for targeted changes to existing text files")
   expect(prompt).toContain("`old_string`")
   expect(prompt).toContain("Use Read to look at files before you change them")
+  expect(prompt).toContain("a PDF of more than 10 pages must be read in ranges with `pages`, at most 20 pages per call")
 })
 
 test("names the tools the way the model is offered them, and not by their old names", () => {

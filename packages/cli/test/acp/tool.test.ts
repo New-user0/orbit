@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import { Global } from "@orbit/util/global"
 import {
   completedToolUpdate,
+  declaredFields,
   errorToolUpdate,
   pendingToolCall,
   runningToolUpdate,
@@ -11,6 +12,13 @@ import {
 } from "../../src/acp/tool"
 
 describe("acp tools", () => {
+  test("keeps the pages of a Read in its declared fields and drops keys a model added", () => {
+    expect(declaredFields("Read", { file_path: "a.pdf", pages: "1-5", sneaky: "x" })).toEqual({
+      file_path: "a.pdf",
+      pages: "1-5",
+    })
+  })
+
   test("maps Orbit tool ids to ACP tool kinds", () => {
     expect(toToolKind("bash")).toBe("execute")
     expect(toToolKind("shell")).toBe("execute")

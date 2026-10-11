@@ -1682,15 +1682,31 @@ fixes it or asks.
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
   check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
-- **Build checks.** `verifyArtifact` does not fail the build on an import or a `require` of a `#` name or of a stray
-  bare name, and `packages/core/test/provider-compiled.test.ts` copies the autoload options instead of importing them.
-  Two names are not replaced in `packages/cli/script/runtime-requires.ts`, because nothing loads code through either
+- **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name in the forms Bun writes in an unsplit build (`import("#x")`, `import"#x"`, `from"#x"`, `__require("#x")` and a call through the minified `import.meta.require` alias)
+  (`packages/cli/test/verify-artifact.test.ts`), and `provider-compiled.test.ts` and `pdf-compiled.test.ts` import the
+  autoload options instead of copying them. The alias set covers the whole file, so a minifier that reuses the alias name for another call could fail the build wrongly, and a `splitting: true` build, where a chunk imports the alias from an earlier or later chunk, is not covered and has no test. It still does not fail the build on a stray bare name: a text scan of the
+  compiled binary finds hundreds of candidates, most of them guarded optional requires in dependencies (`ajv/dist/...`,
+  `node-fetch`, `@aws-sdk/signature-v4-crt`) and bytecode noise, so a reliable check needs the bundler's own list of
+  unresolved imports. Two names are not replaced in `packages/cli/script/runtime-requires.ts`, because nothing loads code through either
   today. `bufferutil` is not in the bundle: the server uses the `ws` that Bun carries, and Bun carries `utf-8-validate`
   but not `bufferutil`, so nothing asks for it. The npm `ws` package asks for it when it loads, so if a change ever
   bundled that package, `bufferutil` would be left to the runtime, resolve from the working folder's `node_modules` and
   run from there. `node-gyp/bin/node-gyp.js`, which the bundle does leave to the runtime, is only a path that npm looks
   up with `require.resolve` and does not load, and Orbit installs with scripts off. Replace the first before the binary
   imports the npm `ws`, and re-check the second before Orbit installs with scripts on.
+- **PDF parsing runs in the server process, bounded in time for the page tree but not in memory.** Read counts and cuts
+  the pages of a PDF in process (`Pdf` in `packages/core/src/tool/pdf.ts`). Read is allowed for every path by default,
+  so a PDF in a project is parsed without a prompt. Measured on the library as pinned: a page tree whose nodes list the
+  same child twice made `getPageCount` block the event loop for 3.2 s at 2,636 bytes and 88 s at 3,040 bytes (2^depth
+  leaves; a 100 ms timer never fired). Closed in `Pdf`: it walks the tree itself, iteratively, refuses a node reached
+  twice as corrupt, and does so before the library's recursive walk (`tool-read-pdf.test.ts`, depth 40, in a child
+  process with a deadline, whole and by range, with a valid deep tree as the control). Still open: the library inflates
+  object streams whole at load time and follows filter arrays, so a 1,407-byte file with `[/FlateDecode /FlateDecode]`
+  took the process from 79 MiB to 1,629 MiB peak RSS. The 32 MiB source cap bounds neither that nor any other time or
+  memory a hostile file can take, so a crafted PDF can still exhaust the memory of the server process, which every session shares. The library also interns every distinct `n g R` reference in a module-global pool that is never cleared: a 28 MiB one-page PDF with 2.5M distinct references took heapUsed from 67 MiB to 567 MiB, and it stayed there after a full GC and further reads (RSS 1.9 GiB), until the process exits. A worker that exits after each parse would free it. The reference bounds both
+  with subprocess timeouts. Parsing in a worker with a time and memory limit was deferred as a follow-up on the premise
+  that the cap was enough; these numbers say it is not, so it goes back to the owner for a new decision. The parser
+  evaluates nothing (`tool-read-pdf.test.ts` plants a script action and a marker).
 - **A rejection with feedback inside Code Mode, and ACP.** The step stops its tool queue when a direct tool call fails
   with a permission correction (`session-runner.test.ts`, `mcp.test.ts`). A Code Mode program turns the same rejection
   into an error result, so the calls queued behind its `execute` call still start and can ask (task `tool-runtime-6`

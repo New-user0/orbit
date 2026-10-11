@@ -2388,6 +2388,14 @@ git-ignored folders such as `node_modules`.
 
 **What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.
 
+### Read returns a PDF by page range
+
+Read takes a new optional `pages` argument for PDFs: a page such as `3` or a range such as `1-5`, counted from 1, at most 20 pages per call. It copies those pages into a new PDF, so the text stays selectable. A PDF of more than 10 pages can no longer be read whole: Read fails and tells the model to pass `pages`, where it used to send the file whole up to 20 MiB. A last page past the end is clamped to the last page; a first page past the end fails. A PDF that cannot be parsed, or is password-protected, is refused with a message instead of being sent; so is one whose page tree lists a page node twice, and one that holds any invalid object, even an unreferenced one, which a more lenient reader would still open. A PDF above 32 MiB is refused, and one between 20 and 32 MiB can still be read through `pages`. `pages` on any other file is ignored; a malformed value, or one wider than 20 pages, fails before anything is read. No program is installed or run: the pages are cut in process.
+
+**Affects:** models, scripts and plugins that read PDFs of more than 10 pages, or PDFs that are not valid, with Read.
+
+**What to do:** Pass `pages`, for example `"1-5"`, for a long PDF. A model that cannot take PDF input still receives the usual unsupported-media text.
+
 ### The question tool has limits and option previews
 
 The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
