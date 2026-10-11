@@ -76,7 +76,9 @@ const locations = makeGlobalNode({
             }),
             Layer.mock(Image.Service, {
               normalize: (_resource, content) =>
-                Effect.succeed(content.content.length > 5 * 1024 * 1024 ? { ...content, content: "AA==" } : content),
+                Effect.succeed({
+                  content: content.content.length > 5 * 1024 * 1024 ? { ...content, content: "AA==" } : content,
+                }),
             }),
             Layer.mock(Snapshot.Service, {
               capture: () => Effect.undefined,

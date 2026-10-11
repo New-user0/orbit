@@ -14,6 +14,7 @@ import { Effect, FileSystem } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { testEffect } from "./lib/effect"
 import { makePdf } from "./lib/pdf"
+import { frame, gif, jfif, jpeg, png, webpLossless } from "./lib/image-bytes"
 
 const it = testEffect(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem])))
 const fixture = Effect.gen(function* () {
@@ -171,6 +172,37 @@ describe("ReadToolFileSystem", () => {
       expect(binaryError).toBeInstanceOf(ReadToolFileSystem.BinaryFileError)
       expect(binaryError.message).toBe("Cannot read binary file: archive.dat")
       expect(malformedResult).toMatchObject({ type: "file", content: "hi\uFFFD", encoding: "utf8" })
+    }),
+  )
+
+  it.effect("reports the header size of a PNG, GIF, JPEG and WebP and none for a PDF, text or a zero width", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const cases = [
+        { file: "a.png", bytes: png(30, 20), size: { width: 30, height: 20 } },
+        { file: "a.gif", bytes: gif(40, 25), size: { width: 40, height: 25 } },
+        { file: "a.jpg", bytes: jpeg(jfif(), frame(0xc0, 50, 35)), size: { width: 50, height: 35 } },
+        { file: "a.webp", bytes: webpLossless(60, 45), size: { width: 60, height: 45 } },
+        { file: "zero.png", bytes: png(0, 20), size: undefined },
+      ]
+      for (const item of cases) {
+        yield* files.writeFile(path.join(directory, item.file), item.bytes)
+        const result = yield* readContent(environment, absolute(path.join(directory, item.file)), item.file)
+        if (result.type !== "file") throw new Error("expected a file")
+        if (result.encoding !== "base64") throw new Error("expected base64")
+        if (item.size) expect(result).toMatchObject({ dimensions: item.size })
+        else expect(result).not.toHaveProperty("dimensions")
+      }
+
+      const pdf = path.join(directory, "doc.pdf")
+      yield* files.writeFile(pdf, yield* Effect.promise(() => makePdf(12)))
+      const text = path.join(directory, "note.txt")
+      yield* files.writeFileString(text, "plain")
+      const results = [
+        yield* readContent(environment, absolute(pdf), "doc.pdf", { pages: { first: 1, last: 2 } }),
+        yield* readContent(environment, absolute(text), "note.txt"),
+      ]
+      for (const result of results) expect(result).not.toHaveProperty("dimensions")
     }),
   )
 

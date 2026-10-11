@@ -34,9 +34,14 @@ const imageStore = Layer.mock(Image.Service, {
         }),
       )
     return Effect.succeed({
-      ...content,
-      content: Buffer.from(`${Buffer.from(content.content, "base64").toString()} normalized`).toString("base64"),
-      mime: "image/jpeg",
+      content: {
+        ...content,
+        content: Buffer.from(`${Buffer.from(content.content, "base64").toString()} normalized`).toString("base64"),
+        mime: "image/jpeg",
+      },
+      ...(resource.startsWith("scaled")
+        ? { resized: { from: { width: 1_000, height: 7 }, to: { width: 300, height: 2 } } }
+        : {}),
     })
   },
 })
@@ -1321,6 +1326,53 @@ describe("Tool", () => {
         { type: "text", text: "snapshot" },
         { type: "text", text: "[1 image omitted: could not be decoded.]" },
         { type: "text", text: "[1 image omitted: could not be resized below the image size limit.]" },
+      ])
+    }),
+  )
+
+  it.effect("adds a resize note after each resized image of any tool and keeps file items to their own keys", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      const png = (name?: string) => ({
+        type: "file" as const,
+        uri: "data:image/png;base64,aW1hZ2U=",
+        mime: "image/png",
+        ...(name === undefined ? {} : { name }),
+      })
+      yield* transform(
+        service,
+        {
+          shots: {
+            name: "shots",
+            description: "Return images",
+            input: Schema.Struct({ text: Schema.String }),
+            output: Schema.Struct({ text: Schema.String }),
+            execute: ({ text }) =>
+              Effect.succeed({
+                output: { text },
+                content: [png("scaled-a.png"), png("frame.png"), png("scaled-b.png"), png("corrupt.png"), png()],
+              }),
+          },
+        },
+        { codemode: false },
+      )
+
+      const note =
+        "[Image resized: the original is 1000×7 px and it is shown at 300×2 px. Multiply coordinates read from the shown image by 3.33 to get coordinates in the original.]"
+      const shown = (name?: string) => ({
+        type: "file" as const,
+        uri: "data:image/jpeg;base64,aW1hZ2Ugbm9ybWFsaXplZA==",
+        mime: "image/jpeg",
+        ...(name === undefined ? {} : { name }),
+      })
+      expect((yield* executeTool(service, call("shots"))).content).toEqual([
+        shown("scaled-a.png"),
+        { type: "text", text: note },
+        shown("frame.png"),
+        shown("scaled-b.png"),
+        { type: "text", text: note },
+        { type: "file", uri: "data:image/jpeg;base64,aW1hZ2Ugbm9ybWFsaXplZA==", mime: "image/jpeg" },
+        { type: "text", text: "[1 image omitted: could not be decoded.]" },
       ])
     }),
   )

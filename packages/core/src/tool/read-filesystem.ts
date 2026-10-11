@@ -121,6 +121,8 @@ export const FileContent = Schema.Struct({
   ...FileSystem.Content.fields,
   /** For a PDF read by range: the pages returned and how many the source has. */
   pages: Schema.optionalKey(Schema.Struct({ first: PositiveInt, last: PositiveInt, total: PositiveInt })),
+  /** For an image: the pixel size its header declares. Absent when the header gives none. */
+  dimensions: Schema.optionalKey(Schema.Struct({ width: PositiveInt, height: PositiveInt })),
 }).annotate({ identifier: "ReadTool.FileContent" })
 export type FileContent = typeof FileContent.Type
 
@@ -187,6 +189,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
     if (first.info.size > MAX_MEDIA_INGEST_BYTES)
       return yield* new MediaIngestLimitError({ resource, maximumBytes: MAX_MEDIA_INGEST_BYTES })
     const whole = yield* readFile(files, input, resource)
+    const dimensions = Mime.dimensions(whole.bytes, media)
     return {
       content: {
         type: "file" as const,
@@ -195,6 +198,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
         content: Buffer.from(whole.bytes).toString("base64"),
         encoding: "base64" as const,
         mime: media,
+        ...(dimensions ? { dimensions } : {}),
       },
       seen: { mtimeMs: whole.info.mtimeMs, digest: FileLedger.digest(whole.bytes) },
     } satisfies ReadResult
