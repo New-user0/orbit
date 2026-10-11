@@ -174,6 +174,22 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   (no host, spawn, timeout, exit, empty output, bad JSON, too long, parse errors) is an invalid result that callers read
   as "ask". Proof: `test/shell-scan/powershell-parse.test.ts` (the real parser on the hiding spellings listed in its row tables, the injected
   host for each failure, and `.exe`, `.bat` and `.cmd` decoys in the working folder with a control that runs them).
+- The shell guard (`packages/core/src/shell/guard.ts`) and its bare-repository probe: for a command that runs git at any
+  level (by name, by path, through `xargs` or `find -exec`), the guard walks from the working folder, each folder the
+  command changes to, each `git -C` and each literal `--git-dir` or `GIT_DIR` value up to the root, as git's discovery does. It
+  only stats and reads small `.git` files and never runs git. A folder with no valid `.git` (a directory holding a regular
+  file `HEAD`) that holds any one of a `HEAD` file, an `objects` folder or a `refs` folder is a finding `indicators`. A `.git`
+  file is trusted only when it is one line `gitdir: <path>` of at most 4 KB that names a linked worktree whose `gitdir` file
+  names this folder back, or a folder under an enclosing repository's `.git/modules`; any other is `unverified-gitdir`, and
+  its text is data (class 5): it is never handed to git and never opened when it names a share. A git directory named on the
+  command line other than the repository's own is `git-dir`. The probe runs in an untrusted folder too, because it is the
+  protection for one: its result only adds a finding to the shell request's metadata, which shell-safety-12 turns into an
+  ask. Every path the guard resolves is judged on its real place (`ProjectTrust.leads`, then `FSUtil.contains` on two real
+  paths), and a share is named without being opened. Proof: `test/shell-guard.test.ts` (the probe rows, the link, dangling
+  link, new-file-under-link, numeric-link and share rows, trusted and untrusted).
+- Shell commands outside the tool's own call: the `!` spans of a slash command go through the same gate
+  (`ShellGuard.authorize`) as the shell tool, so a deny, a folder outside the project and input Orbit cannot read are
+  judged the same way (class 12). Proof: `test/config/command-shell.test.ts`, `test/shell-guard.test.ts`.
 - Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
   MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working
   folder before `PATH` for a bare name, unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`.

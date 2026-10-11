@@ -329,6 +329,8 @@ describe("ShellGuard.facts: the bare-repository probe", () => {
       })
       const run = (command: string) => probe(command, project, project)
       expect((yield* run("git -C ../other status")).bare).toEqual([{ base: other, why: "indicators" }])
+      // The folder a command changes to is where the next git starts.
+      expect((yield* run("cd ../other && git status")).bare).toEqual([{ base: other, why: "indicators" }])
       expect(why(yield* run("git --git-dir=../other/.git status"))).toEqual(["git-dir"])
       expect(why(yield* run("git --git-dir ../other status"))).toEqual(["git-dir"])
       expect(why(yield* run(`GIT_DIR=${slash(other)} git status`))).toEqual(["git-dir"])
@@ -408,6 +410,21 @@ describe("ShellGuard.request", () => {
       Effect.gen(function* () {
         const { request: asked } = yield* request(command)
         expect(asked?.resources[0]).toBe(command)
+        expect(asked?.save).toEqual([])
+      }),
+    )
+
+  // The upgrading note names these as inputs that ask each time; this pins that the analysis reads them as opaque.
+  for (const command of [
+    "cat <<EOF\n$(printf hello)\nEOF",
+    "for f in a b; do printf %s $f; done",
+    'greet() { case "$1" in a) printf hello;; *) printf other;; esac; }; greet a',
+    "[[ -n <(printf reached > marker) ]]; wait \"$!\"",
+  ])
+    it.live(`reads ${JSON.stringify(command)} as opaque, so it asks`, () =>
+      Effect.gen(function* () {
+        const { analysis, request: asked } = yield* request(command)
+        expect(analysis.opaque).toBeDefined()
         expect(asked?.save).toEqual([])
       }),
     )
