@@ -394,7 +394,17 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
     ],
     [
       "stream-json input with --continue",
-      ["-p", "--standalone", "--continue", "--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+      [
+        "-p",
+        "--standalone",
+        "--continue",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--model",
+        model,
+      ],
     ],
   ] as const
   const before = runs

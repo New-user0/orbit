@@ -51,7 +51,11 @@ const decodeLine = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Unkno
 
 const decoders = Object.fromEntries(
   Object.entries(inputs).map(([type, schema]) => [type, Schema.decodeUnknownResult(schema)]),
-) as { [K in keyof typeof inputs]: (value: unknown) => Result.Result<Schema.Schema.Type<(typeof inputs)[K]>, Schema.SchemaError> }
+) as {
+  [K in keyof typeof inputs]: (
+    value: unknown,
+  ) => Result.Result<Schema.Schema.Type<(typeof inputs)[K]>, Schema.SchemaError>
+}
 
 /**
  * Reads one input line. A line that does not decode costs only itself: the error names the path of the first field at

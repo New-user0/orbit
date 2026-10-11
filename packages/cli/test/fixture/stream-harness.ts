@@ -11,11 +11,22 @@ export const location = { directory: "/work" }
 export type Event = Record<string, unknown>
 
 export function permission(id: string, session = sessionID) {
-  return { id, sessionID: session, action: "Edit", resources: ["a.txt"], source: { type: "tool", messageID: "msg_a", id: "c" } }
+  return {
+    id,
+    sessionID: session,
+    action: "Edit",
+    resources: ["a.txt"],
+    source: { type: "tool", messageID: "msg_a", id: "c" },
+  }
 }
 
 export function harness(
-  options: { reconnect?: { baseMs: number; capMs: number; giveUpMs: number; silenceMs?: number }; turn?: SessionTurnOptions } = {},
+  options: {
+    reconnect?: { baseMs: number; capMs: number; giveUpMs: number; silenceMs?: number }
+    turn?: SessionTurnOptions
+    // Leave the writer out, so the driver writes to process.stdout itself.
+    stdout?: boolean
+  } = {},
 ) {
   const lines: Array<Record<string, any>> = []
   const raw: string[] = []
@@ -25,6 +36,7 @@ export function harness(
     admitted: [] as string[],
     replies: [] as Array<{ requestID: string; decision: string; message?: string }>,
     subscriptions: 0,
+    interrupts: 0,
     // How the next subscription behaves: it connects, or fails with this error.
     refuse: undefined as unknown,
     promptError: undefined as Error | undefined,
@@ -60,7 +72,10 @@ export function harness(
     event: { subscribe },
     session: {
       get: async () => ({ id: sessionID }),
-      interrupt: async () => ({}),
+      interrupt: async () => {
+        state.interrupts += 1
+        return {}
+      },
       wait: () => idle.promise,
       inbox: { list: async () => [] },
       form: { list: async () => [], cancel: async () => {}, reply: async () => {} },
@@ -105,10 +120,12 @@ export function harness(
     envelope: { cwd: "/work", version: "test" },
     stdin,
     resolveFile: async () => ({ url: "data:text/plain;base64,", filename: "a", mime: "text/plain" }),
-    write: (line) => {
-      raw.push(line)
-      lines.push(JSON.parse(line))
-    },
+    write: options.stdout
+      ? undefined
+      : (line) => {
+          raw.push(line)
+          lines.push(JSON.parse(line))
+        },
     reconnect: options.reconnect ?? { baseMs: 10, capMs: 20, giveUpMs: 60_000 },
   })
   const api = {
@@ -132,7 +149,10 @@ export function harness(
       }
     },
     async settle(ms = 10_000) {
-      return Promise.race([run, Bun.sleep(ms).then(() => Promise.reject(new Error(`The driver did not return. ${JSON.stringify(lines)}`)))])
+      return Promise.race([
+        run,
+        Bun.sleep(ms).then(() => Promise.reject(new Error(`The driver did not return. ${JSON.stringify(lines)}`))),
+      ])
     },
   }
   return api

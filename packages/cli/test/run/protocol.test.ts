@@ -52,7 +52,11 @@ describe("a line that does not decode names the field at fault", () => {
     ["a bad delivery", { type: "user", text: "x", delivery: "now" }, ["delivery"]],
     ["an id that is not a message ID", { type: "user", text: "x", id: "ses_1" }, ["id"]],
     ["files that are not a list", { type: "user", text: "x", files: "a.txt" }, ["files"]],
-    ["a request ID without the per prefix", { type: "permission_reply", requestID: "x", decision: "once" }, ["requestID"]],
+    [
+      "a request ID without the per prefix",
+      { type: "permission_reply", requestID: "x", decision: "once" },
+      ["requestID"],
+    ],
     ["a decision that is not known", { type: "permission_reply", requestID: "per_1", decision: "maybe" }, ["decision"]],
     ["a bad form ID", { type: "form_reply", formID: "x", answer: {} }, ["formID"]],
     ["an answer that is not a record", { type: "form_reply", formID: "frm_1", answer: [] }, ["answer"]],

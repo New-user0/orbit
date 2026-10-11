@@ -219,7 +219,9 @@ export async function runStream(input: StreamInput) {
     controller.signal.addEventListener("abort", () => clearTimeout(watchdog))
     void stopped.promise.then(() => controller.abort())
     rearm()
-    const iterator = input.client.event.subscribe({ signal: controller.signal, onActivity: rearm })[Symbol.asyncIterator]()
+    const iterator = input.client.event
+      .subscribe({ signal: controller.signal, onActivity: rearm })
+      [Symbol.asyncIterator]()
     const connected = await iterator.next()
     if (connected.done) throw new Error("Event stream disconnected before prompt admission")
     rearm()
@@ -303,14 +305,12 @@ export async function runStream(input: StreamInput) {
 
   // ---- results --------------------------------------------------------------------------------------------------
 
-  const readPeriod = async (first: string, until?: string) => {
+  const readPeriod = async (first: string, until?: string, everything = false) => {
     const collected: SessionMessageInfo[] = []
     let cursor: string | undefined
     while (true) {
       const page = await input.client.message.list(
-        cursor
-          ? { sessionID, limit: 200, cursor }
-          : { sessionID, limit: 200, order: "desc" },
+        cursor ? { sessionID, limit: 200, cursor } : { sessionID, limit: 200, order: "desc" },
       )
       for (const message of page.data) {
         collected.push(message)
@@ -318,6 +318,8 @@ export async function runStream(input: StreamInput) {
         // Ascending from the first message of the period to the idle message that ends it.
         // A queued message that started the next period bounds this one before the history has an idle message.
         const forward = collected.toReversed()
+        // A reconnect needs every message since `first`, because several periods may have run in the gap.
+        if (everything) return { found: true, messages: forward }
         const next = until === undefined ? -1 : forward.findIndex((item) => item.id === until)
         if (next !== -1) return { found: true, messages: forward.slice(0, next) }
         const idle = forward.findIndex((item) => item.type === "idle")
@@ -470,7 +472,12 @@ export async function runStream(input: StreamInput) {
     if (event.type === "session.inbox.delivered") {
       // A queued message waits for the work before it to end, so it starts a period of its own with its own result,
       // although the server delivers it inside the same run.
-      if (period && period.ids.size > 0 && unaccounted.has(event.data.inboxID) && deliveries.get(event.data.inboxID) === "queue")
+      if (
+        period &&
+        period.ids.size > 0 &&
+        unaccounted.has(event.data.inboxID) &&
+        deliveries.get(event.data.inboxID) === "queue"
+      )
         await closePeriod({ kind: "succeeded" }, time, event.data.inboxID)
       if (!period)
         period = {
@@ -759,29 +766,48 @@ export async function runStream(input: StreamInput) {
     // The root session may have gone idle during the gap; its history says so, and its result is still written. A period
     // that began and ended inside the gap was never opened, so it is rebuilt from the messages still without a result.
     const first = period?.first ?? [...unaccounted][0]
-    const history = first ? await readPeriod(first).catch(() => undefined) : undefined
+    const history = first ? await readPeriod(first, undefined, true).catch(() => undefined) : undefined
     if (history?.found) {
-      const idle = history.messages.findLast((message) => message.type === "idle")
-      if (!period)
-        period = {
-          first: first!,
-          startedAt: Date.now(),
-          ids: new Set([...unaccounted].filter((id) => history.messages.some((message) => message.id === id))),
-          steps: 0,
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      // Walk the gap forward and close every period the live path would have closed: one at each idle message, and one
+      // at each queued message that arrives while the period before it still holds messages.
+      const messages = history.messages
+      let current = period
+      let start = 0
+      for (const [index, message] of messages.entries()) {
+        if (unaccounted.has(message.id) && !current?.ids.has(message.id)) {
+          if (current && current.ids.size > 0 && deliveries.get(message.id) === "queue") {
+            Object.assign(current, spentFromHistory(messages.slice(start, index)))
+            period = current
+            await closePeriod({ kind: "succeeded" }, Date.now(), message.id)
+            current = undefined
+          }
+          if (!current) {
+            current = {
+              first: message.id,
+              startedAt: Date.now(),
+              ids: new Set(),
+              steps: 0,
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            }
+            start = index
+          }
+          current.ids.add(message.id)
         }
-      if (idle) {
-        Object.assign(period, spentFromHistory(history.messages))
+        if (message.type !== "idle" || !current) continue
+        Object.assign(current, spentFromHistory(messages.slice(start, index + 1)))
+        period = current
         await closePeriod(
-          idle.outcome === "succeeded"
+          message.outcome === "succeeded"
             ? { kind: "succeeded" }
-            : idle.outcome === "interrupted"
+            : message.outcome === "interrupted"
               ? { kind: "interrupted", reason: "user" }
               : { kind: "failed", error: { type: "unknown", message: "The run ended in failure." } },
           Date.now(),
         )
+        current = undefined
       }
+      period = current
     }
     out(jsonLine({ type: "system", subtype: "reconnected", timestamp: Date.now(), sessionID }))
   }
@@ -908,9 +934,9 @@ export async function runStream(input: StreamInput) {
     if (message.type === "set_model") {
       const selected =
         message.model === undefined || message.model === "default"
-          ? await input.client.model.default({ location: { directory: input.location.directory } }).then((result) =>
-              result.data ? { providerID: result.data.providerID, id: result.data.id } : undefined,
-            )
+          ? await input.client.model
+              .default({ location: { directory: input.location.directory } })
+              .then((result) => (result.data ? { providerID: result.data.providerID, id: result.data.id } : undefined))
           : parseSessionTargetModel(message.model)
       if (!selected) throw new Error("This folder has no default model")
       return void (await input.client.session.switchModel({ sessionID, model: selected }))
@@ -1074,7 +1100,14 @@ type ToolState = {
 }
 
 function fallbackTool(event: { id: string; created: number }): ToolState {
-  return { id: partID(event.id), timestamp: toMillis(event.created), tool: "tool", input: {}, metadata: {}, content: [] }
+  return {
+    id: partID(event.id),
+    timestamp: toMillis(event.created),
+    tool: "tool",
+    input: {},
+    metadata: {},
+    content: [],
+  }
 }
 
 function tally(

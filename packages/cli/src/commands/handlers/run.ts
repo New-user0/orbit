@@ -95,10 +95,7 @@ export function headlessInput(input: HeadlessInput) {
     // checked and the folder the run happens in are the folder of that one session.
     const resume = Option.getOrUndefined(input.resume)
     if (resume !== undefined && (input.continue || Option.isSome(input.session)))
-      return reportRunError(
-        { format, envelope },
-        "--resume cannot be combined with --continue or --session",
-      )
+      return reportRunError({ format, envelope }, "--resume cannot be combined with --continue or --session")
     const resumed =
       resume === undefined
         ? undefined

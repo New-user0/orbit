@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { asked, delivered, finished, harness, permission, replied, sessionID, succeeded } from "../fixture/stream-harness"
+import {
+  asked,
+  delivered,
+  finished,
+  harness,
+  permission,
+  replied,
+  sessionID,
+  succeeded,
+} from "../fixture/stream-harness"
 
 const requests = (lines: Array<Record<string, any>>) => lines.filter((line) => line.type === "permission_request")
 
@@ -131,7 +140,9 @@ describe("the event stream drops and comes back", () => {
 
     expect(await h.settle()).toBe(1)
     expect(h.lines.filter((line) => line.type === "error")).toEqual([
-      expect.objectContaining({ error: expect.objectContaining({ message: expect.stringContaining("did not come back") }) }),
+      expect.objectContaining({
+        error: expect.objectContaining({ message: expect.stringContaining("did not come back") }),
+      }),
     ])
     expect(h.lines.filter((line) => line.type === "result")).toEqual([
       expect.objectContaining({ is_error: true, outcome: "failed", reason: "error" }),
@@ -139,17 +150,21 @@ describe("the event stream drops and comes back", () => {
     expect(h.state.subscriptions).toBeGreaterThan(2)
   }, 30_000)
 
-  test.each([401, 403, 404])("a %i answer is permanent and is not retried", async (status) => {
-    const h = harness({ reconnect: { baseMs: 5, capMs: 10, giveUpMs: 60_000 } })
-    h.send({ type: "user", text: "go" })
-    await Bun.sleep(100)
-    h.state.refuse = Object.assign(new Error("Unexpected status"), { cause: { status } })
-    h.drop()
+  test.each([401, 403, 404])(
+    "a %i answer is permanent and is not retried",
+    async (status) => {
+      const h = harness({ reconnect: { baseMs: 5, capMs: 10, giveUpMs: 60_000 } })
+      h.send({ type: "user", text: "go" })
+      await Bun.sleep(100)
+      h.state.refuse = Object.assign(new Error("Unexpected status"), { cause: { status } })
+      h.drop()
 
-    expect(await h.settle()).toBe(1)
-    expect(h.state.subscriptions).toBe(2)
-    expect(h.lines.filter((line) => line.type === "result")).toHaveLength(1)
-  }, 30_000)
+      expect(await h.settle()).toBe(1)
+      expect(h.state.subscriptions).toBe(2)
+      expect(h.lines.filter((line) => line.type === "result")).toHaveLength(1)
+    },
+    30_000,
+  )
 
   test("a status that may pass is retried", async () => {
     const h = harness({ reconnect: { baseMs: 5, capMs: 10, giveUpMs: 60_000 } })
@@ -195,6 +210,20 @@ describe("an interrupt while the server goes away", () => {
 
     expect(await h.settle()).toBe(130)
     expect(h.lines.filter((line) => line.type === "result")).toHaveLength(1)
+  }, 30_000)
+})
+
+describe("a standard output that nobody reads", () => {
+  test("the first write error stops the run and interrupts the session it ran", async () => {
+    const h = harness({ stdout: true })
+    h.send({ type: "user", text: "go" })
+    await Bun.sleep(100)
+    h.emit(delivered(h.state.admitted[0]))
+    const before = h.state.interrupts
+    // The reader went away: the stream reports the error itself, nothing else interrupts the session.
+    process.stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
+    await h.settle()
+    expect(h.state.interrupts).toBeGreaterThan(before)
   }, 30_000)
 })
 

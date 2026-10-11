@@ -70,7 +70,11 @@ test.each([
       const done = await run.finish()
 
       // The request is the server's: the action, the resolved resources and the tool call, never the model's input.
-      expect(ask.line.request).toMatchObject({ action: "Edit", source: { type: "tool" }, metadata: { files: [{ status: "added" }] } })
+      expect(ask.line.request).toMatchObject({
+        action: "Edit",
+        source: { type: "tool" },
+        metadata: { files: [{ status: "added" }] },
+      })
       expect(ask.line.request.resources).toEqual([name])
       expect(ask.line.request.metadata.files[0].patch).toContain("+written")
       expect(JSON.stringify(ask.line)).not.toContain("MODEL-ADDED-KEY")
@@ -86,7 +90,8 @@ test.each([
 
 test("a write outside the folder asks about the resolved folder, from the server's request and not the model's input", async () => {
   const outside = path.join(root, "outside")
-  const target = path.join(outside, "..", "outside", "escape.txt")
+  // Joined as a string: path.join would remove the `..` before the model ever saw it.
+  const target = [outside, "..", "outside", "escape.txt"].join(path.sep)
   await scripted(
     [{ tool: { name: "Write", input: { file_path: target, content: "x", forged: "MODEL-ADDED-KEY" } } }, "done"],
     async (own, home) => {
@@ -100,8 +105,7 @@ test("a write outside the folder asks about the resolved folder, from the server
 
       expect(ask.line.request.action).toBe("external_directory")
       // The ask names the folder the server resolved, with the `..` already gone.
-      expect(ask.line.request.resources.join("\n")).toContain("outside")
-      expect(ask.line.request.resources.join("\n")).not.toContain("..")
+      expect(ask.line.request.resources).toEqual([`${outside.replaceAll("\\", "/")}/*`])
       expect(JSON.stringify(ask.line)).not.toContain("MODEL-ADDED-KEY")
       expect(await Bun.file(path.join(outside, "escape.txt")).exists()).toBe(false)
     },
@@ -296,7 +300,18 @@ test("an interrupt withdraws the ask that is open with request_cancelled", async
 const question = {
   tool: {
     name: "AskUserQuestion",
-    input: { questions: [{ question: "Which one?", header: "Pick", options: [{ label: "Alpha", description: "a" }, { label: "Beta", description: "b" }] }] },
+    input: {
+      questions: [
+        {
+          question: "Which one?",
+          header: "Pick",
+          options: [
+            { label: "Alpha", description: "a" },
+            { label: "Beta", description: "b" },
+          ],
+        },
+      ],
+    },
   },
 }
 
@@ -593,6 +608,47 @@ test("--input-format stream-json needs stream-json output, and starts no server"
   })
 }, 240_000)
 
+test("a refused --mcp-config through the stream door writes one result line and exits 1", async () => {
+  await scripted(["unused"], async (own, home) => {
+    const file = path.join(home, "mcp.json")
+    await Bun.write(file, JSON.stringify({ servers: { demo: { type: "local", command: ["demo"] } } }))
+    const managed = path.join(home, "managed-only")
+    await Bun.write(
+      path.join(managed, "managed-settings.json"),
+      JSON.stringify({ managed: { mcp: { managed_only: true } } }),
+    )
+    // One after the other: two private servers on one database start slowly and can lose to each other.
+    const runs = [
+      await spawnOrb(
+        home,
+        own,
+        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--mcp-config", file, "hello"],
+        { ORBIT_MANAGED_DIR: managed },
+      ),
+      await spawnOrb(
+        home,
+        own,
+        ["run", "--input-format", "stream-json", "--format", "stream-json", "--mcp-config", file, "hello"],
+        { ORBIT_MANAGED_DIR: managed },
+      ),
+    ]
+    runs.forEach((run) => {
+      const lines = run.stdout
+        .trim()
+        .split("\n")
+        .map((line) => {
+          if (!line) throw new Error(`No output. stderr: ${run.stderr}`)
+          return JSON.parse(line)
+        })
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatchObject({ type: "result", is_error: true, outcome: "failed" })
+      expect(lines[0].error).toContain("Managed settings run only the MCP servers they define")
+      expect(run.code).toBe(1)
+    })
+    expect(own.requests).toHaveLength(0)
+  })
+}, 240_000)
+
 test("--file with stream input needs a message", async () => {
   await scripted(["unused"], async (own, home) => {
     const run = await spawnOrb(home, own, [
@@ -609,19 +665,23 @@ test("--file with stream input needs a message", async () => {
   })
 }, 240_000)
 
-test.skipIf(process.platform === "win32")("SIGINT gives an interrupted result and exit 130", async () => {
-  await scripted([slow], async (own, home) => {
-    const run = controller(home, own)
-    run.send({ type: "user", text: "go" })
-    await modelAsked(own, 1)
-    run.child.kill("SIGINT")
-    const done = await run.finish()
+test.skipIf(process.platform === "win32")(
+  "SIGINT gives an interrupted result and exit 130",
+  async () => {
+    await scripted([slow], async (own, home) => {
+      const run = controller(home, own)
+      run.send({ type: "user", text: "go" })
+      await modelAsked(own, 1)
+      run.child.kill("SIGINT")
+      const done = await run.finish()
 
-    expect(results(run.lines)).toHaveLength(1)
-    expect(results(run.lines)[0]).toMatchObject({ outcome: "interrupted" })
-    expect(done.code).toBe(130)
-  })
-}, 240_000)
+      expect(results(run.lines)).toHaveLength(1)
+      expect(results(run.lines)[0]).toMatchObject({ outcome: "interrupted" })
+      expect(done.code).toBe(130)
+    })
+  },
+  240_000,
+)
 
 test("a controller that stops reading standard output ends the run and interrupts what was running", async () => {
   await scripted([slow], async (own, home) => {
@@ -642,15 +702,33 @@ test("a controller that stops reading standard output ends the run and interrupt
 }, 240_000)
 
 // `orb` with its standard input closed, for the checks that end before any input is read.
-async function spawnOrb(home: string, own: { model: string }, args: string[]) {
+async function spawnOrb(home: string, own: { model: string }, args: string[], env: Record<string, string> = {}) {
   const { isolatedEnv } = await import("../fixture/environment")
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args.slice(0, 1), "--standalone", "--model", own.model, ...args.slice(1)], {
-    cwd: path.join(import.meta.dir, "..", ".."),
-    env: isolatedEnv(home, { USERPROFILE: home, PWD: workspace, ORBIT_CONFIG: undefined, ORBIT_CONFIG_CONTENT: undefined }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      "run",
+      "src/index.ts",
+      ...args.slice(0, 1),
+      "--standalone",
+      "--model",
+      own.model,
+      ...args.slice(1),
+    ],
+    {
+      cwd: path.join(import.meta.dir, "..", ".."),
+      env: isolatedEnv(home, {
+        USERPROFILE: home,
+        PWD: workspace,
+        ORBIT_CONFIG: undefined,
+        ORBIT_CONFIG_CONTENT: undefined,
+        ...env,
+      }),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
   const [code, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),

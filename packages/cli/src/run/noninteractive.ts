@@ -1293,4 +1293,3 @@ function writeSchemaText(text: string, failed: boolean) {
   if (!parsed) return UI.error("The answer was not valid JSON.")
   process.stdout.write(jsonLine(parsed.value) + EOL)
 }
-
