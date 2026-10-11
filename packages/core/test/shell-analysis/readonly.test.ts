@@ -207,7 +207,6 @@ const notReadOnly = [
   "jq -L dir .",
   "jq",
   // Heads that other tasks own: pinned so they flip on purpose
-  "git status",
   "xargs ls",
   "curl x",
   "rm a",

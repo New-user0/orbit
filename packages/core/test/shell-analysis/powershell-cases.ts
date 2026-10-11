@@ -216,3 +216,69 @@ export const arrayAndNetworkOk = ["Get-Date -Format HH:mm", "Get-Date -Format:HH
 // Texts that only pwsh 7 can parse: `&&` and `||` chains. powershell-7.json is recorded with pwsh 7 in Docker, the rest
 // with Windows PowerShell 5.1.
 export const chain = ["Get-ChildItem && Get-Content a", "Get-Content a || Get-Content b", "Get-ChildItem && Get-ChildItem"]
+
+// git, gh, docker and dotnet (shell-safety-5): the validators judge the argv that PowerShell hands the program.
+export const toolReadOnly = [
+  "git log -n 10",
+  "git status",
+  "git log --oneline -5",
+  "git --no-pager show HEAD",
+  "git branch -a",
+  "git config --get user.name",
+  "git log --pretty=format:%h",
+  "git diff HEAD~1",
+  "git --version",
+  "gh pr view 1",
+  "docker ps -a",
+  "dotnet --list-sdks",
+  "Get-ChildItem -Recurse | Select-String foo",
+  "Get-Content a | Out-Null",
+  "Get-Process | Where-Object Name -eq 'pwsh'",
+]
+
+export const toolNotReadOnly = [
+  "git -c core.pager=x log",
+  "git -c:core.pager=x log",
+  "git -C src status",
+  "git log --output=f",
+  "git.exe status",
+  "& git status",
+  ". git status",
+  "git log $env:X",
+  'git log "$x"',
+  "git push",
+  "git diff -S '' x",
+  "git log -- --output=x",
+  "git diff -- a.ts",
+  "git log '--' --output=x",
+  "git log --grep 'a b\\'",
+  "git log a,b",
+  "git log –-oneline",
+  "git log –oneline",
+  "gh api repos/x/y",
+  "gh pr view 1 --repo evil.com/a/b",
+  "gh auth token",
+  "docker run x",
+  "docker compose logs",
+  "dotnet build",
+  "dotnet --version",
+  "gci | ? { $_.Length -gt 0 }",
+  "gci | % { $_.Name }",
+  "Get-ChildItem *.tmp | ForEach-Object Delete",
+  "gci | % -MemberName Delete",
+  "Get-ChildItem env:",
+  "$env:PATH='x'; git status",
+  "$env:GIT_PAGER='x'; git log",
+  "[IO.File]::WriteAllText('a','b')",
+  "(Get-Item a).Delete()",
+  "'x' > f",
+  "Get-Content a | Set-Content b",
+  "Get-Help git",
+  "Get-Command git",
+  "Set-Alias git Remove-Item; git status",
+  "function git { }; git status",
+  "Get-Process | Out-String -InputObject:(Remove-Item x)",
+]
+
+// Native globbing: pwsh on Linux and macOS expands a bareword with a wildcard before it starts the program.
+export const toolPlatform = ["git tag -l v*", "git tag -l 'v*'", "GIT status", "git log *''", "git diff a'*'", 'git log a"*"', "git log -\"-\"o*", "git log '*'", "git log 0x10", "git log -n 0x10", "git log -n: 5", "git log a?", "git log [a]*", 'git log "a*"', "git log -n:5"]
