@@ -238,6 +238,10 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     findings: [
       ...found,
       ...own(all, operands, resolved, ps),
+      // A folder that only the raw reading found and FileAccess cannot name never fails the call, but it is said.
+      ...guessed
+        .filter((item) => item.status === "unresolved")
+        .map(() => ShellSafety.finding("too-complex", "unresolved-path")),
       ...(probed.dynamic ? [ShellSafety.finding("too-complex", "dynamic-git-dir")] : []),
     ].filter(unique),
   } satisfies Facts
@@ -874,7 +878,8 @@ export function locations(
 ) {
   const ps = dialect === "powershell-5.1" || dialect === "pwsh"
   const found = ShellSafety.fragments(readable(text, ps, raw)).flatMap((fragment) => {
-    const words = fragmentTokens(fragment, ps)
+    const words = fragmentTokens(blanked(fragment, ps, raw), ps)
+    if (words.length === 0) return []
     const head = words[0]!.value
     // A module-qualified name (`Microsoft.PowerShell.Management\Set-Location`) is the cmdlet.
     const name = ps ? head.replace(/^.*\\/, "").toLowerCase() : head
@@ -911,7 +916,7 @@ export function locations(
 export function fragmentWords(text: string, ps = false, raw = false) {
   return distinct(
     ShellSafety.fragments(readable(text, ps, raw)).flatMap((fragment) => {
-      const words = fragmentTokens(fragment, ps).slice(1)
+      const words = fragmentTokens(blanked(fragment, ps, raw), ps).slice(1)
       const comment = words.findIndex((word) => /^(#|<#)/.test(word.raw))
       return (comment === -1 ? words : words.slice(0, comment)).flatMap((word, index, rest) => {
         if (/[$`]/.test(word.raw)) return []
@@ -934,12 +939,18 @@ export function fragmentWords(text: string, ps = false, raw = false) {
 // The text that is split into fragments. The raw reading is the text as written: it models no strings or comments, so
 // it cannot lose a folder to a misreading of them. The other reading takes comments out.
 const readable = (text: string, ps: boolean, raw: boolean) =>
-  ps ? (raw ? joined(text) : psText(text)) : bashText(text, raw)
+  ps ? (raw ? text : psText(text)) : bashText(text, raw)
+
+// In the raw reading of PowerShell a block comment that opens and closes inside the fragment is blanks, so the words
+// around it stay; one that does not close in the fragment ends the words at its `<#`, like a `#` word.
+const blanked = (fragment: string, ps: boolean, raw: boolean) =>
+  ps && raw ? fragment.replace(/<#.*?#>/gs, " ") : fragment
 
 // Bash text with each line cut at a `#` that starts a word outside quotes.
 function bashText(text: string, raw: boolean) {
   // The `&` of `&>`, `>&` and `<&` is part of a redirect, not a separator that would cut the command in two.
-  const whole = joined(text).replace(/&(?=>)|(?<=[<>])&/g, "")
+  // The `|` of `>|` (a redirect that overrides noclobber) is part of it too.
+  const whole = joined(text).replace(/&(?=>)|(?<=[<>])&|(?<=>)\|/g, "")
   if (raw) return whole
   return whole
     .split(/(?<=\n)/)
@@ -958,7 +969,7 @@ function bashText(text: string, raw: boolean) {
     .join("")
 }
 
-const REDIRECT = /^\d*(?:>>|>\||&>>|&>|>&|<<<|<<|<&|<|>)/
+const REDIRECT = /^\d*(?:>>|>\||&>>|&>|>&|<<<|<<-|<<|<>|<&|<|>)/
 
 // The words of a bash cd or pushd that can be its folder: flags and redirects are not, and neither is the target of a
 // redirect whose operator stands alone.
@@ -1046,9 +1057,8 @@ function psText(text: string) {
   return out
 }
 
-// A backslash before a line break joins the words around it in bash, as a backtick does in PowerShell, which `fragments` joins.
-// PowerShell text passes through here too: its backslash is a path separator, but a line break after one is rare enough
-// that joining only makes a fragment longer, never shorter.
+// A backslash before a line break joins the words around it in bash. Only bash text passes through here: in PowerShell a
+// backslash is a path separator, a backtick joins lines, and `fragments` does that.
 const joined = (text: string) => text.replace(/\\\r?\n/g, "")
 
 type Token = { raw: string; value: string }

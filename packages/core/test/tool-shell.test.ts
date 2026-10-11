@@ -3671,24 +3671,25 @@ describe("ShellTool guard", () => {
 
     // A redirect word before the operand of cd is not the folder (class 3/4): the input is opaque (an unknown variable), so
     // the fragment reader is the only source of the folder.
-    test(`${scanner}: a redirect before the folder of cd still asks for the folder, and a reject keeps the file`, () =>
-      withScanner(portable, (registry, fixture) =>
-        Effect.gen(function* () {
-          yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
-          yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
-          const result = yield* runPermissionCommand(
-            registry,
-            `cd 2>/dev/null '${fixture.outside}' && rm s; echo $FOO`,
-            path.join(fixture.active, "k"),
-            ["reject"],
-          )
-          expect(result.requests).toMatchObject([
-            { action: "external_directory", resources: [path.join(fixture.outside, "*")] },
-          ])
-          expectDeclined(result.exit)
-          expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
-        }),
-      ))
+    for (const redirect of ["2>/dev/null", ">|/dev/null", ">| /dev/null", "<> f", "3<> f"])
+      test(`${scanner}: a redirect before the folder of cd still asks for the folder, and a reject keeps the file: ${redirect}`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+            yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+            const result = yield* runPermissionCommand(
+              registry,
+              `cd ${redirect} '${fixture.outside}' && rm s; echo $FOO`,
+              path.join(fixture.active, "k"),
+              ["reject"],
+            )
+            expect(result.requests).toMatchObject([
+              { action: "external_directory", resources: [path.join(fixture.outside, "*")] },
+            ])
+            expectDeclined(result.exit)
+            expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+          }),
+        ))
 
     test(`${scanner}: a redirect with no command asks by its own statement, and a rule governs it`, () =>
       withScanner(portable, (registry, fixture) =>
@@ -4095,6 +4096,38 @@ describe("ShellTool guard (PowerShell)", () => {
               const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "k"), ["reject"])
               expect(result.requests).toHaveLength(1)
               expect(result.requests[0]).toMatchObject({ action: "external_directory", resources: [path.join(fixture.outside, "*").replaceAll("\\", "/")] })
+              expectDeclined(result.exit)
+              expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+            }),
+          ),
+        options,
+      )
+
+  // A misread that drops the folder must not drop the one after it (class 3/4/8): the raw reading is the text as written,
+  // so a trailing backslash does not join the next line, and a block comment between the cmdlet and its folder is blanks.
+  for (const opener of ["Write-Output x<#", "$h = @'\nit's <#\n'@"])
+    for (const [name, line, folder] of [
+      ["a trailing backslash", "Set-Location ..\\\nRemove-Item outside\\s", (fixture: { active: string }) => path.dirname(fixture.active)],
+      [
+        "a block comment before the folder",
+        "Set-Location <# c #> ../outside\nRemove-Item s",
+        (fixture: { outside: string }) => fixture.outside,
+      ],
+    ] as const)
+      test(
+        `a removal after ${opener} and ${name} asks for the folder, and a reject keeps the file`,
+        () =>
+          ask((registry, fixture) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+              yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+              const command = `${opener}\n${line} #${"x".repeat(10_050)}`
+              const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "k"), ["reject"])
+              expect(result.requests).toHaveLength(1)
+              expect(result.requests[0]).toMatchObject({
+                action: "external_directory",
+                resources: [path.join(folder(fixture as { active: string; outside: string }), "*").replaceAll("\\", "/")],
+              })
               expectDeclined(result.exit)
               expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
             }),

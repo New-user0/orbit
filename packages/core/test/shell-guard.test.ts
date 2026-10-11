@@ -58,7 +58,7 @@ const analyse = (command: string, ctx: ShellAnalysis.Context) =>
   ShellAnalysis.inspect(command, ctx, { nested: true }).pipe(Effect.provideService(PowerShellParse.Service, noHost))
 
 // The facts of a command run in `cwd`, which is a folder of the project unless a row says otherwise.
-const facts = (command: string, options: { cwd: string; home?: string; writable?: string[]; shell?: string }) =>
+const facts = (command: string, options: { cwd: string; home?: string; writable?: string[]; shell?: string; loose?: string[] }) =>
   Effect.gen(function* () {
     const ctx = context(options.cwd, options.home ?? os.homedir(), options.shell)
     const access = yield* FileAccess.Service
@@ -68,6 +68,7 @@ const facts = (command: string, options: { cwd: string; home?: string; writable?
       ctx,
       cwd: yield* access.resolve({ path: options.cwd, kind: "directory" }),
       directories: [],
+      loose: options.loose,
       writable: options.writable,
     })
   })
@@ -279,6 +280,20 @@ const repository = async (folder: string) => {
   await fs.mkdir(path.join(folder, ".git"), { recursive: true })
   await fs.writeFile(path.join(folder, ".git", "HEAD"), "ref: refs/heads/main\n")
 }
+
+describe("ShellGuard.facts: a folder only the raw reading found", () => {
+  // The drive name is not a disk, so FileAccess refuses it: the call goes on, and the finding says so.
+  ;(win ? it.live : it.live.skip)("says an unresolved loose folder as a finding and does not fail the call", () =>
+    Effect.gen(function* () {
+      const { project } = yield* layout
+      yield* Effect.gen(function* () {
+        const found = yield* facts("Get-Date", { cwd: project, shell: "pwsh", loose: ["HKCU:\\Software"] })
+        expect(found.places.map((place) => place.status)).toEqual(["unresolved"])
+        expect(found.findings.map((finding) => finding.reason)).toContain("unresolved-path")
+      }).pipe(provide(project, true))
+    }),
+  )
+})
 
 describe("ShellGuard.facts: the bare-repository probe", () => {
   const probe = (command: string, cwd: string, root: string) => facts(command, { cwd }).pipe(provide(root, true))
@@ -786,6 +801,40 @@ describe("ShellGuard.authorize", () => {
         expect(folders()).toContainEqual(expect.stringMatching(/\/outside\/\*$/))
       }),
     )
+  // A misread must not drop the folder change after it (class 3/4/8): the raw reading is PowerShell's text as written,
+  // where a backslash before a line break joins nothing, and a block comment that closes is blanks.
+  for (const [opener, name] of [
+    ["Write-Output x<#", misread[0][0]],
+    ["$h = @'\nit's <#\n'@", misread[1][0]],
+  ] as const)
+    for (const [line, why, folder] of [
+      ["Set-Location ..\\outside\\\nRemove-Item s", "a trailing backslash", /\/outside\/\*$/],
+      ["Set-Location ..\\\nRemove-Item outside\\s", "a bare trailing backslash", /^[^]*\/\*$/],
+      ["Set-Location <# c #> ../outside\nRemove-Item s", "a block comment before the folder", /\/outside\/\*$/],
+    ] as const)
+      (win || !why.includes("backslash") ? it.live : it.live.skip)(
+        `asks for the folder of padded input after ${name} and ${why}`,
+        () =>
+          Effect.gen(function* () {
+            yield* run(`${opener}\n${line} ${pad}`, () => false, { shell: "pwsh" })
+            expect(folders()).toEqual([expect.stringMatching(folder)])
+            expect(folders().join("")).not.toMatch(/Remove-Item/)
+          }),
+      )
+  it.live("reads PowerShell's raw text as written and blanks a block comment that closes", () =>
+    Effect.sync(() => {
+      const raw = (text: string) => ShellGuard.locations(text, "pwsh", "win32", "", "", true)
+      expect(raw("Write-Output x<#\nSet-Location ..\\\nRemove-Item outside\\s")).toEqual(["..\\"])
+      expect(raw("Write-Output x<#\nSet-Location ..\\outside\\\nRemove-Item s")).toEqual(["..\\outside\\"])
+      expect(raw("Set-Location <# c #> ../outside")).toEqual(["../outside"])
+      expect(raw("Set-Location ../a <# ../b #>")).toEqual(["../a"])
+      // A block comment that does not close in its fragment ends the words at its opener.
+      expect(raw("Set-Location ../a <# ../b")).toEqual(["../a"])
+      expect(ShellGuard.fragmentWords("Get-Content a <# b", true, true)).toEqual(["a"])
+      // A word that starts with a quote ends at its closing quote, and a `#` right after it starts a comment.
+      expect(ShellGuard.locations("Write-Output 'a'# <#\nSet-Location ../a", "pwsh", "win32")).toEqual(["../a"])
+    }),
+  )
   it.live("does not fail the call for block-commented code that holds a refused spelling", () =>
     Effect.gen(function* () {
       const exit = yield* run(`<# Set-Location HKLM:\\Software #>\nRemove-Item s ${pad}`, () => false, { shell: "pwsh" })
@@ -824,17 +873,31 @@ describe("ShellGuard.authorize", () => {
     "cd >/dev/null ../outside",
     "cd &>/dev/null ../outside",
     "pushd 2>/dev/null ../outside",
+    "cd <> f ../outside",
+    "cd 3<> f ../outside",
+    "cd >|/dev/null ../outside",
+    "cd >| /dev/null ../outside",
+    "cd <<- EOF ../outside",
   ])
     for (const padded of [false, true])
       it.live(`asks for the folder after a redirect${padded ? ", padded" : ""}: ${command}`, () =>
         Effect.gen(function* () {
-          yield* run(`${command} && rm s; echo $FOO${padded ? ` ${pad}` : ""}`, () => false)
+          // A heredoc operator takes its body from the lines after the command.
+          const body = command.includes("<<") ? "\nbody\nEOF" : ""
+          yield* run(`${command} && rm s; echo $FOO${padded ? ` ${pad}` : ""}${body}`, () => false)
           expect(folders()).toContainEqual(expect.stringMatching(/\/outside\/\*$/))
+          expect(folders()).toHaveLength(1)
         }),
       )
   it.live("picks the folder of a bash cd past redirects and flags", () =>
     Effect.sync(() => {
-      for (const text of ["cd 2>/dev/null ../a", "cd 2> /dev/null ../a", "cd >/dev/null ../a", "cd &>/dev/null ../a", "cd <&3 ../a"])
+      for (const text of ["cd 2>/dev/null ../a", "cd 2> /dev/null ../a", "cd >/dev/null ../a", "cd &>/dev/null ../a", "cd <&3 ../a",
+        "cd <> f ../a",
+        "cd 3<> f ../a",
+        "cd <<- EOF ../a",
+        "cd >|/dev/null ../a",
+        "cd >| /dev/null ../a",
+      ])
         expect(ShellGuard.locations(text, "bash", "linux")).toEqual(["../a"])
       expect(ShellGuard.locations("cd ../a ../b", "bash", "linux")).toEqual(["../a"])
       expect(ShellGuard.locations("cd -P ../a 2>&1", "bash", "linux")).toEqual(["../a"])
