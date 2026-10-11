@@ -344,7 +344,7 @@ const layer = Layer.effect(
           "limit.structured-output",
           `The model did not hand in an answer that follows the schema within ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
         )
-      return { validator: compiled.validator, accepted: progress.latest === "accepted" }
+      return { validator: compiled.validator, schema: output.schema, accepted: progress.latest === "accepted" }
     })
 
     const prepareContext = Effect.fn("SessionRunner.prepareContext")(function* (sessionID: SessionSchema.ID) {
@@ -445,7 +445,7 @@ const layer = Layer.effect(
               : transcript.messages,
           // Keep tool definitions on the final Step to preserve the provider's cached prefix.
           toolChoice: handInOnly ? { type: "tool", name: SessionOutput.NAME } : stepLimitReached ? "none" : undefined,
-          output: output && { validator: output.validator, only: handInOnly },
+          output: output && { validator: output.validator, schema: output.schema, only: handInOnly },
           webSocket: "session",
           inputTokens: SessionCompaction.estimatePrompt(loaded),
           outputTokenCap: loaded.outputTokenCap,

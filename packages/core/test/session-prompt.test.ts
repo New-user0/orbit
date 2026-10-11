@@ -1425,6 +1425,7 @@ describe("Session.inbox", () => {
     ["a remote reference", { type: "object", properties: { a: { $ref: "https://example.com/a.json" } } }, /outside the schema/],
     ["a reference that does not resolve", { type: "object", properties: { a: { $ref: "#/$defs/missing" } } }, /does not point/],
     ["a reference into a number", { type: "object", properties: { a: { $ref: "#/maxItems" } }, maxItems: 3 }, /does not point/],
+    ["a nested $id", { type: "object", properties: { a: { $id: "https://example.com/a", type: "string" } } }, /only allowed at the root/],
     ["an unknown keyword", { type: "object", frobnicate: true }, /Unknown keyword "frobnicate"/],
     ["a misspelt keyword", { type: "object", requred: ["a"] }, /Did you mean "required"/],
     ["an unsupported $schema", { $schema: "http://json-schema.org/draft-04/schema#", type: "object" }, /\$schema/],

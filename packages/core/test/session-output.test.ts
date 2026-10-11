@@ -239,19 +239,6 @@ describe("SessionOutput.compile", () => {
     expect(validator.validate({ a: 1 }).map((failure) => failure.pointer)).toEqual(["/a"])
   })
 
-  test("follows a recursive reference down the answer", () => {
-    const validator = compiled({
-      type: "object",
-      properties: { name: { type: "string" }, children: { type: "array", items: { $ref: "#" } } },
-      required: ["name"],
-    })
-
-    expect(validator.validate({ name: "a", children: [{ name: "b", children: [{ name: "c" }] }] })).toEqual([])
-    expect(validator.validate({ name: "a", children: [{ name: "b", children: [{}] }] }).map((f) => f.pointer)).toEqual([
-      "/children/0/children/0/name",
-    ])
-  })
-
   test("names a property with control characters without carrying them into the message", () => {
     const validator = compiled({ type: "object", additionalProperties: false })
 
@@ -276,6 +263,63 @@ describe("SessionOutput.compile", () => {
 
   // A reference that never reads the answer would loop forever in a naive validator; the answer is checked in a child
   // process under a deadline, because a synchronous loop would also stop this runner's own timeout.
+  const inChild = async (script: string) => {
+    const child = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" })
+    const timer = setTimeout(() => child.kill(), 15_000)
+    const code = await child.exited
+    clearTimeout(timer)
+    return { code, out: await new Response(child.stdout).text() }
+  }
+  const outputModule = JSON.stringify(path.join(import.meta.dir, "../src/session/output.ts").replaceAll("\\", "/"))
+
+  test(
+    "follows a recursive reference down the answer",
+    async () => {
+      const schema = {
+        type: "object",
+        properties: { name: { type: "string" }, children: { type: "array", items: { $ref: "#" } } },
+        required: ["name"],
+      }
+      const result = await inChild(`
+        import { SessionOutput } from ${outputModule}
+        const result = SessionOutput.compile(${JSON.stringify(schema)})
+        if (!result.ok) throw new Error(result.message)
+        console.log(JSON.stringify([
+          result.validator.validate({ name: "a", children: [{ name: "b", children: [{ name: "c" }] }] }).length,
+          result.validator.validate({ name: "a", children: [{ name: "b", children: [{}] }] }).map((f) => f.pointer),
+        ]))
+      `)
+
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.out)).toEqual([0, ["/children/0/children/0/name"]])
+    },
+    30_000,
+  )
+
+  test("counts nesting, not chained references, against the depth limit", () => {
+    const defs = Object.fromEntries(
+      Array.from({ length: 70 }, (_, index) => [`d${index}`, index === 69 ? { type: "string" } : { $ref: `#/$defs/d${index + 1}` }]),
+    )
+
+    expect(SessionOutput.compile({ type: "object", properties: { a: { $ref: "#/$defs/d0" } }, $defs: defs }).ok).toBe(true)
+  })
+
+  test("refuses a nested $id, which would change what its references point at", () => {
+    const result = SessionOutput.compile({
+      type: "object",
+      properties: { q: { $id: "https://example.com/inner", type: "object" } },
+    })
+
+    expect(result).toMatchObject({ ok: false })
+    expect(result.ok === false && result.message).toMatch(/only allowed at the root/)
+  })
+
+  test("names an unknown keyword without carrying control characters", () => {
+    const result = SessionOutput.compile({ type: "object", "bad[2Jkey": true })
+
+    expect(result.ok === false && result.message).not.toMatch(//)
+  })
+
   test.each([
     ["a reference to the root", { type: "object", $ref: "#" }],
     [

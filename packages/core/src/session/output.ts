@@ -207,13 +207,18 @@ function check(node: unknown, scope: Scope, pointer = "", level = 0): string | u
   for (const key of Object.keys(node)) {
     if (!KEYWORDS.has(key)) {
       const near = [...KEYWORDS].find((known) => distance(known, key) <= 1 && key.length > 3)
-      return `Unknown keyword "${key}" at ${where(pointer)}${near ? `. Did you mean "${near}"?` : "."} Orbit refuses a keyword it cannot enforce.`
+      return `Unknown keyword "${printable(key)}" at ${where(pointer)}${near ? `. Did you mean "${near}"?` : "."} Orbit refuses a keyword it cannot enforce.`
     }
     const value = node[key]
     const at = `${where(pointer)} keyword "${key}"`
     switch (key) {
-      case "$schema":
       case "$id":
+        // A nested $id would start a new base for the $refs inside it, which the validator does not model.
+        if (node !== scope.root)
+          return `${at} is only allowed at the root of the schema, because a nested "$id" changes what its references point at.`
+        if (typeof value !== "string") return `${at} must be a string.`
+        break
+      case "$schema":
       case "$comment":
       case "title":
       case "description":
@@ -351,7 +356,8 @@ function check(node: unknown, scope: Scope, pointer = "", level = 0): string | u
         const target = resolve(value, scope.root)
         if (target === undefined)
           return `${at} is "${printable(value)}", which does not point at anything in the schema.`
-        const problem = check(target, scope, `${pointer}/$ref`, level + 1)
+        // The seen set bounds reference chains, so a hop is not another level of nesting.
+        const problem = check(target, scope, `${pointer}/$ref`, level)
         if (problem) return problem
         break
       }

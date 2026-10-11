@@ -2145,11 +2145,12 @@ A prompt can ask that the turn end with an answer that follows a JSON Schema: `t
 the `schema` and, optionally, `attempts` (1 to 20, default 5), and `orb run`, `orb -p` and the SDK send it from
 `--json-schema`. The schema is checked and compiled when the prompt is admitted. The runner then offers the model one
 extra tool, `StructuredOutput`, whose parameters are the schema as you wrote it, always as a direct tool: no permission
-rule, agent tool list, context hook or Code Mode setting removes it, and it never asks. Each hand-in is validated; a bad one is
+rule, agent tool list or context hook removes it, and it never asks. Each hand-in is validated; a bad one is
 sent back to the model with every failure (a JSON Pointer and a reason), and a turn that stops without an accepted
 hand-in is asked to hand one in. The turn ends with the latest accepted value, or fails: `limit.structured-output` after
 `attempts` responses that handed in a wrong answer (a valid last attempt still succeeds), or `output.missing` when the model
-never hands one in (after the eight turn-end continuations). `structured_output` on the result comes from the accepted
+never hands one in (after the eight turn-end continuations, or when the agent's step allowance ends first). A model that cannot call
+tools fails with `output.unsupported-model`, and a stored schema that no longer compiles with `output.schema-invalid`. `structured_output` on the result comes from the accepted
 hand-in in the history, and is present only on success.
 
 This replaces the earlier text path: the schema is no longer appended to the prompt, and the answer is no longer parsed
@@ -2157,7 +2158,7 @@ from the reply (a fenced or bare JSON answer in prose is not an answer). Other c
 
 - A schema is refused at admission (HTTP 400, field `turn.output.schema`) unless it is an object whose root declares
   `"type": "object"`, passes the meta-schema (draft-07, 2019-09 or 2020-12; no `$schema` means draft-07), uses only
-  keywords the validator enforces, has only local `$ref`s that resolve (nothing is fetched), and stays under 256 KiB and 64
+  keywords the validator enforces (a `$id` is allowed only at the root), has only local `$ref`s that resolve (nothing is fetched), and stays under 256 KiB and 64
   levels of nesting. Unknown keywords, such as a misspelt `requred`, are refused instead of ignored. `format` and the
   other annotations (`title`, `description`, `default`, `examples`, `$comment`, `deprecated`, `readOnly`, `writeOnly`,
   `contentMediaType`, `contentEncoding`) are accepted and not enforced. The validator interprets the schema and never

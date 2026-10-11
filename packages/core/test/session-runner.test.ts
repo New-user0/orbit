@@ -9188,6 +9188,34 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(2)
     })
 
+    scenario("fails as output.missing when the agent's step allowance ends on a prose answer", function* (s) {
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
+          agent.steps = 1
+        }),
+      )
+      yield* admitOutput(s)
+      yield* s.llm.push(...Array.from({ length: 4 }, (_, index) => TestLLM.text(`Prose ${index}`, `allowance-${index}`)))
+
+      expect(yield* failure(s)).toMatchObject({ type: "output.missing" })
+
+      expect(s.requests).toHaveLength(1)
+    })
+
+    scenario("advertises the turn's own key order, not that of an equal schema compiled earlier", function* (s) {
+      const first = { type: "object", properties: { reasoning: { type: "string" }, answer: { type: "string" } } }
+      const second = { type: "object", properties: { answer: { type: "string" }, reasoning: { type: "string" } } }
+      expect(SessionOutput.compile(first).ok).toBe(true)
+      yield* admitOutput(s, { schema: second })
+      yield* s.llm.push(handIn({ answer: "a" }), TestLLM.stop())
+
+      yield* s.resume
+
+      const advertised = s.requests[0]?.tools.find((tool) => tool.name === SessionOutput.NAME)
+      expect(Object.keys((advertised as unknown as { inputSchema: { properties: object } }).inputSchema.properties)).toEqual(["answer", "reasoning"])
+    })
+
     scenario("stops the step when a stored schema no longer compiles, instead of running unchecked", function* (s) {
       yield* admitOutput(s)
       // A row written around admission, as an old or edited database could hold.

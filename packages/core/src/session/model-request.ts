@@ -104,7 +104,12 @@ export interface Input {
    * The turn asked for a structured answer: the request ends with the hand-in tool, whatever the registry, the agent's
    * permissions or a context hook left. `only` offers nothing else, for a step that may do nothing but hand in.
    */
-  readonly output?: { readonly validator: SessionOutput.Validator; readonly only: boolean }
+  readonly output?: {
+    readonly validator: SessionOutput.Validator
+    /** The turn's own schema, in the order the person wrote it; the validator may be a cached one from another key order. */
+    readonly schema: Readonly<Record<string, unknown>>
+    readonly only: boolean
+  }
 }
 
 const modelOutputMax = (limit: Model.Info["limit"]) =>
@@ -315,7 +320,7 @@ export const layer = Layer.effect(
                   type: "tool" as const,
                   name: SessionOutput.NAME,
                   description: SessionOutput.DESCRIPTION,
-                  inputSchema: handIn.validator.schema,
+                  inputSchema: handIn.schema,
                 },
               ] as const,
             ]
