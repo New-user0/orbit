@@ -60,6 +60,11 @@ export type Input = {
   cwd: FileAccess.Target
   /** Folders the command changes to that the scanner found, absolute, beyond what the analysis lists. */
   directories: readonly string[]
+  /**
+   * Folders that only a reading of the raw text found, absolute: text a comment or a string may hold, so they are asked
+   * about but a spelling FileAccess cannot name never fails the call.
+   */
+  loose?: readonly string[]
   /** The folders the command may write when it runs inside the sandbox. Unset when it runs without one. */
   writable?: readonly string[]
 }
@@ -190,7 +195,10 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   const extra = yield* Effect.forEach(input.directories, (directory) =>
     resolvePlace({ candidates: [directory], kind: "directory", role: "read", removal: false, change: true, level: 0 }),
   )
-  const everything = [...resolved, ...extra]
+  const guessed = yield* Effect.forEach(input.loose ?? [], (directory) =>
+    resolvePlace({ candidates: [directory], kind: "directory", role: "read", removal: false, change: false, level: 0 }),
+  )
+  const everything = [...resolved, ...extra, ...guessed]
 
   const git = ShellSafety.runsGit(input.analysis, input.ctx.platform)
   const probed = git ? yield* probeGit(all, input.cwd.absolute) : { bare: [], dynamic: false }
@@ -370,19 +378,26 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
     ...(ps ? (analysis.opaque ? [] : expansions(analysis, input.cwd.absolute, input.shell)) : (scanned?.directories ?? [])),
     ...(fragmentary ? locations(input.command, analysis.dialect, process.platform, input.cwd.absolute, input.shell) : []),
   ]
+  // The raw text is read as well as the text with its comments and strings taken out: a misreading of the second can
+  // only add a folder here, never drop one.
+  const read = (folders: string[]) => folders.map((directory) => FileAccess.resolvePath(input.cwd.absolute, directory))
+  const loose = fragmentary
+    ? locations(input.command, analysis.dialect, process.platform, input.cwd.absolute, input.shell, true)
+    : []
   const gathered = yield* facts({
     analysis,
     text: input.command,
     ctx,
     cwd: input.cwd,
-    directories: directories.map((directory) => FileAccess.resolvePath(input.cwd.absolute, directory)),
+    directories: read(directories),
+    loose: read(loose.filter((folder) => !directories.includes(folder))),
     writable: input.writable,
   })
   // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
   // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
   const literal = [
     ...(ps ? words(analysis) : yield* ShellParse.operands(input.command, input.shell)),
-    ...(fragmentary ? fragmentWords(input.command, ps) : []),
+    ...(fragmentary ? [...fragmentWords(input.command, ps), ...fragmentWords(input.command, ps, true)] : []),
   ]
   const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, operand)))
   const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
@@ -849,9 +864,16 @@ export function words(analysis: Analysis) {
  * target built as the command runs (`../out/$X`) names the nearest folder before the part that is built, and nothing when
  * no folder comes first.
  */
-export function locations(text: string, dialect: Analysis["dialect"], platform: NodeJS.Platform, cwd = "", shell = "") {
+export function locations(
+  text: string,
+  dialect: Analysis["dialect"],
+  platform: NodeJS.Platform,
+  cwd = "",
+  shell = "",
+  raw = false,
+) {
   const ps = dialect === "powershell-5.1" || dialect === "pwsh"
-  const found = ShellSafety.fragments(ps ? psText(text) : joined(text)).flatMap((fragment) => {
+  const found = ShellSafety.fragments(readable(text, ps, raw)).flatMap((fragment) => {
     const words = fragmentTokens(fragment, ps)
     const head = words[0]!.value
     // A module-qualified name (`Microsoft.PowerShell.Management\Set-Location`) is the cmdlet.
@@ -859,9 +881,9 @@ export function locations(text: string, dialect: Analysis["dialect"], platform: 
     const target = ps ? (aliasTarget(name, dialect, platform) ?? name) : head
     if (!(ps ? MOVES.has(target) && target !== "pop-location" : target === "cd" || target === "pushd")) return []
     // A comment ends the words; bash takes only the first operand of cd and pushd.
-    const comment = words.findIndex((word, index) => index > 0 && word.raw.startsWith("#"))
+    const comment = words.findIndex((word, index) => index > 0 && /^(#|<#)/.test(word.raw))
     const operands = words.slice(1, comment === -1 ? undefined : comment)
-    return (ps ? operands : operands.filter((word) => !word.raw.startsWith("-")).slice(0, 1)).flatMap((item, index, rest) => {
+    return (ps ? operands : bashOperands(operands).slice(0, 1)).flatMap((item, index, rest) => {
       const bound = ps ? colonBound(item, rest[index + 1]) : undefined
       if (bound !== undefined && !pathParameter(bound.name)) return []
       const word = bound?.word ?? item
@@ -886,11 +908,11 @@ export function locations(text: string, dialect: Analysis["dialect"], platform: 
  * comments and anything built as the command runs: what a command in it may open as a path. A PowerShell word is joined
  * the way its argument mode joins it, and a parameter bound with a colon gives its value.
  */
-export function fragmentWords(text: string, ps = false) {
+export function fragmentWords(text: string, ps = false, raw = false) {
   return distinct(
-    ShellSafety.fragments(ps ? psText(text) : joined(text)).flatMap((fragment) => {
+    ShellSafety.fragments(readable(text, ps, raw)).flatMap((fragment) => {
       const words = fragmentTokens(fragment, ps).slice(1)
-      const comment = words.findIndex((word) => word.raw.startsWith("#"))
+      const comment = words.findIndex((word) => /^(#|<#)/.test(word.raw))
       return (comment === -1 ? words : words.slice(0, comment)).flatMap((word, index, rest) => {
         if (/[$`]/.test(word.raw)) return []
         const bound = ps ? colonBound(word, rest[index + 1]) : undefined
@@ -909,6 +931,45 @@ export function fragmentWords(text: string, ps = false) {
   )
 }
 
+// The text that is split into fragments. The raw reading is the text as written: it models no strings or comments, so
+// it cannot lose a folder to a misreading of them. The other reading takes comments out.
+const readable = (text: string, ps: boolean, raw: boolean) =>
+  ps ? (raw ? joined(text) : psText(text)) : bashText(text, raw)
+
+// Bash text with each line cut at a `#` that starts a word outside quotes.
+function bashText(text: string, raw: boolean) {
+  // The `&` of `&>`, `>&` and `<&` is part of a redirect, not a separator that would cut the command in two.
+  const whole = joined(text).replace(/&(?=>)|(?<=[<>])&/g, "")
+  if (raw) return whole
+  return whole
+    .split(/(?<=\n)/)
+    .map((line) => {
+      let quote: string | undefined
+      for (let at = 0; at < line.length; at++) {
+        const char = line[at]!
+        if (char === "\\" && quote !== "'") at++
+        else if (quote !== undefined) quote = char === quote ? undefined : quote
+        else if (char === '"' || char === "'") quote = char
+        else if (char === "#" && (at === 0 || /[\s;&|()<>]/.test(line[at - 1]!)))
+          return line.slice(0, at) + (line.endsWith("\n") ? "\n" : "")
+      }
+      return line
+    })
+    .join("")
+}
+
+const REDIRECT = /^\d*(?:>>|>\||&>>|&>|>&|<<<|<<|<&|<|>)/
+
+// The words of a bash cd or pushd that can be its folder: flags and redirects are not, and neither is the target of a
+// redirect whose operator stands alone.
+function bashOperands(words: Token[]) {
+  return words.flatMap((word, index) => {
+    if (word.raw.startsWith("-") || REDIRECT.test(word.raw)) return []
+    const before = words[index - 1]
+    return before !== undefined && REDIRECT.exec(before.raw)?.[0] === before.raw ? [] : [word]
+  })
+}
+
 // PowerShell text before it is split into fragments: block comments are blanks, and `${env:NAME}` is `$env:NAME` (the
 // split would cut at its braces); a braced name followed by more word characters is a variable the scan cannot know.
 // Quoted strings and line comments are copied as written: a `<#` opens nothing inside them, and `${` opens nothing
@@ -923,6 +984,8 @@ function psText(text: string) {
   }
   let out = ""
   let at = 0
+  // Where a word that starts with a quote ends: a `#` right after it starts a comment.
+  let quoted = -1
   while (at < text.length) {
     const char = text[at]!
     if (char === "`") {
@@ -930,11 +993,9 @@ function psText(text: string) {
       at += 2
       continue
     }
-    if (char === "#" && (at === 0 || /[\s;|&(){},]/.test(text[at - 1]!))) {
+    if (char === "#" && (at === 0 || at === quoted || /[\s;|&(){},]/.test(text[at - 1]!))) {
       const end = text.slice(at).search(/[\r\n]/)
-      const stop = end === -1 ? text.length : at + end
-      out += text.slice(at, stop)
-      at = stop
+      at = end === -1 ? text.length : at + end
       continue
     }
     if (char === "<" && text[at + 1] === "#") {
@@ -957,6 +1018,7 @@ function psText(text: string) {
     }
     // A quoted string: a doubled closing quote is one quote character; a backtick escapes in double quotes only.
     const single = closing.startsWith("'")
+    const wordStart = at === 0 || /[\s;|&(){},]/.test(text[at - 1]!)
     out += char
     at++
     while (at < text.length) {
@@ -979,6 +1041,7 @@ function psText(text: string) {
       out += text[at]!
       at++
     }
+    if (wordStart) quoted = at
   }
   return out
 }
@@ -991,7 +1054,17 @@ const joined = (text: string) => text.replace(/\\\r?\n/g, "")
 type Token = { raw: string; value: string }
 
 // The closing quote of each opening quote that PowerShell accepts, curly ones included.
-const CLOSING: Record<string, string> = { '"': '"“”', "'": "'‘’", "“": '"“”', "”": '"“”', "‘": "'‘’", "’": "'‘’" }
+const CLOSING: Record<string, string> = {
+  '"': '"“”„',
+  "'": "'‘’‚‛",
+  "“": '"“”„',
+  "”": '"“”„',
+  "„": '"“”„',
+  "‘": "'‘’‚‛",
+  "’": "'‘’‚‛",
+  "‚": "'‘’‚‛",
+  "‛": "'‘’‚‛",
+}
 
 // Words split at blanks, with a quoted word kept whole. A PowerShell word is read as its argument mode reads it: quoted
 // pieces and plain text next to each other are one word, so `a"b c"` is the word `ab c`, and its value has no quote
@@ -1027,6 +1100,12 @@ function fragmentTokens(fragment: string, ps: boolean): Token[] {
       continue
     }
     quote = undefined
+    // A word that starts with a quote ends at its closing quote; one that starts unquoted keeps joining (`a'b'c`).
+    if (CLOSING[raw[0]!] !== undefined) {
+      tokens.push({ raw, value })
+      raw = ""
+      value = ""
+    }
   }
   if (raw !== "") tokens.push({ raw, value })
   return tokens

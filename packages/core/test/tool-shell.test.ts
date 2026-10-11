@@ -3669,6 +3669,27 @@ describe("ShellTool guard", () => {
   for (const portable of [false, true]) {
     const scanner = portable ? "native" : "legacy"
 
+    // A redirect word before the operand of cd is not the folder (class 3/4): the input is opaque (an unknown variable), so
+    // the fragment reader is the only source of the folder.
+    test(`${scanner}: a redirect before the folder of cd still asks for the folder, and a reject keeps the file`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+          yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+          const result = yield* runPermissionCommand(
+            registry,
+            `cd 2>/dev/null '${fixture.outside}' && rm s; echo $FOO`,
+            path.join(fixture.active, "k"),
+            ["reject"],
+          )
+          expect(result.requests).toMatchObject([
+            { action: "external_directory", resources: [path.join(fixture.outside, "*")] },
+          ])
+          expectDeclined(result.exit)
+          expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+        }),
+      ))
+
     test(`${scanner}: a redirect with no command asks by its own statement, and a rule governs it`, () =>
       withScanner(portable, (registry, fixture) =>
         Effect.gen(function* () {
@@ -4056,6 +4077,8 @@ describe("ShellTool guard (PowerShell)", () => {
     "Write-Output '<#'; Set-Location ../outside",
     "Write-Output \"<#\"; Set-Location ../outside",
     "Write-Output ok # note <#\nSet-Location ../outside",
+    "Write-Output x<#\nSet-Location ../outside",
+    "$h = @'\nit's <#\n'@\nSet-Location ../outside",
     "Set-Location ../outside # see HKLM:\\Software",
   ])
     for (const padded of [false, true])

@@ -520,7 +520,7 @@ describe("ShellGuard.authorize", () => {
         yield* Effect.promise(() => link(outside, path.join(project, "cfg")))
         yield* Effect.promise(() => fs.writeFile(path.join(outside, "s"), "secret"))
       }
-      yield* Effect.gen(function* () {
+      return yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         return yield* ShellGuard.authorize({
           command,
@@ -755,6 +755,92 @@ describe("ShellGuard.authorize", () => {
     }),
   )
 
+  // Text that PowerShell does not read as a block comment, which psText once did (class 3/4/8): the raw reading adds the
+  // folder, whatever psText made of the text. Seven spellings, the quote characters it missed, and a quote-first word.
+  const misread = [
+    ["a word that ends in the opener", "Write-Output x<#\nSet-Location ../outside"],
+    ["an apostrophe in a here-string", "$h = @'\nit's <#\n'@\nSet-Location ../outside"],
+    ["a nested string", 'Write-Output "$("<#")";\nSet-Location ../outside'],
+    ["low double quotes", "Write-Output „<#“;\nSet-Location ../outside"],
+    ["a low single quote", "Write-Output ‚<#’;\nSet-Location ../outside"],
+    ["a high-reversed single quote", "Write-Output ‛<#‛;\nSet-Location ../outside"],
+    ["a comment after a closing quote", "Write-Output 'a'# <#\nSet-Location ../outside"],
+    ["a comment after a number", "$a = 1# <#\nSet-Location ../outside"],
+    ["a double-quoted here-string", '$h = @"\nsay "hi <#\n"@\nSet-Location ../outside'],
+    ["a low double quote around the folder", "Set-Location „../outside“"],
+    ["a low single quote around the folder", "Set-Location ‚../outside’"],
+    ["a comment right after the quoted folder", "Set-Location '../outside'#x"],
+  ] as const
+  for (const [name, spelling] of misread)
+    it.live(`asks for the folder of padded input after ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling}\nRemove-Item s ${pad}`, () => false, { shell: "pwsh" })
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+        expect(folders().join("")).not.toMatch(/["'„“‚’‛#]/)
+      }),
+    )
+  for (const [name, spelling] of [misread[0], misread[1]] as const)
+    it.live(`asks for a link's folder in padded input after ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling}\nGet-Content cfg/s ${pad}`, () => false, { shell: "pwsh", link: true })
+        expect(folders()).toContainEqual(expect.stringMatching(/\/outside\/\*$/))
+      }),
+    )
+  it.live("does not fail the call for block-commented code that holds a refused spelling", () =>
+    Effect.gen(function* () {
+      const exit = yield* run(`<# Set-Location HKLM:\\Software #>\nRemove-Item s ${pad}`, () => false, { shell: "pwsh" })
+      expect(exit._tag).toBe("Success")
+    }),
+  )
+  it.live("keeps the folder with the quotes read as PowerShell reads them", () =>
+    Effect.sync(() => {
+      expect(ShellGuard.locations("Set-Location '../a'#x", "pwsh", "win32")).toEqual(["../a"])
+      expect(ShellGuard.locations("Set-Location „../a“", "pwsh", "win32")).toEqual(["../a"])
+      expect(ShellGuard.fragmentWords("Get-Content a'b'c", true)).toEqual(["abc"])
+      // The raw reading finds what psText drops.
+      expect(ShellGuard.locations("Write-Output x<#\nSet-Location ../a", "pwsh", "win32")).toEqual([])
+      expect(ShellGuard.locations("Write-Output x<#\nSet-Location ../a", "pwsh", "win32", "", "", true)).toEqual(["../a"])
+    }),
+  )
+  // Comment text that holds a separator is not a folder change, whatever it says (decision 1).
+  it.live("does not fail the call for a separator inside comment text", () =>
+    Effect.gen(function* () {
+      for (const [command, shell] of [
+        [`Set-Location ../outside # old; Set-Location HKLM:\\Software\nRemove-Item s ${pad}`, "pwsh"],
+        ["cd ../outside # note; cd C:x:y\necho $FOO", undefined],
+        [`cd ../outside # note; cd C:x:y\necho $FOO ${pad}`, undefined],
+      ] as const) {
+        asked.length = 0
+        const exit = yield* run(command, () => false, shell ? { shell } : {})
+        expect(exit._tag).toBe("Success")
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }
+    }),
+  )
+  // A redirect word is not the operand of a bash cd (class 3/4).
+  for (const command of [
+    "cd 2>/dev/null ../outside",
+    "cd 2> /dev/null ../outside",
+    "cd >/dev/null ../outside",
+    "cd &>/dev/null ../outside",
+    "pushd 2>/dev/null ../outside",
+  ])
+    for (const padded of [false, true])
+      it.live(`asks for the folder after a redirect${padded ? ", padded" : ""}: ${command}`, () =>
+        Effect.gen(function* () {
+          yield* run(`${command} && rm s; echo $FOO${padded ? ` ${pad}` : ""}`, () => false)
+          expect(folders()).toContainEqual(expect.stringMatching(/\/outside\/\*$/))
+        }),
+      )
+  it.live("picks the folder of a bash cd past redirects and flags", () =>
+    Effect.sync(() => {
+      for (const text of ["cd 2>/dev/null ../a", "cd 2> /dev/null ../a", "cd >/dev/null ../a", "cd &>/dev/null ../a", "cd <&3 ../a"])
+        expect(ShellGuard.locations(text, "bash", "linux")).toEqual(["../a"])
+      expect(ShellGuard.locations("cd ../a ../b", "bash", "linux")).toEqual(["../a"])
+      expect(ShellGuard.locations("cd -P ../a 2>&1", "bash", "linux")).toEqual(["../a"])
+    }),
+  )
+
   // A word that a link in an untrusted project leads out of: the elements of an array and a colon-bound value come from
   // PowerShell's parser; a block comment before the word and a Unicode dash come from the fragment split.
   for (const command of [
@@ -818,7 +904,8 @@ describe("ShellGuard.authorize", () => {
       ).toEqual(["../a", "../b", "c", "d"])
       expect(ShellGuard.locations(`Set-Location ../o"u"t; Set-Location 'a b'x; Set-Location -Path:"../q"`, "pwsh", "win32")).toEqual([
         "../out",
-        "a bx",
+        "a b",
+        "x",
         "../q",
       ])
       expect(ShellGuard.locations("Set-Location -PassThru:$true; Set-Location ../x/$Y/z; cd $Y", "pwsh", "win32")).toEqual([
