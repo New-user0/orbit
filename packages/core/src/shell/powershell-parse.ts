@@ -25,6 +25,9 @@ export type Redirect = {
   operator: string
   // Source text of the target. A merge has none.
   target?: string
+  // File redirect only: the target as a constant, quotes removed and backtick escapes resolved. Absent when the target is
+  // not a string constant (a variable, an expandable string, an expression), which a caller treats as not known.
+  value?: string
   // File redirect only: the target is the variable $null (or ${null}), which discards the output.
   nullSink?: boolean
   text: string
@@ -119,7 +122,7 @@ function Redirect($n) {
   if ($n -is [System.Management.Automation.Language.FileRedirectionAst]) {
     $s = @{ Output = ''; All = '*'; Error = '2'; Warning = '3'; Verbose = '4'; Debug = '5'; Information = '6' }[[string]$n.FromStream]
     $null_ = ($n.Location -is [System.Management.Automation.Language.VariableExpressionAst]) -and ($n.Location.VariablePath.UserPath -eq 'null')
-    [ordered]@{ kind = 'file'; operator = $(if ($n.Append) { $s + '>>' } else { $s + '>' }); target = $n.Location.Extent.Text; nullSink = [bool]$null_; text = $n.Extent.Text }
+    [ordered]@{ kind = 'file'; operator = $(if ($n.Append) { $s + '>>' } else { $s + '>' }); target = $n.Location.Extent.Text; value = Value $n.Location; nullSink = [bool]$null_; text = $n.Extent.Text }
   } else {
     [ordered]@{ kind = 'merge'; operator = [string]$n.FromStream + '>&' + [string]$n.ToStream; text = $n.Extent.Text }
   }
@@ -404,6 +407,7 @@ const RawRedirect = Schema.Struct({
   kind: Schema.Literals(["file", "merge"]),
   operator: Schema.String,
   target: optional(Schema.String),
+  value: optional(Schema.String),
   nullSink: optional(Schema.Boolean),
   text: Schema.String,
 })
@@ -506,6 +510,7 @@ function redirect(raw: RawRedirectType): Redirect {
     kind: raw.kind,
     operator: raw.operator,
     ...(raw.target ? { target: raw.target } : {}),
+    ...(raw.value !== undefined && raw.value !== null ? { value: raw.value } : {}),
     ...(raw.nullSink ? { nullSink: true } : {}),
     text: raw.text,
   }
