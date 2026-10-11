@@ -58,6 +58,13 @@ const valid = [
     need: 0,
   },
   {
+    name: "JPEG with an arithmetic conditioning segment before the frame",
+    bytes: jpeg(segment(0xcc, [0x00, 0x11]), frame(0xc0, 70, 50)),
+    mime: "image/jpeg",
+    size: { width: 70, height: 50 },
+    need: 0,
+  },
+  {
     name: "BMP with a 40-byte header stored top-down",
     bytes: bmp(40, 20, -10),
     mime: "image/bmp",
@@ -126,6 +133,20 @@ describe("Mime.dimensions", () => {
         decoded.free()
       }
     }
+    // Photon has no GIF encoder: a hand-built GIF with a 1x1 frame on a 10x6 screen, which it decodes at screen size.
+    const screen = Uint8Array.from([
+      ...Array.from("GIF89a").map((c) => c.charCodeAt(0)),
+      10, 0, 6, 0, 0x80, 0, 0,
+      0, 0, 0, 0xff, 0xff, 0xff,
+      0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0,
+      2, 2, 0x44, 0x01, 0,
+      0x3b,
+    ])
+    expect(Mime.detect(screen)).toBe("image/gif")
+    const decoded = photon.PhotonImage.new_from_byteslice(screen)
+    expect(Mime.dimensions(screen, "image/gif")).toEqual({ width: decoded.get_width(), height: decoded.get_height() })
+    expect(Mime.dimensions(screen, "image/gif")).toEqual({ width: 10, height: 6 })
+    decoded.free()
   })
 })
 
@@ -153,6 +174,29 @@ describe("Mime.dimensions answers promptly on a JPEG built to stall a walk", () 
     expect(
       await run(Uint8Array.from([0xff, 0xd8, ...Array.from({ length: 100_000 }, () => [0xff, 0xd3]).flat()])),
     ).toEqual({ code: 0, result: null })
+  }, 30_000)
+
+  test("every valid, cut-short and undefined JPEG case, in one child under one deadline", async () => {
+    const full = jpeg(jfif(), exif(jpeg(frame(0xc0, 160, 120))), frame(0xc0, 4_000, 3_000))
+    const cases = [
+      ...valid.filter((item) => item.mime === "image/jpeg").map((item) => ({ bytes: item.bytes, expected: item.size })),
+      ...Array.from({ length: full.length - 3 }, (_, length) => ({ bytes: full.slice(0, length), expected: null })),
+      ...[
+        jpeg(jfif(), segment(0xda, [0, 0])),
+        jpeg(frame(0xc0, 10, 0)),
+        jpeg(frame(0xc8, 10, 10)),
+        Uint8Array.from([0xff, 0xd8, 0x12, 0x34, 0x56, 0x78]),
+      ].map((bytes) => ({ bytes, expected: null })),
+    ]
+    const file = path.join(os.tmpdir(), `orbit-mime-batch-${crypto.randomUUID()}.json`)
+    await Bun.write(file, JSON.stringify(cases.map((item) => ({ base64: Buffer.from(item.bytes).toString("base64"), mime: "image/jpeg" }))))
+    const child = Bun.spawn([process.execPath, probe, file, "batch"], { stdout: "pipe", stderr: "pipe" })
+    const timer = setTimeout(() => child.kill(), 20_000)
+    const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
+    clearTimeout(timer)
+    await fs.rm(file, { force: true })
+    expect(code).toBe(0)
+    expect(JSON.parse(stdout.trim().split("\n").at(-1) ?? "null")).toEqual(cases.map((item) => item.expected))
   }, 30_000)
 
   test("control: the same walk reads a valid file", async () => {

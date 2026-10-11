@@ -39,7 +39,8 @@ const imageStore = Layer.mock(Image.Service, {
         content: Buffer.from(`${Buffer.from(content.content, "base64").toString()} normalized`).toString("base64"),
         mime: "image/jpeg",
       },
-      ...(resource.startsWith("scaled")
+      // A second pass over bytes this mock already rewrote sees an image that fits, as the real resizer does.
+      ...(resource.startsWith("scaled") && !Buffer.from(content.content, "base64").toString().endsWith("normalized")
         ? { resized: { from: { width: 1_000, height: 7 }, to: { width: 300, height: 2 } } }
         : {}),
     })
@@ -1374,6 +1375,35 @@ describe("Tool", () => {
         { type: "file", uri: "data:image/jpeg;base64,aW1hZ2Ugbm9ybWFsaXplZA==", mime: "image/jpeg" },
         { type: "text", text: "[1 image omitted: could not be decoded.]" },
       ])
+    }),
+  )
+
+  it.effect("gives no resize note to an image a Code Mode tool returns (left for a follow-up)", () =>
+    Effect.gen(function* () {
+      const service = yield* Tool.Service
+      yield* transform(
+        service,
+        {
+          shot: {
+            name: "shot",
+            description: "Return an image",
+            input: Schema.Struct({}),
+            output: Schema.Struct({ text: Schema.String }),
+            execute: () =>
+              Effect.succeed({
+                output: { text: "done" },
+                content: [{ type: "file" as const, uri: "data:image/png;base64,aW1hZ2U=", mime: "image/png", name: "scaled.png" }],
+              }),
+          },
+        },
+        { codemode: true },
+      )
+      const result = yield* (yield* service.snapshot()).execute({
+        ...call("Execute"),
+        call: { type: "tool-call", id: "call-codemode-image", name: "Execute", input: { code: "return (await tools.shot({})).text" } },
+      })
+      expect(result.content?.some((item) => item.type === "text" && item.text.startsWith("[Image resized"))).toBe(false)
+      expect(result.content?.filter((item) => item.type === "file")).toHaveLength(1)
     }),
   )
 

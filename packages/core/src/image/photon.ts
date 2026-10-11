@@ -88,8 +88,9 @@ export const make = Effect.gen(function* () {
                   encoding: "base64" as const,
                   mime,
                 },
-                // The first candidate keeps the decoded size, so accepting it is a re-encode, not a resize.
-                ...(size.width === width && size.height === height
+                // The first candidate keeps the decoded size, so accepting it is a re-encode, not a resize. A decoded
+                // size of zero (a GIF whose screen is 0x0) has no scale to report either.
+                ...(width === 0 || height === 0 || (size.width === width && size.height === height)
                   ? {}
                   : { resized: { from: { width, height }, to: size } }),
               }

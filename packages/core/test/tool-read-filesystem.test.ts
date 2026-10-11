@@ -196,10 +196,13 @@ describe("ReadToolFileSystem", () => {
 
       const pdf = path.join(directory, "doc.pdf")
       yield* files.writeFile(pdf, yield* Effect.promise(() => makePdf(12)))
+      const whole = path.join(directory, "whole.pdf")
+      yield* files.writeFile(whole, yield* Effect.promise(() => makePdf(1)))
       const text = path.join(directory, "note.txt")
       yield* files.writeFileString(text, "plain")
       const results = [
         yield* readContent(environment, absolute(pdf), "doc.pdf", { pages: { first: 1, last: 2 } }),
+        yield* readContent(environment, absolute(whole), "whole.pdf"),
         yield* readContent(environment, absolute(text), "note.txt"),
       ]
       for (const result of results) expect(result).not.toHaveProperty("dimensions")

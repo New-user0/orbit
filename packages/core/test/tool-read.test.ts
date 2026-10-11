@@ -544,9 +544,11 @@ describe("ReadTool", () => {
         content: png,
         encoding: "base64",
         mime: "image/png",
+        dimensions: { width: 1, height: 1 },
       }
       const registry = yield* Tool.Service
 
+      // The header still names the size from the file, and no resize note follows an image passed through unchanged.
       expect(
         yield* executeTool(registry, {
           sessionID,
@@ -555,7 +557,10 @@ describe("ReadTool", () => {
         }),
       ).toMatchObject({
         status: "completed",
-        content: [{ type: "text" }, { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png" }],
+        content: [
+          { type: "text", text: "Image read successfully (1×1 px, image/png)" },
+          { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png" },
+        ],
       })
     }),
   )
@@ -773,6 +778,32 @@ describe("ReadTool", () => {
         expect(smaller.mime).toBe("image/png")
         expect(smaller.content.length).toBeLessThan(candidate.content.length)
       }
+    }),
+  )
+
+  it.effect("gives no resize note to a GIF whose logical screen is 0x0", () =>
+    Effect.gen(function* () {
+      // A 1x1 frame on a 0x0 screen, padded with a comment extension so it is over the byte cap.
+      const gif = Uint8Array.from([
+        ...Array.from("GIF89a").map((c) => c.charCodeAt(0)),
+        0, 0, 0, 0, 0x80, 0, 0,
+        0, 0, 0, 0xff, 0xff, 0xff,
+        0x21, 0xfe, 200, ...Array.from({ length: 200 }, () => 0x61), 0,
+        0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0,
+        2, 2, 0x44, 0x01, 0,
+        0x3b,
+      ])
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxBase64Bytes: 200 }))
+      const content = { uri: "file:///empty.gif", content: Buffer.from(gif).toString("base64"), encoding: "base64" as const, mime: "image/gif" }
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const decoded = photon.PhotonImage.new_from_byteslice(gif)
+      // Control: the fixture really is a 0x0 image to the resizer, so the test is not vacuous.
+      expect([decoded.get_width(), decoded.get_height()]).toEqual([0, 0])
+      decoded.free()
+      const result = yield* image.normalize("empty.gif", content)
+      expect(result.content.content.length).toBeLessThanOrEqual(200)
+      expect(result).not.toHaveProperty("resized")
     }),
   )
 

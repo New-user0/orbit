@@ -78,6 +78,10 @@ const locations = makeGlobalNode({
               normalize: (_resource, content) =>
                 Effect.succeed({
                   content: content.content.length > 5 * 1024 * 1024 ? { ...content, content: "AA==" } : content,
+                  // A prompt attachment gets no resize note yet; the mock reports one so a note would show.
+                  ...(content.content.length > 5 * 1024 * 1024
+                    ? { resized: { from: { width: 4_000, height: 3_000 }, to: { width: 2_000, height: 1_500 } } }
+                    : {}),
                 }),
             }),
             Layer.mock(Snapshot.Service, {
@@ -489,6 +493,7 @@ describe("Session.prompt", () => {
           source: { type: "inline" },
         },
       ])
+      expect(message.payload.text).toBe("Inspect this image")
     }),
   )
 
