@@ -90,7 +90,7 @@ export interface Interface {
    */
   readonly externalRequest: (
     targets: readonly Target[],
-    context: Invocation,
+    base: Pick<Permission.AssertInput, "sessionID" | "agent" | "source">,
     metadata?: Permission.AssertInput["metadata"],
   ) => Permission.AssertInput | undefined
   /** Approve external directories in one batch, preserving first-seen resource order. */
@@ -291,7 +291,7 @@ const layer = Layer.effect(
 
     const externalRequest = (
       targets: readonly Target[],
-      context: Invocation,
+      base: Pick<Permission.AssertInput, "sessionID" | "agent" | "source">,
       metadata?: Permission.AssertInput["metadata"],
     ): Permission.AssertInput | undefined => {
       const external = Array.dedupeWith(
@@ -309,7 +309,7 @@ const layer = Layer.effect(
         save: external.map((item) => item.save),
         ...(escaped.length === 0 ? {} : { escaped }),
         ...(metadata === undefined ? {} : { metadata }),
-        ...invocation(context),
+        ...base,
       }
     }
 
@@ -318,7 +318,7 @@ const layer = Layer.effect(
       context: Invocation,
       metadata?: Permission.AssertInput["metadata"],
     ) {
-      const request = externalRequest(targets, context, metadata)
+      const request = externalRequest(targets, invocation(context), metadata)
       if (request) yield* permission.assert(request)
     })
 

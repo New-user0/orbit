@@ -22,6 +22,7 @@ export const trustedProject = Layer.mock(ProjectTrust.Service, {
   allows: () => Effect.succeed(true),
   reachable: () => Effect.succeed(true),
   escapes: () => Effect.succeed(undefined),
+  leads: (file) => Effect.succeed(file),
   supplies: () => Effect.succeed(true),
 })
 

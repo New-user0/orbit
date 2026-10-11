@@ -161,6 +161,8 @@ const ARITY: Record<string, number> = {
   "yarn run": 3,
 }
 const PREFIX_LENGTH = Math.max(...Object.values(ARITY))
+/** How long the legacy scan may parse before it gives up; the analysis allows 50 ms, so this leaves room for a slow machine. */
+const SCAN_MS = 500
 
 export const scan = Effect.fnUntraced(function* (
   command: string,
@@ -175,7 +177,11 @@ export const scan = Effect.fnUntraced(function* (
 const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, cwd: string) {
   const parsers = yield* Effect.promise(load)
   const powershell = ShellSelect.ps(shell)
-  const tree = (powershell ? parsers.ps : parsers.bash).parse(command)
+  // A scan that runs long is abandoned: the input is then asked about as a whole.
+  const deadline = performance.now() + SCAN_MS
+  const tree = (powershell ? parsers.ps : parsers.bash).parse(command, null, {
+    progressCallback: () => performance.now() > deadline,
+  })
   if (!tree) return yield* Effect.fail(new Error("Failed to parse shell command"))
 
   return yield* Effect.acquireUseRelease(
@@ -281,7 +287,10 @@ export const scanPortable = Effect.fnUntraced(function* (command: string, shell:
 export const operands = Effect.fnUntraced(function* (command: string, shell: string) {
   const parsers = yield* Effect.promise(load)
   const powershell = ShellSelect.ps(shell)
-  const tree = (powershell ? parsers.ps : parsers.bash).parse(command)
+  const deadline = performance.now() + SCAN_MS
+  const tree = (powershell ? parsers.ps : parsers.bash).parse(command, null, {
+    progressCallback: () => performance.now() > deadline,
+  })
   if (!tree) return []
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),

@@ -1773,3 +1773,85 @@ describe("Permission under managed network settings", () => {
     }),
   )
 })
+
+// `denied` is the deny half of `assert` and nothing else: the shell tool asks it for every request of a call before the
+// first question, so a call that a rule blocks shows no question at all.
+describe("Permission.denied", () => {
+  const managed = (state: Partial<Parameters<ManagedPolicy.Interface["set"]>[1]>) =>
+    Effect.gen(function* () {
+      const policy = yield* ManagedPolicy.Service
+      yield* policy.set("file", { statements: [], ...state })
+    })
+  const sessionRules = (permission: Permission.Ruleset) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({ permission })
+        .where(eq(SessionTable.id, Session.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+    })
+  const rm = (input: Partial<Permission.AssertInput> = {}) =>
+    assertion({ action: "bash", resources: ["rm -rf x"], ...input })
+
+  it.effect("is true for an agent deny, a session deny, a managed deny and a managed denied domain", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "rm *", effect: "deny" }])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(rm())).toBe(true)
+
+      yield* setRules([])
+      expect(yield* service.denied(rm())).toBe(false)
+      yield* sessionRules([{ action: "bash", resource: "rm *", effect: "deny" }])
+      expect(yield* service.denied(rm())).toBe(true)
+
+      yield* sessionRules([])
+      yield* managed({ rules: [{ action: "bash", resource: "rm *", effect: "deny" }] })
+      expect(yield* service.denied(rm())).toBe(true)
+
+      yield* managed({ rules: [], restrictions: { network: { denied_domains: ["evil.example"] } } })
+      expect(yield* service.denied(assertion({ action: "WebFetch", resources: ["https://evil.example/x"] }))).toBe(true)
+      expect(yield* service.denied(assertion({ action: "WebFetch", resources: ["https://fine.example/x"] }))).toBe(false)
+    }),
+  )
+
+  it.effect("is false for an ask and for an allow, and a rule on another resource does not deny", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "ls *", effect: "allow" }])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(rm())).toBe(false)
+      expect(yield* service.denied(rm({ resources: ["ls -a"] }))).toBe(false)
+      yield* setRules([{ action: "bash", resource: "rm *", effect: "ask" }])
+      expect(yield* service.denied(rm())).toBe(false)
+    }),
+  )
+
+  it.effect("creates no request, publishes nothing, runs no hook and reads no grant", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "*", effect: "ask" }])
+      const service = yield* Permission.Service
+      const bus = yield* Bus.Service
+      const events: string[] = []
+      const unsubscribe = yield* bus.listen((event) => Effect.sync(() => void events.push(event.type)))
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const hooks = yield* PluginHooks.Service
+      const ran: string[] = []
+      yield* hooks.register("permission", "evaluate", () => Effect.sync(() => void ran.push("hook")))
+
+      expect(yield* service.denied(rm())).toBe(false)
+      expect(events).toEqual([])
+      expect(ran).toEqual([])
+      expect(yield* service.list()).toEqual([])
+    }),
+  )
+
+  it.effect("honours aliases, as assert does", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "bash", resource: "Remove-Item *", effect: "deny" }])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(rm({ resources: ["rm x"], aliases: { "rm x": ["Remove-Item x"] } }))).toBe(true)
+      expect(yield* service.denied(rm({ resources: ["rm x"] }))).toBe(false)
+    }),
+  )
+})

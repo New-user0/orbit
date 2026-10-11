@@ -371,9 +371,11 @@ const analyse = (command: string, shell: string) =>
 // Runs a command whose approval the saved grants may cover. Input that Orbit cannot analyse is asked about whole, with
 // nothing to save, whatever is saved; any other input needs no question. The analysis decides which, and the list of inputs
 // that are opaque is pinned in its own test.
-const runCovered = (registry: Tool.Interface, command: string, shell: string, marker: string) =>
+const runCovered = (registry: Tool.Interface, command: string, shell: string, marker: string, lifted = false) =>
   Effect.gen(function* () {
-    const opaque = (yield* analyse(command, shell)).opaque !== undefined
+    // `lifted`: the whole text and every fragment of this opaque input is covered by the saved grants, which lift it until
+    // shell-safety-12 makes such input rule-proof.
+    const opaque = !lifted && (yield* analyse(command, shell)).opaque !== undefined
     const result = yield* runPermissionCommand(registry, command, marker, opaque ? ["once"] : [])
     if (!opaque) expect(result.requests).toEqual([])
     else {
@@ -799,7 +801,7 @@ describe("ShellTool ordinary shell syntax", () => {
           output: "2",
           saved: ["((count += 1)) *", "printf *"],
         },
-        { name: "ANSI-C quoting", command: "printf %s $'a\\nb'", output: "a\nb", saved: ["printf *"] },
+        { name: "ANSI-C quoting", command: "printf %s $'a\\nb'", output: "a\nb", saved: ["printf *"], lifted: true },
       ]) {
         test(`${shell} ${portable ? "native" : "legacy"}: ${fixture.name} reuses existing approvals`, () =>
           withScanner(
@@ -814,6 +816,7 @@ describe("ShellTool ordinary shell syntax", () => {
                   fixture.command,
                   shell,
                   path.join(directory.active, "marker"),
+                  "lifted" in fixture,
                 )
                 expect(result.exit).toMatchObject({
                   _tag: "Success",
@@ -3657,4 +3660,341 @@ describe("ShellTool timeouts", () => {
       { timeout: 30_000 },
     )
   })
+})
+
+const permissions = (rules: Permission.Ruleset) =>
+  Effect.gen(function* () {
+    const agents = yield* Agent.Service
+    yield* agents.transform((editor) =>
+      editor.update(toolIdentity.agent, (agent) => {
+        agent.permissions = [...rules]
+      }),
+    )
+  })
+
+// The call was refused by a rule, before any question: no request, and the model sees the block.
+const expectBlocked = (result: { exit: Exit.Exit<unknown, unknown>; requests: ReadonlyArray<Permission.Request> }) => {
+  expect(result.requests).toEqual([])
+  expect(result.exit).toMatchObject({
+    _tag: "Success",
+    value: { status: "error", error: { message: expect.stringContaining("Permission denied") } },
+  })
+}
+
+// The person declined the one question that was asked.
+const expectDeclined = (exit: Exit.Exit<unknown, unknown>) => {
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (Exit.isFailure(exit))
+    expect(
+      exit.cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError),
+    ).toBe(true)
+}
+
+describe("ShellTool guard", () => {
+  const test = isWindows || !Bun.which("sh") ? permissionIt.live.skip : permissionIt.live
+  const absent = (file: string) => Effect.promise(() => Bun.file(file).exists()).pipe(Effect.map((exists) => !exists))
+  for (const portable of [false, true]) {
+    const scanner = portable ? "native" : "legacy"
+
+    test(`${scanner}: a redirect with no command asks by its own statement, and a rule governs it`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          const marker = path.join(fixture.active, "marker")
+          yield* permissions([{ action: "Bash", resource: "*", effect: "ask" }])
+          const asked = yield* runPermissionCommand(registry, "> marker", marker, ["reject"])
+          expect(asked.requests).toMatchObject([{ action: "Bash", resources: ["> marker"] }])
+          expect(asked.requests[0]?.save).toBeUndefined()
+          expectDeclined(asked.exit)
+          expect(yield* absent(marker)).toBe(true)
+
+          yield* permissions([{ action: "Bash", resource: "*", effect: "deny" }])
+          expectBlocked(yield* runPermissionCommand(registry, "> marker", marker, []))
+          expect(yield* absent(marker)).toBe(true)
+        }),
+      ))
+
+    test(`${scanner}: a saved grant for the commands does not lift a redirect with no command`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          const saved = yield* PermissionSaved.Service
+          const location = yield* Location.Service
+          yield* saved.add({ projectID: location.project.id, action: "Bash", resources: ["printf *"] })
+          const marker = path.join(fixture.active, "marker")
+          const asked = yield* runPermissionCommand(registry, "printf x; > marker", marker, ["reject"])
+          expect(asked.requests).toHaveLength(1)
+          expect(asked.requests[0]?.resources).toContain("> marker")
+          expectDeclined(asked.exit)
+          expect(yield* absent(marker)).toBe(true)
+        }),
+      ))
+
+    // A file outside the project is asked about before the command, whatever the command does with it.
+    for (const [name, command, setup] of [
+      ["a write redirect", "printf x > ../outside/f", false],
+      ["a copy's source", "cp ../outside/s ./k", true],
+      ["a read", "cat ../outside/s", true],
+      ["a removal", "rm ../outside/s", true],
+      ["a file the system keeps for everyone", `printf x > ${os.tmpdir()}/orbit-guard-test-f`, false],
+    ] as const)
+      test(`${scanner}: ${name} outside the project asks about the folder first`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            if (setup) yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+            yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+            const marker = path.join(fixture.active, "k")
+            const result = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(result.requests).toHaveLength(1)
+            expect(result.requests[0]).toMatchObject({ action: "external_directory" })
+            expectDeclined(result.exit)
+            expect(yield* absent(path.join(fixture.outside, "f"))).toBe(true)
+            expect(yield* absent(path.join(os.tmpdir(), "orbit-guard-test-f"))).toBe(true)
+            expect(yield* absent(marker)).toBe(true)
+            if (command.startsWith("rm")) expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+          }),
+        ))
+
+    test(`${scanner}: a link in the project is judged where it leads`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.symlink(fixture.outside, path.join(fixture.active, "cfg")))
+          yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+          yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+          const result = yield* runPermissionCommand(registry, "cat cfg/s", path.join(fixture.active, "none"), ["reject"])
+          expect(result.requests).toMatchObject([
+            { action: "external_directory", resources: [path.join(fixture.outside, "*")] },
+          ])
+          expectDeclined(result.exit)
+        }),
+      ))
+
+    // Decision 6: a deny anywhere beats every question, so the person is not asked about a call a rule blocks.
+    test(`${scanner}: a deny on the command, a path or a read blocks the call before any question`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          const marker = path.join(fixture.outside, "f")
+          const ask = { action: "external_directory", resource: "*", effect: "ask" } as const
+          yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }, { action: "Bash", resource: "printf *", effect: "deny" }, ask])
+          expectBlocked(yield* runPermissionCommand(registry, "printf x > ../outside/f", marker, []))
+
+          // The person's Edit rule on the file stops a shell command that writes it, under a broad shell allow.
+          yield* permissions([
+            { action: "Bash", resource: "*", effect: "allow" },
+            { action: "Edit", resource: marker.replaceAll("\\", "/"), effect: "deny" },
+            ask,
+          ])
+          expectBlocked(yield* runPermissionCommand(registry, "printf x > ../outside/f", marker, []))
+          expectBlocked(yield* runPermissionCommand(registry, "tee ../outside/f", marker, []))
+          expect(yield* absent(marker)).toBe(true)
+
+          yield* Effect.promise(() => Bun.write(path.join(fixture.active, "secret.txt"), "secret"))
+          yield* permissions([
+            { action: "Bash", resource: "*", effect: "allow" },
+            { action: "Read", resource: "secret.txt", effect: "deny" },
+          ])
+          expectBlocked(yield* runPermissionCommand(registry, "cat secret.txt", marker, []))
+          expectBlocked(yield* runPermissionCommand(registry, "cp secret.txt copy.txt", marker, []))
+          expect(yield* absent(path.join(fixture.active, "copy.txt"))).toBe(true)
+        }),
+      ))
+
+    // Input Orbit cannot analyse is asked about whole, with nothing to save, and is never refused.
+    test(`${scanner}: malformed syntax asks about the whole text and a deny rule blocks it`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          const marker = path.join(fixture.active, "marker")
+          const command = 'printf hello > marker\necho "'
+          const asked = yield* runPermissionCommand(registry, command, marker, ["reject"])
+          expect(asked.requests).toHaveLength(1)
+          expect(asked.requests[0]?.resources[0]).toBe(command)
+          expect(asked.requests[0]?.save).toBeUndefined()
+          expectDeclined(asked.exit)
+          expect(yield* absent(marker)).toBe(true)
+
+          yield* permissions([{ action: "Bash", resource: "printf *", effect: "deny" }])
+          expectBlocked(yield* runPermissionCommand(registry, command, marker, []))
+          expect(yield* absent(marker)).toBe(true)
+        }),
+      ))
+
+    for (const command of [
+      "if (true) then echo y; fi",
+      "while (true) do echo; done",
+      "echo $((1; printf 2))",
+      "((echo a); echo b)",
+      "printf x; echo $(rm -rf ~)",
+    ])
+      test(`${scanner}: asks about ${JSON.stringify(command)} and runs nothing when declined`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const saved = yield* PermissionSaved.Service
+            const location = yield* Location.Service
+            yield* saved.add({ projectID: location.project.id, action: "Bash", resources: ["printf *", "echo *"] })
+            const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), ["reject"])
+            expect(result.requests).toHaveLength(1)
+            expect(result.requests[0]?.save).toBeUndefined()
+            expectDeclined(result.exit)
+          }),
+        ))
+
+    test(`${scanner}: input that does nothing asks nothing`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.mkdir(path.join(fixture.active, "sub")))
+          for (const command of ["export A=1; cd sub", "# note", "", "A=1"]) {
+            const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), [])
+            expect([command, result.requests]).toEqual([command, []])
+            expect(result.exit).toMatchObject({ _tag: "Success", value: { status: "completed" } })
+          }
+          const substitution = yield* runPermissionCommand(registry, "A=$(printf x)", path.join(fixture.active, "marker"), ["reject"])
+          expect(substitution.requests).toHaveLength(1)
+        }),
+      ))
+  }
+})
+
+describe("ShellTool guard (PowerShell)", () => {
+  const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
+  const test = pwsh ? permissionIt.live : permissionIt.live.skip
+  // Rule matching is case-insensitive only on Windows (Orbit's wildcard), so the rows that write a rule in one case for a
+  // command written in another run there.
+  const windows = pwsh && isWindows ? permissionIt.live : permissionIt.live.skip
+  const options = { timeout: 30_000 }
+  const absent = (file: string) => Effect.promise(() => Bun.file(file).exists()).pipe(Effect.map((exists) => !exists))
+  const ask = <E, R>(
+    body: (registry: Tool.Interface, fixture: { active: string; outside: string }) => Effect.Effect<void, E, R>,
+  ) => withScanner(false, body, pwsh ?? "pwsh")
+
+  test(
+    "resources and saves come from PowerShell's own parse",
+    () =>
+      ask((registry, fixture) =>
+        Effect.gen(function* () {
+          const result = yield* runPermissionCommand(
+            registry,
+            "Get-ChildItem; Remove-Item x",
+            path.join(fixture.active, "marker"),
+            ["reject"],
+          )
+          expect(result.requests).toMatchObject([
+            { resources: ["Get-ChildItem", "Remove-Item x"], save: ["Get-ChildItem *", "Remove-Item *"] },
+          ])
+        }),
+      ),
+    options,
+  )
+
+  for (const [command, save] of [
+    ["git status -s", ["git status *"]],
+    ["git", undefined],
+    ["git.exe status", undefined],
+    ["git 'push origin'", undefined],
+    ["& $c x", undefined],
+    ["Invoke-Expression 'x'", undefined],
+    ["iex 'x'", undefined],
+    ["pwsh -c x", undefined],
+    ["node x.js", undefined],
+    ["ForEach-Object { }", undefined],
+  ] as const)
+    test(
+      `offers ${save ? JSON.stringify(save) : "nothing to save"} for ${command}`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), ["reject"])
+            expect(result.requests).toHaveLength(1)
+            expect(result.requests[0]?.save).toEqual(save)
+          }),
+        ),
+      options,
+    )
+
+  for (const command of ["'x' > marker", "[IO.File]::WriteAllText('marker','x')"])
+    test(
+      `asks by the statement for ${command}, and writes nothing when declined`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            const marker = path.join(fixture.active, "marker")
+            const result = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(result.requests).toHaveLength(1)
+            expect(result.requests[0]?.resources).toContain(command)
+            expectDeclined(result.exit)
+            expect(yield* absent(marker)).toBe(true)
+          }),
+        ),
+      options,
+    )
+
+  for (const [rule, commands] of [
+    ["Remove-Item *", ["rm x", "del x", "& 'Remove-Item' x", "Microsoft.PowerShell.Management\\Remove-Item x", "Remove-Item\tx"]],
+    ["rm *", ["Remove-Item x"]],
+  ] as const)
+    windows(
+      `a deny written as ${rule} meets ${commands.join(" | ")}`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            yield* permissions([
+              { action: "Bash", resource: "*", effect: "allow" },
+              { action: "Bash", resource: rule, effect: "deny" },
+            ])
+            yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+            for (const command of commands)
+              expectBlocked(yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), []))
+            expect(yield* absent(path.join(fixture.active, "x"))).toBe(false)
+          }),
+        ),
+      options,
+    )
+
+  windows(
+    "an application is denied by the rule for its cmdlet name and never lifted by an allow for it",
+    () =>
+      ask((registry, fixture) =>
+        Effect.gen(function* () {
+          yield* permissions([
+            { action: "Bash", resource: "*", effect: "ask" },
+            { action: "Bash", resource: "Remove-VM *", effect: "deny" },
+          ])
+          expectBlocked(yield* runPermissionCommand(registry, "Hyper-V\\Remove-VM x", path.join(fixture.active, "m"), []))
+
+          yield* permissions([
+            { action: "Bash", resource: "*", effect: "ask" },
+            { action: "Bash", resource: "Remove-VM *", effect: "allow" },
+            { action: "Bash", resource: "Get-Content *", effect: "allow" },
+          ])
+          for (const command of ["Hyper-V\\Remove-VM x", ".\\scripts\\Get-Content x"]) {
+            const asked = yield* runPermissionCommand(registry, command, path.join(fixture.active, "m"), ["reject"])
+            expect(asked.requests).toHaveLength(1)
+          }
+        }),
+      ),
+    options,
+  )
+
+  test(
+    "PowerShell the parser rejects is asked about whole and by fragment, and a deny meets a fragment",
+    () =>
+      ask((registry, fixture) =>
+        Effect.gen(function* () {
+          const command = "Write-Output \"unterminated; iex 'calc'"
+          const asked = yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), ["reject"])
+          expect(asked.requests).toHaveLength(1)
+          expect(asked.requests[0]?.resources[0]).toBe(command)
+          expect(asked.requests[0]?.save).toBeUndefined()
+
+          yield* permissions([
+            { action: "Bash", resource: "*", effect: "allow" },
+            { action: "Bash", resource: "iex *", effect: "deny" },
+          ])
+          expectBlocked(yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), []))
+
+          // The folder change inside input that cannot be read is still asked about.
+          yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+          const location = yield* runPermissionCommand(registry, 'Set-Location ..\\outside; "', path.join(fixture.active, "m"), ["reject"])
+          expect(location.requests).toMatchObject([{ action: "external_directory" }])
+        }),
+      ),
+    options,
+  )
 })

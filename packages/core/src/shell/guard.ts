@@ -2,13 +2,15 @@ export * as ShellGuard from "./guard.js"
 
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect, Option } from "effect"
+import os from "node:os"
 import path from "node:path"
 import { FileAccess } from "../file-access.js"
 import { Location } from "../location.js"
+import { Permission } from "../permission.js"
 import { ProjectTrust } from "../project-trust.js"
-import { aliasNames, aliasTarget, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
+import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
 import { ShellParse } from "./parse.js"
-import type { PowerShellParse } from "./powershell-parse.js"
+import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
 import { ShellSafety } from "./safety.js"
 import { ShellWrappers } from "./wrappers.js"
@@ -166,7 +168,8 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   const everything = [...resolved, ...extra]
 
   const git = ShellSafety.runsGit(input.analysis, input.ctx.platform)
-  const bare = git ? yield* probeGit(all, input.cwd.absolute) : []
+  const probed = git ? yield* probeGit(all, input.cwd.absolute) : { bare: [], dynamic: false }
+  const bare = probed.bare
 
   const found = ShellSafety.check(input.analysis, {
     platform: input.ctx.platform,
@@ -178,7 +181,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     env: input.ctx.env,
     text: input.text,
     facts: {
-      bare: bare.flatMap((item) => (item.why === "git-dir" || item.why === "indicators" || item.why === "unverified-gitdir" ? [item] : [])),
+      bare,
       real: resolved.flatMap((item, index) => {
         const { level, operand, file } = operands[index]!
         return level.depth === 0 && operand.role === "remove" && operand.form !== "glob" && item.real.length > 0
@@ -199,7 +202,11 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
       }))
     }),
     bare,
-    findings: [...found, ...own(all, operands, resolved, ps)].filter(unique),
+    findings: [
+      ...found,
+      ...own(all, operands, resolved, ps),
+      ...(probed.dynamic ? [ShellSafety.finding("too-complex", "dynamic-git-dir")] : []),
+    ].filter(unique),
   } satisfies Facts
 })
 
@@ -239,6 +246,102 @@ function own(
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// The one gate every entry point goes through
+
+export type Authorize = {
+  command: string
+  shell: string
+  cwd: FileAccess.Target
+  env: Record<string, string | undefined>
+  portable: boolean
+  /** The folders the command may write when it runs inside the sandbox. Unset when it runs without one. */
+  writable?: readonly string[]
+  /** Who asks: the session, the agent and the tool call, when there is one. */
+  base: Pick<Permission.AssertInput, "sessionID" | "agent" | "source">
+  /** More for the shell request's metadata, such as the text a client titles it with. */
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Asks for everything a shell command needs before it may run: the folders it reaches outside the project, and the
+ * command itself. Every request of the call is checked for a deny before the first question, so a call that a rule blocks
+ * shows none. The tool and the `!` spans of a command both come through here, so they cannot disagree about what a
+ * command does. Input that cannot be analysed is asked about, never refused. Returns the analysis it made.
+ */
+export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Authorize) {
+  const access = yield* FileAccess.Service
+  const permission = yield* Permission.Service
+  const parser = yield* PowerShellParse.Service
+  const ctx: Context = {
+    shell: input.shell,
+    platform: process.platform,
+    path: process.platform === "win32" ? path.win32 : path.posix,
+    home: os.homedir(),
+    cwd: input.cwd.absolute,
+    env: input.env,
+  }
+  // The one parse of the call. Input that cannot be analysed is a value here, never an error.
+  const analysis = yield* inspect(input.command, ctx, { nested: true }).pipe(Effect.provideService(PowerShellParse.Service, parser))
+  const ps = isPowerShell(analysis)
+  // An input over the length limit is not scanned at all: the scan is not cheap, and the input is asked about whole.
+  const scanned =
+    ps || analysis.opaque?.reason === "length"
+      ? undefined
+      : yield* scanBash(input.command, input.shell, input.cwd.absolute, input.portable && !analysis.opaque)
+  const directories = ps
+    ? analysis.opaque
+      ? locations(input.command, analysis.dialect, process.platform)
+      : expansions(analysis, input.cwd.absolute, input.shell)
+    : (scanned?.directories ?? [])
+  const gathered = yield* facts({
+    analysis,
+    text: input.command,
+    ctx,
+    cwd: input.cwd,
+    directories: directories.map((directory) => FileAccess.resolvePath(input.cwd.absolute, directory)),
+    writable: input.writable,
+  })
+  // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
+  // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
+  const literal = ps ? words(analysis) : analysis.opaque?.reason === "length" ? [] : yield* ShellParse.operands(input.command, input.shell)
+  const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, operand)))
+  const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
+  const requested = request(analysis, input.command, scanned, gathered.findings)
+  const shell: Permission.AssertInput | undefined = requested && {
+    action: "Bash",
+    resources: requested.resources,
+    ...(requested.save.length > 0 ? { save: requested.save } : {}),
+    ...(requested.aliases ? { aliases: requested.aliases } : {}),
+    // The folder the command runs in, as resolved here, so a client shows it rather than the input's spelling, and the
+    // real folder when a link in an untrusted project leads there. The findings only describe, for now.
+    metadata: { workdir: input.cwd.place, findings: gathered.findings, ...input.metadata },
+    ...input.base,
+  }
+  const requests = [
+    ...(shell ? [shell] : []),
+    ...(external ? [external] : []),
+    ...gathered.probes.map((probe): Permission.AssertInput => ({ action: probe.action, resources: probe.resources, ...input.base })),
+  ]
+  yield* Effect.forEach(requests, (item) =>
+    permission.denied(item).pipe(Effect.flatMap((denied) => (denied ? permission.assert(item) : Effect.void))),
+  )
+  if (external) yield* permission.assert(external)
+  if (shell) yield* permission.assert(shell)
+  return analysis
+})
+
+// The bash scanner's view of the input. The legacy scan reads what the analysis could not, and always supplies the
+// redirected statements without a command and the folders to change to; the portable scanner replaces its commands when it
+// is configured and can read the input, and a scanner that cannot never fails the call.
+const scanBash = Effect.fnUntraced(function* (command: string, shell: string, cwd: string, portable: boolean) {
+  const none = () => Effect.succeed(undefined)
+  const legacy = yield* ShellParse.scan(command, shell, cwd).pipe(Effect.catch(none))
+  if (!portable) return legacy
+  const native = yield* ShellParse.scan(command, shell, cwd, { portable }).pipe(Effect.catch(none))
+  return native ? { ...native, bare: legacy?.bare ?? [] } : legacy
+})
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The bare-repository probe
 
 const GITDIR_LIMIT = 4096
@@ -251,6 +354,7 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
   const trust = yield* ProjectTrust.Service
   const fs = yield* FSUtil.Service
   const found: NonNullable<ShellSafety.GuardFacts["bare"]> = []
+  let dynamic = false
   const share = (file: string) => process.platform === "win32" && /^[\\/]{2}/.test(file)
   const type = (file: string) =>
     share(file) ? Effect.succeed(undefined) : fs.stat(file).pipe(Effect.map((info) => info.type), Effect.orElseSucceed(() => undefined))
@@ -282,7 +386,8 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
     })
     for (const match of level.text.matchAll(GIT_DIR)) {
       const value = match[1]!.replace(/^(["'])(.*)\1$/, "$2")
-      if (/[$`(]/.test(value)) found.push({ base: workdir, why: "git-dir" })
+      // A value built as the command runs: the folder git will use is unknown, whatever form the assignment takes.
+      if (/[$`(]/.test(value)) dynamic = true
       else named.push({ base: workdir, value })
     }
   })
@@ -347,7 +452,10 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
       if (repository === undefined || !same(leads, repository)) found.push({ base, why: "git-dir" })
     }),
   )
-  return found.filter((item, index) => found.findIndex((other) => other.base === item.base && other.why === item.why) === index)
+  return {
+    bare: found.filter((item, index) => found.findIndex((other) => other.base === item.base && other.why === item.why) === index),
+    dynamic,
+  }
 })
 
 function gitProgram(command: Command) {
@@ -522,7 +630,8 @@ function saved(command: PowerShellParse.Command) {
   const lower = [command.name, written.toLowerCase()]
   if (command.dynamic || command.placeholder || lower.some((name) => NEVER.has(name))) return undefined
   if (command.class === "cmdlet") return `${written} *`
-  if (command.class !== "application" || /[\\/]/.test(command.written) || /\.[A-Za-z0-9]+$/.test(written) || !/^[\w-]+$/.test(written)) return undefined
+  // A program, or a function of the script: a plain name, never a path, a file or a module-qualified name.
+  if (/[\\/]/.test(command.written) || /\.[A-Za-z0-9]+$/.test(written) || !/^[\w-]+$/.test(written)) return undefined
   const positional: string[] = []
   const words = [written]
   for (const argument of command.arguments) {

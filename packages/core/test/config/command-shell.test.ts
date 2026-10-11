@@ -24,6 +24,8 @@ import { Session } from "@orbit/core/session"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { ShellSelect } from "@orbit/core/shell/select"
+import { FileAccess } from "@orbit/core/file-access"
+import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { which } from "@orbit/core/util/which"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -99,6 +101,8 @@ const shell = Layer.succeed(
 const nodes = LayerNode.group([
   Command.node,
   Bus.node,
+  FileAccess.node,
+  PowerShellParse.node,
   FSUtil.node,
   AppProcess.node,
   Location.node,
@@ -200,7 +204,7 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("Status: !`git status`\nLog: !`git log -n 3 && cat notes.txt`")
       yield* probe.execute("")
-      expect(asserted).toStrictEqual([
+      expect(asserted).toMatchObject([
         {
           action: "Bash",
           resources: ["git status"],
@@ -216,6 +220,8 @@ describe("command template shell spans", () => {
           sessionID,
         },
       ])
+      // No tool call stands behind a span.
+      expect(asserted.map((input) => input.source)).toEqual([undefined, undefined])
       expect(spawned).toEqual([
         { command: "sh", args: ["-c", "git status"], cwd: process.cwd() },
         { command: "sh", args: ["-c", "git log -n 3 && cat notes.txt"], cwd: process.cwd() },
@@ -228,9 +234,11 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("!`> out.txt`")
       yield* probe.execute("")
-      expect(asserted).toStrictEqual([
-        { action: "Bash", resources: ["> out.txt"], save: [], metadata: { command: "> out.txt" }, sessionID },
+      // The statement itself is the resource, and nothing is offered to save.
+      expect(asserted).toMatchObject([
+        { action: "Bash", resources: ["> out.txt"], metadata: { command: "> out.txt" }, sessionID },
       ])
+      expect(asserted[0]?.save).toBeUndefined()
     }),
   )
 
@@ -238,12 +246,12 @@ describe("command template shell spans", () => {
     Effect.gen(function* () {
       const probe = yield* install("Keys: !`cd keys && cat id_rsa`")
       yield* probe.execute("")
-      // The commands alone would show `cat id_rsa` and hide that it reads somewhere else; a saved `cat *` never covers
-      // the whole span, so a later `cd` elsewhere still asks.
-      expect(asserted).toStrictEqual([
+      // The guard, not the span text, now says where the read lands: `keys` is a folder of the project, so nothing
+      // outside is asked, and the folder change is on the request for a client to show.
+      expect(asserted).toMatchObject([
         {
           action: "Bash",
-          resources: ["cat id_rsa", "cd keys && cat id_rsa"],
+          resources: ["cat id_rsa"],
           save: ["cat *"],
           metadata: { command: "cd keys && cat id_rsa" },
           sessionID,
@@ -289,17 +297,17 @@ describe("command template shell spans", () => {
     }),
   )
 
-  it.live("reads the portable scanner setting and fails closed on a span it cannot analyze", () =>
+  it.live("asks about a span it cannot analyze as a whole, with nothing to save, in either scanner mode", () =>
     Effect.gen(function* () {
-      const probe = yield* install('Status: !`git status`\nBroken: !`echo "oops`', {
-        experimental: { portable_shell_scanner: true },
-      })
-      const error = yield* probe.execute("").pipe(Effect.flip)
-      expect(error.message).toBe(
-        'Shell interpolation failed for "echo \\"oops": Portable shell scanner cannot analyze command: unterminated-quote',
-      )
-      expect(spawned).toEqual([])
-      expect(probe.prompts).toEqual([])
+      for (const portable of [false, true]) {
+        asserted.length = 0
+        const probe = yield* install('Status: !`git status`\nBroken: !`echo "oops`', {
+          experimental: { portable_shell_scanner: portable },
+        })
+        yield* probe.execute("")
+        expect(asserted.map((input) => input.resources[0])).toEqual(["git status", 'echo "oops'])
+        expect(asserted[1]?.save).toBeUndefined()
+      }
     }),
   )
 
@@ -620,7 +628,7 @@ describe("command template shell spans with the permission service", () => {
       const running = yield* probe.execute("").pipe(Effect.flip, Effect.forkScoped)
 
       const request = yield* Queue.take(asked)
-      expect(request.metadata).toEqual({ command: "git status" })
+      expect(request.metadata).toMatchObject({ command: "git status" })
       yield* permission.reply({ requestID: request.id, reply: "reject", message: "Read the log instead" })
       const error = yield* Fiber.join(running)
       expect(error).toBeInstanceOf(Command.ExecutionError)
