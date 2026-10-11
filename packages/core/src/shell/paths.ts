@@ -73,10 +73,12 @@ export type Facts = {
   links: boolean
   /** Whether accept-edits may allow the input once the guard has judged every operand. */
   fileEdit: boolean
+  /** By command index: the folders a relative spelling may resolve from when that command starts, and whether an earlier directory change led somewhere unknown. */
+  scopes: { bases: string[]; lost: boolean }[]
 }
 
 export function empty(): Facts {
-  return { files: [], unvalidatable: [], directoryChanges: 0, links: false, fileEdit: false }
+  return { files: [], unvalidatable: [], directoryChanges: 0, links: false, fileEdit: false, scopes: [] }
 }
 
 /** The cmdlets in the table, for the tests that compare it with recorded hosts. */
@@ -552,6 +554,7 @@ export function bash(input: BashInput): Facts {
   // the command reads are still read, so `cat /etc/shadow > notes` reports both.
   const verdicts = input.commands.map((command) => bareVerdict(input.commands, command, ctx))
   input.commands.forEach((command, index) => {
+    state.facts.scopes[index] = { bases: [...state.bases], lost: state.lost }
     const verdict = verdicts[index]
     if (verdict.ok) reads(state, index, verdict.reads)
     else operands(state, index, command, ctx)
@@ -727,6 +730,7 @@ export function powershell(input: PowerShellInput): Facts {
   const ctx = input.ctx
   const fed = fedByExpression(input.summary)
   input.commands.forEach((command, index) => {
+    state.facts.scopes[index] = { bases: [...state.bases], lost: state.lost }
     reads(state, index, input.reads[index] ?? [])
     const source = command.source
     if (!source || source.placeholder) return

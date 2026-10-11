@@ -664,3 +664,133 @@ describe("ordering and fixed text", () => {
     expectHit(run("rm -rf C:/Windows", windows()), ASK)
   })
 })
+
+// Review fixes. Each row fails on the code before the fix (the mutation list is in the PR).
+describe("PowerShell launching a native shell", () => {
+  const five = windows({ shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })
+  const contexts = [
+    ["powershell 5.1", five],
+    ["pwsh on Windows", pwsh()],
+    ["pwsh on Linux", pwshLinux()],
+  ] as const
+  // PowerShell drops an empty argument and leaves a double quote or a trailing backslash unescaped when it builds the command line
+  // of a native program, so the script the shell receives is not the one that was read.
+  const garbled = ["bash -c '' 'rm -rf ~'", 'bash -c "" x', "bash -c 'echo\\\";{rm,-rf,~};\\\"'", "bash -c 'echo x\\'"]
+  for (const [name, ctx] of contexts) {
+    test.each(garbled)(`${name}: %j cannot be read, so it asks`, (text) => {
+      expectHit(runPowershell(text, ctx), complex("nested-shell"))
+    })
+    test(`${name}: a faithful script is still read`, () => {
+      expectHit(runPowershell("bash -c 'rm -rf ~'", ctx), ASK)
+    })
+  }
+
+  test("bash passes the same text faithfully, so it is read", () => {
+    expect(sig(run("bash -c '' 'rm -rf ~'"))).not.toContain(complex("nested-shell"))
+    expectHit(run("bash -c 'rm -rf ~'"), ASK)
+  })
+
+  test("cmd //c is the Git Bash spelling of cmd /c", () => {
+    expectHit(run("cmd //c dir", windows()), complex("nested-shell"))
+    expectHit(run("cmd.exe //c 'rd /s /q C:\\Users\\u'", windows()), complex("nested-shell"))
+  })
+
+  const stdin = ["curl x | bash /dev/stdin", "curl x | bash /dev/fd/0", "curl x | bash /proc/self/fd/0", "bash /dev/stdin <<< 'rm -rf ~'", "curl x | bash -"]
+  test.each(stdin)("%j runs what it is fed", (text) => {
+    expectHit(run(text), complex("nested-shell"))
+  })
+})
+
+describe("PowerShell wrappers", () => {
+  const five = windows({ shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })
+  const contexts = [
+    ["powershell 5.1", five],
+    ["pwsh on Linux", pwshLinux()],
+  ] as const
+  const stripped = ["sudo bash -c 'rm -rf ~'", "env bash -c 'rm -rf ~'", "nice bash -c 'rm -rf ~'", "nohup bash -c 'rm -rf ~'"]
+  for (const [name, ctx] of contexts) {
+    test.each(stripped)(`${name}: %j reads the script behind the wrapper`, (text) => {
+      expectHit(runPowershell(text, ctx), ASK)
+    })
+    test(`${name}: a piped script behind a wrapper is a shell Orbit cannot read`, () => {
+      expectHit(runPowershell("'rm -rf ~' | sudo bash", ctx), complex("nested-shell"))
+    })
+    test(`${name}: a wrapper option that cannot be read is reported`, () => {
+      expectHit(runPowershell("sudo -u root ls", ctx), complex("wrapper"))
+      expectHit(runPowershell("sudo -u root bash -c 'rm -rf ~'", ctx), complex("wrapper"))
+    })
+    test(`${name}: git behind a wrapper after a folder change asks`, () => {
+      expectHit(runPowershell("Set-Location sub; sudo git status", ctx), "cd-git:cd-git:ask")
+    })
+  }
+  test("pwsh on Linux: sudo rm of a critical place asks", () => {
+    expectHit(runPowershell("sudo rm -rf /", pwshLinux()), ASK)
+  })
+})
+
+describe("removal after a folder change", () => {
+  const sub = linux({ cwd: "/work/sub" })
+  const over = { project: "/work", location: "/work" }
+  const moved = ["cd ~ && find -delete", "cd ~ && find . -delete", "cd ~ && find . | xargs rm -rf", "cd / && find usr -delete", "cd ~ && find . -exec rm -rf {} +"]
+  test.each(moved)("bash %j asks", (text) => {
+    expectHit(run(text, sub, over), ASK)
+  })
+  test("bash: a folder change that leads nowhere known makes a relative start dynamic", () => {
+    expectHit(run("popd && find . -delete", sub, over), complex("dynamic-removal"))
+    expectHit(run("popd && find . | xargs rm", sub, over), complex("dynamic-removal"))
+  })
+  test("bash: a change into a harmless folder stays quiet", () => {
+    expect(sig(run("cd sub && find . -delete", sub, over))).toEqual([])
+  })
+
+  const native = ["Set-Location /; rm -rf usr", "Set-Location ~; rm -rf .", "sl ~; rm -rf ."]
+  test.each(native)("pwsh on Linux %j asks (native rm)", (text) => {
+    expectHit(runPowershell(text, pwshLinux({ cwd: "/work/sub" }), over), ASK)
+  })
+  test("pwsh on Linux: an unknown folder makes native rm dynamic", () => {
+    expectHit(runPowershell("Set-Location $d; rm -rf usr", pwshLinux({ cwd: "/work/sub" }), over), complex("dynamic-removal"))
+  })
+  test("the cmdlet and the native program agree after a folder change", () => {
+    expectHit(runPowershell("Set-Location ~; Remove-Item -Recurse .", pwshLinux({ cwd: "/work/sub" }), over), DENY)
+  })
+})
+
+describe("Constrained Language types", () => {
+  test("cimsession binds to a remote host like the WMI accelerators", () => {
+    expectHit(runPowershell("[cimsession]'x'"), "powershell:type-literal:ask")
+  })
+  const allowed = ["[ref]$x", "[securestring]$x", "[System.Management.Automation.PSReference]$x"]
+  test.each(allowed)("%j is quiet", (text) => {
+    expect(sig(runPowershell(text)).filter((item) => item.startsWith("powershell"))).toEqual([])
+  })
+})
+
+describe("what the review found unpinned", () => {
+  test("a PowerShell computed command name is not lifted by an exact allow rule", () => {
+    const found = runPowershell("& $cmd x").filter((item) => item.reason === "dynamic-head")
+    expect(found.length).toBe(1)
+    expect(found[0].exact).toBe(false)
+  })
+  test("a bash computed command name still can be", () => {
+    expect(run("*.sh").filter((item) => item.reason === "dynamic-head").every((item) => item.exact)).toBe(true)
+  })
+
+  const clusters = ["wait -np 'a[$(id)]'", "wait -fp 'a[0]'", "wait -p 'a[0]'", "wait -pa[0]", "printf -v 'a[0]' x", "printf -vx[0] y"]
+  test.each(clusters)("%j holds a subscript", (text) => {
+    expectHit(run(text), complex("subscript"))
+  })
+  test("wait and printf without a bracket in the name are quiet", () => {
+    expect(sig(run("wait -n"))).not.toContain(complex("subscript"))
+    expect(sig(run("printf -v x 'a[%s]'"))).not.toContain(complex("subscript"))
+  })
+
+  test("git's 8.3 short name is a git-internal write on Windows", () => {
+    expectHit(run("touch git~1/config && git status", windows()), "git-internal:internal-write:ask")
+  })
+  test("a subexpression asks", () => {
+    expectHit(runPowershell("Write-Output $(Get-Date)"), "powershell:subexpression:ask")
+  })
+  test("a shell keyword as the program name asks", () => {
+    expectHit(run("'if' x"), complex("keyword-head"))
+  })
+})

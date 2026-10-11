@@ -1,8 +1,8 @@
 export * as ShellSafety from "./safety.js"
 
 import type path from "node:path"
-import { aliasTarget, samePath, type Analysis, type Command } from "./analysis.js"
-import { ShellLaunch } from "./launch.js"
+import { aliasTarget, LOCATION, samePath, type Analysis, type Command } from "./analysis.js"
+import { DASHES, ShellLaunch } from "./launch.js"
 import type { ShellPaths } from "./paths.js"
 import { base, checks, type Reason as PowerShellReason } from "./safety-powershell.js"
 import { ShellWrappers } from "./wrappers.js"
@@ -159,14 +159,14 @@ export function check(analysis: Analysis, options: Options): Finding[] {
   const world = new World(options)
   const levels = collect(analysis, options.text)
   const found = new Map<string, Finding>()
-  const add = (kind: Kind, reason: Reason, command: number | undefined, extra: { decision?: "ask" | "deny"; place?: string } = {}) => {
+  const add = (kind: Kind, reason: Reason, command: number | undefined, extra: { decision?: "ask" | "deny"; place?: string; exact?: false } = {}) => {
     const decision = extra.decision ?? "ask"
     const finding: Finding = {
       kind,
       reason,
       message: decision === "deny" ? REFUSED : MESSAGES[reason],
       decision,
-      exact: kind === "too-complex",
+      exact: kind === "too-complex" && extra.exact !== false,
       ...(command === undefined ? {} : { command }),
       ...(extra.place === undefined ? {} : { place: extra.place }),
     }
@@ -182,7 +182,7 @@ export function check(analysis: Analysis, options: Options): Finding[] {
   return [...found.values()].sort((left, right) => rank(left) - rank(right) || (left.command ?? Infinity) - (right.command ?? Infinity))
 }
 
-type Add = (kind: Kind, reason: Reason, command: number | undefined, extra?: { decision?: "ask" | "deny"; place?: string }) => void
+type Add = (kind: Kind, reason: Reason, command: number | undefined, extra?: { decision?: "ask" | "deny"; place?: string; exact?: false }) => void
 
 function collect(analysis: Analysis, text: string, outer?: number): Level[] {
   return [{ analysis, text, outer }, ...(analysis.nested ?? []).flatMap((item) => collect(item.analysis, item.text, outer ?? item.command))]
@@ -204,8 +204,11 @@ function visit(level: Level, world: World, options: Options, add: Add) {
 
   analysis.commands.forEach((command, index) => {
     const here = at(index)
+    if (command.wrapper) add("too-complex", "wrapper", here)
     if (analysis.dialect === "bash") semantic(command, (reason) => add("too-complex", reason, here))
-    if (command.source ? !command.source.placeholder && command.source.dynamic : command.dynamicHead) add("too-complex", "dynamic-head", here)
+    if (command.source ? !command.source.placeholder && command.source.dynamic : command.dynamicHead)
+      // In PowerShell this is a security ask, which beats every allow rule, an exact one included.
+      add("too-complex", "dynamic-head", here, ps ? { exact: false } : {})
     if (ShellLaunch.launch(command, options.platform)?.kind === "opaque") add("too-complex", "nested-shell", here)
     if (!command.source) command.redirects.forEach((redirect) => redirect.write && !redirect.literal && add("too-complex", "dynamic-redirect", here))
     else command.source.redirects.forEach((redirect) => redirect.kind === "file" && redirect.value === undefined && redirect.nullSink !== true && add("too-complex", "dynamic-redirect", here))
@@ -232,7 +235,6 @@ const READ_DATA = new Set("pdnNtui")
 
 function semantic(command: Command, hit: (reason: Reason) => void) {
   const argv = command.argv.map((word) => word.value)
-  if (command.wrapper) hit("wrapper")
   // The checks name every head of the wrapper chain: `nohup eval x` and `timeout 5 eval x` both run eval.
   ShellWrappers.unwrap(argv).steps.forEach((step) => heads(step, hit))
   const texts = [...argv, ...command.env.map((item) => item.value), ...command.redirects.flatMap((item) => (item.target === undefined ? [] : [item.target]))]
@@ -269,11 +271,14 @@ function lookup(name: string, args: string[]) {
 function subscript(name: string, args: string[]) {
   const bracket = (value: string | undefined) => value?.includes("[") === true
   if (["test", "[", "[["].includes(name)) return args.some((arg, index) => (arg === "-v" || arg === "-R") && args.slice(index + 1).some(bracket))
-  if (name === "printf" || name === "wait")
+  if (name === "printf" || name === "wait") {
+    // The flag may sit anywhere in a short-option cluster (`wait -np`), or be followed by its value in the same word.
+    const flag = name === "printf" ? "v" : "p"
     return args.some((arg, index) => {
-      const flag = name === "printf" ? "v" : "p"
-      return (arg === `-${flag}` && bracket(args[index + 1])) || (arg.startsWith(`-${flag}`) && arg.length > 2 && bracket(arg))
+      const cluster = /^-[A-Za-z]+/.exec(arg)?.[0]
+      return cluster !== undefined && cluster.includes(flag) && (bracket(arg) || (arg === cluster && cluster.endsWith(flag) && bracket(args[index + 1])))
     })
+  }
   if (name === "unset") return args.some((arg) => !arg.startsWith("-") && bracket(arg))
   if (name === "read") return readNames(args).some(bracket)
   return false
@@ -439,51 +444,50 @@ function removals(level: Level, index: number, world: World, options: Options, a
   const name = ShellLaunch.programName(command.inner[0] ?? "", options.platform)
   const words = command.argv.slice(command.argv.length - command.inner.length + 1)
   const ps = powershell(analysis)
-  const compare = (spelled: string, bases: string[], glob = false) => {
+  // The folders a relative spelling resolves from at command `at`, which an earlier `cd` or `Set-Location` may have moved.
+  const compare = (spelled: string, at: number, glob = false) => {
+    const scope = analysis.paths.scopes[at] ?? { bases: [options.cwd], lost: false }
     const backslash = world.win || ps
     const expanded = world.expand(spelled)
+    // An earlier directory change led somewhere unknown, so a relative spelling cannot be placed.
+    if (scope.lost && !glob && !world.absolute(expanded)) return add("too-complex", "dynamic-removal", where)
     const raw = world.classify(world.normalize(expanded, backslash))
-    const candidates = glob ? [] : bases.map((base) => world.classify(world.normalize(options.path.resolve(base, expanded), world.win)))
+    const candidates = glob ? [] : scope.bases.map((base) => world.classify(world.normalize(options.path.resolve(base, expanded), world.win)))
     if (strongest([raw, ...candidates])) add("critical-removal", "critical-place", where, { place: spelled })
-  }
-  const bases = () => {
-    const found = analysis.paths.files.filter((item) => item.command === index).flatMap((item) => item.bases)
-    return found.length > 0 ? [...new Set(found)] : [options.cwd]
   }
 
   if (RM_FAMILY.has(name) && command.inner.includes("--no-preserve-root")) add("critical-removal", "no-preserve-root", where)
   if (ps && options.platform !== "win32" && RM_FAMILY.has(name))
-    words.filter((word) => word.literal && !word.value.startsWith("-")).forEach((word) => compare(word.value, [options.cwd], word.glob))
+    words.filter((word) => word.literal && !word.value.startsWith("-")).forEach((word) => compare(word.value, index, word.glob))
   if (name === "find") {
     const parsed = ShellWrappers.find(command.inner)
     const removes = parsed.delete || parsed.exec.some((action) => RM_FAMILY.has(ShellLaunch.programName(ShellWrappers.unwrap(action).inner[0] ?? "", options.platform)))
     if (removes && !parsed.filtered) {
       const starts = parsed.starts.length > 0 ? parsed.starts : ["."]
-      starts.forEach((start) => (start.includes(UNKNOWN) ? add("too-complex", "dynamic-removal", where) : compare(start, bases())))
+      starts.forEach((start) => (start.includes(UNKNOWN) ? add("too-complex", "dynamic-removal", where) : compare(start, index)))
     }
   }
   if (name === "xargs" && command.input !== undefined) {
     const program = ShellWrappers.xargs(command.inner).program
     const target = program === undefined ? undefined : ShellWrappers.unwrap(program).inner[0]
     if (target === undefined || !RM_FAMILY.has(ShellLaunch.programName(target, options.platform))) return
-    const producer = analysis.commands[command.input.from]
+    const from = command.input.from
+    const producer = analysis.commands[from]
     const producerName = ShellLaunch.programName(producer.inner[0] ?? "", options.platform)
     if (producerName === "find") {
       const parsed = ShellWrappers.find(producer.inner)
-      if (!parsed.filtered) (parsed.starts.length > 0 ? parsed.starts : ["."]).forEach((start) => (start.includes(UNKNOWN) ? add("too-complex", "dynamic-removal", where) : compare(start, bases())))
+      if (!parsed.filtered) (parsed.starts.length > 0 ? parsed.starts : ["."]).forEach((start) => (start.includes(UNKNOWN) ? add("too-complex", "dynamic-removal", where) : compare(start, from)))
     }
     // Every entry of the folders that `ls` lists is removed: `D/*`.
     if (producerName === "ls") {
       const folders = producer.inner.slice(1).filter((word) => !word.startsWith("-"))
-      ;(folders.length > 0 ? folders : ["."]).forEach((folder) => compare(`${folder.replace(/[\\/]+$/, "")}/*`, bases(), true))
+      ;(folders.length > 0 ? folders : ["."]).forEach((folder) => compare(`${folder.replace(/[\\/]+$/, "")}/*`, from, true))
     }
   }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // PowerShell parse failure: the fragment scan
-
-const DASHES = /^[-\u2013\u2014\u2015]/
 
 /**
  * Splits PowerShell text into the fragments a deny rule or the removal scan looks at: backtick continuations joined and
@@ -526,16 +530,9 @@ function scan(fragment: string, analysis: Analysis, world: World, options: Optio
 // ---------------------------------------------------------------------------------------------------------------------
 // git
 
-const GIT_EXTENSION = /\.(exe|cmd|bat|com)$/
-
-function gitBase(raw: string, platform: NodeJS.Platform) {
-  const name = raw.slice(Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\")) + 1)
-  return platform === "win32" ? name.toLowerCase().replace(GIT_EXTENSION, "") : name
-}
-
 // The program of a command is git: by name or by path (a git started by path reads the hooks of its folder too).
 function gitName(command: Command, platform: NodeJS.Platform) {
-  return command.inner.length > 0 && gitBase(command.inner[0], platform) === "git"
+  return command.inner.length > 0 && base(command.inner[0]) === "git"
 }
 
 // Git started through xargs or find -exec.
@@ -543,7 +540,7 @@ function gitIndirect(command: Command, platform: NodeJS.Platform) {
   const name = ShellLaunch.programName(command.inner[0] ?? "", platform)
   const git = (argv: string[] | undefined) => {
     if (!argv || argv.length === 0) return false
-    return gitBase(ShellWrappers.unwrap(argv).inner[0] ?? "", platform) === "git"
+    return base(ShellWrappers.unwrap(argv).inner[0] ?? "") === "git"
   }
   if (name === "xargs") return git(ShellWrappers.xargs(command.inner).program)
   if (name === "find") return ShellWrappers.find(command.inner).exec.some(git)
@@ -568,7 +565,6 @@ function dynamicGitDir(command: Command) {
 }
 
 const ARCHIVES = new Set(["tar", "bsdtar", "unzip", "7z", "7za", "gzip", "gunzip", "expand-archive"])
-const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])
 
 function git(levels: Level[], world: World, options: Options, add: Add) {
   const runs: { level: Level; index: number }[] = levels.flatMap((level) =>

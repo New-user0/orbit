@@ -2,7 +2,7 @@ export * as ClmTypes from "./clm-types.js"
 
 // The types Constrained Language Mode allows (Microsoft's `about_Language_Modes`), by type accelerator and by full name,
 // lower-case. The directory and WMI accelerators (`adsi`, `adsisearcher`, `wmi`, `wmiclass`, `wmisearcher`) and their full
-// names are left out on purpose: casting a string to one of them binds to a remote directory or a WMI service.
+// names are left out on purpose, with `cimsession`: casting a string to one of them binds to a remote directory or a WMI service.
 
 const ACCELERATORS = [
   "alias",
@@ -17,7 +17,6 @@ const ACCELERATORS = [
   "cimclass",
   "cimconverter",
   "ciminstance",
-  "cimsession",
   "cimtype",
   "cmdletbinding",
   "cultureinfo",
@@ -78,6 +77,21 @@ const ACCELERATORS = [
   "x500distinguishedname",
   "x509certificate",
   "xml",
+  "ref",
+  "securestring",
+  "semver",
+  "wildcardpattern",
+  "validatenotnullorwhitespace",
+  "validatedrive",
+  "validateuserdrive",
+  "argumentcompleter",
+  "argumentcompleters",
+  "physicaladdress",
+  "objectsecurity",
+  "experimental",
+  "experimentalfeature",
+  "dscproperty",
+  "dsclocalconfigurationmanager",
 ]
 
 const FULL_NAMES = [
@@ -120,7 +134,6 @@ const FULL_NAMES = [
   "system.numerics.biginteger",
   "microsoft.management.infrastructure.cimclass",
   "microsoft.management.infrastructure.ciminstance",
-  "microsoft.management.infrastructure.cimsession",
   "microsoft.powershell.commands.modulespecification",
   "system.management.automation.alias",
   "system.management.automation.cmdletbindingattribute",
@@ -138,6 +151,20 @@ const FULL_NAMES = [
   "system.management.automation.validaterangeattribute",
   "system.management.automation.validatescriptattribute",
   "system.management.automation.validatesetattribute",
+  "system.management.automation.psreference",
+  "system.security.securestring",
+  "system.management.automation.semanticversion",
+  "system.management.automation.wildcardpattern",
+  "system.management.automation.validatenotnullorwhitespaceattribute",
+  "system.management.automation.validatedriveattribute",
+  "system.management.automation.validateuserdriveattribute",
+  "system.management.automation.argumentcompleterattribute",
+  "system.management.automation.argumentcompletersattribute",
+  "system.net.networkinformation.physicaladdress",
+  "system.security.accesscontrol.objectsecurity",
+  "system.management.automation.experimentalattribute",
+  "system.management.automation.dscpropertyattribute",
+  "system.management.automation.dsclocalconfigurationmanagerattribute",
 ]
 
 const ALLOWED = new Set([...ACCELERATORS, ...FULL_NAMES])

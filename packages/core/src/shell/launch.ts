@@ -25,6 +25,16 @@ export function isShell(name: string) {
 }
 
 export function launch(command: Command, platform: NodeJS.Platform): Launch | undefined {
+  const found = start(command, platform)
+  if (found?.kind !== "script" || command.source === undefined) return found
+  // PowerShell builds a native program's command line itself: before 7.3 (and with legacy passing) it drops an empty argument
+  // and leaves a double quote unescaped, and a trailing backslash escapes the closing quote. The script the program receives
+  // is then not the one that was read, so it is opaque.
+  const rest = command.argv.slice(command.argv.length - command.inner.length + 1)
+  return rest.some((word) => word.value === "" || word.value.includes('"') || word.value.endsWith("\\")) ? { kind: "opaque" } : found
+}
+
+function start(command: Command, platform: NodeJS.Platform): Launch | undefined {
   const words = command.argv.slice(command.argv.length - command.inner.length)
   const program = command.inner[0]
   if (program === undefined || words.length === 0) return undefined
@@ -34,7 +44,7 @@ export function launch(command: Command, platform: NodeJS.Platform): Launch | un
   const opaque = { kind: "opaque" as const }
   if (BASH_SHELLS.includes(name)) return bashLaunch(program, words, reads)
   if (POWERSHELLS.includes(name)) return powershellLaunch(program, name, words, reads)
-  if (name === "cmd") return reads || args.some((arg) => /^\/[ckr]/i.test(arg)) ? opaque : undefined
+  if (name === "cmd") return reads || args.some((arg) => /^\/\/?[ckr]/i.test(arg)) ? opaque : undefined
   if (OTHER_SHELLS.includes(name)) return reads || args.some((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg) || /^--commands?(?:=|$)/.test(arg)) ? opaque : undefined
   if (name === "wsl" || name === "watch") return opaque
   if (name === "su") return args.some((arg) => /^-[A-Za-z]*c$/.test(arg) || /^--(?:command|session-command)(?:=|$)/.test(arg)) ? opaque : undefined
@@ -56,6 +66,8 @@ function runsShell(argv: string[], platform: NodeJS.Platform) {
   return isShell(programName(unwrapped.inner[0] ?? "", platform))
 }
 
+// Operands that name standard input.
+const STDIN = new Set(["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"])
 const BASH_LONG = new Set([
   "--debug",
   "--debugger",
@@ -99,7 +111,7 @@ function bashLaunch(program: string, words: Word[], reads: boolean): Launch | un
   }
   const operand = words[index]
   if (command) return operand?.literal ? { kind: "script", dialect: "bash", program, text: operand.value } : opaque
-  if (operand === undefined || operand.value === "-" || stdin) return reads ? opaque : undefined
+  if (operand === undefined || STDIN.has(operand.value) || stdin) return reads ? opaque : undefined
   return undefined
 }
 
@@ -138,7 +150,7 @@ const PARAMETERS: { name: string; min: number; value?: true }[] = [
   { name: "help", min: 1 },
   { name: "?", min: 1 },
 ]
-const DASHES = /^[-–—―]+/
+export const DASHES = /^[-–—―]+/
 
 /** The canonical parameter a written PowerShell program parameter stands for, or undefined when it is not one. */
 export function powershellParameter(written: string) {

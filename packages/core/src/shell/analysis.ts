@@ -1136,7 +1136,7 @@ export function aliasNames() {
   return [...new Set([...EVERYWHERE.keys(), ...WINDOWS.keys(), ...WINDOWS_POWERSHELL.keys()])]
 }
 
-const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])
+export const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])
 const LOOPS = new Set(["ForStatementAst", "ForEachStatementAst", "WhileStatementAst", "DoWhileStatementAst", "DoUntilStatementAst"])
 const CONSTANT = new Set(["StringConstantExpressionAst", "ConstantExpressionAst"])
 
@@ -1153,6 +1153,8 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
   const add = (source: PowerShellParse.Command, origin: Command["origin"]) => {
     const named = powershellHead(source.written, kind, ctx.platform)
     const argv: Word[] = [word(source.written, true), ...source.arguments.map((argument) => argumentWord(argument))]
+    // A wrapper program (`sudo`, `env`, `nice`) is stripped as in bash, so the checks see the program it starts.
+    const unwrapped = ShellWrappers.unwrap([named.head, ...argv.slice(1).map((item) => item.value)])
     index.set(source, commands.length)
     commands.push({
       text: source.text,
@@ -1160,7 +1162,8 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
       env: [],
       redirects: source.redirects.map(redirect),
       head: source.placeholder ? "" : named.head,
-      inner: [named.head, ...argv.slice(1).map((item) => item.value)],
+      inner: unwrapped.inner,
+      ...(unwrapped.unanalysable ? { wrapper: "unanalysable" as const } : {}),
       dynamicHead: source.placeholder || source.dynamic,
       application: named.application,
       source,
