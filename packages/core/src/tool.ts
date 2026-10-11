@@ -137,22 +137,34 @@ const layer = Layer.effect(
 
     type NormalizedItem = Tool.Content | "decode" | "size"
     const normalizeImages = Effect.fnUntraced(function* (content: ReadonlyArray<Tool.Content>) {
-      const normalized = yield* Effect.forEach(content, (item): Effect.Effect<NormalizedItem> => {
-        if (item.type !== "file" || !item.mime.startsWith("image/")) return Effect.succeed(item)
+      const normalized = yield* Effect.forEach(content, (item): Effect.Effect<ReadonlyArray<NormalizedItem>> => {
+        if (item.type !== "file" || !item.mime.startsWith("image/")) return Effect.succeed([item])
         const base64 = /^data:[^,]*;base64,(.*)$/s.exec(item.uri)?.[1]
-        if (base64 === undefined) return Effect.succeed(item)
+        if (base64 === undefined) return Effect.succeed([item])
         const resource = item.name ?? `${item.mime} tool output`
         return image.normalize(resource, { uri: resource, content: base64, encoding: "base64", mime: item.mime }).pipe(
-          Effect.map((result) => ({
-            ...item,
-            uri: `data:${result.mime};base64,${result.content}`,
-            mime: result.mime,
-          })),
-          Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed(item)),
-          Effect.catchTag("Image.DecodeError", () => Effect.succeed("decode" as const)),
-          Effect.catchTag("Image.SizeError", () => Effect.succeed("size" as const)),
+          Effect.map((result): ReadonlyArray<NormalizedItem> => [
+            // Built field by field: a recorded item keeps keys its schema would drop, so nothing of `result` may spread in.
+            {
+              type: "file",
+              uri: `data:${result.content.mime};base64,${result.content.content}`,
+              mime: result.content.mime,
+              ...(item.name === undefined ? {} : { name: item.name }),
+            },
+            ...(result.resized
+              ? [
+                  {
+                    type: "text" as const,
+                    text: `[Image resized: the original is ${result.resized.from.width}×${result.resized.from.height} px and it is shown at ${result.resized.to.width}×${result.resized.to.height} px. Multiply coordinates read from the shown image by ${(result.resized.from.width / result.resized.to.width).toFixed(2)} to get coordinates in the original.]`,
+                  },
+                ]
+              : []),
+          ]),
+          Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed([item])),
+          Effect.catchTag("Image.DecodeError", () => Effect.succeed(["decode" as const])),
+          Effect.catchTag("Image.SizeError", () => Effect.succeed(["size" as const])),
         )
-      })
+      }).pipe(Effect.map((items) => items.flat()))
       const note = (reason: "decode" | "size", text: string) => {
         const count = normalized.filter((item) => item === reason).length
         if (count === 0) return []

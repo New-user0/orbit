@@ -15,19 +15,36 @@ import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { EOL } from "node:os"
 import { Option, Schema } from "effect"
-import { readFile } from "node:fs/promises"
+import {
+  GLOBAL_FORM_SESSION_ID,
+  contentKey,
+  countedFinishes,
+  decodeEscalation,
+  decodeNotice,
+  echoes,
+  envelopeResultLine,
+  formAlreadySettled,
+  formRequestOptions,
+  markResultWritten,
+  parseJson,
+  partID,
+  prepareFile,
+  projectedPartID,
+  sameLocation,
+  schemaInstruction,
+  subtype,
+  toMillis,
+  toolKey,
+  unfence,
+  type EnvelopeResult,
+  type File,
+} from "./format"
 import { nonEmptyToolContent, toolOutputText, type MiniToolPart } from "@orbit/tui/mini/tool"
 import { UI } from "./ui"
 
 type Model = {
   providerID: string
   modelID: string
-}
-
-type File = {
-  url: string
-  filename: string
-  mime: string
 }
 
 type Input = {
@@ -89,16 +106,13 @@ type Held =
 type V2Event = EventSubscribeOutput
 type FormRequest = Extract<V2Event, { type: "form.created" }>["data"]["form"]
 
-// MCP elicitations are temporarily owned by the "global" sentinel instead of a real
-// session. An exclusive local process may treat them as this run's blockers; an
-// attached client must not cancel input that may belong to another session.
-const GLOBAL_FORM_SESSION_ID = "global"
-
 const QUESTION_CANCELLED_FEEDBACK =
   "This non-interactive run cannot ask the user questions, so the question was cancelled. Continue without an answer; make reasonable assumptions and state them."
 
 const PERMISSION_REJECTED_FEEDBACK =
   "This non-interactive run cannot ask the user for permission, so the request was rejected. Continue without this action."
+
+export { wroteResult } from "./format"
 
 export async function runNonInteractivePrompt(input: Input) {
   const startedAt = Date.now()
@@ -1199,41 +1213,6 @@ export async function runNonInteractivePrompt(input: Input) {
   }
 }
 
-function sameLocation(left: LocationRef | undefined, right: LocationRef) {
-  return !!left && left.directory === right.directory
-}
-
-function formRequestOptions(location: LocationRef | undefined): [] | [{ headers: Record<string, string> }] {
-  if (!location) return []
-  return [
-    {
-      headers: {
-        "x-orbit-directory": encodeURIComponent(location.directory),
-      },
-    },
-  ]
-}
-
-function formAlreadySettled(error: unknown) {
-  return !!error && typeof error === "object" && "_tag" in error && error._tag === "FormAlreadySettledError"
-}
-
-function partID(eventID: string) {
-  return `prt_${eventID.replace(/^evt_/, "")}`
-}
-
-function toolKey(messageID: string, id: string) {
-  return `${messageID}\u0000${id}`
-}
-
-function contentKey(messageID: string, ordinal: number) {
-  return `${messageID}\u0000${ordinal}`
-}
-
-function projectedPartID(messageID: string, part: string) {
-  return `prt_${messageID.replace(/^msg_/, "")}_${part}`
-}
-
 function fallbackTool(event: {
   id: string
   created: number
@@ -1248,39 +1227,6 @@ function fallbackTool(event: {
     metadata: {},
     content: [],
   }
-}
-
-function toMillis(value: unknown) {
-  if (typeof value === "number") return value
-  if (typeof value === "string") return new Date(value).getTime()
-  return Date.now()
-}
-
-async function prepareFile(file: File) {
-  if (file.mime !== "text/plain") {
-    const uri = file.url.startsWith("data:")
-      ? file.url
-      : `data:${file.mime};base64,${(await readFile(new URL(file.url))).toString("base64")}`
-    return { attachment: { uri, name: file.filename } }
-  }
-  const content = file.url.startsWith("data:")
-    ? Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
-    : await readFile(new URL(file.url), "utf8")
-  return { text: `<file name="${file.filename}">\n${content}\n</file>` }
-}
-
-function schemaInstruction(schema: unknown) {
-  return [
-    "Reply with only a JSON value that follows this JSON Schema, with no other text and no code fence:",
-    JSON.stringify(schema, null, 2),
-  ].join("\n")
-}
-
-let resultWritten = false
-
-/** Whether this process already printed its result object, so a late error report does not print a second. */
-export function wroteResult() {
-  return resultWritten
 }
 
 // One JSON object for scripts: the final answer, whether the run failed, and with a schema, the parsed value.
@@ -1305,7 +1251,7 @@ function writeResult(input: {
   const parsed = input.schema === undefined ? undefined : parseJson(unfence(input.text))
   const invalid = input.schema !== undefined && parsed === undefined
   if (input.failed || invalid) process.exitCode = 1
-  resultWritten = true
+  markResultWritten()
   process.stdout.write(
     jsonLine({
       type: "result",
@@ -1331,47 +1277,11 @@ function writeResult(input: {
 }
 
 // The result line of the envelope: what writeResult prints, plus how the run ended and what it used.
-function writeEnvelopeResult(run: {
-  sessionID: string
-  text: string
-  failed: boolean
-  schema: unknown
-  subtype: string
-  truncated: boolean
-  outcome: "succeeded" | "failed" | "interrupted"
-  reason: string | undefined
-  error: string | undefined
-  steps: number
-  duration: number
-  cost: number
-  tokens: unknown
-  rejected: unknown
-}) {
-  const parsed = run.schema === undefined ? undefined : parseJson(unfence(run.text))
-  // The run's own failure is what happened; an answer that is not JSON matters only when the run itself succeeded.
-  const invalid = !run.failed && run.schema !== undefined && parsed === undefined
-  const failed = run.failed || invalid
-  if (failed) process.exitCode = process.exitCode || 1
-  resultWritten = true
-  process.stdout.write(
-    jsonLine({
-      type: "result",
-      sessionID: run.sessionID,
-      is_error: failed,
-      subtype: invalid && !run.failed ? "error" : run.subtype,
-      outcome: run.outcome === "succeeded" && invalid ? "failed" : run.outcome,
-      ...(run.reason === undefined && !invalid ? {} : { reason: run.reason ?? "invalid_output" }),
-      result: run.text,
-      ...(parsed === undefined ? {} : { structured_output: parsed.value }),
-      ...(run.error !== undefined ? { error: run.error } : invalid ? { error: "The answer was not valid JSON." } : {}),
-      steps: run.steps,
-      duration_ms: run.duration,
-      cost: run.cost,
-      tokens: run.tokens,
-      rejected: run.rejected,
-      truncated: run.truncated,
-    }) + EOL,
-  )
+function writeEnvelopeResult(run: EnvelopeResult) {
+  const result = envelopeResultLine(run)
+  if (result.failed) process.exitCode = process.exitCode || 1
+  markResultWritten()
+  process.stdout.write(result.line + EOL)
 }
 
 // `orb -p --json-schema` in text format: stdout holds only the parsed answer, and an answer that is not JSON is an error.
@@ -1382,48 +1292,4 @@ function writeSchemaText(text: string, failed: boolean) {
   if (failed) return
   if (!parsed) return UI.error("The answer was not valid JSON.")
   process.stdout.write(jsonLine(parsed.value) + EOL)
-}
-
-function unfence(text: string) {
-  return text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
-}
-
-const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
-
-// The notice that the runner publishes when it raises the output limit and answers again, with the message it replaces.
-const decodeEscalation = Schema.decodeUnknownOption(
-  Schema.Struct({ notice: Schema.Literal("output-escalation"), replaces: SessionMessage.ID }),
-)
-
-const decodeNotice = Schema.decodeUnknownOption(Schema.Struct({ notice: Schema.String }))
-
-// The finishes the server counts as a step when it checks a step limit.
-const countedFinishes = new Set<string>(["stop", "length", "tool-calls", "content-filter"])
-
-// The limit that ended the run names its result subtype. `limit.cost-unknown` is the server refusing a cost limit it
-// cannot count, which is a plain error, not a limit that was reached.
-function subtype(input: { failed: boolean; interrupted: boolean; limit: SessionStructuredError | undefined }) {
-  if (input.interrupted) return "interrupted"
-  const type = input.limit?.type
-  if (type === "limit.steps") return "error_max_steps"
-  if (type === "limit.tokens") return "error_max_tokens"
-  if (type === "limit.cost") return "error_max_cost"
-  return input.failed ? "error" : "success"
-}
-
-// Whether the prompt the server admitted carries what was asked for.
-function echoes(sent: SessionTurnOptions, admitted: SessionTurnOptions | undefined) {
-  if (!admitted) return false
-  const model = (value: SessionTurnOptions["fallbackModel"]) =>
-    value && `${value.providerID}/${value.id}#${value.variant ?? ""}`
-  return (
-    sent.maxSteps === admitted.maxSteps &&
-    sent.maxCost === admitted.maxCost &&
-    sent.maxTokens === admitted.maxTokens &&
-    model(sent.fallbackModel) === model(admitted.fallbackModel)
-  )
-}
-
-function parseJson(text: string): { value: unknown } | undefined {
-  return Option.match(decodeJson(text), { onNone: () => undefined, onSome: (value) => ({ value }) })
 }

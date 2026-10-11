@@ -65,6 +65,12 @@ const HeadlessParams = {
     Flag.withDescription("File to attach to the message"),
     Flag.atMost(100),
   ),
+  inputFormat: Flag.choice("input-format", ["text", "stream-json"]).pipe(
+    Flag.withDescription(
+      'Input format: "text" (the default) sends the words after the flags and anything piped in as one message; "stream-json" reads one JSON input per line from standard input while the run goes on, and needs --output-format stream-json (--format stream-json for orb run). Inputs: {"type":"user","text":"...","files":["path"],"delivery":"steer"|"queue","id":"msg_..."}, {"type":"interrupt"}, {"type":"permission_reply","requestID":"per_...","decision":"once"|"always"|"reject","message":"..."}, {"type":"form_reply","formID":"frm_...","answer":{...}}, {"type":"form_cancel","formID":"frm_...","message":"..."}, {"type":"set_model","model":"provider/model#variant"} and {"type":"end"}. Asks and questions are written as permission_request and form_request lines for the program to answer; the run ends when standard input closes and every message has a result line. Words after the flags are sent as the first message',
+    ),
+    Flag.optional,
+  ),
   title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
   thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
   maxSteps: Flag.integer("max-steps").pipe(
@@ -957,6 +963,7 @@ export const RootValueFlags = {
     "mcp-config",
     "agents",
     "output-format",
+    "input-format",
     "json-schema",
     "max-steps",
     "max-turns",
