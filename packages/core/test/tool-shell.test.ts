@@ -1654,6 +1654,32 @@ describe("ShellTool", () => {
     )
   }
 
+  productionIt.live(
+    "a create hook that sets the timeout to 0 does not send a foreground call to the background",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const hooks = yield* PluginHooks.Service
+              yield* hooks.register("shell", "create.before", (event) =>
+                Effect.sync(() => {
+                  event.timeout = 0
+                }),
+              )
+              const settled = yield* executeTool(registry, call({ command: helloCommand }, "call-zero-deadline"))
+              expect(settled.status).toBe("completed")
+              expect(settled.content).toEqual([{ type: "text", text: "hello" }])
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
   productionIt.live("offers the tool as PowerShell only when the session shell is PowerShell", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),

@@ -2212,9 +2212,11 @@ code. Under PowerShell an exit code never cancels anything, and under `cmd.exe` 
 model sees is unchanged. Timeouts, signals and commands that cannot start already cancelled their siblings. Background
 commands are not affected.
 
-The shell tool also reports `readOnly` and `destructive` for each call, from the command text alone (advisory; nothing
+The shell tool also reports `readOnly` and `destructive` for each call (advisory; nothing
 is allowed or asked differently because of them). `rm -rf x`, `git reset --hard`, `git push --force`, `DROP TABLE` and
-similar are destructive; every command under `cmd.exe` or an unrecognised shell is.
+similar are destructive; every command under `cmd.exe` or an unrecognised shell is. `destructive` is read from the command
+text alone; `readOnly` also depends on where each program would be found, so a program on a relative `PATH` entry or in
+the working folder is not read-only.
 
 **Affects:** people whose model issues several shell commands in one step, and plugins or SDK code that read the
 `error` field of a shell result's metadata.

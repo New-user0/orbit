@@ -41,6 +41,8 @@ describe("ShellExit.failed", () => {
     "FOO=1 grep x f",
     '"grep" x f',
     "'grep' x f",
+    "\\grep x f",
+    "g\\rep x f",
     "sudo grep x f",
     "timeout 5 grep x f",
     "/usr/bin/grep x f",

@@ -32,5 +32,6 @@ function decide(analysis: ShellAnalysis.Analysis | undefined) {
   if (command.env.length > 0) return undefined
   const word = command.argv[0]
   if (!word || !word.literal || word.quoted || word.glob || word.tilde) return undefined
-  return word.value
+  // `\grep` is unescaped to `grep` in the value, but as written it is not the plain name.
+  return word.escaped ? undefined : word.value
 }

@@ -47,6 +47,8 @@ export type Word = {
   arithmetic: boolean
   /** A leading `~` or `~/`, which is expanded with the injected home. */
   tilde: boolean
+  /** An unquoted word whose source holds a backslash escape, so `value` is not the text as written. */
+  escaped?: true
 }
 
 export type Redirect = {
@@ -676,6 +678,7 @@ class BashWalk {
           glob: unescapedGlob(node.text),
           arithmetic: false,
           tilde: node.text.startsWith("~") && !bad,
+          ...(node.text.includes("\\") ? { escaped: true as const } : {}),
         }
       }
       case "number":
