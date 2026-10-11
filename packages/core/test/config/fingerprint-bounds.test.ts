@@ -23,6 +23,8 @@ const skill = (command: string) =>
 /** A file system that records every path that is handed to it. */
 const watched = (files: FSUtil.Interface) => {
   const seen: string[] = []
+  // Links are read to find a share, which follows a link to where it points, so they are kept apart from `seen`.
+  const links: string[] = []
   const note = <A extends (path: string, ...rest: never[]) => unknown>(fn: A) =>
     ((target: string, ...rest: never[]) => {
       seen.push(target)
@@ -36,13 +38,17 @@ const watched = (files: FSUtil.Interface) => {
     readFile: note(files.readFile),
     readFileString: note(files.readFileString),
     readDirectoryEntries: note(files.readDirectoryEntries),
+    readLink: (target) => {
+      links.push(target)
+      return files.readLink(target)
+    },
     resolve: note(files.resolve),
     scan: (pattern, options) => {
       seen.push(options?.cwd ?? "")
       return files.scan(pattern, options)
     },
   }
-  return { view, seen }
+  return { view, seen, links }
 }
 
 const layout = Effect.gen(function* () {
@@ -258,6 +264,91 @@ describe("Fingerprint reads only inside the folder", () => {
       const found = yield* Fingerprint.directory(files, place.folder, [place.folder])
       expect(Date.now() - started).toBeLessThan(2000)
       expect(found.hooks).toMatch(/^[0-9a-f]{64}$/)
+    }),
+  )
+})
+
+// Class 6: a link that names a share. Reading a path below such a link makes Windows connect to the share, a host the
+// repository chose, so nothing below the link may be handed to the file system, readLink included. 192.0.2.1 is
+// unroutable, so a connect would show as a long wait.
+describe("Fingerprint never reaches below a link that names a share", () => {
+  const share = "\\\\192.0.2.1\\share"
+  const below = (seen: readonly string[], link: string) =>
+    seen.filter((item) => item !== "" && path.resolve(item).startsWith(link + path.sep))
+
+  // Symlinks to a share need Developer Mode or elevation: the row ends there when refused.
+  const shareLink = (link: string) =>
+    Effect.promise(() =>
+      fs
+        .mkdir(path.dirname(link), { recursive: true })
+        .then(() => fs.symlink(share, link, "dir"))
+        .then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+            throw error
+          },
+        ),
+    )
+
+  it.live("document skills under a link to a share", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+      const files = yield* FSUtil.Service
+      const place = yield* layout
+      const link = path.join(place.project, "linked")
+      if (!(yield* shareLink(link))) return
+      const recording = watched(files)
+      const started = Date.now()
+      const found = yield* Fingerprint.document(
+        recording.view,
+        path.join(place.project, "orbit.json"),
+        decode({ skills: ["linked/skills"] }),
+        [path.join(link, "skills")],
+        [place.project],
+      )
+      expect(found.skills).toMatch(/^[0-9a-f]{64}$/)
+      expect(below([...recording.seen, ...recording.links], link)).toEqual([])
+      expect(Date.now() - started).toBeLessThan(5000)
+    }),
+  )
+
+  it.live(".orbit itself is a link to a share", () =>
+    Effect.gen(function* () {
+      if (process.platform !== "win32") return
+      const files = yield* FSUtil.Service
+      const place = yield* layout
+      yield* Effect.promise(() => fs.rm(place.folder, { recursive: true }))
+      if (!(yield* shareLink(place.folder))) return
+      const recording = watched(files)
+      const started = Date.now()
+      yield* Fingerprint.directory(recording.view, place.folder, [place.project])
+      expect(below([...recording.seen, ...recording.links], place.folder)).toEqual([])
+      expect(Date.now() - started).toBeLessThan(5000)
+    }),
+  )
+
+  it.live("control: a link to a local file is named, not read", () =>
+    Effect.gen(function* () {
+      const files = yield* FSUtil.Service
+      const place = yield* layout
+      const linked = yield* Effect.promise(() =>
+        fs
+          .mkdir(path.join(place.folder, "plugins"), { recursive: true })
+          .then(() => fs.symlink(path.join(place.outside, "plugin.ts"), path.join(place.folder, "plugins", "linked.ts"), "file"))
+          .then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+              throw error
+            },
+          ),
+      )
+      if (!linked) return
+      const recording = watched(files)
+      const found = yield* Fingerprint.directory(recording.view, place.folder, [place.folder])
+      expect(found.plugins).toMatch(/^[0-9a-f]{64}$/)
+      expect(touched(recording.seen, place.outside)).toEqual([])
     }),
   )
 })

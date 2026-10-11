@@ -17,6 +17,7 @@ import path from "path"
 import { realpath, stat } from "fs/promises"
 import { PluginRestriction } from "@orbit/plugin/restriction"
 import { fileURLToPath } from "url"
+import { FSUtil } from "@orbit/util/fs-util"
 import type { Page } from "@orbit/plugin/tui/context"
 import { Host } from "@orbit/plugin/host"
 import { resolveSlots, type Claim } from "./structure"
@@ -432,6 +433,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
             sources.read,
             trace,
             id,
+            local !== undefined && props.directories.project.some((item) => FSUtil.contains(item, fileURLToPath(local))),
           ).catch((error) => ({
             status: "failed" as const,
             error: errorMessage(error),
@@ -767,6 +769,7 @@ async function resolvePlugin(
   readSource: ReturnType<typeof createPluginSources>["read"],
   trace: Trace,
   reconciliation: number,
+  confined: boolean,
 ) {
   // Package entrypoints never change within a session, so a loaded previous
   // version needs no re-resolution (which could otherwise hit npm).
@@ -777,6 +780,10 @@ async function resolvePlugin(
     : await trace("prepare", { reconciliation, target: spec, install }, () => packages.prepare(spec, install))
   const entrypoint = Host.resolve(target).tui
   if (!entrypoint) return { status: "unsupported" as const }
+  // A project plugin's entry stays inside its folder: the fingerprints digest the folder, and read nothing that a link
+  // leads out of it, so such an entry would change without the folder being asked again.
+  if (confined && local && !FSUtil.contains(await realpath(fileURLToPath(local)), await realpath(fileURLToPath(entrypoint))))
+    throw new Error(`Project plugin entry leaves its folder: ${spec}`)
   // Content remains stable across the several mtimes one save may expose to
   // filesystem watchers, while the generation keeps reverted modules fresh.
   let source = local

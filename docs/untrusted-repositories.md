@@ -113,8 +113,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     (`test/config/fingerprint.test.ts`, one row per kind; `config-trust.test.ts`, "stops <kind> after it is edited").
   - `skills` of a document: the field and the front-matter `hooks` of the skill files under its local paths
     (`fingerprint.test.ts`).
-  - `plugins` of a directory: the files `ConfigPluginSource.scan` resolves (`PluginSourceDirectory.entrypoints`) and
-    their `package.json`, by content (`fingerprint.test.ts`: edits, a touch, an edit with the old time). `scan` compares
+  - `plugins` of a directory: every entry file `PluginSourceDirectory.files` finds (server, tui, rpc), also in a folder
+    with no server entry, which `scan` skips but the terminal UI imports, and their `package.json`, by content
+    (`fingerprint.test.ts`, `fingerprint-tui-only.test.ts`: edits, a touch, an edit with the old time, a tui-only folder). `scan` compares
     again when it runs, because its change feed fires before the reload (`config-trust.test.ts`: "offers no plugin planted
     after the grant"). `ProjectTrust.status` reads the plugins of a config directory from the disk when it answers, so a
     client that imports plugins on a file event (the terminal UI asks again before it does) sees one planted after the
@@ -134,7 +135,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     out) is not listed, opened or hashed: its name and the links on the way to it, each as written and one hop, are, so
     pointing a link somewhere else is a change and editing what it points at is not. A network path (`\\host\share`,
     `//host/share`, `\\?\UNC\…`), or a link that names one (`LinkShare`, shared with `ProjectTrust`), is not touched at
-    all, not even to look at it. Only regular files are read, so a link to a device is named and not waited on. The walk of
+    all, not even to look at it: nothing below such a link is handed to the file system, a link read included
+    (`fingerprint-bounds.test.ts`, "never reaches below a link that names a share"). Only regular files are read, so a link to a device is named and not waited on. The walk of
     agents/ and skills/ enters a link only when its real path is inside the bound, and stops at a loop. Proof:
     `test/config/fingerprint-bounds.test.ts`, one row per spelling (agents/ and skills/ as a link out, a link out inside
     agents/, a file link in agents/ and plugins/, plugins/ and a plugin as a link out, absolute, `..`, the folder around the
@@ -144,7 +146,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     into the project, a re-pointed link out, `.orbit` as a link out, and the loaders: the plugin is held back after the
     change and offered again after a new grant, and one behind a link out is never offered); and
     `test/config/fingerprint-container.test.ts` (an untrusted load with `.orbit` as a link out).
-    `PluginSourceDirectory.entrypoints` loads no plugin whose server, tui or rpc entry leads out of its folder, and
+    `PluginSourceDirectory.entrypoints` loads no plugin whose server, tui or rpc entry leads out of its folder, the
+    terminal UI refuses a project plugin whose tui entry leaves its folder (`plugin-trust.test.ts`), and
     `ConfigPluginSource.scan` and the terminal UI's plugin discovery (`discoverPluginTargets`, `plugin-trust-read.test.ts`)
     leave out a project plugin whose real path lies outside the project, so no plugin is loaded that the digest cannot see.
   - Records are per source, kept beside the grant and dropped with it (`workspace-trust-records.test.ts`); two locations

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { mkdir, rm, symlink } from "node:fs/promises"
 import path from "node:path"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
@@ -260,4 +260,56 @@ test("a plugin planted while the server cannot answer is not imported on the ans
     await setup.waitFor(async () => (await fixture.marks()).includes("unloaded"), { maxPasses: 400 })
     expect(await fixture.marks()).toEqual(["loaded", "unloaded"])
   })
+}, 30_000)
+
+test("a project's tui-only plugin is not imported while the server reports its plugins as changed", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  await inside(fixture.path, async () => {
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        return json({
+          ...status(fixture.path, true),
+          changed: [{ path: path.join(fixture.path, ".orbit"), kinds: ["plugins"] }],
+        })
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await Bun.sleep(500)
+    expect(await fixture.marks()).toEqual([])
+  })
+}, 30_000)
+
+test("a project's tui entry that links out of its folder is not imported", async () => {
+  await using fixture = await project()
+  await using state = await tmpdir()
+  const entry = path.join(fixture.path, ".orbit", "plugins", "hello", "tui.ts")
+  const outside = `${fixture.path}-outside.ts`
+  await Bun.write(outside, await Bun.file(entry).text())
+  await rm(entry)
+  const linked = await symlink(outside, entry, "file").then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+      throw error
+    },
+  )
+  if (!linked) return
+  await inside(fixture.path, async () => {
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        return json(status(fixture.path, true))
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
+    await Bun.sleep(500)
+    expect(await fixture.marks()).toEqual([])
+  })
+  await rm(outside)
 }, 30_000)

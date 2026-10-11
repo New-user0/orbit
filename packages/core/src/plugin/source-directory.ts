@@ -36,32 +36,44 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
 })
 
 /**
- * The files that make up the plugin at `target` as the supervisor loads it: the entry files, and the `package.json`
- * beside them, which may not exist. Unset when nothing would be loaded: a directory with no server entry, or one with
- * an entry file (server, tui or rpc)
- * that a link leads out of it. `ConfigPluginSource.scan` activates by this and the fingerprints digest by it, so the
- * two never disagree about what a plugin is.
+ * Every file that makes up the plugin at `target`: each entry file Host.resolve finds (server, tui, rpc) and the
+ * `package.json` beside them, which may not exist. `activates` is false for a directory with no server entry, which
+ * `ConfigPluginSource.scan` skips; the TUI still imports the tui entry of such a folder, so the fingerprints digest
+ * these files whether or not the plugin activates. `escapes` is true when an entry's real path leaves the folder.
+ */
+export const files = Effect.fn("PluginSourceDirectory.files")(function* (fs: FSUtil.Interface, target: string) {
+  const directory = yield* fs.isDir(target)
+  const resolved: Host.Entrypoints = directory
+    ? yield* Effect.sync(() => Host.resolve({ directory: target }))
+    : { server: pathToFileURL(target).href }
+  const entries = Object.values(resolved)
+    .filter((entry) => entry !== undefined)
+    .map((entry) => fileURLToPath(entry))
+  const escapes = directory
+    ? yield* Effect.gen(function* () {
+        const root = yield* fs.resolve(target)
+        const real = yield* Effect.forEach(entries, (entry) => fs.resolve(entry))
+        return real.some((entry) => !FSUtil.contains(root, entry))
+      })
+    : false
+  return {
+    directory,
+    activates: resolved.server !== undefined,
+    escapes,
+    files: entries,
+    manifest: path.join(directory ? target : path.dirname(target), "package.json"),
+  }
+})
+
+/**
+ * What the supervisor loads from `target`: unset when nothing would be loaded (no server entry, or an entry file that a
+ * link leads out of the folder). `ConfigPluginSource.scan` activates by this.
  */
 export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(function* (
   fs: FSUtil.Interface,
   target: string,
 ) {
-  const directory = yield* fs.isDir(target)
-  const resolved: Host.Entrypoints = directory
-    ? yield* Effect.sync(() => Host.resolve({ directory: target }))
-    : { server: pathToFileURL(target).href }
-  if (!resolved.server) return undefined
-  if (directory) {
-    const root = yield* fs.resolve(target)
-    const entries = Object.values(resolved).filter((entry) => entry !== undefined)
-    const real = yield* Effect.forEach(entries, (entry) => fs.resolve(fileURLToPath(entry)))
-    if (real.some((entry) => !FSUtil.contains(root, entry))) return undefined
-  }
-  return {
-    directory,
-    files: Object.values(resolved)
-      .filter((entry) => entry !== undefined)
-      .map((entry) => fileURLToPath(entry)),
-    manifest: path.join(directory ? target : path.dirname(target), "package.json"),
-  }
+  const found = yield* files(fs, target)
+  if (!found.activates || found.escapes) return undefined
+  return { directory: found.directory, files: found.files, manifest: found.manifest }
 })

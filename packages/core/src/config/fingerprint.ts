@@ -180,8 +180,9 @@ export const pluginsOf = Effect.fn("Fingerprint.plugins")(function* (
         Effect.gen(function* () {
           if ((yield* reach(bound, target)) !== "inside")
             return { name: relative(folder, target), outside: yield* trail(bound, folder, target) }
-          const found = yield* PluginSourceDirectory.entrypoints(fs, target)
-          const files = found === undefined ? [] : [...found.files, found.manifest]
+          // Every entry, including a tui-only folder's: the TUI imports those without the server activating them.
+          const found = yield* PluginSourceDirectory.files(fs, target)
+          const files = [...found.files, found.manifest]
           return {
             name: relative(folder, target),
             files: yield* Effect.forEach(files, (file) => readInside(bound, folder, file)),
@@ -239,6 +240,12 @@ const trail = Effect.fnUntraced(function* (bound: Bound, from: string, file: str
   const links: string[] = []
   for (let at = file; path.dirname(at) !== at; at = path.dirname(at)) {
     if (network(at)) break
+    // Below a link that names a share, even reading a link connects to it: stop there and name the share.
+    const share = yield* LinkShare.of(bound.fs, path.dirname(at))
+    if (share !== undefined) {
+      links.push(`${relative(from, path.dirname(at)) || "."} => ${share}`)
+      break
+    }
     const target = yield* bound.fs.readLink(at).pipe(Effect.orElseSucceed(() => undefined))
     if (target !== undefined) links.push(`${relative(from, at) || "."} => ${target}`)
     if (at === from || (at !== file && FSUtil.contains(at, from))) break

@@ -64,8 +64,10 @@ describe("Fingerprint follows links that stay inside the project", () => {
       expect(yield* Fingerprint.pluginsOf(files, folder, [project])).toBe(before)
       yield* Effect.promise(() => write(path.join(shared, "evil.ts"), "export default 666\n"))
       expect(yield* Fingerprint.pluginsOf(files, folder, [project])).not.toBe(before)
-      // The control: the bound is the project, so the same link counts as outside when the bound is the folder alone.
-      expect(yield* Fingerprint.pluginsOf(files, folder, [folder])).toBe(yield* Fingerprint.pluginsOf(files, folder, [folder]))
+      // The control: under the folder alone the link counts as outside, so adding to its target is not a change.
+      const bounded = yield* Fingerprint.pluginsOf(files, folder, [folder])
+      yield* Effect.promise(() => write(path.join(shared, "evil2.ts"), "export default 667\n"))
+      expect(yield* Fingerprint.pluginsOf(files, folder, [folder])).toBe(bounded)
     }),
   )
 
@@ -249,6 +251,24 @@ describe("a plugin behind a link after a grant", () => {
         expect(yield* offered).toEqual([])
         yield* grantAndWait
         expect((yield* offered).toSorted()).toEqual(["evil.ts", "one.ts"])
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  live.live("E: editing the tui entry of a folder with no server entry waits for a new grant", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const entry = path.join(folders.repo, ".orbit", "plugins", "p", "tui.ts")
+      yield* Effect.promise(() => write(entry, "export default 1\n"))
+      yield* Effect.gen(function* () {
+        const project = yield* ProjectTrust.Service
+        yield* grantAndWait
+        expect((yield* project.status()).changed ?? []).toEqual([])
+        yield* Effect.promise(() => write(entry, "export default 666\n"))
+        yield* reloaded
+        expect((yield* project.status()).changed?.flatMap((item) => item.kinds)).toContain("plugins")
+        yield* grantAndWait
+        expect((yield* project.status()).changed ?? []).toEqual([])
       }).pipe(Effect.provide(loader(folders)))
     }),
   )
