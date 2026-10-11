@@ -269,19 +269,18 @@ describe("Fingerprint reads only inside the folder", () => {
 })
 
 // Class 6: a link that names a share. Reading a path below such a link makes Windows connect to the share, a host the
-// repository chose, so nothing below the link may be handed to the file system, readLink included. 192.0.2.1 is
-// unroutable, so a connect would show as a long wait.
+// repository chose, so nothing below the link may be handed to the file system, readLink included. Each row has its own
+// unroutable TEST-NET-1 address (192.0.2.16, 192.0.2.17), because Windows remembers a host that failed.
 describe("Fingerprint never reaches below a link that names a share", () => {
-  const share = "\\\\192.0.2.1\\share"
   const below = (seen: readonly string[], link: string) =>
     seen.filter((item) => item !== "" && path.resolve(item).startsWith(link + path.sep))
 
   // Symlinks to a share need Developer Mode or elevation: the row ends there when refused.
-  const shareLink = (link: string) =>
+  const shareLink = (link: string, host: string) =>
     Effect.promise(() =>
       fs
         .mkdir(path.dirname(link), { recursive: true })
-        .then(() => fs.symlink(share, link, "dir"))
+        .then(() => fs.symlink(`\\\\${host}\\share`, link, "dir"))
         .then(
           () => true,
           (error: NodeJS.ErrnoException) => {
@@ -297,7 +296,7 @@ describe("Fingerprint never reaches below a link that names a share", () => {
       const files = yield* FSUtil.Service
       const place = yield* layout
       const link = path.join(place.project, "linked")
-      if (!(yield* shareLink(link))) return
+      if (!(yield* shareLink(link, "192.0.2.16"))) return
       const recording = watched(files)
       const started = Date.now()
       const found = yield* Fingerprint.document(
@@ -319,7 +318,7 @@ describe("Fingerprint never reaches below a link that names a share", () => {
       const files = yield* FSUtil.Service
       const place = yield* layout
       yield* Effect.promise(() => fs.rm(place.folder, { recursive: true }))
-      if (!(yield* shareLink(place.folder))) return
+      if (!(yield* shareLink(place.folder, "192.0.2.17"))) return
       const recording = watched(files)
       const started = Date.now()
       yield* Fingerprint.directory(recording.view, place.folder, [place.project])

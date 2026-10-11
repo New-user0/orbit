@@ -121,3 +121,11 @@ test("a project plugin that a link leads out of the project is not discovered, a
   await symlink(path.join(root.path, "elsewhere"), linked, "junction")
   expect(await discoverPluginTargets([linked], project)).toEqual([])
 })
+
+test("a node_modules folder in a plugins folder is not a plugin, and the folder beside it is", async () => {
+  await using root = await tmpdir()
+  const plugins = path.join(root.path, "plugins")
+  await mkdir(path.join(plugins, "node_modules", "dep"), { recursive: true })
+  await mkdir(path.join(plugins, "real"), { recursive: true })
+  expect((await discoverPluginTargets([plugins])).map((item) => path.basename(item))).toEqual(["real"])
+})

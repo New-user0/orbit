@@ -2587,7 +2587,7 @@ Read now opens an image with a header line that names its pixel size and type, f
 
 ### Editing any file of a plugin folder asks about the folder again
 
-A project plugin folder is now fingerprinted by every regular file in it, not only its entry files and `package.json`, so a change to a helper module counts like a change to the entry. `node_modules` inside a plugin folder is named but not read, so installing a dependency does not ask again. Before a folder is trusted, Orbit lists a plugin folder without following links that lead out of the project or onto a network share.
+A project plugin folder is now fingerprinted by every regular file in it, not only its entry files and `package.json`, so a change to a helper module counts like a change to the entry. A folder named `node_modules` directly in `plugin/` or `plugins/` is never a plugin: it is not read and not loaded. Inside a plugin folder, `node_modules` is named but not read, so a change inside an existing `node_modules` does not ask again, while creating it (a first install) or changing a lockfile or `package.json` does. Before a folder is trusted, Orbit lists a plugin folder without following links that lead out of the project or onto a network share.
 
 **Affects:** projects with plugin folders that hold more than the entry files, under a trust grant made before this change.
 

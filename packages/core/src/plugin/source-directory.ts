@@ -16,7 +16,12 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
   const children = (yield* Effect.forEach(folders, (source) =>
     fs.readDirectoryEntries(path.join(directory, source)).pipe(
       Effect.orElseSucceed(() => []),
-      Effect.map((entries) => entries.map((entry) => ({ ...entry, target: path.join(directory, source, entry.name) }))),
+      // A dependency folder is never a plugin, so the digest does not read it and the loaders do not activate it.
+      Effect.map((entries) =>
+        entries
+          .filter((entry) => entry.name !== "node_modules")
+          .map((entry) => ({ ...entry, target: path.join(directory, source, entry.name) })),
+      ),
     ),
   ))
     .flat()

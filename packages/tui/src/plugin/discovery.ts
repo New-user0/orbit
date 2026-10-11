@@ -104,7 +104,7 @@ async function discoverAll(directories: string[]) {
         return (
           await Promise.all(
             entries
-              .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+              .filter((entry) => entry.name !== "node_modules" && (entry.isDirectory() || entry.isSymbolicLink()))
               .sort((a, b) => a.name.localeCompare(b.name))
               .map(async (entry): Promise<string | undefined> => {
                 const plugin = path.join(directory, entry.name)

@@ -67,4 +67,54 @@ describe("a plugin folder with a looping entry", () => {
       expect(offered).toEqual(["good.ts"])
     }),
   )
+
+  // The catchCause in `leaves`: a folder with a server entry still has its tui entry resolved, and a link that loops
+  // there counts as leaving the folder for that plugin only.
+  it.live("a server plugin folder whose tui entry loops costs only itself", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const repo = path.join(root, "work", "repo")
+      const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(plugins, "p"), { recursive: true })
+        await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
+        await fs.writeFile(path.join(plugins, "p", "server.ts"), "export default 1;")
+      })
+      const linked = yield* Effect.promise(() =>
+        fs.symlink(path.join(plugins, "p", "tui.ts"), path.join(plugins, "p", "tui.ts"), "file").then(
+          () => true,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+            throw error
+          },
+        ),
+      )
+      if (!linked) return
+      const offered = yield* Effect.gen(function* () {
+        const source = yield* ConfigPluginSource.Service
+        return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
+      }).pipe(Effect.provide(loader(root, repo)))
+      expect(offered).toEqual(["good.ts"])
+    }),
+  )
+
+  // A folder named node_modules is never a plugin; the single-file plugin beside it still is.
+  it.live("plugins/node_modules is not offered, and the plugin beside it is", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const repo = path.join(root, "work", "repo")
+      const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(plugins, "node_modules"), { recursive: true })
+        await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
+        await fs.writeFile(path.join(plugins, "node_modules", "index.js"), "export default 1;")
+        await fs.writeFile(path.join(plugins, "node_modules", "server.ts"), "export default 1;")
+      })
+      const offered = yield* Effect.gen(function* () {
+        const source = yield* ConfigPluginSource.Service
+        return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
+      }).pipe(Effect.provide(loader(root, repo)))
+      expect(offered).toEqual(["good.ts"])
+    }),
+  )
 })
