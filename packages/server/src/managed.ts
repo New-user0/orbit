@@ -17,13 +17,16 @@ export const read = (directory: string) => ManagedSettings.read(directory).pipe(
 
 /**
  * The refusal an `orb mcp add` gets from the organization's MCP lists, or undefined when the server may be added. It
- * asks the same predicate the server's reconcile uses, so a server refused here is one that reconcile would drop.
+ * asks the same predicate `Mcp.add` uses: when managed settings run only the servers they define it refuses every server,
+ * before the lists, and otherwise a server refused here is one that reconcile would drop.
  */
 export const mcpRefusal = (directory: string, name: string, server: Mcp.ServerConfig) =>
   read(directory).pipe(
     Effect.map((snapshot) => {
-      const checked = McpRestriction.check(snapshot.restrictions.mcp, name, server)
+      const checked = McpRestriction.admit(snapshot.restrictions.mcp, name, server)
       if (checked.allowed) return undefined
+      if (checked.reason === "managed_only")
+        return `MCP server "${name}" was not added: ${snapshot.restrictions.organization === undefined ? "managed settings allow" : `${snapshot.restrictions.organization}'s managed settings allow`} only the MCP servers they define`
       return checked.reason === "denied"
         ? `MCP server "${name}" is blocked by managed settings`
         : `MCP server "${name}" is not on the allow list in managed settings`

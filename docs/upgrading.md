@@ -359,6 +359,21 @@ The `mcp`, `plugins` and `network` lists of a managed `managed` block now take e
 
 **What to do:** nothing unless your organization manages Orbit.
 
+### Managed settings can run only the MCP servers they define
+
+Set `managed.mcp.managed_only` to `true` in the managed settings (only managed files can set it) and Orbit runs only the servers in the managed document's own `mcp.servers`. Servers from every other source are ignored: user, project, local, flag (`--mcp-config`, `--settings`, `ORBIT_CONFIG_CONTENT`) and well-known config, plugins and their transforms, and `.mcp.json`. A server that the flag drops is not listed and never starts, and the server logs one line (name and reason, never the command or URL) when that state changes. The organization's `mcp.allow` and `mcp.deny` still apply to the managed servers, and a later drop-in's value wins over an earlier file's, as for the other managed flags. A value that is not a boolean is ignored with a diagnostic and costs only itself.
+
+- A managed server runs as the managed files write it. Its `timeout` defaults come from the managed `mcp.timeout` alone, so a person's `mcp.timeout` and Orbit's Code Mode defaults do not shape it; write `codemode` in the managed definition if you want it.
+- `PUT /api/experimental/mcp/:server` (`Mcp.add`) answers 403 `ForbiddenError` for every server, including a replacement of a managed server's name, and stores nothing. The refusal is given before the deny and allow lists, so it names the real cause. `orb mcp add` refuses and writes no file, and an ACP session attaches without each server it names and adds it on a later attach once the flag is off.
+- `orb`, `orb -p` and `orb run` with `--mcp-config` that names at least one server stop with exit code 1 before the first request. An empty `{"servers":{}}` runs. A server that does not report `config.effective.mcp` (an older one) stops the run too.
+- `Mcp.remove` works on a managed server, and a removed one stays out until restart.
+- The change takes effect live: turning the flag on stops the other servers on the running server, a managed server whose definition did not change keeps its process, and turning it off starts the others again.
+- `GET /api/config/effective` reports `mcp.managed_only`; it is absent from a server that predates it, which clients read as unknown.
+
+**Affects:** organizations that ship managed settings, and people on their machines who add MCP servers by any route, plus SDK callers of `Config.Effective`, which gains an optional `mcp` field.
+
+**What to do:** nothing unless your organization manages Orbit. To use it, define the servers in the managed `mcp.servers` and set `managed.mcp.managed_only` to `true`.
+
 ### A background shell command that stops at a prompt is reported once
 
 Orbit now watches every shell command that runs in the background (asked for, moved at its deadline, or moved by a
@@ -2170,6 +2185,21 @@ and plugin or SDK code that compares the result text exactly.
 
 **What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.
 
+### Read-only shell calls run at the same time
+
+Before, every `Bash` call in a step ran alone, in the order the model wrote them. Now a call whose command the shell
+analysis judges read-only (`ls`, `git status`, `cat a | grep b`, `sleep 1`) runs beside other safe calls, up to
+`tool_execution.max_concurrency`. Any other call, such as `touch x` or `echo hi > f`, still runs alone and waits for
+the calls before it. The decision uses the command text the model sent, before any hook rewrites it, and ignores
+`run_in_background`, the timeout and the paths the command reads. A command that cannot be analysed, an empty command,
+and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has an empty or relative
+entry (a trailing `;` in the Windows `Path` is enough) no command counts as read-only, so shell calls stay serial.
+
+**Affects:** people whose model issues several read-only shell commands in one step, and plugins that observe the
+`execute.before` and `execute.after` hooks of `Bash` and assume they never overlap.
+
+**What to do:** Nothing. To keep shell calls serial, set `tool_execution.max_concurrency` to 1.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.
@@ -2342,3 +2372,11 @@ Read takes a new optional `pages` argument for PDFs: a page such as `3` or a ran
 **Affects:** models, scripts and plugins that read PDFs of more than 10 pages, or PDFs that are not valid, with Read.
 
 **What to do:** Pass `pages`, for example `"1-5"`, for a long PDF. A model that cannot take PDF input still receives the usual unsupported-media text.
+
+### The question tool has limits and option previews
+
+The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
+
+**Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with no options or one option, more than four options, or more than four questions.
+
+**What to do:** Nothing for most setups. Clients that do not draw previews keep working because the field is optional.

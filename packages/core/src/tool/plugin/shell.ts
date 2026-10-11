@@ -14,6 +14,7 @@ import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
 import { Job } from "../../job.js"
 import { FileAccess } from "../../file-access.js"
+import { Location } from "../../location.js"
 import { Permission } from "../../permission.js"
 import { NonNegativeInt } from "../../schema.js"
 import { Session } from "../../session.js"
@@ -138,6 +139,16 @@ const backgroundResult = (shellID: string, file: string, deadline?: number) => (
   status: "running" as const,
 })
 
+/**
+ * Whether a call may run beside others: exactly when the command is read-only to the synchronous analysis. Only a
+ * bash-dialect shell is analysed here; PowerShell, cmd and any unrecognised shell answer false without parsing,
+ * because PowerShell is judged read-only only in the permission path, where its parse is available.
+ */
+export const concurrent = Effect.fn("ShellTool.concurrent")(function* (command: string, ctx: ShellAnalysis.Context) {
+  if (ShellAnalysis.dialect(ctx.shell, ctx) !== "bash") return false
+  return (yield* ShellAnalysis.inspect(command, ctx)).readOnly
+})
+
 export const Plugin = {
   id: "orbit.tool.shell",
   effect: Effect.fn("ShellTool.Plugin")(function* (ctx: Context) {
@@ -152,6 +163,7 @@ export const Plugin = {
     const permission = yield* Permission.Service
     const config = yield* Config.Service
     const powershellParse = yield* PowerShellParse.Service
+    const location = yield* Location.Service
 
     const prepare = Effect.fn("ShellTool.prepare")(function* (
       invocation: ShellCreateBefore,
@@ -292,7 +304,22 @@ export const Plugin = {
         editor.add({
           name,
           options: { authorizes: true, codemode: false },
-          traits: { cancelSiblingsOnFailure: true },
+          traits: {
+            cancelSiblingsOnFailure: true,
+            // Decided on the input the model sent, before any hook, from the command text alone: not the background
+            // flag, the timeout or the paths it reads. The scheduler runs a call that answers false by itself.
+            concurrencySafe: (input) =>
+              Effect.gen(function* () {
+                return yield* concurrent(input.command, {
+                  shell: yield* compatibleShell,
+                  platform: process.platform,
+                  path: process.platform === "win32" ? path.win32 : path.posix,
+                  home: os.homedir(),
+                  cwd: input.workdir ? FileAccess.resolvePath(location.directory, input.workdir) : location.directory,
+                  env: process.env,
+                }).pipe(Effect.provideService(PowerShellParse.Service, powershellParse))
+              }),
+          },
           description: description(undefined, limits()),
           input: Input,
           output: Output,

@@ -348,6 +348,31 @@ describe("acp session lifecycle over the wire", () => {
     expect(acp.server.mcp.map((item) => item.name)).toEqual(["fine"])
   })
 
+  test("creates the session when managed settings run only their own servers, and adds the server on a later attach once they stop", async () => {
+    const docs: McpServer = { name: "docs", command: "bun", args: [], env: [] }
+    let managedOnly = true
+    await using acp = await startWire({
+      fetch: (request) =>
+        managedOnly && request.method === "PUT" && request.path === "/api/experimental/mcp/docs"
+          ? Response.json(
+              { _tag: "ForbiddenError", message: "managed settings allow only their own servers" },
+              { status: 403 },
+            )
+          : undefined,
+    })
+    await acp.initialize()
+
+    const created = await acp.newSession("/workspace", [docs])
+
+    expect(created.sessionId).toBeDefined()
+    expect(acp.server.mcp).toEqual([])
+
+    // The refusal was not remembered: after the restriction lifts, attaching the same session adds the server.
+    managedOnly = false
+    await acp.request("session/resume", { cwd: "/workspace", sessionId: created.sessionId, mcpServers: [docs] })
+    expect(acp.server.mcp.map((item) => item.name)).toEqual(["docs"])
+  })
+
   test("leaves a session detached when re-attaching it fails", async () => {
     const broken: McpServer = { name: "broken", command: "bun", args: [], env: [] }
     await using acp = await startWire({
