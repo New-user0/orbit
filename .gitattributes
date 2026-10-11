@@ -8,3 +8,5 @@ packages/protocol/openapi.json text eol=lf
 packages/client/src/promise/generated/** text eol=lf
 packages/client/src/effect/generated/** text eol=lf
 packages/client/src/effect/api/** text eol=lf
+# bash and the Linux container run these as written, so a Windows checkout must keep their LF line endings.
+tools/linux-test/** text eol=lf
