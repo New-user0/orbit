@@ -1,6 +1,9 @@
+import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { Effect } from "effect"
+import { ShellAnalysis } from "@orbit/core/shell/analysis"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 
@@ -142,3 +145,49 @@ describe("ShellTool.destructive", () => {
   })
 })
 
+
+// The model's workdir is resolved before any permission question, so a share or device spelling must not be opened to
+// decide scheduling (class 4 and 6, task permissions-23). The file system call is watched, not the answer's speed.
+describe("ShellTool.concurrent with a workdir that names a share or a device", () => {
+  const spellings = [
+    "\\\\example.invalid\\share\\",
+    "//example.invalid/share",
+    "\\\\?\\UNC\\example.invalid\\share",
+    "\\\\.\\UNC\\example.invalid\\share",
+    "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\",
+    "\\\\.\\pipe\\probe",
+    "\\\\localhost\\C$\\Windows",
+    "\\\\127.0.0.1\\C$\\Windows",
+    "\\\\example.invalid@8765\\x\\",
+  ]
+
+  test.each(spellings)("%p is answered false and no disk call names it", async (cwd) => {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-share-"))
+    try {
+      for (const name of ["ls", "ls.exe"]) fs.writeFileSync(path.join(bin, name), "")
+      const watched: string[] = []
+      const record = (name: "existsSync" | "realpathSync" | "statSync" | "lstatSync") => {
+        const original = fs[name] as (...args: unknown[]) => unknown
+        const spy = spyOn(fs, name).mockImplementation(((...args: unknown[]) => {
+          watched.push(String(args[0]))
+          return original(...args)
+        }) as never)
+        return spy
+      }
+      const spies = [record("existsSync"), record("statSync"), record("lstatSync"), record("realpathSync")]
+      const ctx = { ...windows, cwd, env: { Path: bin }, local: undefined } satisfies Ctx
+      try {
+        expect(await answer("ls", ctx)).toBe(false)
+        const inspected = await Effect.runPromise(
+          ShellAnalysis.inspect("ls", ctx).pipe(Effect.provideService(PowerShellParse.Service, parser)),
+        )
+        expect(inspected.readOnly).toBe(false)
+      } finally {
+        spies.forEach((spy) => spy.mockRestore())
+      }
+      expect(watched.filter((file) => file.startsWith("\\\\") || file.startsWith("//"))).toEqual([])
+    } finally {
+      fs.rmSync(bin, { recursive: true, force: true })
+    }
+  })
+})

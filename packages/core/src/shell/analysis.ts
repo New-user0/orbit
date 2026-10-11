@@ -1384,11 +1384,18 @@ const inspectOne = Effect.fn("ShellAnalysis.inspectOne")(function* (command: str
   )
 })
 
+/** True when the working folder is spelled as a share or a device on Windows: it must be answered without touching disk. */
+export function sharePlace(ctx: Pick<Context, "platform" | "cwd">) {
+  return ctx.platform === "win32" && (/^[\\/]{2}/.test(ctx.cwd) || ShellReadOnly.windowsShare(ctx.cwd))
+}
+
 // Whether the program that `head` names on the shell's PATH sits inside the working folder. Both are made real first, as
-// FSUtil.contains requires, so a link into the folder counts.
+// FSUtil.contains requires, so a link into the folder counts. A working folder that names a share or a device is never
+// opened: the head then counts as local, so the command is not read-only (class 4, task permissions-23).
 function locate(head: string, ctx: Context) {
   const found = which(head, ctx.env as NodeJS.ProcessEnv)
   if (!found) return false
+  if (sharePlace(ctx)) return true
   if (!fs.existsSync(ctx.cwd)) return false
   return FSUtil.contains(fs.realpathSync.native(ctx.cwd), fs.realpathSync.native(found))
 }
