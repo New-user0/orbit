@@ -56,7 +56,7 @@ export class PdfPagesRequiredError extends Schema.TaggedError<PdfPagesRequiredEr
   { resource: Schema.String, pages: Schema.Number },
 ) {
   override get message() {
-    return `This PDF has ${this.pages} pages, too many to read at once (more than ${Pdf.MAX_WHOLE_PAGES}): ${this.resource}. Read it in parts with the pages argument, for example pages: "1-5". One call returns at most ${Pdf.MAX_PAGES_PER_CALL} pages.`
+    return `${this.resource} runs to ${this.pages} pages, and Read opens a PDF whole only up to ${Pdf.MAX_WHOLE_PAGES}. Call Read again with a pages range (for instance "1-8"); a single call covers at most ${Pdf.MAX_PAGES_PER_CALL} pages.`
   }
 }
 

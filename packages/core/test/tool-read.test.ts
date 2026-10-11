@@ -801,16 +801,32 @@ describe("ReadTool", () => {
     }),
   )
 
+  it.effect("accepts the widest range of 20 pages, and passes pages when the PDF carries a notebook name", () =>
+    Effect.gen(function* () {
+      readResult = { ...pdfPart, pages: { first: 1, last: 20, total: 30 } as never }
+      const registry = yield* Tool.Service
+
+      for (const file_path of ["document.pdf", "disguised.ipynb"]) {
+        readCalls.length = 0
+        yield* executeTool(registry, pdfCall("wide", { file_path, pages: "1-20" }))
+        // The first read is the one that tells a PDF by its content; it must carry the range whatever the name.
+        expect(readCalls[0]?.page.pages).toEqual({ first: 1, last: 20 })
+      }
+    }),
+  )
+
   it.effect("refuses a bad pages value before any permission request or read, whatever the file", () =>
     Effect.gen(function* () {
       const registry = yield* Tool.Service
       const cases = [
-        { pages: "0", message: 'Invalid pages value "0"' },
-        { pages: "5-3", message: 'Invalid pages value "5-3"' },
-        { pages: "-5", message: 'Invalid pages value "-5"' },
-        { pages: "", message: 'Invalid pages value ""' },
+        { pages: "0", message: '"0" is not a usable pages value' },
+        { pages: "5-3", message: '"5-3" is not a usable pages value' },
+        { pages: "-5", message: '"-5" is not a usable pages value' },
+        { pages: "", message: '"" is not a usable pages value' },
         { pages: "1-25", message: 'The pages value "1-25" asks for more than 20 pages' },
         { pages: "3-", message: 'The pages value "3-" asks for more than 20 pages' },
+        { pages: "1-21", message: 'The pages value "1-21" asks for more than 20 pages' },
+        { pages: "9007199254740991-9007199254740993", message: 'is not a usable pages value' },
       ]
       for (const item of cases) {
         for (const file_path of ["document.pdf", "README.md", "missing-file.xyz"]) {
@@ -887,12 +903,12 @@ describe("ReadTool", () => {
     Effect.gen(function* () {
       const registry = yield* Tool.Service
       const cases = [
-        [new ReadToolFileSystem.PdfPagesRequiredError({ resource: "document.pdf", pages: 15 }), "15 pages"],
+        [new ReadToolFileSystem.PdfPagesRequiredError({ resource: "document.pdf", pages: 15 }), "runs to 15 pages"],
         [new ReadToolFileSystem.PdfPageRangeError({ resource: "document.pdf", first: 40, total: 15 }), "Page 40"],
         [new ReadToolFileSystem.PdfSourceError({ resource: "document.pdf" }), "could not be read in full"],
-        [new Pdf.Error({ resource: "document.pdf", reason: "corrupt" }), "corrupted or invalid"],
-        [new Pdf.Error({ resource: "document.pdf", reason: "encrypted" }), "password-protected"],
-        [new Pdf.Error({ resource: "document.pdf", reason: "unavailable" }), "unavailable in this build"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "corrupt" }), "not a well-formed PDF"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "encrypted" }), "is encrypted"],
+        [new Pdf.Error({ resource: "document.pdf", reason: "unavailable" }), "missing from this build"],
         [
           new ReadToolFileSystem.MediaIngestLimitError({
             resource: "document.pdf",

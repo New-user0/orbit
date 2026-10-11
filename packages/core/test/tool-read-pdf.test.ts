@@ -11,7 +11,11 @@ import { Effect, FileSystem } from "effect"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { PDFDocument, PDFHexString, PDFName, PDFString } from "pdf-lib"
 import { testEffect } from "./lib/effect"
-import { encryptedPdf, makePdf, pageWidth, widths } from "./lib/pdf"
+import fs from "node:fs/promises"
+import os from "node:os"
+import { encryptedPdf, heavyPagePdf, makePdf, pageTreePdf, pageWidth, rawPdf, strayInvalidObjectPdf, widths } from "./lib/pdf"
+
+const fixtureFile = (name: string) => path.join(import.meta.dir, "fixture", name)
 
 const it = testEffect(LayerNode.compile(LayerNode.group([CrossSpawnSpawner.node, LayerNodePlatform.filesystem])))
 const fixture = Effect.gen(function* () {
@@ -41,6 +45,9 @@ describe("Pdf.parseRange", () => {
     [" 3-7 ", { first: 3, last: 7 }],
     ["5-5", { first: 5, last: 5 }],
     ["4-", { first: 4, last: Infinity }],
+    ["20-20", { first: 20, last: 20 }],
+    ["9007199254740991-9007199254740993", undefined],
+    ["9007199254740991-", { first: 9007199254740991, last: Infinity }],
     ["", undefined],
     ["   ", undefined],
     ["0", undefined],
@@ -88,8 +95,8 @@ describe("ReadTool PDFs", () => {
       const eleven = yield* read("eleven.pdf").pipe(Effect.flip)
       expect(eleven).toBeInstanceOf(ReadToolFileSystem.PdfPagesRequiredError)
       expect(eleven).toMatchObject({ pages: 11, resource: "eleven.pdf" })
-      expect(eleven.message).toContain("11 pages")
-      expect((yield* read("fifteen.pdf").pipe(Effect.flip)).message).toContain("15 pages")
+      expect(eleven.message).toContain("runs to 11 pages")
+      expect((yield* read("fifteen.pdf").pipe(Effect.flip)).message).toContain("runs to 15 pages")
     }),
   )
 
@@ -146,6 +153,19 @@ describe("ReadTool PDFs", () => {
     }),
   )
 
+  it.effect("refuses a cut above 20 MiB even when its source is under the source cap", () =>
+    Effect.gen(function* () {
+      const { put, read } = yield* fixture
+      yield* put("heavy.pdf", yield* Effect.promise(() => heavyPagePdf(21 * MiB)))
+
+      const error = yield* read("heavy.pdf", range(1)).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(ReadToolFileSystem.MediaIngestLimitError)
+      expect(error).toMatchObject({ maximumBytes: ReadToolFileSystem.MAX_MEDIA_INGEST_BYTES })
+      expect(error.message).toContain("fewer pages")
+    }),
+  )
+
   it.effect("refuses a source above 32 MiB before reading it whole", () =>
     Effect.gen(function* () {
       const { environment, put } = yield* fixture
@@ -195,7 +215,7 @@ describe("ReadTool PDFs", () => {
         const error = yield* read("broken.pdf", page).pipe(Effect.flip)
         expect(error).toBeInstanceOf(Pdf.Error)
         expect(error).toMatchObject({ reason: "corrupt" })
-        expect(error.message).toBe("PDF is corrupted or invalid: broken.pdf")
+        expect(error.message).toBe("Cannot read broken.pdf: the file is not a well-formed PDF.")
       }
     }),
   )
@@ -209,7 +229,7 @@ describe("ReadTool PDFs", () => {
         const error = yield* read("locked.pdf", page).pipe(Effect.flip)
         expect(error).toBeInstanceOf(Pdf.Error)
         expect(error).toMatchObject({ reason: "encrypted" })
-        expect(error.message).toContain("password-protected")
+        expect(error.message).toContain("is encrypted")
       }
     }),
   )
@@ -287,9 +307,69 @@ describe("Pdf.extract", () => {
     const second = await Effect.runPromise(Pdf.extract(source, "a.pdf", 2, 3))
 
     expect(first).toEqual(second)
-    const text = Buffer.from(first).toString("latin1")
-    expect(text).not.toContain("pdf-lib")
-    expect(text).not.toContain("Producer")
-    expect(text).not.toContain("CreationDate")
+    // The info dictionary sits in a compressed object stream, so the bytes cannot show it: ask the document.
+    const cut = await PDFDocument.load(first, { updateMetadata: false })
+    expect([cut.getProducer(), cut.getCreator(), cut.getCreationDate(), cut.getModificationDate()]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+})
+
+describe("a PDF is refused when a few bytes would make the parser stall", () => {
+  const probe = fixtureFile("pdf-count.ts")
+  const run = async (bytes: Uint8Array, ...range: number[]) => {
+    const file = path.join(os.tmpdir(), `orbit-pdf-probe-${crypto.randomUUID()}.pdf`)
+    await Bun.write(file, bytes)
+    const child = Bun.spawn([process.execPath, probe, file, ...range.map(String)], { stdout: "pipe", stderr: "pipe" })
+    // The deadline is the point: a parser that walks 2^depth nodes never answers.
+    const timer = setTimeout(() => child.kill(), 20_000)
+    const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
+    clearTimeout(timer)
+    await fs.rm(file, { force: true })
+    return { code, result: code === 0 ? JSON.parse(stdout.trim().split("\n").at(-1) ?? "null") : undefined }
+  }
+
+  test("a page tree that lists a child twice at every level, read whole and by range", async () => {
+    const shared = pageTreePdf(40, true)
+    expect(shared.length).toBeLessThan(10_000)
+
+    expect(await run(shared)).toEqual({ code: 0, result: { refused: "corrupt" } })
+    expect(await run(shared, 1, 2)).toEqual({ code: 0, result: { refused: "corrupt" } })
+  }, 60_000)
+
+  test("a page tree that lists itself as a child", async () => {
+    const loop = rawPdf([
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [2 0 R] /Count 1 >>",
+    ])
+    expect(await run(loop)).toEqual({ code: 0, result: { refused: "corrupt" } })
+  })
+
+  test("control: a deep tree that lists every node once is read, whole and by range", async () => {
+    const nested = pageTreePdf(40, false)
+
+    expect(await run(nested)).toEqual({ code: 0, result: { total: 40 } })
+    expect(await run(nested, 2, 4)).toEqual({ code: 0, result: { total: 40, cut: 3 } })
+  }, 60_000)
+
+  test("a page tree entry that is missing or not a dictionary", async () => {
+    for (const kids of ["[9 0 R]", "[42]", "[]"]) {
+      const bad = rawPdf(["<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Kids ${kids} /Count 1 >>`])
+      const { result } = await run(bad)
+      // An empty tree is a PDF with no pages; the others are damaged.
+      expect(result).toEqual(kids === "[]" ? { total: 0 } : { refused: "corrupt" })
+    }
+  })
+})
+
+describe("what the strict parse refuses", () => {
+  // Pinned on purpose: the parse fails closed, so one invalid object makes the whole file unreadable.
+  test("a PDF with one invalid object, even an unreferenced one", async () => {
+    const error = await Effect.runPromise(Pdf.pageCount(strayInvalidObjectPdf(), "stray.pdf").pipe(Effect.flip))
+    expect(error).toMatchObject({ reason: "corrupt" })
+    expect((await PDFDocument.load(strayInvalidObjectPdf(), { throwOnInvalidObject: false })).getPageCount()).toBe(1)
   })
 })

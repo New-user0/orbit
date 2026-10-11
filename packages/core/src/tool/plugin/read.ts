@@ -29,7 +29,7 @@ const LocationInput = Schema.Struct({
     description: "The maximum number of lines or directory entries to read (defaults to and capped at 2000)",
   }),
   pages: Schema.optionalKey(Schema.String.check(Schema.isPattern(/^[\s\d-]*$/))).annotate({
-    description: `Page range for a PDF, 1-based, such as "3" or "1-5" (at most ${Pdf.MAX_PAGES_PER_CALL} pages per call). Required for a PDF of more than ${Pdf.MAX_WHOLE_PAGES} pages. Other files ignore it.`,
+    description: `Which pages of a PDF to return, counting from 1: one page ("3") or a span ("1-5"), up to ${Pdf.MAX_PAGES_PER_CALL} pages. Needed when the PDF has more than ${Pdf.MAX_WHOLE_PAGES} pages; ignored for other files.`,
   }),
 })
 export const Input = LocationInput
@@ -54,7 +54,7 @@ export const Plugin = {
           options: { authorizes: true, codemode: false },
           traits: { readOnly: true, concurrencySafe: true, interruptBehavior: "cancel", maxResultChars: Infinity },
           description:
-            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. A PDF of more than 10 pages must be read with pages, and one call returns at most 20 pages. A read returns at most 2000 lines or about 25000 tokens of rendered text, and a truncated one ends with the offset to continue from. Prefer one larger read over many small slices, and use Grep to find specific content in large files. Device paths such as /dev/zero or NUL are refused.",
+            "Read the contents of a file or directory. Supports text files, images, and PDFs. Images and PDFs are presented directly to the model. Each text line is prefixed by its 1-based line number as <line>: <content>. The prefix is for reference and is not part of the file content. Directory entries are returned one per line. Use offset and limit to read large files or directories in sections. Read opens a PDF whole only up to 10 pages; for a longer one, pass pages, and expect at most 20 pages back per call. A read returns at most 2000 lines or about 25000 tokens of rendered text, and a truncated one ends with the offset to continue from. Prefer one larger read over many small slices, and use Grep to find specific content in large files. Device paths such as /dev/zero or NUL are refused.",
           input: Input,
           output: Output,
           execute: (input, context) => {
@@ -67,7 +67,8 @@ export const Plugin = {
                 reader.read(
                   target.absolute,
                   target.resource,
-                  paged ? { offset: input.offset, limit: input.limit, ...(pages ? { pages } : {}) } : {},
+                  // Pages go even with a notebook name: a PDF is told apart by its content, not its extension.
+                  { ...(paged ? { offset: input.offset, limit: input.limit } : {}), ...(pages ? { pages } : {}) },
                 )
 
               const requested = yield* access.authorizeRead(input.file_path, context)
@@ -178,10 +179,6 @@ export const Plugin = {
                   error instanceof FileAccess.DeviceError ||
                   error instanceof ReadToolFileSystem.BinaryFileError ||
                   error instanceof ReadToolFileSystem.MediaIngestLimitError ||
-                  error instanceof ReadToolFileSystem.PdfPagesRequiredError ||
-                  error instanceof ReadToolFileSystem.PdfPageRangeError ||
-                  error instanceof ReadToolFileSystem.PdfSourceError ||
-                  error instanceof Pdf.Error ||
                   error instanceof ReadToolFileSystem.OffsetOutOfRangeError ||
                   error instanceof ReadToolFileSystem.PathKindError
                     ? error.message
@@ -271,7 +268,7 @@ const parsePages = (value: string | undefined) => {
   if (!range)
     return Effect.fail(
       new ToolFailure({
-        message: `Invalid pages value "${value}". Use a single page such as "3" or a range such as "1-5"; pages count from 1.`,
+        message: `"${value}" is not a usable pages value. Send one page number ("3") or two joined by a dash ("1-5"), counting from 1.`,
       }),
     )
   // The width comes from the numbers alone, before the PDF's page count is known; an open range is always too wide.

@@ -14,12 +14,16 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-pdf-compiled-"))
 const repository = path.join(root, "repository")
 const entry = path.join(import.meta.dir, "fixture", "pdf-pages.ts")
 let binary = ""
+const decoys = ["pdf-lib", "pako", "tslib", "@pdf-lib/standard-fonts", "@pdf-lib/upng"]
 
 beforeAll(async () => {
   await Promise.all([
-    Bun.write(
-      path.join(repository, "node_modules", "pdf-lib", "index.js"),
-      `require("fs").writeFileSync(process.cwd() + "/decoy.marker", "ran")\nmodule.exports = {}\n`,
+    // A decoy for the library and for every package it brought into the lockfile, each writing its own marker.
+    ...decoys.map((name) =>
+      Bun.write(
+        path.join(repository, "node_modules", name, "index.js"),
+        `require("fs").writeFileSync(process.cwd() + "/decoy-${name.replace("/", "-")}.marker", "ran")\nmodule.exports = {}\n`,
+      ),
     ),
     Bun.write(path.join(repository, "document.pdf"), await makePdf(6)),
   ])
@@ -46,7 +50,10 @@ test("cuts pages through the compiled binary and never loads the library from th
   expect(stderr).toBe("")
   expect(code).toBe(0)
   expect(JSON.parse(stdout.trim().split("\n").at(-1) ?? "")).toEqual({ total: 6, cut: 3 })
-  expect(await Bun.file(path.join(repository, "decoy.marker")).exists()).toBe(false)
+  const planted = await Promise.all(
+    decoys.map((name) => Bun.file(path.join(repository, `decoy-${name.replace("/", "-")}.marker`)).exists()),
+  )
+  expect(planted).toEqual(decoys.map(() => false))
 })
 
 test("the bundle leaves nothing for the runtime to resolve", async () => {
@@ -57,6 +64,10 @@ test("the bundle leaves nothing for the runtime to resolve", async () => {
   // The library is inside the bundle, so these would only appear as imports the bundler could not follow.
   expect(text).not.toMatch(/\bimport\(\s*["']pdf-lib["']\s*\)/)
   expect(text).not.toMatch(/\brequire\(\s*["'](?:canvas|@napi-rs\/canvas)["']\s*\)/)
+  expect(text).not.toContain("__require(")
+  expect(text).not.toContain("new Function")
+  expect(text).not.toContain("eval(")
+  expect(text).not.toContain("dlopen")
   expect(text).not.toContain("createRequire")
   expect(text).not.toContain("import.meta.resolve")
   expect(text).not.toMatch(/new Worker\(/)
