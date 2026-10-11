@@ -224,7 +224,7 @@ export type FormWhen = {
   value: string | number | "Infinity" | "-Infinity" | "NaN" | boolean
 }
 
-export type FormOption = { value: string; label: string; description?: string }
+export type FormOption = { value: string; label: string; description?: string; preview?: string }
 
 export type FormExternalField = { key: string; type: "external"; url: string; title?: string; description?: string }
 
@@ -4927,6 +4927,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -4992,6 +4993,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5029,6 +5031,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5094,6 +5097,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5138,6 +5142,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5203,6 +5208,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5240,6 +5246,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5305,6 +5312,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5349,6 +5357,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5414,6 +5423,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5451,6 +5461,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5516,6 +5527,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5560,6 +5572,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5625,6 +5638,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
@@ -5662,6 +5676,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly custom?: boolean
           }
@@ -5727,6 +5742,7 @@ export type SessionFormCreateInput = {
               readonly value: string
               readonly label: string
               readonly description?: string
+              readonly preview?: string
             }>
             readonly minItems?: number
             readonly maxItems?: number
