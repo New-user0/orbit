@@ -111,10 +111,24 @@ test(
           "Search the web",
         ],
         { PWD: workspace, ORBIT_TRUST_PROJECT: "1" },
+        "pipe",
       )
+      // The controller stays connected until the run has its result, so an ask that was offered to it would wait for it.
+      const stdoutText = new Response(child.stdout).text()
+      const seen = (async () => {
+        const deadline = Date.now() + 60_000
+        while (Date.now() < deadline) {
+          const text = await Promise.race([stdoutText, Bun.sleep(200).then(() => undefined)])
+          if (text !== undefined) return
+          if (requests.some((request) => JSON.stringify(request).includes("Web search is not enabled"))) return
+        }
+      })()
+      await seen
+      await Bun.sleep(1_000)
+      child.stdin.end()
       const [code, stdout, stderr] = await Promise.all([
         child.exited,
-        new Response(child.stdout).text(),
+        stdoutText,
         new Response(child.stderr).text(),
       ])
       expect({ code, stderr: code === 0 ? "" : stderr }).toEqual({ code: 0, stderr: "" })
@@ -265,7 +279,11 @@ function searchCall() {
   return `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`
 }
 
-function spawn(args: string[], overrides: Record<string, string | undefined> = {}) {
+function spawn(
+  args: string[],
+  overrides: Record<string, string | undefined> = {},
+  stdin: "ignore" | "pipe" = "ignore",
+) {
   const proxy = `http://127.0.0.1:${(trap.address() as net.AddressInfo).port}`
   return Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
     cwd: path.join(import.meta.dir, ".."),
@@ -288,7 +306,7 @@ function spawn(args: string[], overrides: Record<string, string | undefined> = {
         : { http_proxy: proxy, https_proxy: proxy, all_proxy: proxy, no_proxy: "127.0.0.1,localhost,::1" }),
       ...overrides,
     }),
-    stdin: "ignore",
+    stdin,
     stdout: "pipe",
     stderr: "pipe",
   })
