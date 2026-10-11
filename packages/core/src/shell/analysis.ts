@@ -7,6 +7,7 @@ import type path from "node:path"
 import type { Node } from "web-tree-sitter"
 import { which } from "../util/which.js"
 import { ShellParse } from "./parse.js"
+import { ShellPaths } from "./paths.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellReadOnly } from "./readonly.js"
 
@@ -49,6 +50,8 @@ export type Word = {
   tilde: boolean
   /** An unquoted word whose source holds a backslash escape, so `value` is not the text as written. */
   escaped?: true
+  /** A word shaped like `name=~/x` whose tilde after the equals sign is unquoted, so bash expands it. */
+  equalsTilde?: boolean
 }
 
 export type Redirect = {
@@ -61,6 +64,8 @@ export type Redirect = {
   read: boolean
   literal: boolean
   glob: boolean
+  /** The target begins with an unquoted `~` that the shell expands. */
+  tilde?: boolean
 }
 
 export type Command = {
@@ -109,6 +114,8 @@ export type Analysis = {
   features: Features
   readOnly: boolean
   readPaths: string[]
+  /** The files the commands name, what each does to them, and where a relative spelling may land. */
+  paths: ShellPaths.Facts
   sleepLed: boolean
   /**
    * Bash: the index in `commands` of the command whose status is the status of the whole text, when that is one plain
@@ -163,6 +170,7 @@ function opaque(kind: Dialect, value: Opaque): Analysis {
     features: features(),
     readOnly: false,
     readPaths: [],
+    paths: ShellPaths.empty(),
     sleepLed: false,
     count: 0,
   }
@@ -282,6 +290,8 @@ class BashWalk {
   statements: Analysis["statements"] = []
   feature = features()
   sensitive = false
+  // HOME is assigned somewhere in the input, so a `~` after it is not the home folder.
+  homeAssigned = false
 
   constructor(
     readonly source: string,
@@ -334,6 +344,13 @@ class BashWalk {
       restVerdicts.every((verdict) => verdict.ok) &&
       (directories === 0 || rest.length === 1)
     for (const verdict of restVerdicts) if (verdict.ok) reads.push(...verdict.reads)
+    const paths = ShellPaths.bash({
+      commands: this.commands,
+      ctx,
+      homeChanged: this.homeAssigned,
+      dropped,
+      sensitive: this.sensitive,
+    })
     return {
       dialect: "bash",
       commands: this.commands,
@@ -342,6 +359,7 @@ class BashWalk {
       features: this.feature,
       readOnly,
       readPaths: reads,
+      paths,
       sleepLed: sleepLed(this.statements, this.commands, (command) => command.argv[0]?.value === "sleep"),
       ...(this.decider ? { last: this.commands.indexOf(this.decider) } : {}),
       count: this.commands.length,
@@ -460,6 +478,7 @@ class BashWalk {
     if (name.text === "PS4" || name.text === "IFS") fail("for:variable")
     // The variable takes the loop's words, so it changes how programs are found exactly as an assignment does.
     if (SENSITIVE.test(name.text)) this.sensitive = true
+    if (name.text === "HOME") this.homeAssigned = true
     const marker = kids(node).findIndex((child) => child.type === "in")
     const body = kids(node).find((child) => child.type === "do_group")
     if (!body) fail("for:shape")
@@ -547,6 +566,7 @@ class BashWalk {
   read(args: Word[], scope: Scope, origin: Command["origin"]) {
     for (const arg of args) {
       if (arg.value.startsWith("-") || !arg.literal) continue
+      if (arg.value === "HOME") this.homeAssigned = true
       const known = scope.get(arg.value)
       if (origin === "condition" && typeof known === "string") fail("read:known")
       scope.set(arg.value, null)
@@ -645,6 +665,7 @@ class BashWalk {
     if (nameNode?.type !== "variable_name") fail("assign:name")
     const name = nameNode.text
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail("assign:name")
+    if (name === "HOME") this.homeAssigned = true
     if (name === "IFS") fail("assign:ifs")
     const operator = kids(node)[1]?.type
     if (operator !== "=" && operator !== "+=") fail("assign:operator")
@@ -719,6 +740,7 @@ class BashWalk {
       glob: parts.some((part) => part.glob),
       arithmetic: parts.some((part) => part.arithmetic),
       tilde,
+      equalsTilde: kids(node)[0].type === "word" && /^[^=]+=~\//.test(kids(node)[0].text),
     }
   }
 
@@ -827,6 +849,7 @@ class BashWalk {
       read,
       literal: word.literal,
       glob: word.glob,
+      tilde: word.tilde,
     }
   }
 
@@ -1096,7 +1119,7 @@ invoke-restmethod: irm
 invoke-webrequest: iwr
 import-module: ipmo
 start-job: sajb
-new-item: ni md
+new-item: ni
 remove-item: ri del erase rd
 move-item: mi move
 copy-item: copy cpi
@@ -1131,6 +1154,7 @@ get-childitem: ls
 get-content: cat
 copy-item: cp
 move-item: mv
+new-item: md
 remove-item: rm rmdir
 get-process: ps
 stop-process: kill
@@ -1260,6 +1284,16 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
     const verdict = verdicts.get(item)
     return verdict?.ok ? verdict.reads : []
   })
+  const paths = ShellPaths.powershell({
+    commands,
+    ctx,
+    summary,
+    index,
+    reads: commands.map((item) => {
+      const verdict = verdicts.get(item)
+      return verdict?.ok ? verdict.reads : []
+    }),
+  })
   return {
     dialect: kind,
     commands,
@@ -1268,6 +1302,7 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
     features: feature,
     readOnly: readOnly && commands.length > 0,
     readPaths: reads,
+    paths,
     sleepLed: sleepLed(statements, commands, (item) => item.head === "start-sleep" || item.head === "sleep"),
     count: commands.length,
   }

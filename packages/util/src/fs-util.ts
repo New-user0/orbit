@@ -263,8 +263,8 @@ export namespace FSUtil {
     }
   }
 
-  export function windowsPath(p: string): string {
-    if (process.platform !== "win32") return p
+  export function windowsPath(p: string, platform: NodeJS.Platform = process.platform): string {
+    if (platform !== "win32") return p
     return (
       p
         // A `\\?\` or `\\.\` prefix names the same file as the plain drive or share path, so it is written as that path.
@@ -282,9 +282,10 @@ export namespace FSUtil {
    * period and space. Bun's own file calls keep them, but a shell, ripgrep and `Bun.write` do not, so `cfg.` is `cfg` and
    * `.env.` is `.env`. A part of only periods and spaces is left alone. Elsewhere the path is returned as it is.
    */
-  export function windowsTrim(p: string): string {
-    if (process.platform !== "win32") return p
-    const root = path.parse(p).root
+  export function windowsTrim(p: string, platform: NodeJS.Platform = process.platform): string {
+    if (platform !== "win32") return p
+    const flavor = path.win32
+    const root = flavor.parse(p).root
     const parts = p.slice(root.length).split(/[\\/]/)
     return (
       root +
@@ -294,7 +295,7 @@ export namespace FSUtil {
           if (index === parts.length - 1) return part.replace(/[. ]+$/, "")
           return part.endsWith(".") && !part.endsWith("..") ? part.slice(0, -1) : part
         })
-        .join(path.sep)
+        .join(flavor.sep)
     )
   }
 
@@ -305,17 +306,20 @@ export namespace FSUtil {
    * (FileAccess.resolvePath), and the ACP client, the terminal interface and Mini draw a call's paths with it, so a call
    * is not shown in one place while it acts in another.
    */
-  export function resolveFrom(directory: string, input: string, home: string) {
-    const normalized = windowsPath(input)
+  export function resolveFrom(directory: string, input: string, home: string, platform: NodeJS.Platform = process.platform) {
+    // The platform decides the spelling rules and the path flavor, so Windows semantics can be asked for on any host.
+    const flavor = platform === "win32" ? path.win32 : path.posix
+    const normalized = windowsPath(input, platform)
     return windowsTrim(
-      path.resolve(
+      flavor.resolve(
         directory,
         normalized === "~"
           ? home
-          : normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))
-            ? path.join(home, normalized.slice(2))
+          : normalized.startsWith("~/") || (platform === "win32" && normalized.startsWith("~\\"))
+            ? flavor.join(home, normalized.slice(2))
             : normalized,
       ),
+      platform,
     )
   }
 
