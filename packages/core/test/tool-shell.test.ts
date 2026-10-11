@@ -571,7 +571,7 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
-    test(`${scanner}: a continued directory operand asks for the wrong path and misses the destination deny`, () =>
+    test(`${scanner}: a continued directory operand is judged where it leads, and a deny on the destination blocks it`, () =>
       withScanner(portable, (registry, fixture) =>
         Effect.gen(function* () {
           const agents = yield* Agent.Service
@@ -585,37 +585,10 @@ describe("ShellTool scanner permissions", () => {
           )
           const marker = path.join(fixture.active, "marker")
           const command = `cd ../out\\\nside && pwd -P && printf reached > '${marker}'`
-          for (const reply of ["reject", "once"] as const) {
-            const result = yield* runPermissionCommand(registry, command, marker, [reply])
-            expect(result.requests).toMatchObject([
-              {
-                action: "external_directory",
-                // The backslash before the line break makes the input opaque in both modes, so both read the folder
-                // the legacy scan names.
-                resources: [path.join(fixture.active, "..", "out", "*").replaceAll("\\", "/")],
-              },
-            ])
-            if (reply === "reject") {
-              expect(Exit.isFailure(result.exit)).toBe(true)
-              if (Exit.isFailure(result.exit))
-                expect(
-                  result.exit.cause.reasons.some(
-                    (reason) => Cause.isDieReason(reason) && reason.defect instanceof Permission.DeclinedError,
-                  ),
-                ).toBe(true)
-              expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
-              continue
-            }
-            expect(result.exit).toMatchObject({
-              _tag: "Success",
-              value: {
-                status: "completed",
-                metadata: { exit: 0 },
-                content: [{ type: "text", text: `${fixture.outside}\n` }],
-              },
-            })
-            expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("reached")
-          }
+          // The backslash before the line break joins the words, so the folder is `../outside`. The input is opaque in both
+          // modes; the fragments of such input are joined the same way, so the deny on the destination blocks the call.
+          expectBlocked(yield* runPermissionCommand(registry, command, marker, []))
+          expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
         }),
       ))
   }

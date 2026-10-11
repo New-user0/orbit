@@ -836,7 +836,7 @@ export function words(analysis: Analysis) {
  */
 export function locations(text: string, dialect: Analysis["dialect"], platform: NodeJS.Platform) {
   const ps = dialect === "powershell-5.1" || dialect === "pwsh"
-  return ShellSafety.fragments(text).flatMap((fragment) => {
+  return ShellSafety.fragments(ps ? text : joined(text)).flatMap((fragment) => {
     const words = fragmentTokens(fragment)
     const head = unquoted(words[0]!)
     const target = ps ? (aliasTarget(head.toLowerCase(), dialect, platform) ?? head.toLowerCase()) : head
@@ -853,7 +853,7 @@ export function locations(text: string, dialect: Analysis["dialect"], platform: 
  */
 export function fragmentWords(text: string) {
   return distinct(
-    ShellSafety.fragments(text).flatMap((fragment) => {
+    ShellSafety.fragments(joined(text)).flatMap((fragment) => {
       const words = fragmentTokens(fragment).slice(1)
       const comment = words.findIndex((word) => word.startsWith("#"))
       return (comment === -1 ? words : words.slice(0, comment)).flatMap((word) => {
@@ -864,6 +864,11 @@ export function fragmentWords(text: string) {
     }),
   )
 }
+
+// A backslash before a line break joins the words around it in bash, as a backtick does in PowerShell, which `fragments` joins.
+// PowerShell text passes through here too: its backslash is a path separator, but a line break after one is rare enough
+// that joining only makes a fragment longer, never shorter.
+const joined = (text: string) => text.replace(/\\\r?\n/g, "")
 
 // Words split at blanks, with a quoted word kept whole.
 const fragmentTokens = (fragment: string) => fragment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
