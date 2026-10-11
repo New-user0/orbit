@@ -430,7 +430,12 @@ its gate, before the first trust task. It names every surface that M1 found over
   approvals or agents it carries out. Both refuse an untrusted folder whatever it holds back. Without them the check
   refuses only a folder whose config holds something back, which is right for `orb run` and `orb loop`, because they
   import nothing. `strict` refuses any untrusted folder, and `orb -p` passes it (`handlers/print.ts`): a clean clone's
-  `AGENTS.md` still steers a model whose tool calls run unasked under the default rules. Whether `orb run` and
+  `AGENTS.md` still steers a model whose tool calls run unasked under the default rules. Stream input (`--input-format stream-json`,
+  through `orb -p` and `orb run`) starts work as well, so `headlessInput` makes it strict for both doors and refuses before the first
+  line is read (`trust.test.ts`, the `stream-json input` rows). Its input lines name request IDs, form IDs, message IDs and models,
+  which `run/protocol.ts` decodes with their exact schemas before the driver uses them (class 5), and its replies reach only the
+  requests the driver itself showed, so a program on a shared server cannot answer another client's ask (`run/stream.test.ts`).
+  Whether `orb run` and
   `orb loop` should be strict too is an open owner question. This is `execute` in `packages/cli/src/commands/handlers/flow/execute.ts`:
 
   ```ts
@@ -1351,7 +1356,7 @@ gray-matter's default engines, or a marker test per reader written with the spec
 ### 12. Entry points and process boundaries each need the gate
 
 **Rule:** List every command, subprocess and process that can start work or load a file (`run`, `loop`, `flow run`,
-`resume` and `replay`, `eval`, `orb -p`, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
+`resume` and `replay`, `eval`, `orb -p` and `orb run` with stream input, `acp`, `serve --stdio`, the terminal UI's plugin loader, IDE buttons, SDK hosts), and
 route each one through the one gate. A gate in the server does not reach the CLI or the terminal UI process.
 
 **Why:** The same loader had several doors. A check on `orb flow run` did not cover replay or resume, the server's

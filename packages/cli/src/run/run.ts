@@ -10,6 +10,7 @@ import { ServerConnection } from "../services/server-connection"
 import { parseSessionTargetModel, resolveSessionTarget } from "../session-target"
 import { toolInlineInfo, toolOutputText } from "@orbit/tui/mini/tool"
 import { runNonInteractivePrompt, wroteResult } from "./noninteractive"
+import { runStream } from "./stream"
 import { UI } from "./ui"
 import { Env } from "../env"
 import { errorMessage } from "../util/error"
@@ -41,6 +42,8 @@ export type RunCommandInput = {
   partial?: boolean
   /** With the text format: tool output bodies and a usage line per step. */
   verbose?: boolean
+  /** `--input-format stream-json`: standard input is a stream of JSON inputs, answered with the envelope of lines. */
+  stream?: boolean
 }
 
 type FilePart = {
@@ -89,14 +92,23 @@ async function run(input: RunCommandInput, options: ExecutionOptions) {
   const root = options.root ?? process.env.PWD ?? process.cwd()
   const local = localDirectory(root)
   const directory = options.useServerDirectory ? undefined : (options.directory ?? local)
-  const message = mergeInput(formatMessage(input.message), process.stdin.isTTY ? undefined : await readStdin())
-  if (!message?.trim()) fail("You must provide a message")
+  // Stream input leaves standard input to the protocol, and needs no message: the first one may come down the stream.
+  const message = input.stream
+    ? (formatMessage(input.message) ?? "")
+    : mergeInput(formatMessage(input.message), process.stdin.isTTY ? undefined : await readStdin())
+  if (!input.stream && !message?.trim()) fail("You must provide a message")
   const files = await Promise.all(input.file.map((file) => prepareFile(file, root, options)))
-  const prepared = { directory, message, files }
-  return execute(input, prepared, input.server.endpoint, options)
+  const prepared = { directory, message: message ?? "", files }
+  return execute(input, prepared, input.server.endpoint, options, root)
 }
 
-async function execute(input: RunCommandInput, prepared: Prepared, endpoint: Endpoint, options: ExecutionOptions) {
+async function execute(
+  input: RunCommandInput,
+  prepared: Prepared,
+  endpoint: Endpoint,
+  options: ExecutionOptions,
+  root: string,
+) {
   const client = Orbit.make({
     baseUrl: endpoint.url,
     headers: Service.headers(endpoint),
@@ -170,6 +182,36 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
           .then((result) => (result.data ? { providerID: result.data.providerID, modelID: result.data.id } : undefined))
           .catch(() => undefined)))
       : undefined
+  if (input.stream && input.envelope) {
+    process.exitCode = await runStream({
+      client,
+      sessionID: target.session.id,
+      location: target.location,
+      agent: target.agent,
+      model,
+      variant,
+      thinking: input.thinking ?? false,
+      partial: input.partial,
+      jsonSchema: input.jsonSchema,
+      turn,
+      auto: input.auto ?? false,
+      attached: options.attached ?? true,
+      envelope: {
+        cwd: target.location.directory,
+        agent: target.agent,
+        model: initModel ? `${initModel.providerID}/${initModel.modelID}` : undefined,
+        version: ORBIT_VERSION,
+      },
+      first: prepared.message.trim() ? { message: prepared.message, files: prepared.files } : undefined,
+      // A terminal is not a stream of inputs: the message on the command line is then the only input.
+      stdin: process.stdin.isTTY ? undefined : process.stdin,
+      resolveFile: (value) => (value.startsWith("data:") ? dataFile(value) : prepareFile(value, root, options)),
+    }).catch((error) => {
+      reportRunError(input, errorMessage(error), target.session.id)
+      return 1
+    })
+    return
+  }
   await runNonInteractivePrompt({
     client,
     sessionID: target.session.id,
@@ -354,6 +396,17 @@ export function reportRunError(
     return
   }
   UI.error(message)
+}
+
+// A `data:` URL from a `user` line, which carries its own bytes. Only the base64 form is read, and the same size limit
+// as a file applies.
+async function dataFile(value: string): Promise<FilePart> {
+  const comma = value.indexOf(",")
+  const header = comma === -1 ? "" : value.slice(5, comma)
+  if (!header.endsWith(";base64")) fail("A data URL file must be base64 encoded: data:<type>;base64,<data>")
+  if (value.length > Math.ceil((ATTACH_FILE_MAX_BYTES * 4) / 3) + comma + 4)
+    fail("Cannot attach a file larger than 10 MiB")
+  return { url: value, filename: "attachment", mime: header.split(";")[0] || "text/plain" }
 }
 
 function fail(message: string): never {

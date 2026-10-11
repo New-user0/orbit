@@ -51,6 +51,17 @@ describe("CLI frontend import boundaries", () => {
     expect(print).not.toContain("packages/tui/src/app.tsx")
     expect(print).not.toContain("packages/tui/src/mini/runtime.ts")
 
+    // Stream input is part of the printed run, and pulls in no more of the terminal UI than the run itself does.
+    expect(print).toContain("packages/cli/src/run/stream.ts")
+    expect(print).toContain("packages/cli/src/run/protocol.ts")
+    const stream = await bundleInputs("packages/cli/src/run/stream.ts")
+    const tui = (graph: string[]) => graph.filter((file) => file.startsWith("packages/tui/"))
+    expect(tui(stream).length).toBeGreaterThan(0)
+    expect(tui(stream).filter((file) => !tui(run).includes(file))).toEqual([])
+    expect(stream).not.toContain("packages/tui/src/runtime.tsx")
+    expect(stream).not.toContain("packages/tui/src/app.tsx")
+    expect(stream).not.toContain("packages/tui/src/mini/runtime.ts")
+
     const mini = await bundleInputs("packages/cli/src/commands/handlers/mini.ts")
     expect(mini).toContain("packages/cli/src/mini.ts")
     expect(mini).toContain("packages/tui/src/mini/index.ts")

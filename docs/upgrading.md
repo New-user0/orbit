@@ -2293,3 +2293,23 @@ always shown, and a folder that is not a repository hides nothing.
 git-ignored folders such as `node_modules`.
 
 **What to do:** Nothing for most setups. Read results by their content, not by the old `path:line:column` lines.
+
+### `--input-format stream-json` lets a program drive a headless run
+
+`orb -p --input-format stream-json --output-format stream-json` (and `orb run --input-format stream-json --format stream-json`)
+reads one JSON input per line from standard input while the run goes on, instead of sending one message and exiting. The
+inputs are `user` (`text`, optional `files`, `delivery` `steer` or `queue`, `id`), `interrupt`, `permission_reply`,
+`form_reply`, `form_cancel`, `set_model` and `end`. Output is the envelope of `--output-format stream-json`, with an init
+line first and one `result` line for each busy period, plus `permission_request` and `form_request` lines for the asks and
+questions the program should answer, `request_cancelled` when one of them is settled by someone else, and `error` lines with
+type `invalid_input`, `unknown_request` or `input_failed` for a line or operation that failed (the run goes on). A message
+sent with `delivery: "steer"` joins the work that is running and shares its result; `"queue"` waits and gets its own. When
+standard input closes, every ask that is still open is rejected (a question is cancelled) with feedback so the model carries on,
+the queued work finishes, and the exit status is 1 if the last result was an error and 0 otherwise. A first message may also be
+given on the command line. Like `orb -p`, it refuses an untrusted folder. Without `--yolo` every ask goes to the program;
+with it, asks are approved without being shown.
+
+**Affects:** nothing that exists: the flag is new. `--input-format` is a new `-p` flag, so a script that passes it to a
+root command without `-p` now gets the usual usage error.
+
+**What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.

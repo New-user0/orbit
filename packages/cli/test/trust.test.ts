@@ -378,6 +378,15 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
     ["stream-json", ["-p", "--standalone", "--output-format", "stream-json", "--model", model, "say ok"]],
     ["bare", ["-p", "--bare", "--model", model, "say ok"]],
     ["continue", ["-p", "--standalone", "--continue", "--model", model, "say ok"]],
+    // Stream input starts work as well, through either door, so it is stopped before it reads a line (class 12).
+    [
+      "stream-json input with -p",
+      ["-p", "--standalone", "--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+    ],
+    [
+      "stream-json input with run",
+      ["run", "--standalone", "--input-format", "stream-json", "--format", "stream-json", "--model", model],
+    ],
   ] as const
   const before = runs
   for (const [folderName, folder] of folders) {
@@ -386,7 +395,7 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
       const result = await orb(folder, [...args])
       const context = `${startName} in ${folderName}`
       expect({ context, code: result.code }).toEqual({ context, code: 1 })
-      if (startName === "stream-json") {
+      if (startName.startsWith("stream-json")) {
         // No session exists, so there is no init line: the output is the result line alone.
         const lines = result.stdout.trim().split("\n")
         expect({ context, lines: lines.length }).toEqual({ context, lines: 1 })
@@ -420,6 +429,20 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
   succeeded(trusted)
   expect(trusted.stdout).toContain("ran fine")
   expect(runs).toBeGreaterThan(before)
+  // And so does stream input, which takes its first message from the command line when no program feeds it.
+  const streamed = await orb(folders[0][1], [
+    "-p",
+    "--trust",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--model",
+    model,
+    "say ok",
+  ])
+  succeeded(streamed)
+  expect(streamed.stdout).toContain("ran fine")
 }, 300_000)
 
 test("orb -p cannot ask a server older than workspace trust whether a clean folder is trusted, so it stops", async () => {

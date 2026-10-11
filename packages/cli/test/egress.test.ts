@@ -88,6 +88,53 @@ searchFlags.forEach((flags) => {
   )
 })
 
+// Stream input hands asks to a program, but the search consent is not one it may answer: the form is cancelled and
+// never written as a form_request line.
+test(
+  "a stream-json input run cannot search the web without consent, and does not offer the form to its controller",
+  async () => {
+    const workspace = await fresh("stream-input")
+    requests.length = 0
+    attempts.length = 0
+    script.search = true
+    try {
+      const child = spawn(
+        [
+          "-p",
+          "--standalone",
+          "--model",
+          "test/test-model",
+          "--input-format",
+          "stream-json",
+          "--output-format",
+          "stream-json",
+          "Search the web",
+        ],
+        { PWD: workspace, ORBIT_TRUST_PROJECT: "1" },
+      )
+      const [code, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      expect({ code, stderr: code === 0 ? "" : stderr }).toEqual({ code: 0, stderr: "" })
+      const lines = stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as { type: string })
+      expect(lines.some((line) => line.type === "form_request")).toBe(false)
+      expect(lines.at(-1)?.type).toBe("result")
+      expect(requests.some((request) => offersSearch(request))).toBe(true)
+      expect(requests.some((request) => JSON.stringify(request).includes("Web search is not enabled"))).toBe(true)
+      expect(attempts).toEqual([])
+      expect(consent({ databaseExists: true })).toBeUndefined()
+    } finally {
+      script.search = false
+    }
+  },
+  120_000,
+)
+
 const controls = [
   ["firecrawl", "mcp.firecrawl.dev:443"],
   ["parallel", "search.parallel.ai:443"],
