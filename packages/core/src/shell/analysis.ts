@@ -6,10 +6,12 @@ import fs from "node:fs"
 import type path from "node:path"
 import type { Node } from "web-tree-sitter"
 import { which } from "../util/which.js"
+import { ShellLaunch } from "./launch.js"
 import { ShellParse } from "./parse.js"
 import { ShellPaths } from "./paths.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellReadOnly } from "./readonly.js"
+import { ShellWrappers } from "./wrappers.js"
 
 // What a shell command does, as data. The permission layers and the tool runtime read this model and decide; nothing
 // here allows or denies. The module is pure: a caller injects the platform, the matching path module, the home folder and
@@ -35,6 +37,8 @@ export type Context = {
   /** True when the shell would start `head` from the working folder. `inspect` supplies it; pure tests may omit it. */
   local?: (head: string) => boolean
 }
+
+export type Script = { command: number; dialect: "bash" | "powershell"; program: string; text: string }
 
 export type Opaque = { class: "limit" | "syntax" | "unsupported"; reason: string }
 
@@ -82,9 +86,14 @@ export type Command = {
   application: boolean
   /** PowerShell: the parser's view of the command. */
   source?: PowerShellParse.Command
-  origin: "top" | "substitution" | "subshell" | "body" | "condition" | "pipeline"
+  origin: "top" | "substitution" | "subshell" | "body" | "condition" | "pipeline" | "script"
   /** Set on a command that reads the output of the command at index `from` of `commands`, when both are plain commands. */
   input?: { from: number; operator: "|" | "|&" }
+  /**
+   * Standard input is the previous pipeline element, whatever the shape of that element (`input` is set only between two
+   * plain commands, so `(curl x) | sh` has none). Set on every command inside a later element of a pipeline.
+   */
+  piped?: true
   readOnly: boolean
 }
 
@@ -117,6 +126,14 @@ export type Analysis = {
   /** The files the commands name, what each does to them, and where a relative spelling may land. */
   paths: ShellPaths.Facts
   sleepLed: boolean
+  /** PowerShell: the parser's summary, for the checks that read statement and variable flags. */
+  summary?: PowerShellParse.Summary
+  /** The shells these commands start with a literal script, which `nest` can read. */
+  scripts?: Script[]
+  /** The scripts of `scripts`, analysed. Only `nest` sets it; it never changes the fields above. */
+  nested?: { command: number; text: string; analysis: Analysis }[]
+  /** `nest` stopped: this level holds scripts below the third level of nesting. */
+  deep?: true
   /**
    * Bash: the index in `commands` of the command whose status is the status of the whole text, when that is one plain
    * command: the last of the last top-level statement, reached at the top level, through `&&` or `||`, or as the last
@@ -183,8 +200,12 @@ function opaque(kind: Dialect, value: Opaque): Analysis {
 export function analyze(command: string, ctx: Context, parse?: Parse): Analysis {
   const kind = dialect(ctx.shell, ctx)
   if (kind === "unanalysed") return opaque(kind, { class: "unsupported", reason: "dialect" })
-  if (kind === "bash") return analyzeBash(command, ctx, parse)
-  return analyzePowerShell(ctx, kind, parse)
+  const result = kind === "bash" ? analyzeBash(command, ctx, parse) : analyzePowerShell(ctx, kind, parse)
+  const scripts = result.commands.flatMap((item, index) => {
+    const launched = ShellLaunch.launch(item, ctx.platform)
+    return launched?.kind === "script" ? [{ command: index, dialect: launched.dialect, program: launched.program, text: launched.text }] : []
+  })
+  return scripts.length === 0 ? result : { ...result, scripts }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -439,7 +460,13 @@ class BashWalk {
     for (const child of kids(node)) {
       if (child.type === "|" || child.type === "|&") operator = child.type
       if (!child.isNamed || child.type === "comment") continue
+      const first = this.commands.length
       const walked = this.node(child, new Map(scope), "pipeline")
+      // Everything that ran inside a later element reads the pipe, except a substitution, which has its own input.
+      if (operator)
+        this.commands.slice(first).forEach((item) => {
+          if (item.origin !== "substitution") item.piped = true
+        })
       last = walked.last ?? last
       tail = walked.tail
       const plain = walked.last !== undefined && plainCommand(child)
@@ -578,7 +605,7 @@ class BashWalk {
     const raw = values[0] ?? ""
     // Windows runs `cat.exe` for `cat`. Elsewhere `cat.exe` is its own name and is never read-only.
     const head = this.ctx.platform === "win32" && !/[\\/]/.test(raw) ? raw.replace(/\.exe$/i, "") : raw
-    const unwrapped = unwrap(values)
+    const unwrapped = ShellWrappers.unwrap(values)
     const rebuilt = /\$[A-Za-z_]|\n/.test(text) || text === ""
     const command: Command = {
       text: rebuilt ? render(env, values, redirects) : text,
@@ -945,7 +972,8 @@ function leadingCd(command: Command, ctx: Context) {
   return samePath(target.value, ctx.cwd, ctx)
 }
 
-function samePath(left: string, right: string, ctx: Context) {
+/** Whether two spellings name the same folder, with the Git Bash spelling `/c/proj` read as `C:\proj`. */
+export function samePath(left: string, right: string, ctx: Pick<Context, "platform" | "path">) {
   // Git Bash writes C:\proj as /c/proj.
   const msys = (value: string) => {
     const match = ctx.platform === "win32" ? /^\/([A-Za-z])(\/.*)?$/.exec(value) : undefined
@@ -956,109 +984,6 @@ function samePath(left: string, right: string, ctx: Context) {
     return ctx.platform === "win32" ? normal.toLowerCase() : normal
   }
   return fold(left) === fold(right)
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Wrappers: the argv of the real program, for the checks that name it. Never read-only.
-
-function unwrap(argv: string[]): { inner: string[]; unanalysable: boolean } {
-  let rest = argv
-  for (;;) {
-    const head = rest[0]
-    const next = (() => {
-      switch (head) {
-        case "time":
-        case "nohup":
-          return rest[1] === "--" ? rest.slice(2) : rest.slice(1)
-        case "timeout":
-          return timeout(rest)
-        case "nice":
-          return nice(rest)
-        case "stdbuf":
-          return stdbuf(rest)
-        case "env":
-          return env(rest)
-        case "sudo":
-        case "doas":
-        case "exec":
-          return rest[1]?.startsWith("-") ? undefined : rest.slice(1)
-        default:
-          return null
-      }
-    })()
-    if (next === null) return { inner: rest, unanalysable: false }
-    if (next === undefined || next.length === 0) return { inner: rest, unanalysable: next === undefined }
-    rest = next
-  }
-}
-
-function timeout(argv: string[]) {
-  let index = 1
-  const value = /^[A-Za-z0-9_.+-]+$/
-  for (; index < argv.length; index++) {
-    const token = argv[index]
-    if (token === "--") {
-      index++
-      break
-    }
-    if (!token.startsWith("-")) break
-    if (["--foreground", "--preserve-status", "--verbose", "-v"].includes(token)) continue
-    if (/^--(?:kill-after|signal)=/.test(token)) {
-      if (!value.test(token.slice(token.indexOf("=") + 1))) return undefined
-      continue
-    }
-    if (token === "--kill-after" || token === "--signal" || token === "-k" || token === "-s") {
-      if (!value.test(argv[++index] ?? "")) return undefined
-      continue
-    }
-    if (/^-[ks][A-Za-z0-9_.+-]+$/.test(token)) continue
-    return undefined
-  }
-  if (!/^\d+(?:\.\d+)?[smhd]?$/.test(argv[index] ?? "")) return undefined
-  return index + 1 < argv.length ? argv.slice(index + 1) : undefined
-}
-
-function nice(argv: string[]) {
-  if (argv.slice(1).some((arg) => /[$(`]/.test(arg))) return undefined
-  if (argv[1] === "-n") return /^[+-]?\d+$/.test(argv[2] ?? "") ? argv.slice(3) : undefined
-  if (/^-\d+$/.test(argv[1] ?? "")) return argv.slice(2)
-  if (argv[1]?.startsWith("-")) return undefined
-  return argv.slice(1)
-}
-
-function stdbuf(argv: string[]) {
-  let index = 1
-  let options = 0
-  for (; index < argv.length; index++) {
-    const token = argv[index]
-    if (/^-[ioe]\S+$/.test(token) || /^--(?:input|output|error)=\S+$/.test(token)) {
-      options++
-      continue
-    }
-    if (/^-[ioe]$/.test(token)) {
-      options++
-      index++
-      continue
-    }
-    if (token.startsWith("-")) return undefined
-    break
-  }
-  return options === 0 || index >= argv.length ? undefined : argv.slice(index)
-}
-
-function env(argv: string[]) {
-  let index = 1
-  for (; index < argv.length; index++) {
-    const token = argv[index]
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token) || ["-i", "-0", "-v"].includes(token)) continue
-    if (token === "-u") {
-      index++
-      continue
-    }
-    if (token.startsWith("-")) return undefined
-    break
-  }
-  return index >= argv.length ? [] : argv.slice(index)
 }
 
 function sleepLed(statements: Analysis["statements"], commands: Command[], sleeping: (command: Command) => boolean) {
@@ -1211,7 +1136,7 @@ export function aliasNames() {
   return [...new Set([...EVERYWHERE.keys(), ...WINDOWS.keys(), ...WINDOWS_POWERSHELL.keys()])]
 }
 
-const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])
+export const LOCATION = new Set(["set-location", "push-location", "pop-location", "new-psdrive"])
 const LOOPS = new Set(["ForStatementAst", "ForEachStatementAst", "WhileStatementAst", "DoWhileStatementAst", "DoUntilStatementAst"])
 const CONSTANT = new Set(["StringConstantExpressionAst", "ConstantExpressionAst"])
 
@@ -1228,6 +1153,10 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
   const add = (source: PowerShellParse.Command, origin: Command["origin"]) => {
     const named = powershellHead(source.written, kind, ctx.platform)
     const argv: Word[] = [word(source.written, true), ...source.arguments.map((argument) => argumentWord(argument))]
+    // A wrapper program (`sudo`, `env`, `nice`) is stripped as in bash, so the checks see the program it starts.
+    const values = [named.head, ...argv.slice(1).map((item) => item.value)]
+    // `timeout` on Windows is the delay program (`timeout /t 5`), not the POSIX wrapper.
+    const unwrapped = ctx.platform === "win32" && named.head === "timeout" ? { inner: values, unanalysable: false } : ShellWrappers.unwrap(values)
     index.set(source, commands.length)
     commands.push({
       text: source.text,
@@ -1235,7 +1164,8 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
       env: [],
       redirects: source.redirects.map(redirect),
       head: source.placeholder ? "" : named.head,
-      inner: [named.head, ...argv.slice(1).map((item) => item.value)],
+      inner: unwrapped.inner,
+      ...(unwrapped.unanalysable ? { wrapper: "unanalysable" as const } : {}),
       dynamicHead: source.placeholder || source.dynamic,
       application: named.application,
       source,
@@ -1284,6 +1214,21 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
     const verdict = verdicts.get(item)
     return verdict?.ok ? verdict.reads : []
   })
+  summary.statements.forEach((statement) =>
+    statement.elements.slice(1).forEach((element) => {
+      const at = index.get(element.command)
+      if (at !== undefined) commands[at].piped = true
+    }),
+  )
+  // Two commands side by side in a pipeline: the second reads the first (`find / | xargs rm -rf`).
+  summary.statements.forEach((statement) =>
+    statement.elements.forEach((element, offset) => {
+      const previous = statement.elements[offset - 1]
+      const at = index.get(element.command)
+      const from = previous === undefined ? undefined : index.get(previous.command)
+      if (element.kind === "command" && previous?.kind === "command" && at !== undefined && from !== undefined) commands[at].input = { from, operator: "|" }
+    }),
+  )
   const paths = ShellPaths.powershell({
     commands,
     ctx,
@@ -1296,6 +1241,7 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
   })
   return {
     dialect: kind,
+    summary,
     commands,
     statements,
     redirects: top.flatMap((statement) => statement.redirects.map(redirect)),
@@ -1331,14 +1277,86 @@ function redirect(item: PowerShellParse.Redirect): Redirect {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Nested scripts
+
+const NESTING = 3
+
+/**
+ * Reads the literal scripts that `analysis` starts (`bash -c '...'`, `pwsh -Command ...`) and attaches each one's analysis
+ * as `nested`, down to three levels; a script below that sets `deep`. `parse` answers for one script synchronously and
+ * returns undefined when it cannot be parsed, which makes that script opaque. Nesting only adds: the outer analysis'
+ * commands, `readOnly`, `paths` and `count` stay exactly as they were, so a rule for `rm *` never matches `bash -c 'rm x'`.
+ * The top commands of a nested script carry `origin: "script"`.
+ */
+export function nest(analysis: Analysis, ctx: Context, parse: (script: Script) => Parse | undefined, level = 1): Analysis {
+  const scripts = analysis.scripts ?? []
+  if (scripts.length === 0) return analysis
+  if (level > NESTING) return { ...analysis, deep: true }
+  const nested = scripts.map((script) => {
+    const inner: Context = { ...ctx, shell: script.program }
+    const parsed = parse(script)
+    const made = parsed === undefined ? opaque(dialect(script.program, ctx), { class: "unsupported", reason: "nested:parse" }) : analyze(script.text, inner, parsed)
+    const commands = made.commands.map((item) => (item.origin === "top" ? { ...item, origin: "script" as const } : item))
+    return { command: script.command, text: script.text, analysis: nest({ ...made, commands }, ctx, parse, level + 1) }
+  })
+  return { ...analysis, nested }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // The impure entry
 
 /**
  * Parses `command` within the limits and analyses it. Bash goes through tree-sitter (10,000 characters, 50 ms and 50,000
  * nodes), PowerShell through its own parser. Nothing falls back to a weaker path; an input that cannot be parsed is opaque.
  */
-export const inspect = Effect.fn("ShellAnalysis.inspect")(function* (command: string, ctx: Context) {
+export const inspect = Effect.fn("ShellAnalysis.inspect")(function* (command: string, ctx: Context, options: { nested?: boolean } = {}) {
   const withLocal: Context = { ...ctx, local: ctx.local ?? ((head) => locate(head, ctx)) }
+  const outer = yield* inspectOne(command, withLocal)
+  // Only the guard asks for nested scripts: a PowerShell script costs a host process, and scheduling does not need it.
+  if (!options.nested || !outer.scripts) return outer
+  return yield* expand(outer, withLocal)
+})
+
+type Tree = { rootNode: Node; delete(): void }
+
+// Each round analyses what the cache already holds and parses the scripts it was missing, so every level of nesting is
+// parsed once. Trees stay alive until the last analysis has read them.
+function expand(outer: Analysis, ctx: Context) {
+  return Effect.acquireUseRelease(
+    Effect.sync((): Tree[] => []),
+    (trees) =>
+      Effect.gen(function* () {
+        const cache = new Map<string, Parse>()
+        const key = (script: Script) => `${script.dialect}\u0000${script.text}`
+        const parsers = yield* Effect.promise(ShellParse.parsers)
+        for (let round = 0; round < NESTING + 2; round++) {
+          const missing = new Map<string, Script>()
+          const result = nest(outer, ctx, (script) => {
+            const hit = cache.get(key(script))
+            if (hit === undefined) missing.set(key(script), script)
+            return hit
+          })
+          if (missing.size === 0) return result
+          for (const [name, script] of missing) {
+            if (script.dialect === "powershell") {
+              const parser = yield* PowerShellParse.Service
+              cache.set(name, yield* parser.parse(script.text))
+              continue
+            }
+            const deadline = performance.now() + DEADLINE_MS
+            const tree = script.text.length > MAX_LENGTH ? null : parsers.bash.parse(script.text, null, { progressCallback: () => performance.now() > deadline })
+            if (tree) trees.push(tree)
+            cache.set(name, tree ? tree.rootNode : "aborted")
+          }
+        }
+        return nest(outer, ctx, (script) => cache.get(key(script)))
+      }),
+    (trees) => Effect.sync(() => trees.forEach((tree) => tree.delete())),
+  )
+}
+
+const inspectOne = Effect.fn("ShellAnalysis.inspectOne")(function* (command: string, withLocal: Context) {
+  const ctx = withLocal
   const kind = dialect(ctx.shell, ctx)
   if (kind === "unanalysed") return analyze(command, withLocal)
   if (kind !== "bash") {
