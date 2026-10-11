@@ -2584,3 +2584,11 @@ Read now opens an image with a header line that names its pixel size and type, f
 **Affects:** anyone who matches Read's exact "Image read successfully" text, SDK callers that read the Read tool output schema (images gain an optional `dimensions`), and sessions that read large images.
 
 **What to do:** Nothing for most setups. Match the line by its prefix if you parse it.
+
+### Editing any file of a plugin folder asks about the folder again
+
+A project plugin folder is now fingerprinted by every regular file in it, not only its entry files and `package.json`, so a change to a helper module counts like a change to the entry. `node_modules` inside a plugin folder is named but not read, so installing a dependency does not ask again. Before a folder is trusted, Orbit lists a plugin folder without following links that lead out of the project or onto a network share.
+
+**Affects:** projects with plugin folders that hold more than the entry files, under a trust grant made before this change.
+
+**What to do:** Nothing; grant the folder again if it asks.

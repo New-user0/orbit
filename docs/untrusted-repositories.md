@@ -113,9 +113,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     (`test/config/fingerprint.test.ts`, one row per kind; `config-trust.test.ts`, "stops <kind> after it is edited").
   - `skills` of a document: the field and the front-matter `hooks` of the skill files under its local paths
     (`fingerprint.test.ts`).
-  - `plugins` of a directory: every entry file `PluginSourceDirectory.files` finds (server, tui, rpc), also in a folder
-    with no server entry, which `scan` skips but the terminal UI imports, and their `package.json`, by content
-    (`fingerprint.test.ts`, `fingerprint-tui-only.test.ts`: edits, a touch, an edit with the old time, a tui-only folder). `scan` compares
+  - `plugins` of a directory: every regular file in each plugin folder (`node_modules` is named, not entered), listed by
+    the same link-aware walk as agents/ and skills/, so nothing a folder supplies reaches the runtime's resolver or
+    `fs.resolve` before trust; a single-file plugin and the `package.json` beside it, by content
+    (`fingerprint.test.ts`, `fingerprint-tui-only.test.ts`: edits, a touch, an edit with the old time, a tui-only folder;
+    `fingerprint-plugin-share.test.ts`: tui.ts, server.ts, package.json and a server/ folder linked to a share, an
+    untrusted load, and a control). `scan` compares
     again when it runs, because its change feed fires before the reload (`config-trust.test.ts`: "offers no plugin planted
     after the grant"). `ProjectTrust.status` reads the plugins of a config directory from the disk when it answers, so a
     client that imports plugins on a file event (the terminal UI asks again before it does) sees one planted after the

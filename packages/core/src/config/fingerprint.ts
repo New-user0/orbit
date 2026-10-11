@@ -180,12 +180,21 @@ export const pluginsOf = Effect.fn("Fingerprint.plugins")(function* (
         Effect.gen(function* () {
           if ((yield* reach(bound, target)) !== "inside")
             return { name: relative(folder, target), outside: yield* trail(bound, folder, target) }
-          // Every entry, including a tui-only folder's: the TUI imports those without the server activating them.
-          const found = yield* PluginSourceDirectory.files(fs, target)
-          const files = [...found.files, found.manifest]
+          // Every file of the folder, whichever entry the runtime would pick (the TUI imports a tui-only folder too).
+          // The runtime's resolver follows links, so nothing a folder supplies is handed to it before trust.
+          if (!(yield* fs.isDir(target))) {
+            const files = [target, path.join(path.dirname(target), "package.json")]
+            return {
+              name: relative(folder, target),
+              files: yield* Effect.forEach(files, (file) => readInside(bound, folder, file)),
+            }
+          }
+          const listed = yield* walk(bound, target, ["*", "**/*"], ["node_modules"])
           return {
             name: relative(folder, target),
-            files: yield* Effect.forEach(files, (file) => readInside(bound, folder, file)),
+            files: yield* Effect.forEach(listed.files, (file) => readInside(bound, folder, file)),
+            ...leaving(yield* Effect.forEach(listed.outside, (file) => describe(bound, folder, file))),
+            ...(listed.named.length === 0 ? {} : { named: listed.named.map((file) => relative(folder, file)).toSorted() }),
           }
         }),
       )
@@ -260,7 +269,12 @@ const describe = Effect.fnUntraced(function* (bound: Bound, from: string, file: 
 
 const leaving = (outside: readonly string[]) => (outside.length === 0 ? {} : { outside: outside.toSorted() })
 
-type Listing = { readonly files: readonly string[]; readonly outside: readonly string[] }
+type Listing = {
+  readonly files: readonly string[]
+  readonly outside: readonly string[]
+  // Folders that are named and not entered.
+  readonly named: readonly string[]
+}
 
 // The files under each folder that match, sorted, and the names that lead out of the bound. A folder that is not there
 // holds none. The loaders follow links, so the walk does too, one entry at a time: a link whose real path lies inside
@@ -273,24 +287,31 @@ const listFiles = Effect.fnUntraced(function* (
   const found = yield* Effect.forEach(places, (place) =>
     Effect.gen(function* () {
       const verdict = yield* reach(bound, place.root)
-      if (verdict === "absent") return { files: [], outside: [] } satisfies Listing
-      if (verdict === "outside") return { files: [], outside: [place.root] } satisfies Listing
-      if (!(yield* bound.fs.isDir(place.root))) return { files: [], outside: [] } satisfies Listing
+      if (verdict === "absent") return { files: [], outside: [], named: [] } satisfies Listing
+      if (verdict === "outside") return { files: [], outside: [place.root], named: [] } satisfies Listing
+      if (!(yield* bound.fs.isDir(place.root))) return { files: [], outside: [], named: [] } satisfies Listing
       return yield* walk(bound, place.root, place.patterns)
     }),
   )
   return {
     files: found.flatMap((item) => item.files).toSorted(),
     outside: found.flatMap((item) => item.outside).toSorted(),
+    named: [],
   } satisfies Listing
 })
 
 // Deep enough for any real tree, and an end to a loop of links that stays inside the bound.
 const maxDepth = 32
 
-const walk = Effect.fnUntraced(function* (bound: Bound, root: string, patterns: readonly string[]) {
+const walk = Effect.fnUntraced(function* (
+  bound: Bound,
+  root: string,
+  patterns: readonly string[],
+  skip: readonly string[] = [],
+) {
   const files: string[] = []
   const outside: string[] = []
+  const named: string[] = []
   const entered = new Set<string>()
   const matches = (file: string) => {
     const name = relative(root, file)
@@ -304,6 +325,10 @@ const walk = Effect.fnUntraced(function* (bound: Bound, root: string, patterns: 
       const entries = (yield* bound.fs.readDirectoryEntries(folder)).toSorted((a, b) => (a.name < b.name ? -1 : 1))
       for (const entry of entries) {
         const full = path.join(folder, entry.name)
+        if (skip.includes(entry.name)) {
+          named.push(full)
+          continue
+        }
         if (entry.type === "directory") {
           yield* visit(full, depth + 1)
           continue
@@ -320,7 +345,7 @@ const walk = Effect.fnUntraced(function* (bound: Bound, root: string, patterns: 
       }
     })
   yield* visit(root, 0)
-  return { files, outside } satisfies Listing
+  return { files, outside, named } satisfies Listing
 })
 
 // The `hooks` and `mcp_servers` that the front matter of these files carry, with the file each came from. A file whose
