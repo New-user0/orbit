@@ -1960,6 +1960,8 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   const status = () => {
     if (state() === "completed") return "finished"
     if (state() === "error") return "failed"
+    // A stalled command has not ended: say what it waits for, in the neutral tone, and never "finished".
+    if (state() === "waiting") return "waiting for input"
     return state() ?? "finished"
   }
   const heading = () => bodyText(`${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`)
