@@ -499,6 +499,9 @@ describe("ShellGuard.request", () => {
 
 describe("ShellGuard.authorize", () => {
   const asked: Permission.AssertInput[] = []
+  // The rows that read PowerShell's own parse need a host; they skip where there is none.
+  const host = Bun.which("pwsh") ?? Bun.which("powershell") ?? undefined
+  const real = host ? it.live : it.live.skip
 
   // Runs the gate over a project with the given deny rule in force. A request that `denied` matches fails when it is
   // asserted, as a rule would; every other one is recorded as a question.
@@ -507,11 +510,12 @@ describe("ShellGuard.authorize", () => {
   const run = (
     command: string,
     denied: (input: Permission.AssertInput) => boolean,
-    options: { shell?: string; link?: boolean } = {},
+    options: { shell?: string; link?: boolean; real?: boolean } = {},
   ) =>
     Effect.gen(function* () {
       asked.length = 0
       const { project, outside } = yield* layout
+      process.env.ORBIT_GUARD_OUT = outside
       if (options.link) {
         yield* Effect.promise(() => link(outside, path.join(project, "cfg")))
         yield* Effect.promise(() => fs.writeFile(path.join(outside, "s"), "secret"))
@@ -529,7 +533,14 @@ describe("ShellGuard.authorize", () => {
       }).pipe(
         Effect.provide(
           AppNodeBuilder.build(
-            LayerNode.group([FileAccess.node, Permission.node, ProjectTrust.node, FSUtil.node, Location.node]),
+            LayerNode.group([
+              FileAccess.node,
+              Permission.node,
+              ProjectTrust.node,
+              FSUtil.node,
+              Location.node,
+              PowerShellParse.node,
+            ]),
             [
               Location.node.replace(
                 Layer.succeed(
@@ -552,11 +563,12 @@ describe("ShellGuard.authorize", () => {
                   denied: (input) => Effect.succeed(denied(input)),
                 }),
               ),
+              ...(options.real ? [] : [PowerShellParse.node.replace(Layer.succeed(PowerShellParse.Service, noHost))]),
               ...(options.link ? untrustedProjectNodes : []),
             ],
           ),
         ),
-        Effect.provideService(PowerShellParse.Service, noHost),
+        Effect.ensuring(Effect.sync(() => void delete process.env.ORBIT_GUARD_OUT)),
         Effect.exit,
       )
     })
@@ -629,6 +641,95 @@ describe("ShellGuard.authorize", () => {
       }),
     )
 
+  // The spellings that PowerShell accepts for the same folder (class 3/4): each is asked about as the folder it names, in
+  // input too long to analyse (a pad comment) and, with PowerShell's own parser, in its short form.
+  const out = "$env:ORBIT_GUARD_OUT"
+  const spellings = [
+    ["an environment variable", `Set-Location ${out}`],
+    ["a braced environment variable", "Set-Location ${env:ORBIT_GUARD_OUT}"],
+    ["a quoted environment variable", `Set-Location "${out}"`],
+    ["a variable in a colon-bound path", `Set-Location -Path:${out}`],
+    ["a stack name before the folder", "Push-Location -StackName st ../outside"],
+    ["-PSPath bound with a colon", "Set-Location -PSPath:../outside"],
+    ["-PSPath abbreviated", "Set-Location -ps:../outside"],
+    ["-PSPath with a space", "Set-Location -PSPath ../outside"],
+    ["a switch bound before the folder", "Set-Location -PassThru: $true ../outside"],
+    ["a block comment before the folder", "Set-Location <# c #> ../outside"],
+    ["a block comment with a line break", "Set-Location <# c\n d #> ../outside"],
+    ["an en dash before the parameter", "Set-Location –Path:../outside"],
+    ["an em dash before the parameter", "Set-Location —LiteralPath:../outside"],
+    ["a module qualifier", "Microsoft.PowerShell.Management\\Set-Location ../outside"],
+    ["a quote inside the folder", 'Set-Location ../out"side"'],
+  ] as const
+  const folders = () =>
+    asked.filter((input) => input.action === "external_directory").flatMap((input) => input.resources.map(slash))
+  for (const [name, spelling] of spellings)
+    it.live(`asks for the folder of padded input: ${name}`, () =>
+      Effect.gen(function* () {
+        const command = `${spelling}; Remove-Item s ${pad}`
+        yield* run(command, () => false, { shell: "pwsh" })
+        expect(command.length).toBeGreaterThan(10_000)
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }),
+    )
+  for (const [name, spelling] of spellings)
+    real(`asks for the same folder with PowerShell's parser, short: ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling}; Remove-Item s`, () => false, { shell: host!, real: true })
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }),
+    )
+  for (const [name, spelling] of [
+    ["$HOME", "Set-Location $HOME"],
+    ["$HOME with a subfolder", 'Set-Location "$HOME\\.ssh"'],
+    ["a variable in a colon-bound path", "Set-Location -Path:$HOME"],
+    ["a braced USERPROFILE", "Set-Location ${env:USERPROFILE}"],
+  ] as const)
+    for (const padded of [true, false])
+      real(`asks for the home folder${padded ? " in padded input" : ""}: ${name}`, () =>
+        Effect.gen(function* () {
+          yield* run(padded ? `${spelling}; Remove-Item s ${pad}` : spelling, () => false, { shell: host!, real: !padded })
+          expect(folders().length).toBe(1)
+          expect(folders()[0]!.toLowerCase().startsWith(slash(os.homedir()).toLowerCase())).toBe(true)
+        }),
+      )
+  real("asks one folder, with no quote character, for a quote inside the target", () =>
+    Effect.gen(function* () {
+      yield* run('Set-Location ../out"side"; Remove-Item s', () => false, { shell: host!, real: true })
+      expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      expect(folders().join("")).not.toMatch(/["']/)
+    }),
+  )
+
+  // A word that a link in an untrusted project leads out of: the elements of an array and a colon-bound value come from
+  // PowerShell's parser; a block comment before the word and a Unicode dash come from the fragment split.
+  for (const command of [
+    "Get-Content x,cfg/s",
+    "Get-Content -Path:cfg/s",
+    "Get-Content -LiteralPath:'cfg/s'",
+    "Get-Content cfg/s, x",
+    // A cmdlet that no path table knows: the words alone name the file.
+    "Invoke-Thing -Path:cfg/s",
+    "Invoke-Thing x,cfg/s",
+  ])
+    real(`asks for a link's folder with PowerShell's parser: ${command}`, () =>
+      Effect.gen(function* () {
+        yield* run(command, () => false, { shell: host!, link: true, real: true })
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }),
+    )
+  for (const [name, command] of [
+    ["a block comment before the word", "Get-Content <# c #> cfg/s"],
+    ["an en dash before a parameter", "Get-Content –Force cfg/s"],
+    ["a block comment closing like a line comment", "Get-Content x <# #> cfg/s"],
+  ] as const)
+    it.live(`asks for a link's folder in padded input: ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(`${command} ${pad}`, () => false, { shell: "pwsh", link: true })
+        expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      }),
+    )
+
   // The control: a short input names the same folder, so the long one is not asked more or less than it.
   it.live("asks for the folder of the short form of those inputs", () =>
     Effect.gen(function* () {
@@ -666,9 +767,32 @@ describe("ShellGuard.authorize", () => {
         "a bx",
         "../q",
       ])
-      expect(ShellGuard.locations("Set-Location -PassThru:$true; Set-Location ../x/$env:Y/z; cd $env:Y", "pwsh", "win32")).toEqual([
+      expect(ShellGuard.locations("Set-Location -PassThru:$true; Set-Location ../x/$Y/z; cd $Y", "pwsh", "win32")).toEqual([
         "../x/",
       ])
+      // Every word that is not a parameter, and the variables the shell defines for folders.
+      expect(ShellGuard.locations("Push-Location -StackName st ../o", "pwsh", "win32")).toEqual(["st", "../o"])
+      expect(ShellGuard.locations("Set-Location -PSPath:../a; sl -ps:../b; sl -PSPath ../c; sl -LP:../d", "pwsh", "win32")).toEqual([
+        "../a",
+        "../b",
+        "../c",
+        "../d",
+      ])
+      expect(
+        ShellGuard.locations("Set-Location <# c #> ../a; sl –Path:../b; sl —LiteralPath ../c; Microsoft.PowerShell.Management\\sl ../d", "pwsh", "win32"),
+      ).toEqual(["../a", "../b", "../c", "../d"])
+      process.env.ORBIT_LOCATION_TEST = "/elsewhere"
+      expect(
+        ShellGuard.locations(
+          'sl $env:ORBIT_LOCATION_TEST; sl ${env:ORBIT_LOCATION_TEST}; sl "$env:ORBIT_LOCATION_TEST/x"; sl -Path:$env:ORBIT_LOCATION_TEST; sl $PWD/q',
+          "pwsh",
+          "win32",
+          "/work",
+          "/bin/pwsh",
+        ),
+      ).toEqual(["/elsewhere", "/elsewhere/x", "/work/q"])
+      delete process.env.ORBIT_LOCATION_TEST
+      expect(ShellGuard.fragmentWords("Get-Content <# a b #> c –Force d #> e\nls f", true)).toEqual(["c", "d", "f"])
       expect(ShellGuard.locations("cd ../out/$X; cd $Y/z", "bash", process.platform)).toEqual(["../out/"])
       expect(ShellGuard.fragmentWords('Get-Content -Path:a/b -LiteralPath: "c d" x"y"z -Force `$q # w', true)).toEqual([
         "a/b",

@@ -368,7 +368,7 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
   const fragmentary = analysis.opaque !== undefined || (!ps && scanned === undefined)
   const directories = [
     ...(ps ? (analysis.opaque ? [] : expansions(analysis, input.cwd.absolute, input.shell)) : (scanned?.directories ?? [])),
-    ...(fragmentary ? locations(input.command, analysis.dialect, process.platform) : []),
+    ...(fragmentary ? locations(input.command, analysis.dialect, process.platform, input.cwd.absolute, input.shell) : []),
   ]
   const gathered = yield* facts({
     analysis,
@@ -800,15 +800,20 @@ export function expansions(analysis: Analysis, cwd: string, shell: string) {
     )
     .flatMap((command) =>
       command.arguments.flatMap((argument) => {
-        const text =
+        // A word with a variable is read as written; any other word is the constant the parser folded, with its quotes
+        // joined (`../out"side"` is `../outside`), so the folder shown never holds a quote character.
+        const word =
           argument.parameter === undefined
-            ? argument.text
-            : /^(?:p|l)/i.test(argument.parameter)
-              ? argument.bound?.text
+            ? { text: argument.text, value: argument.value }
+            : pathParameter(argument.parameter)
+              ? { text: argument.bound?.text, value: argument.bound?.value }
               : undefined
-        // A word without a variable is a constant that the analysis already names, with its quotes joined.
-        const folder =
-          text === undefined || !text.includes("$") ? undefined : ShellParse.directoryArgument(text, true, cwd, shell)
+        if (word?.text === undefined) return []
+        const folder = word.text.includes("$")
+          ? ShellParse.directoryArgument(word.text, true, cwd, shell)
+          : word.value === undefined
+            ? undefined
+            : ShellParse.directoryArgument(word.value, true, cwd, shell)
         return folder === undefined ? [] : [folder]
       }),
     )
@@ -839,31 +844,38 @@ export function words(analysis: Analysis) {
 
 /**
  * The folders that the fragments of an input change to, for input that was not analysed: a fragment that starts with a
- * directory-changing command and names a place. Absolute or relative as written. A target built as the command runs
- * (`../out/$X`) names the nearest folder before the part that is built, and nothing when no folder comes first.
+ * directory-changing command and names a place, in every word that is not a parameter and in the value of a path
+ * parameter. Absolute or relative as written; `$HOME`, `$env:NAME`, `${env:NAME}`, `$PWD` and `$PSHOME` are expanded. A
+ * target built as the command runs (`../out/$X`) names the nearest folder before the part that is built, and nothing when
+ * no folder comes first.
  */
-export function locations(text: string, dialect: Analysis["dialect"], platform: NodeJS.Platform) {
+export function locations(text: string, dialect: Analysis["dialect"], platform: NodeJS.Platform, cwd = "", shell = "") {
   const ps = dialect === "powershell-5.1" || dialect === "pwsh"
-  return ShellSafety.fragments(ps ? text : joined(text)).flatMap((fragment) => {
+  const found = ShellSafety.fragments(ps ? psText(text) : joined(text)).flatMap((fragment) => {
     const words = fragmentTokens(fragment, ps)
     const head = words[0]!.value
-    const target = ps ? (aliasTarget(head.toLowerCase(), dialect, platform) ?? head.toLowerCase()) : head
+    // A module-qualified name (`Microsoft.PowerShell.Management\Set-Location`) is the cmdlet.
+    const name = ps ? head.replace(/^.*\\/, "").toLowerCase() : head
+    const target = ps ? (aliasTarget(name, dialect, platform) ?? name) : head
     if (!(ps ? MOVES.has(target) && target !== "pop-location" : target === "cd" || target === "pushd")) return []
-    const word = words
-      .slice(1)
-      .flatMap((item, index, rest) => {
-        const bound = ps ? colonBound(item, rest[index + 1]) : undefined
-        if (bound !== undefined) return pathParameter(bound.name) ? [bound.word] : []
-        return /^[-–—―]/.test(item.raw) ? [] : [item]
-      })
-      .at(0)
-    if (word === undefined) return []
-    const dynamic = word.value.search(/[$`(]/)
-    if (dynamic === -1) return [word.value]
-    const prefix = word.value.slice(0, dynamic)
-    const slash = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf("\\"))
-    return slash === -1 ? [] : [prefix.slice(0, slash + 1)]
+    return words.slice(1).flatMap((item, index, rest) => {
+      const bound = ps ? colonBound(item, rest[index + 1]) : undefined
+      if (bound !== undefined && !pathParameter(bound.name)) return []
+      const word = bound?.word ?? item
+      if (bound === undefined && /^[-–—―]/.test(item.raw)) return []
+      if (ps && word.value.includes("$")) {
+        const folder = ShellParse.directoryArgument(word.value, true, cwd, shell)
+        if (folder !== undefined) return [folder]
+      }
+      const dynamic = word.value.search(/[$`(]/)
+      if (dynamic === -1) return [word.value]
+      const prefix = word.value.slice(0, dynamic)
+      const slash = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf("\\"))
+      return slash === -1 ? [] : [prefix.slice(0, slash + 1)]
+    })
   })
+  // A value that follows `-Name:` is read both as that value and as a word of its own.
+  return distinct(found)
 }
 
 /**
@@ -873,7 +885,7 @@ export function locations(text: string, dialect: Analysis["dialect"], platform: 
  */
 export function fragmentWords(text: string, ps = false) {
   return distinct(
-    ShellSafety.fragments(ps ? text : joined(text)).flatMap((fragment) => {
+    ShellSafety.fragments(ps ? psText(text) : joined(text)).flatMap((fragment) => {
       const words = fragmentTokens(fragment, ps).slice(1)
       const comment = words.findIndex((word) => word.raw.startsWith("#"))
       return (comment === -1 ? words : words.slice(0, comment)).flatMap((word, index, rest) => {
@@ -886,12 +898,21 @@ export function fragmentWords(text: string, ps = false) {
         const value = ps
           ? word.value
           : unquoted(word.raw.startsWith("-") && word.raw.includes("=") ? word.raw.slice(word.raw.indexOf("=") + 1) : word.raw)
-        if (value === "" || value.startsWith("-")) return []
+        if (value === "" || (ps ? /^[-–—―]/ : /^-/).test(value)) return []
         // The elements of a PowerShell array argument `a,b` are words of their own.
         return ps && value.includes(",") ? [value, ...value.split(",").filter((item) => item !== "")] : [value]
       })
     }),
   )
+}
+
+// PowerShell text before it is split into fragments: block comments are blanks, and `${env:NAME}` is `$env:NAME` (the
+// split would cut at its braces); a braced name followed by more word characters is a variable the scan cannot know.
+function psText(text: string) {
+  return text
+    .replace(/<#[\s\S]*?(?:#>|$)/g, " ")
+    .replace(/\$\{([^}\r\n]*)\}(?=\w)/g, "$$x")
+    .replace(/\$\{([^}\r\n]*)\}/g, "$$$1")
 }
 
 // A backslash before a line break joins the words around it in bash, as a backtick does in PowerShell, which `fragments` joins.
@@ -945,14 +966,21 @@ function fragmentTokens(fragment: string, ps: boolean): Token[] {
 
 // -Name:value as one word, or `-Name:` followed by its value as the next word.
 function colonBound(token: Token, next: Token | undefined) {
-  const match = /^-(\w+):(.*)$/s.exec(token.value)
+  const match = /^[-–—―](\w+):(.*)$/s.exec(token.value)
   if (!match) return undefined
   if (match[2] !== "") return { name: match[1]!, word: { raw: token.raw.slice(token.raw.indexOf(":") + 1), value: match[2]! } }
   return next === undefined ? undefined : { name: match[1]!, word: next }
 }
 
-// -Path and -LiteralPath, with the abbreviations PowerShell accepts (`-p` also fits -PassThru, so it needs two letters).
-const pathParameter = (name: string) =>
-  (name.length >= 2 && "path".startsWith(name.toLowerCase())) || "literalpath".startsWith(name.toLowerCase())
+// -Path, -LiteralPath and -PSPath (-LP in PowerShell 7), with the abbreviations PowerShell accepts (`-p` also fits
+// -PassThru, so it needs two letters).
+const pathParameter = (name: string) => {
+  const lower = name.toLowerCase()
+  return (
+    (lower.length >= 2 && ("path".startsWith(lower) || "pspath".startsWith(lower))) ||
+    "literalpath".startsWith(lower) ||
+    lower === "lp"
+  )
+}
 
 const unquoted = (word: string) => word.replace(/^(["'])(.*)\1$/, "$2")

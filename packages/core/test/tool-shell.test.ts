@@ -3708,12 +3708,6 @@ describe("ShellTool guard", () => {
       ["a read", "cat ../outside/s", true],
       ["a removal", "rm ../outside/s", true],
       ["a removal after a cd, in input over the length limit", `cd ../outside && rm s #${"x".repeat(10_050)}`, true],
-      ...(isWindows
-        ? ([
-            ["a removal after a colon-bound Set-Location, in input over the length limit", `Set-Location -Path:../outside; Remove-Item s #${"x".repeat(10_050)}`, true],
-            ["a removal after a colon-bound Push-Location, in input over the length limit", `Push-Location -LiteralPath:../outside; Remove-Item s #${"x".repeat(10_050)}`, true],
-          ] as const)
-        : []),
       ["a file the system keeps for everyone", `printf x > ${os.tmpdir()}/orbit-guard-test-f`, false],
     ] as const)
       test(`${scanner}: ${name} outside the project asks about the folder first`, () =>
@@ -4048,4 +4042,36 @@ describe("ShellTool guard (PowerShell)", () => {
       ),
     options,
   )
+
+  // A folder change that the shell's parser cannot analyse (the pad makes the input too long) is asked about as its short
+  // form is, and a rejected question keeps the file. Each spelling is one that PowerShell accepts for the same folder.
+  for (const spelling of [
+    "Set-Location ../out\"side\"",
+    "Set-Location -Path:../outside",
+    "Push-Location -LiteralPath:../outside",
+    "Push-Location -StackName st ../outside",
+    "Set-Location -PSPath:../outside",
+    "Set-Location $env:ORBIT_TOOL_OUT",
+    "Set-Location <# c #> ../outside",
+  ])
+    for (const padded of [false, true])
+      test(
+        `a removal after ${spelling} asks for the folder first${padded ? ", in input over the length limit" : ""}`,
+        () =>
+          ask((registry, fixture) =>
+            Effect.gen(function* () {
+              process.env.ORBIT_TOOL_OUT = fixture.outside
+              yield* Effect.addFinalizer(() => Effect.sync(() => void delete process.env.ORBIT_TOOL_OUT))
+              yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+              yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+              const command = `${spelling}; Remove-Item s${padded ? ` #${"x".repeat(10_050)}` : ""}`
+              const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "k"), ["reject"])
+              expect(result.requests).toHaveLength(1)
+              expect(result.requests[0]).toMatchObject({ action: "external_directory", resources: [path.join(fixture.outside, "*").replaceAll("\\", "/")] })
+              expectDeclined(result.exit)
+              expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+            }),
+          ),
+        options,
+      )
 })

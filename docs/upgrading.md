@@ -1577,9 +1577,11 @@ scanner found, and the folder question held the folders the scanner found.
 - For input Orbit can analyse, a file the command reads, writes, copies from or removes outside the project (a redirect
   target, a `cp` source, a `cat`) asks `external_directory` for its folder, judged where links really lead, in a trusted
   project too. Input that Orbit cannot analyse (see below), or that is over 10,000 characters, is read less closely: it asks for
-  the folders that a `cd`, `pushd` or `Set-Location` fragment names with a plain word, and, in a project that is not
-  trusted, for the folder that a link leads to when a plain word of a fragment names it. A file that such input names in other
-  ways is not asked about. A new file under a link,
+  the folders that a `cd`, `pushd`, `Set-Location` or `Push-Location` fragment names (every word that is not a parameter,
+  the value of `-Path`, `-LiteralPath` and `-PSPath`, and `$HOME`, `$env:NAME`, `${env:NAME}`, `$PWD` and `$PSHOME`
+  expanded), and, in a project that is not trusted, for the folder that a link leads to when a plain word of a fragment
+  names it. A target built as the command runs asks for the nearest folder before the built part. A file that such input
+  names in other ways is not asked about. A new file under a link,
   a dangling link and a numeric link are judged where the write would land. A write under `os.tmpdir()` is outside like any
   other, unless the call runs in the sandbox, where the sandbox's writable folders count as inside for writes.
 - A statement with no command, such as `> file`, and a PowerShell statement that is not a pipeline of commands (an
