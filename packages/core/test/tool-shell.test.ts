@@ -1910,6 +1910,258 @@ describe("ShellTool", () => {
     )
   }
 
+  wiring("declares readOnly, destructive and block from the command text", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("sh"))
+            const traits = (input: unknown) => toolTraits(registry, "Bash", input)
+            expect(yield* traits({ command: "rm -rf x" })).toMatchObject({
+              readOnly: false,
+              concurrencySafe: false,
+              destructive: true,
+              interruptBehavior: "block",
+              cancelSiblingsOnFailure: true,
+            })
+            for (const command of ["ls", "git status"])
+              expect(yield* traits({ command })).toMatchObject({
+                readOnly: true,
+                concurrencySafe: true,
+                destructive: false,
+                interruptBehavior: "block",
+              })
+            // Text the parser rejects is neither read-only nor safe to overlap, and the catalogue still reads the text.
+            expect(yield* traits({ command: 'echo "unterminated' })).toMatchObject({
+              readOnly: false,
+              concurrencySafe: false,
+              destructive: false,
+            })
+            expect(yield* traits({ command: 'rm -rf "x' })).toMatchObject({ readOnly: false, destructive: true })
+            // Input the schema rejects takes the conservative record and keeps what the tool declares.
+            expect(yield* traits({ command: 5 })).toMatchObject({
+              readOnly: false,
+              concurrencySafe: false,
+              destructive: true,
+              cancelSiblingsOnFailure: true,
+            })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // `readOnly` is the verdict on the command text alone and relaxes nothing: a read-only `cat` of a file outside the
+  // folder still asks about the external directory.
+  bashOnly("still asks about a path outside the folder for a read-only command", () =>
+    Effect.acquireUseRelease(
+      Effect.all([Effect.promise(() => tmpdir()), Effect.promise(() => tmpdir())]),
+      ([tmp, outside]) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("sh"))
+            const command = `cat ${path.join(outside.path, "secret.txt")}`
+            expect((yield* toolTraits(registry, "Bash", { command })).readOnly).toBe(true)
+            yield* Effect.promise(() => Bun.write(path.join(outside.path, "secret.txt"), "x"))
+            yield* executeTool(registry, call({ command }))
+            expect(assertions.map((item) => item.action)).toContain("external_directory")
+          }),
+        )
+      },
+      ([tmp, outside]) =>
+        Effect.all([
+          Effect.promise(() => tmp[Symbol.asyncDispose]()),
+          Effect.promise(() => outside[Symbol.asyncDispose]()),
+        ]),
+    ),
+  )
+
+  // Needs a real PowerShell: elsewhere "powershell" falls back to a bash shell.
+  ;(isWindows ? it.live : it.live.skip)("calls a PowerShell command destructive from the PowerShell catalogue", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("powershell"))
+            expect(yield* toolTraits(registry, "Bash", { command: "Remove-Item -Recurse -Force x" })).toMatchObject({
+              readOnly: false,
+              concurrencySafe: false,
+              destructive: true,
+            })
+            expect(yield* toolTraits(registry, "Bash", { command: "Get-ChildItem" })).toMatchObject({
+              readOnly: false,
+              concurrencySafe: false,
+              destructive: false,
+            })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // cmd.exe has no catalogue, so no command under it can be called harmless.
+  ;(isWindows ? it.live : it.live.skip)("calls every cmd command destructive", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("cmd"))
+            expect(yield* toolTraits(registry, "Bash", { command: "dir" })).toMatchObject({
+              readOnly: false,
+              destructive: true,
+            })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // Exit codes through the real tool: the metadata of a foreground run says whether the line failed.
+  describe("exit codes", () => {
+    const posix = isWindows ? it.live.skip : it.live
+    const withFiles = <A, E, R>(
+      body: (registry: Tool.Interface, run: (input: typeof ShellTool.Input.Type) => Effect.Effect<Record<string, unknown>>) => Effect.Effect<A, E, R>,
+    ) =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const selection = yield* ShellSelect.Service
+              yield* selection.transform((editor) => editor.configure("sh"))
+              yield* Effect.promise(() =>
+                Promise.all([Bun.write(path.join(tmp.path, "a"), "x\n"), Bun.write(path.join(tmp.path, "b"), "y\n")]),
+              )
+              let count = 0
+              const run = (input: typeof ShellTool.Input.Type) =>
+                executeTool(registry, call(input, `call-exit-${count++}`)).pipe(
+                  Effect.map((settled) => (settled.status === "completed" ? (settled.metadata ?? {}) : { failed: true })),
+                )
+              return yield* body(registry, run)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      )
+
+    const answers = ["grep nomatch a", "diff a b", "test -f missing", "[ -f missing ]", "cat a | grep nomatch"]
+    const failures = [
+      "grep x missing-file",
+      "false",
+      "exit 3",
+      "sh -c 'exit 7'",
+      "grep nomatch a && echo found",
+      "[[ -f missing ]]",
+    ]
+
+    posix("leaves a no-match, differ or false exit unflagged, and flags any other failing exit", () =>
+      withFiles((_registry, run) =>
+        Effect.gen(function* () {
+          for (const command of answers) {
+            const metadata = yield* run({ command })
+            expect(metadata.exit).toBe(1)
+            expect(metadata.error).toBeUndefined()
+          }
+          for (const command of failures) {
+            const metadata = yield* run({ command })
+            expect(metadata.exit).toBeGreaterThan(0)
+            expect(metadata.error).toBe(true)
+          }
+        }),
+      ),
+    )
+
+    posix("judges the command that ran, after the hooks", () =>
+      withFiles((_registry, run) =>
+        Effect.gen(function* () {
+          const hooks = yield* PluginHooks.Service
+          yield* hooks.register("shell", "create.before", (event) =>
+            Effect.sync(() => {
+              event.command = "false"
+            }),
+          )
+          const metadata = yield* run({ command: "grep nomatch a" })
+          expect(metadata.exit).toBe(1)
+          expect(metadata.error).toBe(true)
+        }),
+      ),
+    )
+
+    posix("flags nothing for a background run that has not ended", () =>
+      withFiles((_registry, run) =>
+        Effect.gen(function* () {
+          const metadata = yield* run({ command: "grep nomatch a", run_in_background: true })
+          expect(metadata.status).toBe("running")
+          expect(metadata.error).toBeUndefined()
+        }),
+      ),
+    )
+
+    posix("still flags a timeout", () =>
+      withFiles((_registry, run) =>
+        Effect.gen(function* () {
+          expect((yield* run({ command: "sleep 60", timeout: 50 })).error).toBe(true)
+        }),
+      ),
+    )
+
+    // Under PowerShell an exit code never counts: the call cancels no sibling.
+    ;(isWindows ? it.live : it.live.skip)("never flags an exit code under PowerShell", () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const selection = yield* ShellSelect.Service
+              yield* selection.transform((editor) => editor.configure("powershell"))
+              const result = yield* executeTool(registry, call({ command: "cmd /c exit 3" }))
+              if (result.status !== "completed") throw new Error("Expected a completed result")
+              expect(result.metadata?.exit).toBeGreaterThan(0)
+              expect(result.metadata?.error).toBeUndefined()
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    )
+
+    // Any other shell takes the default rule: a non-zero exit is a failure.
+    ;(isWindows ? it.live : it.live.skip)("flags an exit code under cmd", () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const selection = yield* ShellSelect.Service
+              yield* selection.transform((editor) => editor.configure("cmd"))
+              const result = yield* executeTool(registry, call({ command: "exit /b 1" }))
+              if (result.status !== "completed") throw new Error("Expected a completed result")
+              expect(result.metadata?.error).toBe(true)
+            }),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    )
+  })
+
   it.live("keeps non-zero exits useful", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -2370,7 +2622,13 @@ describe("ShellTool", () => {
   const flagCases = [
     ["a timeout", { command: idleCommand, timeout: 50 }, { settled: "completed", flag: true }, true],
     ["a signal kill", { command: killCommand }, { settled: "completed", flag: true }, !isWindows],
-    ["a non-zero exit", { command: bodyExitCommand }, { settled: "completed", flag: undefined }, true],
+    // A failing exit cancels siblings except under PowerShell, where an exit code carries no meaning.
+    [
+      "a non-zero exit",
+      { command: bodyExitCommand },
+      { settled: "completed", flag: isWindows ? undefined : true },
+      true,
+    ],
     ["a clean exit", { command: helloCommand }, { settled: "completed", flag: undefined }, true],
     ["a missing workdir", { command: cwdCommand, workdir: "missing" }, { settled: "failed", flag: undefined }, true],
   ] as const
@@ -2424,7 +2682,7 @@ describe("ShellTool", () => {
   )
 
   // Only Shell.create raises AppProcessError (spawn failure, missing sandbox). On Windows a missing program is an
-  // ordinary exit 1 until tool-runtime-11, so this case runs on POSIX only.
+  // ordinary exit 1, which PowerShell never flags, so this case runs on POSIX only.
   const spawnTest = isWindows ? it.live.skip : it.live
   spawnTest("flags a shell that cannot be started as a failure", () =>
     Effect.acquireUseRelease(

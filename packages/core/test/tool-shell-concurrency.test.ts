@@ -109,3 +109,36 @@ describe("ShellTool.concurrent", () => {
     expect(parses).toBe(before)
   })
 })
+
+describe("ShellTool.destructive", () => {
+  test.each([
+    ["rm -rf x", true],
+    ['rm -rf "x', true],
+    ["ls", false],
+    ["git status", false],
+    ["git rm -rf x", false],
+  ])("bash: %p is %p", (command, expected) => {
+    expect(ShellTool.destructive(command, linux)).toBe(expected)
+  })
+
+  test("is read from the text, so it does not follow the read-only verdict", () => {
+    expect(ShellTool.destructive('echo "DROP TABLE users"', linux)).toBe(true)
+  })
+
+  test.each([
+    ["Remove-Item -Recurse -Force x", true],
+    ["Get-ChildItem", false],
+  ])("PowerShell: %p is %p, without starting the parser", (command, expected) => {
+    const before = parses
+    const shell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    expect(ShellTool.destructive(command, { ...windows, shell })).toBe(expected)
+    expect(ShellTool.destructive(command, { ...linux, shell: "pwsh" })).toBe(expected)
+    expect(parses).toBe(before)
+  })
+
+  test.each(["dir", "echo hi", "Get-ChildItem"])("cmd and an unrecognised shell: %p is destructive", (command) => {
+    expect(ShellTool.destructive(command, { ...windows, shell: "C:\\Windows\\System32\\cmd.exe" })).toBe(true)
+    expect(ShellTool.destructive(command, { ...linux, shell: "/usr/bin/fish" })).toBe(true)
+  })
+})
+

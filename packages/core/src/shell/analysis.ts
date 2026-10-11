@@ -108,6 +108,12 @@ export type Analysis = {
   readOnly: boolean
   readPaths: string[]
   sleepLed: boolean
+  /**
+   * Bash: the index in `commands` of the command whose status is the status of the whole text, when that is one plain
+   * command: the last of the last top-level statement, reached at the top level, through `&&` or `||`, or as the last
+   * element of a pipeline. Unset when the last statement is backgrounded, negated, or a subshell, group, loop or `if`.
+   */
+  last?: number
   count: number
 }
 
@@ -201,7 +207,10 @@ const SENSITIVE = /^(?:PATH|PAGER|MANPAGER|LESSOPEN|LESSCLOSE|LD_.*|DYLD_.*|RIPG
 const DIRECTORY = new Set(["cd", "chdir", "pushd", "popd"])
 
 type Scope = Map<string, string | null>
-type Walked = { last?: Command }
+// `last` is the last command walked, which the enclosing node links input and redirects to. `tail` is the command whose
+// status is the status of the node itself; a negation, a subshell and a compound command have none.
+type Walked = { last?: Command; tail?: Command }
+const one = (command: Command): Walked => ({ last: command, tail: command })
 
 function precheck(text: string) {
   if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return "control"
@@ -277,6 +286,9 @@ class BashWalk {
     readonly ctx: Context,
   ) {}
 
+  // The command that decides the status of the whole text.
+  decider?: Command
+
   program(root: Node) {
     const children = kids(root)
     children.forEach((child, index) => {
@@ -284,7 +296,8 @@ class BashWalk {
       const next = children[index + 1]
       const background = next?.type === "&"
       const start = this.commands.length
-      this.node(child, background ? new Map(this.scope) : this.scope, "top")
+      const walked = this.node(child, background ? new Map(this.scope) : this.scope, "top")
+      this.decider = background ? undefined : walked.tail
       if (background) this.feature.background = true
       const separator = next && [";", "&"].includes(next.type) ? (next.type as ";" | "&") : "\n"
       this.statements.push({
@@ -328,6 +341,7 @@ class BashWalk {
       readOnly,
       readPaths: reads,
       sleepLed: sleepLed(this.statements, this.commands, (command) => command.argv[0]?.value === "sleep"),
+      ...(this.decider ? { last: this.commands.indexOf(this.decider) } : {}),
       count: this.commands.length,
     }
   }
@@ -338,13 +352,14 @@ class BashWalk {
       case "comment":
         return {}
       case "command":
-        return { last: this.simple(node, scope, origin) }
+        return one(this.simple(node, scope, origin))
       case "list":
         return this.list(node, scope, origin)
       case "pipeline":
         return this.pipeline(node, scope)
       case "negated_command":
-        return this.node(kids(node).filter((item) => item.isNamed).find((child) => child.type !== "comment")!, scope, origin)
+        // The inverted status belongs to no single command.
+        return { last: this.node(kids(node).filter((item) => item.isNamed).find((child) => child.type !== "comment")!, scope, origin).last }
       case "redirected_statement":
         return this.redirected(node, scope, origin)
       case "subshell":
@@ -360,11 +375,11 @@ class BashWalk {
       case "while_statement":
         return this.until(node, scope)
       case "declaration_command":
-        return { last: this.declaration(node, scope, origin) }
+        return one(this.declaration(node, scope, origin))
       case "unset_command":
-        return { last: this.unset(node, scope, origin) }
+        return one(this.unset(node, scope, origin))
       case "test_command":
-        return { last: this.test(node, scope, origin) }
+        return one(this.test(node, scope, origin))
       case "variable_assignment":
         this.assign(node, scope, origin, true)
         this.feature.assignment = true
@@ -398,6 +413,7 @@ class BashWalk {
 
   pipeline(node: Node, scope: Scope): Walked {
     let last: Command | undefined
+    let tail: Command | undefined
     let previous: { command: Command; plain: boolean } | undefined
     let operator: "|" | "|&" | undefined
     for (const child of kids(node)) {
@@ -405,13 +421,14 @@ class BashWalk {
       if (!child.isNamed || child.type === "comment") continue
       const walked = this.node(child, new Map(scope), "pipeline")
       last = walked.last ?? last
+      tail = walked.tail
       const plain = walked.last !== undefined && plainCommand(child)
       // Only a plain command that follows a plain command has an input to speak of; any other shape leaves it unset.
       if (plain && previous?.plain && operator) walked.last!.input = { from: this.commands.indexOf(previous.command), operator }
       previous = walked.last ? { command: walked.last, plain } : undefined
       operator = undefined
     }
-    return { last }
+    return { last, tail }
   }
 
   redirected(node: Node, scope: Scope, origin: Command["origin"]): Walked {
@@ -596,7 +613,8 @@ class BashWalk {
   }
 
   test(node: Node, scope: Scope, origin: Command["origin"]) {
-    const argv: Word[] = [plain("[[")]
+    // `[ ... ]` and `[[ ... ]]` are different commands to an exit code, so the opening bracket is the head.
+    const argv: Word[] = [plain(kids(node)[0]?.type === "[" ? "[" : "[[")]
     const visit = (child: Node) => {
       if (child.type === "comment") return
       if (!child.isNamed) {
