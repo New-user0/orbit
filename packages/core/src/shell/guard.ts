@@ -877,8 +877,8 @@ export function locations(
   raw = false,
 ) {
   const ps = dialect === "powershell-5.1" || dialect === "pwsh"
-  const found = ShellSafety.fragments(readable(text, ps, raw)).flatMap((fragment) => {
-    const words = fragmentTokens(blanked(fragment, ps, raw), ps)
+  const found = ShellSafety.fragments(readable(text, ps, raw)).flatMap((whole) => variants(whole, ps, raw).flatMap((fragment) => {
+    const words = fragmentTokens(fragment, ps)
     if (words.length === 0) return []
     const head = words[0]!.value
     // A module-qualified name (`Microsoft.PowerShell.Management\Set-Location`) is the cmdlet.
@@ -903,7 +903,7 @@ export function locations(
       const slash = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf("\\"))
       return slash === -1 ? [] : [prefix.slice(0, slash + 1)]
     })
-  })
+  }))
   // A value that follows `-Name:` is read both as that value and as a word of its own.
   return distinct(found)
 }
@@ -915,8 +915,8 @@ export function locations(
  */
 export function fragmentWords(text: string, ps = false, raw = false) {
   return distinct(
-    ShellSafety.fragments(readable(text, ps, raw)).flatMap((fragment) => {
-      const words = fragmentTokens(blanked(fragment, ps, raw), ps).slice(1)
+    ShellSafety.fragments(readable(text, ps, raw)).flatMap((whole) => variants(whole, ps, raw).flatMap((fragment) => {
+      const words = fragmentTokens(fragment, ps).slice(1)
       const comment = words.findIndex((word) => /^(#|<#)/.test(word.raw))
       return (comment === -1 ? words : words.slice(0, comment)).flatMap((word, index, rest) => {
         if (/[$`]/.test(word.raw)) return []
@@ -932,7 +932,7 @@ export function fragmentWords(text: string, ps = false, raw = false) {
         // The elements of a PowerShell array argument `a,b` are words of their own.
         return ps && value.includes(",") ? [value, ...value.split(",").filter((item) => item !== "")] : [value]
       })
-    }),
+    })),
   )
 }
 
@@ -941,10 +941,27 @@ export function fragmentWords(text: string, ps = false, raw = false) {
 const readable = (text: string, ps: boolean, raw: boolean) =>
   ps ? (raw ? text : psText(text)) : bashText(text, raw)
 
-// In the raw reading of PowerShell a block comment that opens and closes inside the fragment is blanks, so the words
-// around it stay; one that does not close in the fragment ends the words at its `<#`, like a `#` word.
-const blanked = (fragment: string, ps: boolean, raw: boolean) =>
-  ps && raw ? fragment.replace(/<#.*?#>/gs, " ") : fragment
+// The raw reading of PowerShell reads each fragment two ways and takes the union of what they find: as written (words end
+// at the first word that starts with `#` or `<#`), and with the block comments that close in the fragment blanked. A
+// `<#` inside a word or quotes is not a comment opener, so the blanked reading alone could lose the folder between it and
+// a later `#>`; the as-written reading alone loses what follows a real comment.
+const variants = (fragment: string, ps: boolean, raw: boolean) =>
+  ps && raw ? [fragment, blankComments(fragment)] : [fragment]
+
+// One linear pass: blanks each `<#` ... `#>` and stops at the first `<#` that has no `#>` after it.
+function blankComments(text: string) {
+  const parts: string[] = []
+  let at = 0
+  while (true) {
+    const open = text.indexOf("<#", at)
+    if (open === -1) break
+    const close = text.indexOf("#>", open + 2)
+    if (close === -1) break
+    parts.push(text.slice(at, open), " ")
+    at = close + 2
+  }
+  return parts.length === 0 ? text : parts.join("") + text.slice(at)
+}
 
 // Bash text with each line cut at a `#` that starts a word outside quotes.
 function bashText(text: string, raw: boolean) {

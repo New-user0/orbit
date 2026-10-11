@@ -4134,4 +4134,35 @@ describe("ShellTool guard (PowerShell)", () => {
           ),
         options,
       )
+
+  // A `<#` inside a word or quotes is not a comment opener (class 3/4/8): the raw reading keeps the text as written too.
+  for (const [name, line] of [
+    ["a word that ends in the opener", "Set-Location -ErrorVariable e<# ../outside #>\nRemove-Item s"],
+    ["a stack name that ends in the opener", "Push-Location -StackName a<# ../outside #>\nRemove-Item s"],
+    ["quoted openers", "Write-Output x<#\nSet-Location -ErrorVariable '<#' ../outside -OutVariable '#>'\nRemove-Item s"],
+  ] as const)
+    test(
+      `a removal after ${name} asks for the folder, and a reject keeps the file`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => Bun.write(path.join(fixture.outside, "s"), "secret"))
+            yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+            const result = yield* runPermissionCommand(
+              registry,
+              `${line} #${"x".repeat(10_050)}`,
+              path.join(fixture.active, "k"),
+              ["reject"],
+            )
+            expect(result.requests).toHaveLength(1)
+            expect(result.requests[0]).toMatchObject({
+              action: "external_directory",
+              resources: [path.join(fixture.outside, "*").replaceAll("\\", "/")],
+            })
+            expectDeclined(result.exit)
+            expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+          }),
+        ),
+      options,
+    )
 })

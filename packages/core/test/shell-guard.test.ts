@@ -835,6 +835,58 @@ describe("ShellGuard.authorize", () => {
       expect(ShellGuard.locations("Write-Output 'a'# <#\nSet-Location ../a", "pwsh", "win32")).toEqual(["../a"])
     }),
   )
+  // A `<#` inside a word or quotes is not a comment opener (class 3/4/8): the raw reading takes the union of the text as
+  // written and the text with closed block comments blanked, so neither reading can lose the folder.
+  for (const [name, spelling] of [
+    ["a word that ends in the opener", "Set-Location -ErrorVariable e<# ../outside #>"],
+    ["a stack name that ends in the opener", "Push-Location -StackName a<# ../outside #>"],
+    ["quoted openers", "Write-Output x<#\nSet-Location -ErrorVariable '<#' ../outside -OutVariable '#>'"],
+  ] as const)
+    it.live(`asks for the folder of padded input with ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling}\nRemove-Item s ${pad}`, () => false, { shell: "pwsh" })
+        expect(folders()).toContainEqual(expect.stringMatching(/\/outside\/\*$/))
+        expect(folders().join("")).not.toMatch(/Remove-Item/)
+      }),
+    )
+  for (const [name, spelling] of [
+    ["a word that ends in the opener", "Get-Content -ErrorVariable e<# cfg/s #>"],
+    ["quoted openers", "Get-Content -ErrorVariable '<#' cfg/s -OutVariable '#>'"],
+  ] as const)
+    it.live(`asks for a link's folder in padded input with ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(`${spelling} ${pad}`, () => false, { shell: "pwsh", link: true })
+        expect(folders()).toContainEqual(expect.stringMatching(/\/outside\/\*$/))
+      }),
+    )
+  it.live("reads an opener inside a word as written", () =>
+    Effect.sync(() => {
+      expect(ShellGuard.locations("Set-Location -ErrorVariable e<# ../a #>", "pwsh", "win32", "", "", true)).toContain("../a")
+      expect(ShellGuard.fragmentWords("Get-Content -ErrorVariable e<# cfg/s #>", true, true)).toContain("cfg/s")
+    }),
+  )
+  // The blanking is one linear pass: a regex over openers that never close is quadratic.
+  it.live("reads a megabyte of openers within a deadline", () =>
+    Effect.promise(async () => {
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `import { ShellGuard } from "@orbit/core/shell/guard"
+const text = "Set-Location ../a " + "<#a ".repeat(262_144)
+ShellGuard.locations(text, "pwsh", "win32", "", "", true)
+ShellGuard.fragmentWords(text, true, true)
+console.log("done")`,
+        ],
+        { cwd: import.meta.dir, stdout: "pipe", stderr: "pipe" },
+      )
+      const timer = setTimeout(() => child.kill(), 10_000)
+      const out = await new Response(child.stdout).text()
+      await child.exited
+      clearTimeout(timer)
+      expect(out.trim()).toBe("done")
+    }),
+  )
   it.live("does not fail the call for block-commented code that holds a refused spelling", () =>
     Effect.gen(function* () {
       const exit = yield* run(`<# Set-Location HKLM:\\Software #>\nRemove-Item s ${pad}`, () => false, { shell: "pwsh" })
