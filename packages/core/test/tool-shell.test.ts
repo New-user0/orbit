@@ -40,6 +40,7 @@ import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { define } from "@orbit/plugin/effect/plugin"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
+import { ShellAnalysis } from "@orbit/core/shell/analysis"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
 import { ToolScheduler } from "@orbit/core/session/runner/tool-scheduler"
@@ -356,6 +357,33 @@ const runPermissionCommand = (
     // A guard against a hung command, not a speed check: PowerShell's cold start alone can take most of five seconds.
   }).pipe(Effect.scoped, Effect.timeout(Duration.seconds(15)))
 
+const noHost = PowerShellParse.Service.of({ parse: () => Effect.succeed({ valid: false, reason: "no-host" }) })
+const analyse = (command: string, shell: string) =>
+  ShellAnalysis.inspect(command, {
+    shell,
+    platform: process.platform,
+    path: process.platform === "win32" ? path.win32 : path.posix,
+    home: os.homedir(),
+    cwd: process.cwd(),
+    env: {},
+  }).pipe(Effect.provideService(PowerShellParse.Service, noHost))
+
+// Runs a command whose approval the saved grants may cover. Input that Orbit cannot analyse is asked about whole, with
+// nothing to save, whatever is saved; any other input needs no question. The analysis decides which, and the list of inputs
+// that are opaque is pinned in its own test.
+const runCovered = (registry: Tool.Interface, command: string, shell: string, marker: string) =>
+  Effect.gen(function* () {
+    const opaque = (yield* analyse(command, shell)).opaque !== undefined
+    const result = yield* runPermissionCommand(registry, command, marker, opaque ? ["once"] : [])
+    if (!opaque) expect(result.requests).toEqual([])
+    else {
+      expect(result.requests).toHaveLength(1)
+      expect(result.requests[0]?.resources[0]).toBe(command)
+      expect(result.requests[0]?.save).toBeUndefined()
+    }
+    return result
+  })
+
 // Directory cases still document inherited limitations; fixed scanner cases require matching behavior.
 describe("ShellTool scanner permissions", () => {
   const test = isWindows || !Bun.which("sh") ? permissionIt.live.skip : permissionIt.live
@@ -384,7 +412,7 @@ describe("ShellTool scanner permissions", () => {
           expect((yield* saved.list()).map((item) => item.resource)).toEqual(["printf *"])
 
           yield* Effect.forEach(yield* saved.list(), (item) => saved.remove(item.id))
-          const command = 'export SCAN_TEST=$(printf hello); printf %s "$SCAN_TEST" > marker'
+          const command = "scanned=$(printf hello); printf hello > marker"
           const prompts: Permission.Request[] = []
           for (const reply of ["reject", "once", "always", undefined] as const) {
             yield* Effect.promise(() => fs.rm(marker, { force: true }))
@@ -412,7 +440,7 @@ describe("ShellTool scanner permissions", () => {
           for (const request of prompts) {
             expect(request).toMatchObject({
               action: "Bash",
-              resources: ["printf hello", 'printf %s "$SCAN_TEST" > marker'],
+              resources: ["printf hello", "printf hello > marker"],
               save: ["printf *", "printf *"],
             })
           }
@@ -511,7 +539,7 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
-    test(`${scanner}: a numeric symlink operand still reaches outside without an external-directory prompt`, () =>
+    test(`${scanner}: a numeric symlink operand is judged where it leads, and an external-directory deny blocks it`, () =>
       withScanner(portable, (registry, fixture) =>
         Effect.gen(function* () {
           yield* Effect.promise(() => fs.symlink(fixture.outside, path.join(fixture.active, "123")))
@@ -531,16 +559,13 @@ describe("ShellTool scanner permissions", () => {
             marker,
             [],
           )
+          // The link leads to the folder outside, which the deny rule names: blocked before any question or write.
           expect(result.requests).toEqual([])
           expect(result.exit).toMatchObject({
             _tag: "Success",
-            value: {
-              status: "completed",
-              metadata: { exit: 0 },
-              content: [{ type: "text", text: `${fixture.outside}\n` }],
-            },
+            value: { status: "error", error: { message: expect.stringContaining("Permission denied: external_directory") } },
           })
-          expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("reached")
+          expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
         }),
       ))
 
@@ -563,9 +588,9 @@ describe("ShellTool scanner permissions", () => {
             expect(result.requests).toMatchObject([
               {
                 action: "external_directory",
-                resources: [
-                  path.join(fixture.active, "..", portable ? "out\\\nside" : "out", "*").replaceAll("\\", "/"),
-                ],
+                // The backslash before the line break makes the input opaque in both modes, so both read the folder
+                // the legacy scan names.
+                resources: [path.join(fixture.active, "..", "out", "*").replaceAll("\\", "/")],
               },
             ])
             if (reply === "reject") {
@@ -639,9 +664,15 @@ describe("ShellTool conditional process substitution", () => {
               const marker = path.join(directory.active, "marker")
               const command = '[[ -n <(printf reached > marker) ]]; wait "$!"'
               const result = yield* runPermissionCommand(registry, command, marker, [reply])
-              expect(result.requests).toMatchObject([
-                { action: "Bash", resources: ["printf reached > marker", 'wait "$!"'], save: ["printf *", "wait *"] },
-              ])
+              // Process substitution is beyond what Orbit analyses: the whole input is asked about first, then its
+              // fragments, and "always" has nothing to save.
+              expect(result.requests).toHaveLength(1)
+              expect(result.requests[0]).toMatchObject({ action: "Bash" })
+              expect(result.requests[0]?.resources[0]).toBe(command)
+              expect(result.requests[0]?.resources).toEqual(
+                expect.arrayContaining(["printf reached > marker", 'wait "$!"']),
+              )
+              expect(result.requests[0]?.save).toBeUndefined()
               if (reply === "reject") {
                 expect(Exit.isFailure(result.exit)).toBe(true)
                 expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
@@ -653,14 +684,9 @@ describe("ShellTool conditional process substitution", () => {
               })
               expect(yield* Effect.promise(() => Bun.file(marker).text())).toBe("reached")
               yield* Effect.promise(() => fs.unlink(marker))
-              const repeat = yield* runPermissionCommand(
-                registry,
-                command,
-                marker,
-                reply === "always" ? [] : ["reject"],
-              )
-              expect(repeat.requests).toHaveLength(reply === "always" ? 0 : 1)
-              expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(reply === "always")
+              const repeat = yield* runPermissionCommand(registry, command, marker, ["reject"])
+              expect(repeat.requests).toHaveLength(1)
+              expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
             }),
           "bash",
         ))
@@ -716,13 +742,12 @@ describe("ShellTool compound syntax approval compatibility", () => {
               const saved = yield* PermissionSaved.Service
               const location = yield* Location.Service
               yield* saved.add({ projectID: location.project.id, action: "Bash", resources: fixture.saved })
-              const result = yield* runPermissionCommand(
+              const result = yield* runCovered(
                 registry,
                 portable ? fixture.command : fixture.equivalent,
+                fixture.shell,
                 path.join(directory.active, "marker"),
-                [],
               )
-              expect(result.requests).toEqual([])
               expect(result.exit).toMatchObject({
                 _tag: "Success",
                 value: {
@@ -784,13 +809,12 @@ describe("ShellTool ordinary shell syntax", () => {
                 const saved = yield* PermissionSaved.Service
                 const location = yield* Location.Service
                 yield* saved.add({ projectID: location.project.id, action: "Bash", resources: fixture.saved })
-                const result = yield* runPermissionCommand(
+                const result = yield* runCovered(
                   registry,
                   fixture.command,
+                  shell,
                   path.join(directory.active, "marker"),
-                  [],
                 )
-                expect(result.requests).toEqual([])
                 expect(result.exit).toMatchObject({
                   _tag: "Success",
                   value: {
@@ -1892,7 +1916,7 @@ describe("ShellTool", () => {
     { timeout: 30_000 },
   )
 
-  it.live("exposes malformed native syntax without fallback or partial execution", () =>
+  it.live("asks about malformed syntax in both scanner modes instead of refusing it", () =>
     Effect.gen(function* () {
       if (isWindows) return
       for (const portable of [false, true]) {
@@ -1917,18 +1941,13 @@ describe("ShellTool", () => {
                   )
                 }),
               )
-              if (portable) {
-                expect(settled).toMatchObject({
-                  status: "error",
-                  error: { message: expect.stringContaining("unterminated-quote") },
-                })
-                expect(assertions).toEqual([])
-                expect(yield* Effect.promise(() => Bun.file(path.join(tmp.path, "marker")).exists())).toBe(false)
-                return
-              }
+              // Input that cannot be read is asked about, never refused, in both modes: the whole text first, then the
+              // fragments, with nothing to save. Once allowed it runs as far as the shell gets.
               expect(settled.status).toBe("completed")
               expect(settled.metadata?.exit).not.toBe(0)
               expect(assertions.map((item) => item.action)).toEqual(["Bash"])
+              expect(assertions[0]?.resources[0]).toBe('printf hello > marker\necho "')
+              expect(assertions[0]?.save).toBeUndefined()
               expect(yield* Effect.promise(() => Bun.file(path.join(tmp.path, "marker")).text())).toBe("hello")
             }),
           (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),

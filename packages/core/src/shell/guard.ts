@@ -375,7 +375,8 @@ export function request(analysis: Analysis, text: string, scan: ShellParse.Resul
   if (isPowerShell(analysis)) return powershell(analysis, whole, findings)
   const resources = [...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? [])]
   const save = scan?.commands.map((command) => command.save) ?? []
-  if (resources.length > 0) return { resources: distinct(resources), save: distinct(save) }
+  // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
+  if (resources.length > 0) return { resources, save }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
 }
