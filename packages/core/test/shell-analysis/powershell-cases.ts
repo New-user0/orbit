@@ -219,6 +219,7 @@ export const chain = ["Get-ChildItem && Get-Content a", "Get-Content a || Get-Co
 
 // git, gh, docker and dotnet (shell-safety-5): the validators judge the argv that PowerShell hands the program.
 export const toolReadOnly = [
+  "git log -n 10",
   "git status",
   "git log --oneline -5",
   "git --no-pager show HEAD",
@@ -280,4 +281,4 @@ export const toolNotReadOnly = [
 ]
 
 // Native globbing: pwsh on Linux and macOS expands a bareword with a wildcard before it starts the program.
-export const toolPlatform = ["git tag -l v*", "git tag -l 'v*'", "GIT status", "git log *''", "git diff a'*'", 'git log a"*"', "git log -\"-\"o*", "git log '*'", "git log 0x10", "git log -n: 5", "git log a?", "git log [a]*", 'git log "a*"', "git log -n:5"]
+export const toolPlatform = ["git tag -l v*", "git tag -l 'v*'", "GIT status", "git log *''", "git diff a'*'", 'git log a"*"', "git log -\"-\"o*", "git log '*'", "git log 0x10", "git log -n 0x10", "git log -n: 5", "git log a?", "git log [a]*", 'git log "a*"', "git log -n:5"]

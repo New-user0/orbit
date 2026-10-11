@@ -697,13 +697,11 @@ function git(args: string[], ctx: ShellAnalysis.Context): Verdict {
     return refuse("git:operand")
   const noIndex = scanned.seen.some((item) => item.name === "--no-index")
   // --no-index reads plain files: the first two operands of diff, every operand after the pattern of grep.
-  // diff also switches to no-index mode on its own when one of exactly two words before any `--` lies outside the work tree,
-  // so those words are listed as read paths even without the flag; a revision such as HEAD~1 resolves inside the folder.
+  // diff also switches to no-index mode on its own for two words wherever `--` sits (and, outside a repository, for any two),
+  // so its first two operands, words after `--` included, are listed as read paths even without the flag.
   const files =
     key === "diff"
-      ? noIndex || !rest.includes("--")
-        ? scanned.operands.slice(0, 2)
-        : []
+      ? scanned.operands.slice(0, 2)
       : noIndex && key === "grep"
         ? scanned.pattern
           ? scanned.operands

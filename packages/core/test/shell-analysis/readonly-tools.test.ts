@@ -159,6 +159,19 @@ const gitNot: Array<[string, string?]> = [
   ["export GIT_DIR=x; git log"],
 ]
 
+// Windows profile variables move the config folder of docker and gh, and Git Bash exports the inherited values (class 1, 6).
+describe("Windows profile variables", () => {
+  test.each(["USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH"])("%s=. before docker or gh", (name) => {
+    for (const ctx of [windows(), linux()]) {
+      expect(bash(`${name}=.; docker ps`, ctx).readOnly).toBe(false)
+      expect(bash(`${name}=. gh pr list`, ctx).readOnly).toBe(false)
+    }
+  })
+  test("control: an unrelated assignment stays read-only", () => {
+    expect(bash("FOO=.; docker ps", windows()).readOnly).toBe(true)
+  })
+})
+
 const ghRead = [
   "gh",
   "gh pr view 1",
@@ -348,7 +361,13 @@ describe("read paths", () => {
     ["git diff ../a ../b", ["../a", "../b"]],
     ["git diff --stat a ~/b", ["a", "/home/u/b"]],
     ["git diff HEAD~1 HEAD", ["HEAD~1", "HEAD"]],
-    ["git diff HEAD~1 -- a b", []],
+    ["git diff HEAD~1 -- a b", ["HEAD~1", "a"]],
+    ["git diff -- ../a ../b", ["../a", "../b"]],
+    ["git diff --stat -- ../a ../b", ["../a", "../b"]],
+    ["git diff ../a ../b --", ["../a", "../b"]],
+    ["git diff ../a -- ../b", ["../a", "../b"]],
+    ["git diff --cached -- ../a ../b", ["../a", "../b"]],
+    ["git diff -- /etc/passwd ~/.ssh/id_rsa", ["/etc/passwd", "/home/u/.ssh/id_rsa"]],
   ]
   test.each(paths)("%s", (text, expected) => {
     expect(bash(text).readPaths).toEqual(expected)
@@ -417,6 +436,11 @@ describe("PowerShell git, gh, docker and dotnet", () => {
     expect(powershell('git log "a*"', pwshLinux()).readOnly).toBe(true)
     expect(powershell("git log -n: 5", pwsh()).readOnly).toBe(false)
     expect(powershell("git log -n:5", pwsh()).readOnly).toBe(false)
+  })
+  test("a number reaches git as written, so -n 0x10 is not read-only", () => {
+    expect(toolPlatform).toContain("git log -n 0x10")
+    expect(powershell("git log -n 0x10", pwsh()).readOnly).toBe(false)
+    expect(powershell("git log -n 10", pwsh()).readOnly).toBe(true)
   })
   test("a program name in another case is another program on Linux", () => {
     expect(powershell("GIT status", pwshLinux()).readOnly).toBe(false)
