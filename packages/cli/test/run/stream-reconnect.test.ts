@@ -78,6 +78,50 @@ describe("the event stream drops and comes back", () => {
     expect(await h.settle()).toBe(0)
   }, 30_000)
 
+  test("a busy period that began and ended inside the gap gets its result at the reconnect, not a failure at the end", async () => {
+    const h = harness()
+    h.send({ type: "user", text: "go" })
+    // Admitted, but neither its delivery nor anything after it reached the driver.
+    while (h.state.admitted.length === 0) await Bun.sleep(10)
+    h.state.messages = finished(h.state.admitted[0], "all inside the gap")
+    h.drop()
+    await h.until((line) => line.type === "system" && line.subtype === "reconnected")
+
+    expect(h.lines.filter((line) => line.type === "result")).toEqual([
+      expect.objectContaining({ result: "all inside the gap", outcome: "succeeded", is_error: false }),
+    ])
+    h.close()
+    h.idle()
+    expect(await h.settle()).toBe(0)
+    expect(h.lines.filter((line) => line.type === "result")).toHaveLength(1)
+  }, 30_000)
+
+  test("a message that was delivered during the gap and is still running gets no result yet", async () => {
+    const h = harness()
+    h.send({ type: "user", text: "go" })
+    while (h.state.admitted.length === 0) await Bun.sleep(10)
+    h.state.messages = finished(h.state.admitted[0], "partial").slice(1)
+    h.drop()
+    await h.until((line) => line.type === "system" && line.subtype === "reconnected")
+    expect(h.lines.filter((line) => line.type === "result")).toHaveLength(0)
+
+    h.emit(succeeded)
+    await h.until((line) => line.type === "result")
+    h.close()
+    h.idle()
+    expect(await h.settle()).toBe(0)
+  }, 30_000)
+
+  test("a stream that goes silent is treated as dead and reopened", async () => {
+    const h = harness({ reconnect: { baseMs: 5, capMs: 10, giveUpMs: 60_000, silenceMs: 150 } })
+    // The fake reports no activity, which is a connection that sends nothing, not even keepalive comments.
+    await h.until((line) => line.type === "system" && line.subtype === "reconnected")
+    expect(h.state.subscriptions).toBeGreaterThanOrEqual(2)
+    h.close()
+    h.idle()
+    expect(await h.settle()).toBe(0)
+  }, 30_000)
+
   test("a server that never comes back gives an error line, a failed result and exit 1", async () => {
     const h = harness({ reconnect: { baseMs: 5, capMs: 10, giveUpMs: 150 } })
     h.send({ type: "user", text: "go" })
@@ -119,6 +163,38 @@ describe("the event stream drops and comes back", () => {
     h.close()
     h.idle()
     expect(await h.settle()).toBe(0)
+  }, 30_000)
+})
+
+describe("an interrupt while the server goes away", () => {
+  test("a SIGINT with nothing sent writes no result", async () => {
+    const h = harness()
+    await Bun.sleep(100)
+    process.emit("SIGINT")
+    h.state.refuse = new Error("connection refused")
+    h.drop()
+
+    expect(await h.settle()).toBe(130)
+    expect(h.lines.filter((line) => line.type === "result")).toEqual([])
+  }, 30_000)
+
+  test("a period whose interrupted result was written is not given a second one when the server goes away", async () => {
+    const h = harness()
+    h.send({ type: "user", text: "go" })
+    await Bun.sleep(100)
+    h.emit(delivered(h.state.admitted[0]))
+    await Bun.sleep(50)
+    process.emit("SIGINT")
+    h.emit({ id: "evt_int", created: 3, type: "session.execution.interrupted", data: { sessionID, reason: "user" } })
+    await h.until((line) => line.type === "result")
+    h.state.refuse = new Error("connection refused")
+    h.drop()
+    // After a SIGINT the driver does not resubscribe: it winds down at once.
+    await Bun.sleep(300)
+    h.idle()
+
+    expect(await h.settle()).toBe(130)
+    expect(h.lines.filter((line) => line.type === "result")).toHaveLength(1)
   }, 30_000)
 })
 

@@ -15,7 +15,7 @@ export function permission(id: string, session = sessionID) {
 }
 
 export function harness(
-  options: { reconnect?: { baseMs: number; capMs: number; giveUpMs: number }; turn?: SessionTurnOptions } = {},
+  options: { reconnect?: { baseMs: number; capMs: number; giveUpMs: number; silenceMs?: number }; turn?: SessionTurnOptions } = {},
 ) {
   const lines: Array<Record<string, any>> = []
   const raw: string[] = []

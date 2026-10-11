@@ -90,7 +90,7 @@ export const decodeEscalation = Schema.decodeUnknownOption(
 
 export const decodeNotice = Schema.decodeUnknownOption(Schema.Struct({ notice: Schema.String }))
 
-export const decodeJson =Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+export const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 
 // The finishes the server counts as a step when it checks a step limit.
 export const countedFinishes = new Set<string>(["stop", "length", "tool-calls", "content-filter"])

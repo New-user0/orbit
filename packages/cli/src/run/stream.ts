@@ -74,10 +74,10 @@ export type StreamInput = {
   /** Where lines go; standard output unless a test collects them. */
   write?: (line: string) => void
   /** Reconnection timing; the defaults are the documented ones. */
-  reconnect?: { baseMs?: number; capMs?: number; giveUpMs?: number }
+  reconnect?: { baseMs?: number; capMs?: number; giveUpMs?: number; silenceMs?: number }
 }
 
-const DEFAULT_RECONNECT = { baseMs: 1_000, capMs: 30_000, giveUpMs: 10 * 60_000 }
+const DEFAULT_RECONNECT = { baseMs: 1_000, capMs: 30_000, giveUpMs: 10 * 60_000, silenceMs: 45_000 }
 
 const EOF_PERMISSION_FEEDBACK =
   "The program driving this run closed its input, so nobody can approve this request. Continue without this action."
@@ -122,7 +122,6 @@ export async function runStream(input: StreamInput) {
   // What the controller has been shown and has not answered yet, by request ID.
   const pending = new Map<string, Pending>()
   const owned = new Map<string, Promise<boolean>>([[sessionID, Promise.resolve(true)]])
-  const admitted = new Set<string>()
   const deliveries = new Map<string, "steer" | "queue">()
   const unaccounted = new Set<string>()
   const accounted = new Set<string>()
@@ -152,6 +151,12 @@ export async function runStream(input: StreamInput) {
     // After a SIGINT the server may already be shutting down with this process, so what is left is to say that the run
     // was interrupted, not that something broke.
     if (signalled) {
+      // Nothing was sent, or the result was already written: another line would be a second result for one period.
+      if (!period && unaccounted.size === 0) {
+        finished = true
+        stopped.resolve()
+        return
+      }
       const state = period
       period = undefined
       writeResult({
@@ -202,9 +207,22 @@ export async function runStream(input: StreamInput) {
 
   const subscribe = async () => {
     const controller = new AbortController()
-    const iterator = input.client.event.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
+    // The server sends a keepalive comment every 15 seconds, so a stream that is silent for longer is a dead
+    // connection (a half-open socket reports nothing): aborting it sends the event loop through `reconnect`.
+    let watchdog: ReturnType<typeof setTimeout> | undefined
+    const rearm = () => {
+      clearTimeout(watchdog)
+      if (controller.signal.aborted) return
+      watchdog = setTimeout(() => controller.abort(), reconnectTiming.silenceMs)
+      watchdog.unref?.()
+    }
+    controller.signal.addEventListener("abort", () => clearTimeout(watchdog))
+    void stopped.promise.then(() => controller.abort())
+    rearm()
+    const iterator = input.client.event.subscribe({ signal: controller.signal, onActivity: rearm })[Symbol.asyncIterator]()
     const connected = await iterator.next()
     if (connected.done) throw new Error("Event stream disconnected before prompt admission")
+    rearm()
     return { controller, iterator }
   }
   let events = await subscribe()
@@ -738,13 +756,23 @@ export async function runStream(input: StreamInput) {
     // Requests that were shown and are gone were settled during the gap.
     ;[...pending.keys()].filter((id) => !current.has(id)).forEach(settledElsewhere)
     await Promise.all([...asked.permissions.map(onPermission), ...asked.forms.map(onForm)])
-    // The root session may have gone idle during the gap; its history says so, and its result is still written.
-    if (period) {
-      const history = await readPeriod(period.first).catch(() => undefined)
-      const idle = history?.messages.findLast((message) => message.type === "idle")
-      if (history && idle) {
-        const spent = spentFromHistory(history.messages)
-        Object.assign(period, spent)
+    // The root session may have gone idle during the gap; its history says so, and its result is still written. A period
+    // that began and ended inside the gap was never opened, so it is rebuilt from the messages still without a result.
+    const first = period?.first ?? [...unaccounted][0]
+    const history = first ? await readPeriod(first).catch(() => undefined) : undefined
+    if (history?.found) {
+      const idle = history.messages.findLast((message) => message.type === "idle")
+      if (!period)
+        period = {
+          first: first!,
+          startedAt: Date.now(),
+          ids: new Set([...unaccounted].filter((id) => history.messages.some((message) => message.id === id))),
+          steps: 0,
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }
+      if (idle) {
+        Object.assign(period, spentFromHistory(history.messages))
         await closePeriod(
           idle.outcome === "succeeded"
             ? { kind: "succeeded" }
@@ -797,7 +825,6 @@ export async function runStream(input: StreamInput) {
       })
       return
     }
-    admitted.add(messageID)
     deliveries.set(messageID, delivery)
     if (!accounted.has(messageID)) unaccounted.add(messageID)
     const response = await input.client.session
@@ -1119,10 +1146,14 @@ function remainingTurn(turn: SessionTurnOptions | undefined, spent: number) {
   return { ...turn, maxCost: left }
 }
 
-// A status that reopening cannot change: the credential is refused or the route is gone.
+// A status that reopening cannot change: the credential is refused or the route is gone. The generated client throws the
+// server's declared body (named after its tag) for a declared status, and an error with the response as its cause otherwise.
 function permanentStatus(error: unknown) {
-  const cause = typeof error === "object" && error !== null && "cause" in error ? error.cause : undefined
+  if (typeof error !== "object" || error === null) return false
+  if ("name" in error && typeof error.name === "string" && permanentTags.has(error.name)) return true
+  const cause = "cause" in error ? error.cause : undefined
   const status = typeof cause === "object" && cause !== null && "status" in cause ? cause.status : undefined
   return status === 401 || status === 403 || status === 404
 }
 
+const permanentTags = new Set(["UnauthorizedError", "ForbiddenError", "NotFoundError"])

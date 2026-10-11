@@ -84,6 +84,30 @@ test.each([
   240_000,
 )
 
+test("a write outside the folder asks about the resolved folder, from the server's request and not the model's input", async () => {
+  const outside = path.join(root, "outside")
+  const target = path.join(outside, "..", "outside", "escape.txt")
+  await scripted(
+    [{ tool: { name: "Write", input: { file_path: target, content: "x", forged: "MODEL-ADDED-KEY" } } }, "done"],
+    async (own, home) => {
+      const run = controller(home, own)
+      run.send({ type: "user", text: "write it" })
+      const ask = await run.until((line) => line.type === "permission_request")
+      run.send({ type: "permission_reply", requestID: ask.line.request.id, decision: "reject" })
+      await run.until((line) => line.type === "result", ask.next)
+      run.end()
+      await run.finish()
+
+      expect(ask.line.request.action).toBe("external_directory")
+      // The ask names the folder the server resolved, with the `..` already gone.
+      expect(ask.line.request.resources.join("\n")).toContain("outside")
+      expect(ask.line.request.resources.join("\n")).not.toContain("..")
+      expect(JSON.stringify(ask.line)).not.toContain("MODEL-ADDED-KEY")
+      expect(await Bun.file(path.join(outside, "escape.txt")).exists()).toBe(false)
+    },
+  )
+}, 240_000)
+
 test("always saves the rule, so the same write asks nothing the second time", async () => {
   const name = "always.txt"
   await scripted([write(name), "first done", write(name), "second done"], async (own, home) => {
@@ -272,7 +296,7 @@ test("an interrupt withdraws the ask that is open with request_cancelled", async
 const question = {
   tool: {
     name: "AskUserQuestion",
-    input: { questions: [{ question: "Which one?", header: "Pick", options: [{ label: "Alpha", description: "a" }] }] },
+    input: { questions: [{ question: "Which one?", header: "Pick", options: [{ label: "Alpha", description: "a" }, { label: "Beta", description: "b" }] }] },
   },
 }
 
@@ -596,6 +620,24 @@ test.skipIf(process.platform === "win32")("SIGINT gives an interrupted result an
     expect(results(run.lines)).toHaveLength(1)
     expect(results(run.lines)[0]).toMatchObject({ outcome: "interrupted" })
     expect(done.code).toBe(130)
+  })
+}, 240_000)
+
+test("a controller that stops reading standard output ends the run and interrupts what was running", async () => {
+  await scripted([slow], async (own, home) => {
+    const run = controller(home, own)
+    run.send({ type: "user", text: "go" })
+    await modelAsked(own, 1)
+    await run.abandon()
+    // The next line the child writes has nowhere to go. A hello from the model would do; an interrupt makes a result.
+    run.send({ type: "interrupt" })
+    const started = Date.now()
+    const done = await run.finish(90_000)
+
+    // The model call would take a minute; the run does not wait for it, because nobody can read what it would write.
+    expect(Date.now() - started).toBeLessThan(30_000)
+    expect(typeof done.code).toBe("number")
+    expect(own.steps).toHaveLength(1)
   })
 }, 240_000)
 

@@ -371,6 +371,7 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
   const folders = [
     ["a folder with no config", await bare("print-clean-bare")],
     ["a folder with a config that holds nothing back", await quiet("print-clean-quiet")],
+    ["a folder that holds something back", await hooked("print-clean-held")],
   ] as const
   const starts = [
     ["text", ["-p", "--standalone", "--model", model, "say ok"]],
@@ -386,6 +387,14 @@ test("orb -p stops in an untrusted folder that holds nothing back, asks no model
     [
       "stream-json input with run",
       ["run", "--standalone", "--input-format", "stream-json", "--format", "stream-json", "--model", model],
+    ],
+    [
+      "stream-json input with --bare",
+      ["-p", "--bare", "--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
+    ],
+    [
+      "stream-json input with --continue",
+      ["-p", "--standalone", "--continue", "--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
     ],
   ] as const
   const before = runs

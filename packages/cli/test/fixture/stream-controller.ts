@@ -49,10 +49,14 @@ export function controller(
   const lines: Line[] = []
   const raw: string[] = []
   const waiters: Array<() => void> = []
+  const reader = child.stdout.getReader()
   const reading = (async () => {
     const decoder = new TextDecoder()
     let buffer = ""
-    for await (const chunk of child.stdout) {
+    while (true) {
+      const next = await reader.read().catch(() => ({ done: true as const, value: undefined }))
+      if (next.done) break
+      const chunk = next.value
       buffer += decoder.decode(chunk, { stream: true })
       const parts = buffer.split("\n")
       buffer = parts.pop() ?? ""
@@ -80,6 +84,10 @@ export function controller(
     },
     end() {
       child.stdin.end()
+    },
+    /** Stops reading standard output, so the next write of the child fails like a program that has gone away. */
+    abandon() {
+      return reader.cancel()
     },
     /** Waits for the first line that matches at or after `from`, and returns it with the index to continue from. */
     async until(match: (line: Line) => boolean, from = 0, ms = 90_000) {
@@ -130,4 +138,4 @@ export async function modelAsked(own: ReturnType<typeof scriptedModel>, steps: n
   }
 }
 
-export const results =(lines: Line[]) => lines.filter((line) => line.type === "result")
+export const results = (lines: Line[]) => lines.filter((line) => line.type === "result")
