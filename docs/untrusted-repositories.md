@@ -185,8 +185,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   command line other than the repository's own is `git-dir`. The probe runs in an untrusted folder too, because it is the
   protection for one: its result only adds a finding to the shell request's metadata, which shell-safety-12 turns into an
   ask. Every path the guard resolves is judged on its real place (`ProjectTrust.leads`, then `FSUtil.contains` on two real
-  paths), and a share is named without being opened. Proof: `test/shell-guard.test.ts` (the probe rows, the link, dangling
-  link, new-file-under-link, numeric-link and share rows, trusted and untrusted).
+  paths), and a share is named without being opened. Proof: `test/shell-guard.test.ts` (the link, dangling
+  link, new-file-under-link and numeric-link rows run trusted and untrusted; the probe, share, Windows spelling and finding rows run trusted;
+  the rows for input over the length limit run in a project with a link that leads out and nothing trusts). Input the
+  analysis cannot read is split into fragments, whose `cd` targets and plain words go through the same containment and
+  `access.escaped` checks as analysed input.
 - Shell commands outside the tool's own call: the `!` spans of a slash command go through the same gate
   (`ShellGuard.authorize`) as the shell tool, so a deny, a folder outside the project and input Orbit cannot read are
   judged the same way (class 12). Proof: `test/config/command-shell.test.ts`, `test/shell-guard.test.ts`.

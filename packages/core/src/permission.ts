@@ -57,6 +57,9 @@ export const AssertInput = Schema.Struct({
   // agent for its own folders (`Agent.folders`) do not decide them, only the person's own rules and approvals do. They
   // stay off the public Request.
   escaped: Schema.Array(Schema.String).pipe(Schema.optional),
+  // Set on the deny-only checks a shell command makes for the files it names: the rules that a mode puts on an agent
+  // (`Agent.modeRule`) do not apply to them, since the mode asks about the command itself.
+  probe: Schema.Boolean.pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -327,7 +330,10 @@ const layer = Layer.effect(
       if (closed) return false
       const current = managed.current()
       const configuredRules = yield* configured(input.sessionID, input.agent)
-      if (anyDenied(input, configuredRules.rules)) return true
+      const decisive = input.probe
+        ? configuredRules.rules.filter((rule) => !Agent.isModeRule(rule))
+        : configuredRules.rules
+      if (anyDenied(input, decisive)) return true
       if (
         ManagedNetwork.bearsUrl(input.action) &&
         ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)

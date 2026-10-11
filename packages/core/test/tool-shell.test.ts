@@ -3734,6 +3734,7 @@ describe("ShellTool guard", () => {
       ["a copy's source", "cp ../outside/s ./k", true],
       ["a read", "cat ../outside/s", true],
       ["a removal", "rm ../outside/s", true],
+      ["a removal after a cd, in input over the length limit", `cd ../outside && rm s #${"x".repeat(10_050)}`, true],
       ["a file the system keeps for everyone", `printf x > ${os.tmpdir()}/orbit-guard-test-f`, false],
     ] as const)
       test(`${scanner}: ${name} outside the project asks about the folder first`, () =>
@@ -3749,7 +3750,7 @@ describe("ShellTool guard", () => {
             expect(yield* absent(path.join(fixture.outside, "f"))).toBe(true)
             expect(yield* absent(path.join(os.tmpdir(), "orbit-guard-test-f"))).toBe(true)
             expect(yield* absent(marker)).toBe(true)
-            if (command.startsWith("rm")) expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
+            if (/\brm\b/.test(command)) expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)
           }),
         ))
 
@@ -3796,6 +3797,35 @@ describe("ShellTool guard", () => {
           expect(yield* absent(path.join(fixture.active, "copy.txt"))).toBe(true)
         }),
       ))
+
+    // Plan mode denies every edit and asks about every shell command. The deny is the mode's, so the probes for the files a
+    // command names skip it and the person is asked about the command; the same deny written by the person blocks it.
+    for (const command of ["printf x > notes.md", "touch f", "rm a", "cp a b", "cat a"])
+      test(`${scanner}: Plan mode's deny of edits leaves ${command} to the question`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => Bun.write(path.join(fixture.active, "a"), "keep"))
+            const marker = path.join(fixture.active, "k")
+            yield* permissions([
+              { action: "*", resource: "*", effect: "allow" },
+              Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }),
+              { action: "Bash", resource: "*", effect: "ask" },
+            ])
+            const asked = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(asked.requests).toMatchObject([{ action: "Bash" }])
+            expectDeclined(asked.exit)
+            expect(yield* absent(path.join(fixture.active, "a"))).toBe(false)
+
+            if (command === "cat a") return
+            yield* permissions([
+              { action: "*", resource: "*", effect: "allow" },
+              { action: "Edit", resource: "*", effect: "deny" },
+              { action: "Bash", resource: "*", effect: "ask" },
+            ])
+            expectBlocked(yield* runPermissionCommand(registry, command, marker, []))
+            expect(yield* absent(path.join(fixture.active, "a"))).toBe(false)
+          }),
+        ))
 
     // Input Orbit cannot analyse is asked about whole, with nothing to save, and is never refused.
     test(`${scanner}: malformed syntax asks about the whole text and a deny rule blocks it`, () =>
@@ -3894,6 +3924,18 @@ describe("ShellTool guard (PowerShell)", () => {
     ["pwsh -c x", undefined],
     ["node x.js", undefined],
     ["ForEach-Object { }", undefined],
+    // Spawners and runners: a saved `ssh *` would lift `ssh -o ProxyCommand=... x`, which runs a local command.
+    ["ssh host ls", undefined],
+    ["py x.py", undefined],
+    ["python2 x.py", undefined],
+    ["tsx x.ts", undefined],
+    ["lua x.lua", undefined],
+    ["bunx pkg", undefined],
+    ["New-Object System.Object", undefined],
+    ["New-PSSession host", undefined],
+    ["Start-ThreadJob { 1 }", undefined],
+    ["Register-ObjectEvent $o E", undefined],
+    ["New-PSDrive -Name Q -PSProvider FileSystem -Root C:\\Windows", undefined],
   ] as const)
     test(
       `offers ${save ? JSON.stringify(save) : "nothing to save"} for ${command}`,
@@ -3971,6 +4013,36 @@ describe("ShellTool guard (PowerShell)", () => {
       ),
     options,
   )
+
+  // New-PSDrive makes a drive, which can be a network share with a connection to any host: it is a command like any other,
+  // not a change of location that the guard sets aside.
+  for (const drive of [
+    "New-PSDrive -Name Q -PSProvider FileSystem -Root C:\\Windows",
+    "New-PSDrive -Name Q -PSProvider FileSystem -Root \\\\10.255.255.1\\s -Persist",
+  ])
+    test(
+      `New-PSDrive is denied by a deny rule and asked by its own text: ${drive}`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            const marker = path.join(fixture.active, "marker")
+            yield* permissions([{ action: "Bash", resource: "*", effect: "deny" }])
+            expectBlocked(yield* runPermissionCommand(registry, drive, marker, []))
+
+            yield* permissions([{ action: "Bash", resource: "*", effect: "ask" }])
+            const asked = yield* runPermissionCommand(registry, drive, marker, ["reject"])
+            expect(asked.requests).toHaveLength(1)
+            expect(asked.requests[0]?.resources).toEqual([drive])
+            expect(asked.requests[0]?.save).toBeUndefined()
+            expectDeclined(asked.exit)
+
+            // Beside another command, both are listed.
+            const both = yield* runPermissionCommand(registry, `${drive}; Get-ChildItem`, marker, ["reject"])
+            expect(both.requests[0]?.resources).toEqual([drive, "Get-ChildItem"])
+          }),
+        ),
+      options,
+    )
 
   test(
     "PowerShell the parser rejects is asked about whole and by fragment, and a deny meets a fragment",

@@ -49,6 +49,19 @@ export const folders = (global: Pick<Global.Interface, "data" | "tmp" | "config"
 const orbitOwn = new WeakSet<object>()
 export const isOwnFolder = (rule: object) => orbitOwn.has(rule)
 
+/**
+ * Marks a rule that a mode puts on an agent, such as Plan's deny of every edit, and returns it. The mode decides what the
+ * agent's own tools may do; it is not a rule of the person's, so the deny-only probes a shell command makes for the files
+ * it names (`Permission.AssertInput.probe`) skip it and the command is asked about as the mode says. The mark is the rule
+ * object itself, as for `folders`.
+ */
+export const modeRule = <A extends object>(rule: A) => {
+  orbitMode.add(rule)
+  return rule
+}
+const orbitMode = new WeakSet<object>()
+export const isModeRule = (rule: object) => orbitMode.has(rule)
+
 export interface Selection {
   readonly id: ID
   readonly info: Info | undefined

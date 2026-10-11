@@ -174,6 +174,48 @@ describe("ShellGuard.facts: places", () => {
     }),
   )
 
+  // Class 9: what a person reads of a finding is Orbit's fixed sentence and the place with control characters replaced, so
+  // the escape sequence in the command does not reach a terminal through the approval.
+  it.live("shows no control character from the command in a finding", () =>
+    Effect.gen(function* () {
+      const { project, home } = yield* layout
+      yield* Effect.gen(function* () {
+        for (const command of [
+          `rm -rf "${home}/\u001b[2J\u0007"`,
+          `rm -rf "/\u001b]0;x\u0007"`,
+          `cd a; cd sub; rm "x\u001b[31m"`,
+          `rm -rf ~/\u001b[2J`,
+        ]) {
+          const found = yield* facts(command, { cwd: project, home })
+          expect(found.findings.length).toBeGreaterThan(0)
+          expect(JSON.stringify(found.findings)).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/)
+        }
+      }).pipe(provide(project, true))
+    }),
+  )
+
+  // Windows keeps the case of a name and has two more spellings of a file: its 8.3 name and the `\\?\` form. All of them
+  // reach the place they name, so a project spelled any of these ways is still the project (class 4).
+  const windows = win ? it.live : it.live.skip
+  windows("judges the case, 8.3 and \\\\?\\ spellings of a place by where it is (Windows)", () =>
+    Effect.gen(function* () {
+      const { project, outside } = yield* layout
+      yield* Effect.promise(() => fs.writeFile(path.join(outside, "a long file name.txt"), "x"))
+      const short = (file: string) =>
+        Bun.spawnSync(["cmd.exe", "/d", "/c", `for %I in ("${file}") do @echo %~sI`]).stdout.toString().trim()
+      const shortName = short(path.join(outside, "a long file name.txt"))
+      yield* Effect.gen(function* () {
+        expect((yield* facts(`cat ${slash(project.toUpperCase())}/a/x`, { cwd: project })).external).toEqual([])
+        expect((yield* facts(`cat //?/${slash(project)}/a/x`, { cwd: project })).external).toEqual([])
+        expect((yield* facts(`cat ${slash(project.toLowerCase())}/sub/x`, { cwd: project })).external).toEqual([])
+        // Where the volume keeps no short names there is nothing to check.
+        if (shortName.includes("~"))
+          expect(directories(yield* facts(`cat ${slash(shortName)}`, { cwd: project }))).toHaveLength(1)
+        expect(directories(yield* facts(`cat ${slash(outside.toUpperCase())}/x`, { cwd: project }))).toHaveLength(1)
+      }).pipe(provide(project, true))
+    }),
+  )
+
   it.live("counts a sandbox root as inside only for a write and only while the call is sandboxed", () =>
     Effect.gen(function* () {
       const { project, outside } = yield* layout
@@ -460,15 +502,25 @@ describe("ShellGuard.authorize", () => {
 
   // Runs the gate over a project with the given deny rule in force. A request that `denied` matches fails when it is
   // asserted, as a rule would; every other one is recorded as a question.
-  const run = (command: string, denied: (input: Permission.AssertInput) => boolean) =>
+  // `link` makes `cfg` in the project a link to the folder outside it, which holds a file `s`; the project is then one that
+  // nothing trusts, and a link in it that leads out is asked about.
+  const run = (
+    command: string,
+    denied: (input: Permission.AssertInput) => boolean,
+    options: { shell?: string; link?: boolean } = {},
+  ) =>
     Effect.gen(function* () {
       asked.length = 0
-      const { project } = yield* layout
+      const { project, outside } = yield* layout
+      if (options.link) {
+        yield* Effect.promise(() => link(outside, path.join(project, "cfg")))
+        yield* Effect.promise(() => fs.writeFile(path.join(outside, "s"), "secret"))
+      }
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         return yield* ShellGuard.authorize({
           command,
-          shell: "sh",
+          shell: options.shell ?? "sh",
           cwd: yield* access.resolve({ path: project, kind: "directory" }),
           env: {},
           portable: true,
@@ -500,6 +552,7 @@ describe("ShellGuard.authorize", () => {
                   denied: (input) => Effect.succeed(denied(input)),
                 }),
               ),
+              ...(options.link ? untrustedProjectNodes : []),
             ],
           ),
         ),
@@ -528,12 +581,59 @@ describe("ShellGuard.authorize", () => {
   // from ever reaching it, and nothing scans it at all.
   it.live("asks about a very long unreadable input whole and quickly, in portable mode", () =>
     Effect.gen(function* () {
-      const long = `echo ${"a[ ".repeat(21_000)}`
+      const long = `cd ../outside; echo ${"a[ ".repeat(21_000)}`
       const started = Date.now()
       yield* run(long, () => false)
-      expect(asked.map((input) => input.resources)).toEqual([[long.trim()]])
-      expect(asked[0]?.save).toBeUndefined()
-      expect(Date.now() - started).toBeLessThan(3000)
+      // The folder it changes to is asked about first, though the input is too long to analyse.
+      expect(asked.map((input) => input.action)).toEqual(["external_directory", "Bash"])
+      expect(asked[0]?.resources).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+      expect(asked[1]?.resources[0]).toBe(long.trim())
+      expect(asked[1]?.save).toBeUndefined()
+      expect(Date.now() - started).toBeLessThan(5000)
+    }),
+  )
+
+  // Input over the length limit, or that the shell's parser gives up on, still names its folders and files. Each row asks
+  // the same question as its short form (class 3/4); the pad is a comment, so it changes nothing the command does.
+  const pad = `#${"x".repeat(10_050)}`
+  for (const [name, command, shell, link] of [
+    ["bash cd and removal", `cd ../outside && rm s ${pad}`, "sh", false],
+    ["bash pushd", `pushd ../outside; rm s ${pad}`, "sh", false],
+    ["bash quoted cd", `cd "../outside" && rm s ${pad}`, "sh", false],
+    ["PowerShell Set-Location", `Set-Location ../outside; Remove-Item s ${pad}`, "pwsh", false],
+    ["bash read through a link", `cat cfg/s ${pad}`, "sh", true],
+    ["PowerShell read through a link", `Get-Content cfg/s ${pad}`, "pwsh", true],
+    ["bash read of a quoted word", `cat "cfg/s" ${pad}`, "sh", true],
+    ["bash redirect target", `printf x > cfg/s ${pad}`, "sh", true],
+  ] as const)
+    it.live(`asks for the folder of input it cannot analyse: ${name}`, () =>
+      Effect.gen(function* () {
+        yield* run(command, () => false, { shell, link })
+        expect(command.length).toBeGreaterThan(10_000)
+        expect(asked.find((input) => input.action === "external_directory")?.resources).toEqual([
+          expect.stringMatching(/\/outside\/\*$/),
+        ])
+      }),
+    )
+
+  // The control: a short input names the same folder, so the long one is not asked more or less than it.
+  it.live("asks for the folder of the short form of those inputs", () =>
+    Effect.gen(function* () {
+      yield* run("cd ../outside && rm s", () => false)
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+      yield* run("cat cfg/s", () => false, { link: true })
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+    }),
+  )
+
+  it.live("splits input that cannot be analysed into folders and words, with comments and expansions left out", () =>
+    Effect.sync(() => {
+      expect(
+        ShellGuard.locations('cd ../a && pushd "b c"; cd -P "d"; cd $X; echo cd z', "bash", process.platform),
+      ).toEqual(["../a", "b c", "d"])
+      expect(ShellGuard.locations("cd x; Set-Location y; ls z", "pwsh", "win32")).toEqual(["x", "y"])
+      expect(ShellGuard.locations("New-PSDrive -Name Q -Root z; Pop-Location y", "pwsh", "win32")).toEqual([])
+      expect(ShellGuard.fragmentWords('cat a "b c" -n --file=d $E x # e f\nls g')).toEqual(["a", "b c", "d", "x", "g"])
     }),
   )
 })

@@ -1827,6 +1827,29 @@ describe("Permission.denied", () => {
     }),
   )
 
+  it.effect("skips the rules a mode puts on the agent for a probe, and for a probe only", () =>
+    Effect.gen(function* () {
+      const edit = (input: Partial<Permission.AssertInput> = {}) =>
+        assertion({ action: "Edit", resources: ["notes.md"], ...input })
+      yield* setup([Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const })])
+      const service = yield* Permission.Service
+      expect(yield* service.denied(edit())).toBe(true)
+      expect(yield* service.denied(edit({ probe: true }))).toBe(false)
+      // The same rule written by the person, or a copy of the mode's, still denies the probe.
+      yield* setRules([{ action: "Edit", resource: "*", effect: "deny" }])
+      expect(yield* service.denied(edit({ probe: true }))).toBe(true)
+      yield* setRules([{ ...Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }) }])
+      expect(yield* service.denied(edit({ probe: true }))).toBe(true)
+      // The mode's rule beside the person's deny of one file: the file stays denied.
+      yield* setRules([
+        Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }),
+        { action: "Edit", resource: "notes.md", effect: "deny" },
+      ])
+      expect(yield* service.denied(edit({ probe: true }))).toBe(true)
+      expect(yield* service.denied(edit({ probe: true, resources: ["other.md"] }))).toBe(false)
+    }),
+  )
+
   it.effect("creates no request, publishes nothing, runs no hook and reads no grant", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "bash", resource: "*", effect: "ask" }])

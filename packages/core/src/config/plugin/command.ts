@@ -271,7 +271,9 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
     const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
     const cwd = services.location.directory
     const settingsEnv = services.location.workspaceID === undefined ? ConfigEnv.resolve(entries) : {}
-    const commands = yield* Effect.forEach(sources, (source) =>
+    const failure = (source: string) => (error: Error) =>
+      interpolationError(source, error instanceof Permission.CorrectedError ? error.feedback : error.message)
+    const planned = yield* Effect.forEach(sources, (source) =>
       Effect.gen(function* () {
         const args = ShellSelect.args(shell, source)
         const network = services.managed.current().restrictions.network
@@ -283,8 +285,8 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           cwd,
           writable: [services.location.project.directory, cwd, tmpdir()],
         })
-        // The same gate as the shell tool, so a span is judged by what it does and a deny blocks it before any question.
-        yield* ShellGuard.authorize({
+        // The same gate as the shell tool, so a span is judged by what it does.
+        const prepared = yield* ShellGuard.prepare({
           command: source,
           shell,
           cwd: yield* services.access.resolve({ path: cwd, kind: "directory" }),
@@ -299,6 +301,19 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           // Deliberately no tool source: a tool grant must never upgrade a span that template text started.
           base: { sessionID },
         }).pipe(Effect.provideContext(services.guarded))
+        return { source, args, network, settings, sandboxed, prepared }
+      }).pipe(Effect.mapError(failure(source))),
+    )
+    // A deny on any span blocks the whole template before the first question about any of them.
+    yield* Effect.forEach(planned, (item) =>
+      ShellGuard.denyPass(item.prepared).pipe(
+        Effect.provideContext(services.guarded),
+        Effect.mapError(failure(item.source)),
+      ),
+    )
+    const commands = yield* Effect.forEach(planned, ({ source, args, network, sandboxed, prepared }) =>
+      Effect.gen(function* () {
+        yield* ShellGuard.ask(prepared).pipe(Effect.provideContext(services.guarded))
         // Fail closed: a sandbox the user asked for but cannot get must not quietly become an unsandboxed command.
         if (sandboxed.type === "missing")
           return yield* Effect.fail(new Error(`Shell sandboxing is enabled but ${sandboxed.tool} is not installed`))
@@ -312,11 +327,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
           extendEnv: true,
           env: settingsEnv,
         })
-      }).pipe(
-        Effect.mapError((error) =>
-          interpolationError(source, error instanceof Permission.CorrectedError ? error.feedback : error.message),
-        ),
-      ),
+      }).pipe(Effect.mapError(failure(source))),
     )
     return yield* Effect.forEach(
       commands,

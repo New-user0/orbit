@@ -1557,15 +1557,23 @@ The shell tool and the `!` spans of slash commands now go through one gate. It a
 the command names to where it really is, and builds the requests from that. Before, the request held the commands the
 scanner found, and the folder question held the folders the scanner found.
 
-- A file the command reads, writes, copies from or removes outside the project (a redirect target, a `cp` source, a `cat`)
-  asks `external_directory` for its folder, judged where links really lead, in a trusted project too. A new file under a link,
+- For input Orbit can analyse, a file the command reads, writes, copies from or removes outside the project (a redirect
+  target, a `cp` source, a `cat`) asks `external_directory` for its folder, judged where links really lead, in a trusted
+  project too. Input that Orbit cannot analyse (see below), or that is over 10,000 characters, is read less closely: it asks for
+  the folders that a `cd`, `pushd` or `Set-Location` fragment names with a plain word, and, in a project that is not
+  trusted, for the folder that a link leads to when a plain word of a fragment names it. A file that such input names in other
+  ways is not asked about. A new file under a link,
   a dangling link and a numeric link are judged where the write would land. A write under `os.tmpdir()` is outside like any
   other, unless the call runs in the sandbox, where the sandbox's writable folders count as inside for writes.
 - A statement with no command, such as `> file`, and a PowerShell statement that is not a pipeline of commands (an
   assignment, an expression such as `[IO.File]::WriteAllText(...)`, an `if`, a loop, a function) is asked about by its own
   text. Before, its resources were empty and it ran under any `shell *` ask rule. A saved grant for the commands inside it does not cover it.
-- A person's `Read` and `Edit` deny rules now stop a shell command that names the file, and a deny anywhere in a call
-  (the shell request, the folder question, a path rule) blocks it before any question is shown.
+- For input Orbit can analyse, a person's `Read` and `Edit` deny rules now stop a shell command that names the file, and
+  a deny anywhere in a call (the shell request, the folder question, a path rule) blocks it before any question is shown. A
+  `!` span of a slash command counts with the others: a deny on any span of the template blocks it before a question about
+  the first. Plan mode's own deny of every edit is not such a rule: a command in Plan mode is still asked about, as it always
+  was, and only an `Edit` deny of your own stops it. `New-PSDrive` is an ordinary PowerShell command that is asked about
+  by its text (it can map a network share), not a change of location.
 - Input Orbit cannot analyse, a syntax error or an unterminated quote included, is asked about as the whole text plus its
   fragments, with no "always allow", in both scanner modes. Before, the portable scanner refused it with an error and the
   default scanner asked about the commands it could find. A deny rule still blocks it, on the whole text or on a fragment. Bash
@@ -1579,7 +1587,9 @@ statement or a PowerShell expression without a question, and plugin authors who 
 now also carries `findings`.
 
 **What to do:** Approve the folder once, or add an `external_directory` allow for it. Write an allow rule for the commands you
-mean, such as `Bash printf *`; a rule cannot lift a statement with no command or input Orbit cannot read.
+mean, such as `Bash printf *`. Until the follow-up that makes these asks unliftable (shell-safety-12), a broad allow rule
+(the default `* *` allow included) still lifts a statement with no command and input Orbit cannot read, because it matches
+every resource of the request.
 
 ## Plugins and SDK
 

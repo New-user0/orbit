@@ -26,7 +26,9 @@ import { ShellWrappers } from "./wrappers.js"
 // share and starts no process (class 6).
 
 const WRITES = new Set<ShellPaths.Role>(["remove", "write", "create"])
-const CD = new Set(["cd", "chdir", "pushd", "popd", "set-location", "push-location", "pop-location"])
+const CD = new Set(["cd", "pushd", "popd", "set-location", "push-location", "pop-location"])
+// What changes the PowerShell location. New-PSDrive makes a drive, which can be a network share, and is an ordinary command.
+const MOVES = new Set(["set-location", "push-location", "pop-location"])
 
 export type Place = {
   /** 0 for the input itself, n for the n-th nested script. */
@@ -301,15 +303,47 @@ export type Authorize = {
   metadata?: Record<string, unknown>
 }
 
+/** The requests of one input, made but not yet checked or asked. */
+export type Prepared = {
+  analysis: Analysis
+  external?: Permission.AssertInput
+  shell?: Permission.AssertInput
+  /** Every request of the input, the deny-only probes included. */
+  requests: Permission.AssertInput[]
+}
+
 /**
  * Asks for everything a shell command needs before it may run: the folders it reaches outside the project, and the
  * command itself. Every request of the call is checked for a deny before the first question, so a call that a rule blocks
  * shows none. The tool and the `!` spans of a command both come through here, so they cannot disagree about what a
- * command does. Input that cannot be analysed is asked about, never refused. Returns the analysis it made.
+ * command does. Input that cannot be analysed is asked about, never refused. Returns the analysis it made. A caller with
+ * several inputs prepares them all, runs `denyPass` over each, and only then asks, so a deny in the last one shows no
+ * question about the first.
  */
 export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Authorize) {
-  const access = yield* FileAccess.Service
+  const prepared = yield* prepare(input)
+  yield* denyPass(prepared)
+  yield* ask(prepared)
+  return prepared.analysis
+})
+
+/** Fails with the block when a rule of the person's or the managed policy denies any request of the input. Asks nobody. */
+export const denyPass = Effect.fn("ShellGuard.denyPass")(function* (prepared: Prepared) {
   const permission = yield* Permission.Service
+  yield* Effect.forEach(prepared.requests, (item) =>
+    permission.denied(item).pipe(Effect.flatMap((denied) => (denied ? permission.assert(item) : Effect.void))),
+  )
+})
+
+/** Asks the folder question first, then the command. */
+export const ask = Effect.fn("ShellGuard.ask")(function* (prepared: Prepared) {
+  const permission = yield* Permission.Service
+  if (prepared.external) yield* permission.assert(prepared.external)
+  if (prepared.shell) yield* permission.assert(prepared.shell)
+})
+
+export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authorize) {
+  const access = yield* FileAccess.Service
   const parser = yield* PowerShellParse.Service
   const ctx: Context = {
     shell: input.shell,
@@ -324,16 +358,18 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
     Effect.provideService(PowerShellParse.Service, parser),
   )
   const ps = isPowerShell(analysis)
-  // An input over the length limit is not scanned at all: the scan is not cheap, and the input is asked about whole.
-  const scanned =
-    ps || analysis.opaque?.reason === "length"
-      ? undefined
-      : yield* scanBash(input.command, input.shell, input.cwd.absolute, input.portable && !analysis.opaque)
-  const directories = ps
-    ? analysis.opaque
-      ? locations(input.command, analysis.dialect, process.platform)
-      : expansions(analysis, input.cwd.absolute, input.shell)
-    : (scanned?.directories ?? [])
+  // The scanners stop by themselves after half a second, so an input over the length limit is still read for the folders
+  // it changes to and the words it names; only the portable scanner, which is quadratic on some inputs, never sees it.
+  const scanned = ps
+    ? undefined
+    : yield* scanBash(input.command, input.shell, input.cwd.absolute, input.portable && !analysis.opaque)
+  // Input that cannot be analysed, or that a scanner gave up on, is also split into fragments: what they name is asked
+  // about whatever else the command does, so the list is never empty for it.
+  const fragmentary = analysis.opaque !== undefined || (!ps && scanned === undefined)
+  const directories = [
+    ...(ps ? (analysis.opaque ? [] : expansions(analysis, input.cwd.absolute, input.shell)) : (scanned?.directories ?? [])),
+    ...(fragmentary ? locations(input.command, analysis.dialect, process.platform) : []),
+  ]
   const gathered = yield* facts({
     analysis,
     text: input.command,
@@ -344,11 +380,10 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
   })
   // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
   // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
-  const literal = ps
-    ? words(analysis)
-    : analysis.opaque?.reason === "length"
-      ? []
-      : yield* ShellParse.operands(input.command, input.shell)
+  const literal = [
+    ...(ps ? words(analysis) : yield* ShellParse.operands(input.command, input.shell)),
+    ...(fragmentary ? fragmentWords(input.command) : []),
+  ]
   const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, operand)))
   const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
   const requested = request(analysis, input.command, scanned, gathered.findings)
@@ -366,15 +401,15 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
     ...(shell ? [shell] : []),
     ...(external ? [external] : []),
     ...gathered.probes.map(
-      (probe): Permission.AssertInput => ({ action: probe.action, resources: probe.resources, ...input.base }),
+      (probe): Permission.AssertInput => ({
+        action: probe.action,
+        resources: probe.resources,
+        probe: true,
+        ...input.base,
+      }),
     ),
   ]
-  yield* Effect.forEach(requests, (item) =>
-    permission.denied(item).pipe(Effect.flatMap((denied) => (denied ? permission.assert(item) : Effect.void))),
-  )
-  if (external) yield* permission.assert(external)
-  if (shell) yield* permission.assert(shell)
-  return analysis
+  return { analysis, external, shell, requests } satisfies Prepared
 })
 
 // The bash scanner's view of the input. The legacy scan reads what the analysis could not, and always supplies the
@@ -404,7 +439,6 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
   const trust = yield* ProjectTrust.Service
   const fs = yield* FSUtil.Service
   const found: NonNullable<ShellSafety.GuardFacts["bare"]> = []
-  let dynamic = false
   const share = (file: string) => process.platform === "win32" && /^[\\/]{2}/.test(file)
   const type = (file: string) =>
     share(file)
@@ -418,6 +452,10 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
 
   const bases: string[] = [workdir]
   const named: { base: string; value: string }[] = []
+  // A git directory built as the command runs: the folder git will use is unknown, whatever form the assignment takes.
+  const dynamic = all.some((level) =>
+    [...level.text.matchAll(GIT_DIR)].some((match) => /[$`(]/.test(match[1]!.replace(/^(["'])(.*)\1$/, "$2"))),
+  )
   all.forEach((level) => {
     level.analysis.paths.scopes.forEach((scope) => bases.push(...scope.bases))
     level.analysis.commands.forEach((command, index) => {
@@ -439,12 +477,10 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
         } else if (["-c", "--work-tree", "--namespace", "--exec-path"].includes(word.value)) at++
       }
     })
-    for (const match of level.text.matchAll(GIT_DIR)) {
-      const value = match[1]!.replace(/^(["'])(.*)\1$/, "$2")
-      // A value built as the command runs: the folder git will use is unknown, whatever form the assignment takes.
-      if (/[$`(]/.test(value)) dynamic = true
-      else named.push({ base: workdir, value })
-    }
+    ;[...level.text.matchAll(GIT_DIR)]
+      .map((match) => match[1]!.replace(/^(["'])(.*)\1$/, "$2"))
+      .filter((value) => !/[$`(]/.test(value))
+      .forEach((value) => named.push({ base: workdir, value }))
   })
 
   const own = new Map<string, string>()
@@ -600,7 +636,6 @@ const DECLARATIONS = new Set([
   "readonly",
   "unset",
   "cd",
-  "chdir",
   "pushd",
   "popd",
 ])
@@ -631,6 +666,9 @@ const NEVER = new Set(
     "new-module add-type invoke-webrequest iwr curl wget invoke-restmethod irm start-bitstransfer set-alias sal new-alias nal",
     "set-variable sv new-variable nv remove-variable rv clear-variable clv get-wmiobject gwmi invoke-wmimethod get-ciminstance gcim",
     "invoke-cimmethod new-cimsession foreach-object foreach %",
+    // Spawners and code runners that a saved "name *" would lift for every argument.
+    "start-threadjob register-scheduledjob register-engineevent register-objectevent register-wmievent new-pssession",
+    "enter-pssession save-script new-object python2 tsx lua bunx ssh py new-psdrive",
   ]
     .join(" ")
     .split(" "),
@@ -644,7 +682,7 @@ function powershell(analysis: Analysis, whole: string, findings: ShellSafety.Fin
   const aliases: Record<string, string[]> = {}
 
   summary.commands
-    .filter((command) => !LOCATION.has(command.name))
+    .filter((command) => !MOVES.has(command.name))
     .forEach((command) => {
       const resource = command.text.trim()
       resources.push(resource)
@@ -677,10 +715,10 @@ function powershell(analysis: Analysis, whole: string, findings: ShellSafety.Fin
         resources.push(text)
     })
 
-  const distinctresources = distinct(resources).filter((item) => item !== "")
-  if (distinctresources.length > 0)
+  const listed = distinct(resources).filter((item) => item !== "")
+  if (listed.length > 0)
     return {
-      resources: distinctresources,
+      resources: listed,
       save: distinct(save),
       ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
     }
@@ -703,7 +741,7 @@ function inertPowerShell(summary: PowerShellParse.Summary) {
           statement.text.trim(),
         ) ||
           (statement.kind === "PipelineAst" &&
-            statement.elements.every((element) => element.kind === "command" && LOCATION.has(element.command.name)))),
+            statement.elements.every((element) => element.kind === "command" && MOVES.has(element.command.name)))),
     )
 }
 
@@ -714,13 +752,13 @@ function strip(name: string) {
 // The spellings a rule may be written in for this cmdlet: the name as written without its module qualifier and quotes, the
 // cmdlet's own name and each of its aliases here, each followed by the arguments as written, joined by single spaces.
 function canonical(command: PowerShellParse.Command, analysis: Analysis) {
-  const arguments_ = command.arguments.map((argument) => argument.text)
+  const given = command.arguments.map((argument) => argument.text)
   const names = distinct([
     strip(command.written),
     command.name,
     ...aliasNames().filter((alias) => aliasTarget(alias, analysis.dialect, process.platform) === command.name),
   ])
-  return names.map((name) => [name, ...arguments_].join(" "))
+  return names.map((name) => [name, ...given].join(" "))
 }
 
 // The pattern an "always" reply would save for this command: none for what could run anything.
@@ -793,17 +831,41 @@ export function words(analysis: Analysis) {
 }
 
 /**
- * The folders that a PowerShell fragment changes to, for input whose parse failed: a fragment that starts with a location
- * command and names a constant place. Absolute or relative as written.
+ * The folders that the fragments of an input change to, for input that was not analysed: a fragment that starts with a
+ * directory-changing command and names a constant place. Absolute or relative as written.
  */
 export function locations(text: string, dialect: Analysis["dialect"], platform: NodeJS.Platform) {
+  const ps = dialect === "powershell-5.1" || dialect === "pwsh"
   return ShellSafety.fragments(text).flatMap((fragment) => {
-    const words = fragment.split(/\s+/)
-    const head = words[0]!.replace(/^(["'])(.*)\1$/, "$2").toLowerCase()
-    const target = aliasTarget(head, dialect, platform) ?? head
-    if (!LOCATION.has(target) || target === "new-psdrive" || target === "pop-location") return []
+    const words = fragmentTokens(fragment)
+    const head = unquoted(words[0]!)
+    const target = ps ? (aliasTarget(head.toLowerCase(), dialect, platform) ?? head.toLowerCase()) : head
+    if (!(ps ? MOVES.has(target) && target !== "pop-location" : target === "cd" || target === "pushd")) return []
     const word = words.slice(1).find((item) => !/^[-–—―]/.test(item))
     if (word === undefined || /[$`(]/.test(word)) return []
-    return [word.replace(/^(["'])(.*)\1$/, "$2")]
+    return [unquoted(word)]
   })
 }
+
+/**
+ * The literal words of the fragments of an input that was not analysed, without the first word of each fragment, flags,
+ * comments and anything built as the command runs: what a command in it may open as a path.
+ */
+export function fragmentWords(text: string) {
+  return distinct(
+    ShellSafety.fragments(text).flatMap((fragment) => {
+      const words = fragmentTokens(fragment).slice(1)
+      const comment = words.findIndex((word) => word.startsWith("#"))
+      return (comment === -1 ? words : words.slice(0, comment)).flatMap((word) => {
+        if (/[$`]/.test(word)) return []
+        const value = unquoted(word.startsWith("-") && word.includes("=") ? word.slice(word.indexOf("=") + 1) : word)
+        return value === "" || value.startsWith("-") ? [] : [value]
+      })
+    }),
+  )
+}
+
+// Words split at blanks, with a quoted word kept whole.
+const fragmentTokens = (fragment: string) => fragment.match(/"[^"]*"|'[^']*'|\S+/g) ?? []
+
+const unquoted = (word: string) => word.replace(/^(["'])(.*)\1$/, "$2")

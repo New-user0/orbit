@@ -264,6 +264,15 @@ describe("plan plugin mutations", () => {
     }),
   )
 
+  it.effect("marks only its own deny of edits as the mode's, which shell probes skip", () =>
+    Effect.gen(function* () {
+      const { planAgent } = yield* run()
+      expect(
+        planAgent.permissions.filter(Agent.isModeRule).map((rule) => [rule.action, rule.resource, rule.effect]),
+      ).toEqual([["Edit", "*", "deny"]])
+    }),
+  )
+
   it.effect("allows the Plan directory external boundary", () =>
     Effect.gen(function* () {
       const { planAgent } = yield* run()

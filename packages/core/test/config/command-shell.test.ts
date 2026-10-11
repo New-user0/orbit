@@ -655,6 +655,24 @@ describe("command template shell spans with the permission service", () => {
   )
 })
 
+describe("command template shell spans: a deny on a later span", () => {
+  real.live("blocks the template before the first span asks its question", () =>
+    Effect.gen(function* () {
+      const session = yield* createSession([
+        { action: "Bash", resource: "git *", effect: "ask" },
+        { action: "Bash", resource: "rm *", effect: "deny" },
+      ])
+      const asked = yield* requests
+      const probe = yield* install("Status: !`git status`\nClean: !`rm -rf build`", {}, session.id)
+      const error = yield* probe.execute("").pipe(Effect.flip)
+      expect(error.message).toBe('Shell interpolation failed for "rm -rf build": Permission denied: Bash')
+      // The span before the deny would have asked about `git status`.
+      expect(yield* Queue.size(asked)).toBe(0)
+      expect(spawned).toEqual([])
+    }),
+  )
+})
+
 // The built-in Plan agent asks before every shell command, so a template with a span prompts with no configuration.
 describe("command template shell spans through Session.command", () => {
   routed.live("fails with a typed error when the user rejects a span, and runs and submits nothing", () =>
