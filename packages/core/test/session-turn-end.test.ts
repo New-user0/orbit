@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Session } from "@orbit/core/session"
+import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import type { SessionTurn } from "@orbit/core/session/turn"
 
@@ -81,7 +82,7 @@ describe("SessionTurnEnd", () => {
     expect(result).toEqual({ check: "good", text: "go" })
   })
 
-  test("the default list is empty, so no turn continues until a later task adds a check", async () => {
-    expect(await ask(SessionTurnEnd.layer, turn())).toBeUndefined()
+  test("the default list holds only the structured-output check, which lets a turn without output end", async () => {
+    expect(await ask(AppNodeBuilder.build(SessionTurnEnd.node), turn())).toBeUndefined()
   })
 })

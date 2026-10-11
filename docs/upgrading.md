@@ -2169,6 +2169,48 @@ permission request.
 
 **What to do:** nothing. A plugin that wanted the path as the model wrote it reads it from the tool call's input.
 
+### Structured output is a validated tool hand-in
+
+A prompt can ask that the turn end with an answer that follows a JSON Schema: `turn.output` on the prompt request holds
+the `schema` and, optionally, `attempts` (1 to 20, default 5), and `orb run`, `orb -p` and the SDK send it from
+`--json-schema`. The schema is checked and compiled when the prompt is admitted. The runner then offers the model one
+extra tool, `StructuredOutput`, whose parameters are the schema as you wrote it, always as a direct tool: no permission
+rule, agent tool list or context hook removes it, and it never asks. Each hand-in is validated; a bad one is
+sent back to the model with every failure (a JSON Pointer and a reason), and a turn that stops without an accepted
+hand-in is asked to hand one in. The turn ends with the latest accepted value, or fails: `limit.structured-output` after
+`attempts` responses that handed in a wrong answer (a valid last attempt still succeeds), or `output.missing` when the model
+never hands one in (after the eight turn-end continuations, or when the agent's step allowance ends first). A model that cannot call
+tools fails with `output.unsupported-model`, and a stored schema that no longer compiles with `output.schema-invalid`. `structured_output` on the result comes from the accepted
+hand-in in the history, and is present only on success.
+
+This replaces the earlier text path: the schema is no longer appended to the prompt, and the answer is no longer parsed
+from the reply (a fenced or bare JSON answer in prose is not an answer). Other changes:
+
+- A schema is refused at admission (HTTP 400, field `turn.output.schema`) unless it is an object whose root declares
+  `"type": "object"`, passes the meta-schema (draft-07, 2019-09 or 2020-12; no `$schema` means draft-07), uses only
+  keywords the validator enforces (a `$id` is allowed only at the root), has only local `$ref`s that resolve (nothing is fetched), and stays under 256 KiB and 64
+  levels of nesting. Unknown keywords, such as a misspelt `requred`, are refused instead of ignored. `format` and the
+  other annotations (`title`, `description`, `default`, `examples`, `$comment`, `deprecated`, `readOnly`, `writeOnly`,
+  `contentMediaType`, `contentEncoding`) are accepted and not enforced. The validator interprets the schema and never
+  builds code from it.
+- `--json-schema` takes inline JSON when its value starts with `{`, and otherwise the path of a file (a UTF-8 byte order
+  mark is dropped and UTF-16 files are decoded). A missing file, invalid JSON or a root that is not an object schema is a
+  usage error in the requested format, before any session exists. Windows PowerShell 5.1 strips the quotes from inline
+  JSON, so pass a file there.
+- `ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES` (1 to 20) sets `attempts` for the prompts of a run; any other value is a usage error.
+- A failed run reports the new subtype `error_max_structured_output_retries` for the attempt limit, and `reason:
+  "invalid_output"` when the turn ended without an answer. In stream input mode every user line carries `output`, so each has its own
+  attempts and its own result line.
+- An older server refuses a request that carries `turn.output`, and a server that drops it fails the run; neither falls
+  back to parsing text.
+- On an agent's last allowed step the hand-in tool is offered alone (and asked for by name) until an answer is accepted.
+
+**Affects:** scripts and SDK callers that use `--json-schema` or build prompts with a schema in the text, anything that
+matched the old `The answer was not valid JSON.` error, and schemas that were not object roots or used unknown keywords.
+
+**What to do:** Pass the schema as `--json-schema` (or `turn.output`) and read `structured_output` from the result or
+from the accepted `StructuredOutput` call; make the schema an object schema; update an older server.
+
 ## Shell sandbox
 
 ### Shell sandbox: WSL1 refuses commands; WSL2 commands cannot start Windows programs
