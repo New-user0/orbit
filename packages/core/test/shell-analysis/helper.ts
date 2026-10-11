@@ -57,6 +57,28 @@ export function pwshLinux(over: Partial<ShellAnalysis.Context> = {}): ShellAnaly
   return linux({ shell: "/opt/microsoft/powershell/7/pwsh", ...over })
 }
 
+/**
+ * Reads the literal scripts of `result` the way `inspect` does with `nested: true`: tree-sitter for bash, the recorded rows
+ * for PowerShell. A script with no recorded row cannot be parsed, which makes it opaque.
+ */
+export function nest(result: ShellAnalysis.Analysis, ctx: ShellAnalysis.Context) {
+  const trees: { delete(): void }[] = []
+  try {
+    return ShellAnalysis.nest(result, ctx, (script) => {
+      if (script.dialect === "powershell") {
+        const row = ({ ...rows, ...rows7 } as Record<string, { code: number; output: string }>)[script.text]
+        return row ? PowerShellParse.interpret(row.code, row.output) : undefined
+      }
+      const tree = parsers.bash.parse(script.text, null)
+      if (!tree) return "aborted"
+      trees.push(tree)
+      return tree.rootNode
+    })
+  } finally {
+    trees.forEach((tree) => tree.delete())
+  }
+}
+
 /** The argv of every command, as plain strings. */
 export function argv(result: ShellAnalysis.Analysis) {
   return result.commands.map((command) => command.argv.map((word) => word.value))

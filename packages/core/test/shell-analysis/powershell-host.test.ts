@@ -4,8 +4,9 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect, Layer } from "effect"
 import { ShellAnalysis } from "../../src/shell/analysis"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
+import { ShellSafety } from "../../src/shell/safety"
 import { which } from "../../src/util/which"
-import { powershell, pwsh } from "./helper"
+import { powershell, pwsh, windows } from "./helper"
 
 // A small subset against a real PowerShell, so the recorded answers cannot drift from what the parser says now.
 // Skipped when no host is installed; the rest of the suite reads the recorded answers.
@@ -34,6 +35,18 @@ test.skipIf(!hasHost).each(rows)(
     )
     expect(ShellAnalysis.analyze(text, pwsh(), result).readOnly).toBe(expected)
     expect(powershell(text, pwsh()).readOnly).toBe(expected)
+  },
+  60_000,
+)
+
+test.skipIf(!hasHost)(
+  "a PowerShell script inside bash is parsed by the real host and its removal of the home folder is refused",
+  async () => {
+    const ctx = windows()
+    const text = "pwsh -c 'Remove-Item -Recurse ~'"
+    const found = await Effect.runPromise(ShellAnalysis.inspect(text, ctx, { nested: true }).pipe(Effect.provide(real)))
+    const options = { platform: ctx.platform, path: ctx.path, home: ctx.home, cwd: ctx.cwd, project: ctx.cwd, location: ctx.cwd, env: ctx.env, text }
+    expect(ShellSafety.check(found, options).map((item) => `${item.kind}:${item.decision}`)).toContain("critical-removal:deny")
   },
   60_000,
 )
