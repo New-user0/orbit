@@ -1,5 +1,6 @@
 export * as ShellGuard from "./guard.js"
 
+import type { ToolFailure } from "@orbit/ai"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect, Option } from "effect"
 import os from "node:os"
@@ -19,8 +20,10 @@ import { ShellWrappers } from "./wrappers.js"
 // them; the safety checks describe what no rule may lift. This module puts the disk between them: it resolves every named
 // place to where it really is (links followed, a new file under a link judged where the write would land), decides which
 // places are outside the project, probes the folders git would discover, and builds the requests the tool makes from
-// the analysis. It decides nothing about a person's rules, and it never fails the call: whatever it cannot resolve is an
-// `unresolved` place with a finding (class 7). It opens no share and starts no process (class 6).
+// the analysis. It decides nothing about a person's rules. Whatever it cannot resolve is an `unresolved` place with a
+// finding, never a failure of the call (class 7), with one exception that is older than this module: a folder the command
+// changes to that FileAccess refuses to name (a drive that is not a disk) refuses the call, as it always did. It opens no
+// share and starts no process (class 6).
 
 const WRITES = new Set<ShellPaths.Role>(["remove", "write", "create"])
 const CD = new Set(["cd", "chdir", "pushd", "popd", "set-location", "push-location", "pop-location"])
@@ -86,6 +89,12 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     role: ShellPaths.Role
     /** A bash removal takes the link away, not what it points to. */
     removal: boolean
+    /**
+     * The command changes folder to this place. FileAccess refuses a folder it cannot name (a drive that is not a disk, a
+     * data stream), and the call is refused with it, as it always was: the shell would otherwise start from a place nobody
+     * checked.
+     */
+    change: boolean
     level: number
   }
   type Resolved = Place & {
@@ -94,9 +103,8 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   }
 
   const resolveCandidate = Effect.fnUntraced(function* (candidate: string, spec: Spec) {
-    const lexical = Option.getOrUndefined(
-      yield* access.resolve({ path: candidate, kind: spec.kind }).pipe(Effect.option),
-    )
+    const opened = access.resolve({ path: candidate, kind: spec.kind })
+    const lexical = spec.change ? yield* opened : Option.getOrUndefined(yield* opened.pipe(Effect.option))
     const leads = spec.removal
       ? path.join(yield* trust.leads(path.dirname(candidate)), path.basename(candidate))
       : yield* trust.leads(candidate)
@@ -117,7 +125,10 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     }
   })
 
-  const resolvePlace = Effect.fnUntraced(function* (spec: Spec, skip?: Place["why"]): Effect.fn.Return<Resolved> {
+  const resolvePlace = Effect.fnUntraced(function* (
+    spec: Spec,
+    skip?: Place["why"],
+  ): Effect.fn.Return<Resolved, FSUtil.Error | ToolFailure> {
     if (skip !== undefined || spec.candidates.length === 0)
       return {
         level: spec.level,
@@ -168,13 +179,14 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
         kind,
         role: operand.role,
         removal: operand.role === "remove" && !ps && operand.form !== "glob" && !/[\\/]\.?$/.test(operand.spelled),
+        change: level.depth === 0 && CD.has(command?.head ?? ""),
         level: level.depth,
       },
       skip,
     )
   })
   const extra = yield* Effect.forEach(input.directories, (directory) =>
-    resolvePlace({ candidates: [directory], kind: "directory", role: "read", removal: false, level: 0 }),
+    resolvePlace({ candidates: [directory], kind: "directory", role: "read", removal: false, change: true, level: 0 }),
   )
   const everything = [...resolved, ...extra]
 
@@ -371,9 +383,12 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
 const scanBash = Effect.fnUntraced(function* (command: string, shell: string, cwd: string, portable: boolean) {
   const none = () => Effect.succeed(undefined)
   const legacy = yield* ShellParse.scan(command, shell, cwd).pipe(Effect.catch(none))
-  if (!portable) return legacy
-  const native = yield* ShellParse.scan(command, shell, cwd, { portable }).pipe(Effect.catch(none))
-  return native ? { ...native, bare: legacy?.bare ?? [] } : legacy
+  const bare = yield* ShellParse.bare(command)
+  const scanned = portable
+    ? yield* ShellParse.scan(command, shell, cwd, { portable }).pipe(Effect.catch(none))
+    : undefined
+  const result = scanned ?? legacy
+  return result && bare.length > 0 ? { ...result, bare } : result
 })
 
 // ---------------------------------------------------------------------------------------------------------------------

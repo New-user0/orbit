@@ -203,6 +203,19 @@ describe("ShellGuard.facts: places", () => {
     }),
   )
 
+  // A name FileAccess refuses (a data stream) is a place the guard cannot place, not a failure of the call; a folder to change to
+  // that FileAccess refuses is a refusal, as the file tools give.
+  it.live("leaves a data stream unresolved", () =>
+    Effect.gen(function* () {
+      if (!win) return
+      const { project } = yield* layout
+      yield* Effect.gen(function* () {
+        const found = yield* facts("cat notes.txt:payload", { cwd: project })
+        expect(found.places.map((place) => [place.status, place.why])).toEqual([["unresolved", "stream"]])
+      }).pipe(provide(project, true))
+    }),
+  )
+
   // A share is never opened to find out where it is: the place is unresolved, with a finding, and nothing waits on the network.
   it.live("leaves a share unresolved without touching it", () =>
     Effect.gen(function* () {
@@ -363,7 +376,10 @@ describe("ShellGuard.request", () => {
     Effect.gen(function* () {
       const ctx = context(process.cwd(), os.homedir(), shell)
       const analysis = yield* analyse(command, ctx)
-      const scanned = shell === "sh" ? yield* ShellParse.scan(command, shell, ctx.cwd) : undefined
+      const scanned =
+        shell === "sh"
+          ? { ...(yield* ShellParse.scan(command, shell, ctx.cwd)), bare: yield* ShellParse.bare(command) }
+          : undefined
       return { analysis, request: ShellGuard.request(analysis, command, scanned, []) }
     })
 

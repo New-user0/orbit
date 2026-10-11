@@ -17,7 +17,7 @@ const POWERSHELL_PATH_FLAGS = new Set(["-literalpath", "-path"])
 export type Result = {
   commands: Array<{ resource: string; save: string }>
   directories: string[]
-  /** Bash: the text of each redirected statement that has no command body (`> file`), which creates or truncates a file. */
+  /** Set by the caller from `bare`, not by `scan`: the redirected statements that have no command (`> file`). */
   bare?: string[]
 }
 
@@ -187,8 +187,8 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),
     (tree) =>
-      Effect.sync(() => {
-        const result = tree.rootNode.descendantsOfType("command").reduce(
+      Effect.sync(() =>
+        tree.rootNode.descendantsOfType("command").reduce(
           (result, node) => {
             if (!node) return result
             const command = parts(node)
@@ -206,17 +206,29 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
             return result
           },
           { commands: [] as Array<{ resource: string; save: string }>, directories: [] as string[] },
-        )
-        // A redirected statement with no command (`> file`) creates or truncates a file and has no command node. A result
-        // without one is what it always was.
-        const bare = powershell
-          ? []
-          : tree.rootNode
-              .descendantsOfType("redirected_statement")
-              .flatMap((node) => (node && node.childForFieldName("body") === null ? [node.text.trim()] : []))
-        const output: Result = bare.length > 0 ? { ...result, bare } : result
-        return output
-      }),
+        ),
+      ),
+    (tree) => Effect.sync(() => tree.delete()),
+  )
+})
+
+/**
+ * The text of each redirected statement of a bash input that has no command (`> file`): it creates or truncates a file and
+ * has no command node, so `scan` lists nothing for it. A scan that runs long gives up and lists none.
+ */
+export const bare = Effect.fnUntraced(function* (command: string) {
+  const parsers = yield* Effect.promise(load)
+  const deadline = performance.now() + SCAN_MS
+  const tree = parsers.bash.parse(command, null, { progressCallback: () => performance.now() > deadline })
+  if (!tree) return []
+  return yield* Effect.acquireUseRelease(
+    Effect.succeed(tree),
+    (tree) =>
+      Effect.sync(() =>
+        tree.rootNode
+          .descendantsOfType("redirected_statement")
+          .flatMap((node) => (node && node.childForFieldName("body") === null ? [node.text.trim()] : [])),
+      ),
     (tree) => Effect.sync(() => tree.delete()),
   )
 })
