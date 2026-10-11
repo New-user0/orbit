@@ -13853,8 +13853,11 @@
           },
           "env": {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
+            "patternProperties": {
+              "^[^=\\u0000]+$": {
+                "type": "string",
+                "pattern": "^[^\\u0000]*$"
+              }
             }
           },
           "model": {
