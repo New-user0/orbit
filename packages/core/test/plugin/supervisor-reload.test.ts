@@ -387,7 +387,7 @@ describe("PluginSupervisor under workspace trust", () => {
         // what the config last read, so it waits for the reload to have read the new plugin.
         yield* project.status().pipe(
           Effect.filterOrFail(
-            (status) => status.changed.length > 0,
+            (status) => (status.changed ?? []).length > 0,
             () => "reload pending",
           ),
           Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),

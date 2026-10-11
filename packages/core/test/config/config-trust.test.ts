@@ -950,7 +950,7 @@ describe("Config under workspace trust: fingerprints", () => {
           directory,
           Effect.gen(function* () {
             const project = yield* ProjectTrust.Service
-            return (yield* project.status()).changed.map((item) => path.relative(folders.repo, item.path)).sort()
+            return ((yield* project.status()).changed ?? []).map((item) => path.relative(folders.repo, item.path)).sort()
           }),
         )
 
