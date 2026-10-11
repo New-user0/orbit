@@ -941,6 +941,16 @@
               }
             }
           },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                }
+              }
+            }
+          },
           "503": {
             "description": "ServiceUnavailableError",
             "content": {
@@ -7173,6 +7183,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "ForbiddenError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenErrorEncoded"
                 }
               }
             }
@@ -13506,6 +13526,40 @@
             "required": ["bypass", "always"],
             "additionalProperties": false,
             "description": "What organization-managed settings leave open about permission prompts. Absent from a server that predates it, which clients read as bypass refused."
+          },
+          "plugins": {
+            "type": "object",
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "block": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "organization": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "description": "Which plugins organization-managed settings allow or block, as selectors that match a package name, an absolute path or a plugin ID. An empty object means no restriction. Absent from a server that predates it, which clients read as no external plugin may load."
+          },
+          "mcp": {
+            "type": "object",
+            "properties": {
+              "managed_only": {
+                "type": "boolean",
+                "description": "Whether organization-managed settings run only the MCP servers they define. When true, adding a server is refused and servers from every other source are ignored."
+              }
+            },
+            "required": ["managed_only"],
+            "additionalProperties": false,
+            "description": "What organization-managed settings say about MCP servers. Absent from a server that predates it, which clients read as unknown."
           }
         },
         "required": ["compatibility"],
@@ -15522,6 +15576,9 @@
             "type": "string"
           },
           "description": {
+            "type": "string"
+          },
+          "preview": {
             "type": "string"
           }
         },

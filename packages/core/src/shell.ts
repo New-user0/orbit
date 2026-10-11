@@ -20,6 +20,8 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { SessionEnvironment } from "./session/environment.js"
 import { SessionSchema } from "./session/schema.js"
 import { Config } from "./config.js"
+import { ManagedNetwork } from "./managed-network.js"
+import { ManagedPolicy } from "./managed-policy.js"
 import { ToolOutput } from "./tool-output.js"
 import { ShellResult } from "./shell/result.js"
 import { ShellSandbox } from "./shell/sandbox.js"
@@ -137,6 +139,7 @@ const layer = () =>
       const hooks = yield* PluginHooks.Service
       const environments = yield* SessionEnvironment.Service
       const config = yield* Config.Service
+      const managed = yield* ManagedPolicy.Service
       const context = yield* Effect.context()
       const runFork = Effect.runForkWith(context)
       const commands = new Map<Shell.ID, Active>()
@@ -286,8 +289,9 @@ const layer = () =>
         const id = Shell.ID.ascending()
         const args = ShellSelect.args(invocation.shell, invocation.command)
         const sandbox = Config.latest(yield* config.entries(), "sandbox")
+        const network = managed.current().restrictions.network
         const sandboxed = ShellSandbox.launch({
-          settings: sandbox ?? {},
+          settings: yield* ManagedNetwork.sandboxSettings(sandbox, network),
           shell: invocation.shell,
           args,
           cwd: invocation.cwd,
@@ -304,6 +308,7 @@ const layer = () =>
             command: invocation.command,
             cause: new Error(sandboxed.reason),
           })
+        if (sandboxed.type === "unwrapped") yield* ManagedNetwork.unbound(network)
         const file = path.join(outputDir, `${id}.out`)
 
         const info: Info = {
@@ -501,6 +506,7 @@ export const node = makeLocationNode({
     Environment.node,
     PluginHooks.node,
     SessionEnvironment.node,
+    ManagedPolicy.node,
     Config.node,
     cleanupNode,
   ],

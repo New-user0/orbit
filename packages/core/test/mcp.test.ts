@@ -1,3 +1,4 @@
+import os from "node:os"
 import path from "node:path"
 import fs from "node:fs/promises"
 import { describe, expect, test } from "bun:test"
@@ -27,6 +28,8 @@ import { Environment } from "@orbit/core/environment/index"
 import { EnvironmentUnavailable } from "@orbit/core/environment/unavailable"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Location } from "@orbit/core/location"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
+import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { Mcp } from "@orbit/core/mcp/index"
 import { McpClient } from "@orbit/core/mcp/client"
 import { McpStdio } from "@orbit/core/mcp/stdio"
@@ -57,6 +60,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   PubSub,
   Ref,
   Schedule,
@@ -290,6 +294,7 @@ function resourceMcpLayer(
     entries?: Config.Interface["entries"]
     subscribe?: Bus.Interface["subscribe"]
     environment?: Layer.Layer<Environment.Service>
+    managed?: Layer.Layer<ManagedPolicy.Service>
     published?: string[]
   },
 ) {
@@ -369,6 +374,7 @@ function resourceMcpLayer(
         }),
         Layer.mock(Credential.Service, {}),
         overrides?.environment ?? hostEnvironmentLayer,
+        overrides?.managed ?? ManagedPolicy.layer,
       ),
     ),
   )
@@ -2175,7 +2181,15 @@ testEffect(Layer.empty).live("keeps MCP config snapshots stable during an in-fli
 
 const shutdownIt = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Bus.node, Integration.node, Credential.node, Form.node, Environment.node, Location.node]),
+    LayerNode.group([
+      Bus.node,
+      Integration.node,
+      Credential.node,
+      Form.node,
+      Environment.node,
+      Location.node,
+      ManagedPolicy.node,
+    ]),
     [
       Location.node.replace(
         Layer.succeed(
@@ -3144,4 +3158,571 @@ describe("MCP hints and permissions", () => {
       }).pipe(Effect.provide(Layer.fresh(permissionStack(mcpService))))
     }),
   )
+})
+
+describe("MCP servers under the organization's lists", () => {
+  const fixture = path.join(import.meta.dir, "fixture/mcp-output-schema.ts")
+  const live = (name: string): ConfigMCP.Local => ({
+    type: "local",
+    command: [process.execPath, fixture, name],
+  })
+  // A command that writes a file when it is started and then exits, so a server that is never spawned leaves no file.
+  const marking = (marker: string): ConfigMCP.Local => ({
+    type: "local",
+    command: [process.execPath, "-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "x")`],
+  })
+  const exists = (file: string) =>
+    Effect.promise(() =>
+      fs.stat(file).then(
+        () => true,
+        () => false,
+      ),
+    )
+  // One policy for the test, shared by the MCP layer and the test body, so a restriction can change while it runs.
+  const withPolicy = <A, E, R>(
+    restrictions: ConfigManaged.Restrictions,
+    body: (policy: ManagedPolicy.Interface) => Effect.Effect<A, E, R>,
+    // Always given, so the layer never falls back to the test config's remote server and its real connection.
+    entries: readonly Entry[] = [],
+    subscribe?: Bus.Interface["subscribe"],
+    // The servers the managed settings files define, which run when `managed_only` is set.
+    mcp?: ManagedPolicy.McpDefinitions,
+  ) =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(ManagedPolicy.layer)
+      const policy = Context.get(context, ManagedPolicy.Service)
+      yield* policy.set("file", { statements: [], restrictions, ...(mcp ? { mcp } : {}) })
+      return yield* body(policy).pipe(
+        Effect.provide(
+          resourceMcpLayer("https://unused.example", undefined, undefined, {
+            managed: Layer.succeedContext(context),
+            entries: () => Effect.succeed([...entries]),
+            ...(subscribe ? { subscribe } : {}),
+          }),
+        ),
+      )
+    }).pipe(Effect.scoped)
+  const names = (service: Mcp.Interface) =>
+    service.servers().pipe(Effect.map((servers) => servers.map((server) => server.name).toSorted()))
+  const waitFor = (check: Effect.Effect<boolean>) =>
+    check.pipe(
+      Effect.filterOrFail((ok) => ok),
+      Effect.retry({ times: 300, schedule: Schedule.spaced("20 millis") }),
+    )
+
+  testEffect(Layer.empty).live("never starts a denied server or one missing from the allow list", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const marker = (name: string) => path.join(tmp.path, name)
+      yield* withPolicy({ mcp: { deny: ["denied"], allow: ["denied", "allowed"] } }, () =>
+        Effect.gen(function* () {
+          const service = yield* Mcp.Service
+          yield* service.transform((editor) => {
+            editor.set("denied", marking(marker("denied")))
+            editor.set("unlisted", marking(marker("unlisted")))
+            editor.set("allowed", marking(marker("allowed")))
+          })
+          // The control: the allowed server was spawned, so the other two had the same chance and were not.
+          yield* waitFor(exists(marker("allowed")))
+          expect(yield* names(service)).toEqual(["allowed"])
+          expect(yield* exists(marker("denied"))).toBe(false)
+          expect(yield* exists(marker("unlisted"))).toBe(false)
+        }),
+      )
+    }),
+  )
+
+  testEffect(Layer.empty).live("also holds a server that the managed document defines to the lists", () =>
+    Effect.gen(function* () {
+      const entries = [
+        new Document({
+          type: "document",
+          scope: "managed",
+          info: new Info({ mcp: new ConfigMCP.Info({ servers: { fromManaged: live("a"), kept: live("b") } }) }),
+        }),
+      ]
+      yield* withPolicy(
+        { mcp: { deny: ["fromManaged"] } },
+        () =>
+          Effect.gen(function* () {
+            const service = yield* Mcp.Service
+            yield* service.reload()
+            expect(yield* names(service)).toEqual(["kept"])
+          }),
+        entries,
+      )
+      yield* withPolicy(
+        { mcp: { allow: ["kept"] } },
+        () =>
+          Effect.gen(function* () {
+            const service = yield* Mcp.Service
+            yield* service.reload()
+            expect(yield* names(service)).toEqual(["kept"])
+          }),
+        entries,
+      )
+    }),
+  )
+
+  testEffect(Layer.empty).live("refuses to add a blocked server and stores nothing", () =>
+    withPolicy({ mcp: { deny: ["denied"], allow: ["denied", "fine"] } }, () =>
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        const denied = yield* service.add("denied", live("a")).pipe(Effect.flip)
+        expect(denied).toBeInstanceOf(Mcp.BlockedError)
+        expect(denied.reason).toBe("denied")
+        const unlisted = yield* service.add("stranger", live("a")).pipe(Effect.flip)
+        expect(unlisted.reason).toBe("not_allowed")
+        yield* service.reload()
+        expect(yield* names(service)).not.toContain("denied")
+        expect(yield* names(service)).not.toContain("stranger")
+        yield* service.add("fine", live("a"))
+        expect(yield* names(service)).toContain("fine")
+      }),
+    ),
+  )
+
+  testEffect(Layer.empty).live("a transform registered after the policy cannot bring a denied server back", () =>
+    withPolicy({ mcp: { deny: ["denied"] } }, () =>
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        yield* service.transform((editor) => editor.set("denied", live("a")))
+        yield* service.transform((editor) => editor.set("denied", live("b")))
+        yield* service.reload()
+        expect(yield* names(service)).not.toContain("denied")
+      }),
+    ),
+  )
+
+  testEffect(Layer.empty).live("stops a running server when a deny arrives and starts it when the deny is lifted", () =>
+    Effect.gen(function* () {
+      // A managed change reaches Mcp the way it does in the server: as config.updated, which the MCP config plugin turns
+      // into a reload. Nothing here calls reload itself.
+      const events = yield* PubSub.unbounded<{ type: string }>()
+      const changed = (policy: ManagedPolicy.Interface, restrictions: ConfigManaged.Restrictions) =>
+        policy
+          .set("file", { statements: [], restrictions })
+          .pipe(Effect.andThen(PubSub.publish(events, { type: "config.updated" })))
+      yield* withPolicy(
+        {},
+        (policy) =>
+          Effect.gen(function* () {
+            const service = yield* Mcp.Service
+            yield* service.transform((editor) => editor.set("flip", live("a")))
+            expect(yield* names(service)).toContain("flip")
+            yield* changed(policy, { mcp: { deny: ["flip"] } })
+            yield* waitFor(names(service).pipe(Effect.map((all) => !all.includes("flip"))))
+            expect(yield* service.tools()).toEqual([])
+            yield* changed(policy, {})
+            yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("flip"))))
+            expect((yield* settled(service, "flip"))?.status).toBe("connected")
+          }),
+        [],
+        (() => Stream.fromPubSub(events)) as Bus.Interface["subscribe"],
+      )
+    }),
+  )
+
+  testEffect(Layer.empty).live("logs a blocked server once when its state changes, by name and reason only", () =>
+    Effect.gen(function* () {
+      const output: unknown[] = []
+      const logger = Logger.make((entry) => {
+        output.push(entry.message)
+      })
+      yield* withPolicy({ mcp: { deny: ["denied"] } }, (policy) =>
+        Effect.gen(function* () {
+          const service = yield* Mcp.Service
+          yield* service.transform((editor) =>
+            editor.set("denied", { type: "remote", url: "https://denied.example/mcp?key=secret" }),
+          )
+          yield* service.reload()
+          yield* service.reload()
+          const blocked = () => output.filter((entry) => JSON.stringify(entry).includes("blocked an MCP server"))
+          expect(blocked()).toHaveLength(1)
+          expect(JSON.stringify(output)).not.toContain("secret")
+          // A different reason is a change; the same one again is not.
+          yield* policy.set("file", { statements: [], restrictions: { mcp: { allow: ["other"] } } })
+          yield* service.reload()
+          yield* service.reload()
+          // The denied server changed reason, so it logs once more; nothing logs twice.
+          expect(blocked()).toHaveLength(2)
+        }),
+      ).pipe(Effect.provide(Logger.layer([logger])))
+    }),
+  )
+
+  describe("under managed.mcp.managed_only", () => {
+    const dir = path.join(import.meta.dir, "fixture")
+    const markerIn = (folder: string, name: string) => path.join(folder, name)
+    const document = (
+      scope: "user" | "project" | "local" | "flag" | "remote" | "managed",
+      servers: Record<string, ConfigMCP.Local>,
+      timeout?: ConfigMCP.Timeout,
+    ) =>
+      new Document({
+        type: "document",
+        scope,
+        info: new Info({ mcp: new ConfigMCP.Info({ servers, ...(timeout ? { timeout } : {}) }) }),
+      })
+    // A server that records each start by appending a byte, so a restart is visible as a second byte.
+    const counting = (marker: string): ConfigMCP.Local => ({
+      type: "local",
+      command: [process.execPath, path.join(dir, "mcp-counting.ts"), marker],
+    })
+    const sleeping: ConfigMCP.Local = {
+      type: "local",
+      command: [process.execPath, "-e", "setTimeout(()=>{},60000)"],
+    }
+    const folder = Effect.acquireRelease(
+      Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "mcp-managed-only-"))),
+      (made) => Effect.promise(() => fs.rm(made, { recursive: true, force: true })),
+    )
+    const size = (file: string) =>
+      Effect.promise(() =>
+        fs.stat(file).then(
+          (info) => info.size,
+          () => 0,
+        ),
+      )
+    // A flush is the control for "never started": every server of the run had the same chance to leave its mark.
+    const settle = Effect.sleep("400 millis")
+
+    type Door = {
+      readonly name: string
+      readonly entries: (marker: string) => Entry[]
+      readonly act?: (service: Mcp.Interface, marker: string) => Effect.Effect<unknown, never, Scope.Scope>
+    }
+    const doors: readonly Door[] = [
+      {
+        name: "a user-scope document",
+        entries: (marker) => [document("user", { door: marking(marker) })],
+      },
+      {
+        name: "a project-scope document, the shape .mcp.json takes",
+        entries: (marker) => [document("project", { door: marking(marker) })],
+      },
+      {
+        name: "a local-scope document",
+        entries: (marker) => [document("local", { door: marking(marker) })],
+      },
+      {
+        name: "a flag-scope document (--mcp-config, --settings, ORBIT_CONFIG_CONTENT)",
+        entries: (marker) => [document("flag", { door: marking(marker) })],
+      },
+      {
+        name: "a remote-scope document (well-known)",
+        entries: (marker) => [document("remote", { door: marking(marker) })],
+      },
+      {
+        name: "a plugin transform that sets a server",
+        entries: () => [],
+        act: (service, marker) => service.transform((editor) => editor.set("door", marking(marker))),
+      },
+      {
+        name: "Mcp.add",
+        entries: () => [],
+        act: (service, marker) => service.add("door", marking(marker)).pipe(Effect.ignore),
+      },
+    ]
+
+    for (const door of doors) {
+      testEffect(Layer.empty).live(`ignores ${door.name}, and still runs the managed server`, () =>
+        Effect.gen(function* () {
+          const made = yield* folder
+          const orgMarker = markerIn(made, "org")
+          const doorMarker = markerIn(made, "door")
+          const managed = { org: marking(orgMarker) }
+          yield* withPolicy(
+            { mcp: { managed_only: true } },
+            () =>
+              Effect.gen(function* () {
+                const service = yield* Mcp.Service
+                if (door.act) yield* door.act(service, doorMarker)
+                yield* service.reload()
+                // The control: the managed server started, so the door's server had the same chance and did not.
+                yield* waitFor(exists(orgMarker))
+                yield* settle
+                expect(yield* exists(doorMarker)).toBe(false)
+                expect(yield* names(service)).toEqual(["org"])
+              }),
+            [document("managed", managed), ...door.entries(doorMarker)],
+            undefined,
+            { servers: managed },
+          )
+        }).pipe(Effect.scoped),
+      )
+      testEffect(Layer.empty).live(`control: ${door.name} starts its server without the flag`, () =>
+        Effect.gen(function* () {
+          const made = yield* folder
+          const orgMarker = markerIn(made, "org")
+          const doorMarker = markerIn(made, "door")
+          const managed = { org: marking(orgMarker) }
+          yield* withPolicy(
+            {},
+            () =>
+              Effect.gen(function* () {
+                const service = yield* Mcp.Service
+                if (door.act) yield* door.act(service, doorMarker)
+                yield* service.reload()
+                yield* waitFor(exists(doorMarker))
+                expect(yield* names(service)).toEqual(["door", "org"])
+              }),
+            [document("managed", managed), ...door.entries(doorMarker)],
+            undefined,
+            { servers: managed },
+          )
+        }).pipe(Effect.scoped),
+      )
+    }
+
+    // The doors that later tasks open. Each owner turns its row on; until then the row only names who owes it.
+    test.todo("inline agent servers start only for an agent the managed document defines (agents-extensibility-9)", () => {})
+    test.todo("a plugin manifest's declarative servers do not start (agents-extensibility-20)", () => {})
+    test.todo("no .mcp.json approval is asked and nothing starts (agents-extensibility-23)", () => {})
+    test.todo("--strict-mcp-config together with the flag stops the run (clients-ux-17)", () => {})
+
+    testEffect(Layer.empty).live("Mcp.add refuses a replacement of a managed name, and the managed command keeps running", () =>
+      Effect.gen(function* () {
+        const made = yield* folder
+        const managed = { org: marking(markerIn(made, "org")) }
+        yield* withPolicy(
+          { mcp: { managed_only: true } },
+          () =>
+            Effect.gen(function* () {
+              const service = yield* Mcp.Service
+              const refused = yield* service.add("org", marking(markerIn(made, "replacement"))).pipe(Effect.flip)
+              expect(refused).toBeInstanceOf(Mcp.BlockedError)
+              expect(refused.reason).toBe("managed_only")
+              expect(refused.message).toContain("only the MCP servers they define")
+              yield* service.reload()
+              yield* waitFor(exists(markerIn(made, "org")))
+              yield* settle
+              expect(yield* exists(markerIn(made, "replacement"))).toBe(false)
+            }),
+          [document("managed", managed)],
+          undefined,
+          { servers: managed },
+        )
+      }).pipe(Effect.scoped),
+    )
+
+    testEffect(Layer.empty).live("a transform that sets or edits a managed name cannot change what runs", () =>
+      Effect.gen(function* () {
+        const made = yield* folder
+        const managed = { org: marking(markerIn(made, "org")) }
+        yield* withPolicy(
+          { mcp: { managed_only: true } },
+          () =>
+            Effect.gen(function* () {
+              const service = yield* Mcp.Service
+              yield* service.transform((editor) => editor.set("org", marking(markerIn(made, "set"))))
+              yield* service.transform((editor) =>
+                editor.update("org", (server) => {
+                  if (server.type === "local") server.command = [...marking(markerIn(made, "edited")).command]
+                }),
+              )
+              yield* service.reload()
+              yield* waitFor(exists(markerIn(made, "org")))
+              yield* settle
+              expect(yield* exists(markerIn(made, "set"))).toBe(false)
+              expect(yield* exists(markerIn(made, "edited"))).toBe(false)
+            }),
+          [document("managed", managed)],
+          undefined,
+          { servers: managed },
+        )
+      }).pipe(Effect.scoped),
+    )
+
+    testEffect(Layer.empty).live("still holds the managed servers to the organization's lists", () =>
+      Effect.gen(function* () {
+        const made = yield* folder
+        const managed = { org: marking(markerIn(made, "org")), other: marking(markerIn(made, "other")) }
+        const run = (restrictions: ConfigManaged.Restrictions, expected: readonly string[]) =>
+          withPolicy(
+            restrictions,
+            () =>
+              Effect.gen(function* () {
+                const service = yield* Mcp.Service
+                yield* service.reload()
+                yield* settle
+                expect(yield* names(service)).toEqual([...expected])
+              }),
+            [document("managed", managed)],
+            undefined,
+            { servers: managed },
+          )
+        yield* run({ mcp: { managed_only: true } }, ["org", "other"])
+        yield* run({ mcp: { managed_only: true, deny: ["org"] } }, ["other"])
+        yield* run({ mcp: { managed_only: true, allow: [] } }, [])
+      }).pipe(Effect.scoped),
+    )
+
+    testEffect(Layer.empty).live("reports managed_only before a deny when a server is added", () =>
+      withPolicy({ mcp: { managed_only: true, deny: ["denied"] } }, () =>
+        Effect.gen(function* () {
+          const service = yield* Mcp.Service
+          const refused = yield* service.add("denied", live("a")).pipe(Effect.flip)
+          expect(refused.reason).toBe("managed_only")
+        }),
+      ),
+    )
+
+    testEffect(Layer.empty).live("names the organization in the refusal when managed settings give one", () =>
+      Effect.gen(function* () {
+        const context = yield* Layer.build(ManagedPolicy.layer)
+        const policy = Context.get(context, ManagedPolicy.Service)
+        yield* policy.set("file", {
+          statements: [],
+          restrictions: { mcp: { managed_only: true } },
+          organization: "Acme",
+        })
+        const refused = yield* Mcp.Service.use((service) => service.add("x", live("a"))).pipe(
+          Effect.flip,
+          Effect.provide(
+            resourceMcpLayer("https://unused.example", undefined, undefined, {
+              managed: Layer.succeedContext(context),
+              entries: () => Effect.succeed([]),
+            }),
+          ),
+        )
+        expect(refused.message).toContain("Acme's managed settings allow only the MCP servers they define")
+      }).pipe(Effect.scoped),
+    )
+
+    testEffect(Layer.empty).live("a live flip stops other servers, keeps a managed one running, and brings them back", () =>
+      Effect.gen(function* () {
+        const made = yield* folder
+        const orgMarker = markerIn(made, "org")
+        const userMarker = markerIn(made, "user")
+        const managed = { org: counting(orgMarker) }
+        const entries = [document("managed", managed), document("user", { user: counting(userMarker) })]
+        const events = yield* PubSub.unbounded<{ type: string }>()
+        const changed = (policy: ManagedPolicy.Interface, restrictions: ConfigManaged.Restrictions) =>
+          policy
+            .set("file", { statements: [], restrictions, mcp: { servers: managed } })
+            .pipe(Effect.andThen(PubSub.publish(events, { type: "config.updated" })))
+        yield* withPolicy(
+          {},
+          (policy) =>
+            Effect.gen(function* () {
+              const service = yield* Mcp.Service
+              yield* service.reload()
+              yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("user") && all.includes("org"))))
+              yield* waitFor(size(orgMarker).pipe(Effect.map((bytes) => bytes === 1)))
+              const toolServers = service
+                .tools()
+                .pipe(Effect.map((all) => [...new Set(all.map((tool) => String(tool.server)))].sort()))
+              yield* waitFor(toolServers.pipe(Effect.map((all) => all.length === 2)))
+              yield* changed(policy, { mcp: { managed_only: true } })
+              yield* waitFor(names(service).pipe(Effect.map((all) => !all.includes("user"))))
+              expect(yield* names(service)).toEqual(["org"])
+              expect(yield* toolServers).toEqual(["org"])
+              // No restart: the managed server's definition did not change, so its process is the one that was started.
+              yield* settle
+              expect(yield* size(orgMarker)).toBe(1)
+              yield* changed(policy, {})
+              yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("user"))))
+              yield* waitFor(toolServers.pipe(Effect.map((all) => all.length === 2)))
+              yield* settle
+              expect(yield* size(orgMarker)).toBe(1)
+            }),
+          entries,
+          (() => Stream.fromPubSub(events)) as Bus.Interface["subscribe"],
+          { servers: managed },
+        )
+      }).pipe(Effect.scoped),
+      20_000,
+    )
+
+    testEffect(Layer.empty).live("keeps a server removed at run time out until restart", () =>
+      Effect.gen(function* () {
+        const made = yield* folder
+        const managed = { org: marking(markerIn(made, "org")) }
+        yield* withPolicy(
+          { mcp: { managed_only: true } },
+          () =>
+            Effect.gen(function* () {
+              const service = yield* Mcp.Service
+              yield* service.reload()
+              yield* waitFor(names(service).pipe(Effect.map((all) => all.includes("org"))))
+              yield* service.remove("org")
+              yield* service.reload()
+              expect(yield* names(service)).toEqual([])
+            }),
+          [document("managed", managed)],
+          undefined,
+          { servers: managed },
+        )
+      }).pipe(Effect.scoped),
+    )
+
+    testEffect(Layer.empty).live("shapes a managed definition from the managed timeout and never a person's", () =>
+      Effect.gen(function* () {
+        const fast = new ConfigMCP.Timeout({ startup: 1 })
+        const run = (
+          entries: Entry[],
+          mcp: ManagedPolicy.McpDefinitions,
+          restrictions: ConfigManaged.Restrictions,
+          expected: "failed" | "pending",
+        ) =>
+          withPolicy(
+            restrictions,
+            () =>
+              Effect.gen(function* () {
+                const service = yield* Mcp.Service
+                yield* service.reload()
+                const status = () =>
+                  service.servers().pipe(Effect.map((all) => all.find((server) => server.name === "org")?.status.status))
+                if (expected === "failed") return yield* waitFor(status().pipe(Effect.map((now) => now === "failed")))
+                yield* Effect.sleep("1500 millis")
+                expect(yield* status()).toBe("pending")
+              }),
+            entries,
+            undefined,
+            mcp,
+          )
+        const managed = { org: sleeping }
+        // A person's timeout shapes a managed server without the flag (the control) and not with it.
+        yield* run([document("managed", managed), document("user", {}, fast)], { servers: managed }, {}, "failed")
+        yield* run(
+          [document("managed", managed), document("user", {}, fast)],
+          { servers: managed },
+          { mcp: { managed_only: true } },
+          "pending",
+        )
+        // The managed timeout reaches the definition.
+        yield* run(
+          [document("managed", managed, fast)],
+          { servers: managed, timeout: fast },
+          { mcp: { managed_only: true } },
+          "failed",
+        )
+      }).pipe(Effect.scoped),
+      20_000,
+    )
+
+    testEffect(Layer.empty).live("logs each dropped server once, by name and reason, never its URL", () =>
+      Effect.gen(function* () {
+        const output: unknown[] = []
+        const logger = Logger.make((entry) => {
+          output.push(entry.message)
+        })
+        yield* withPolicy({ mcp: { managed_only: true } }, () =>
+          Effect.gen(function* () {
+            const service = yield* Mcp.Service
+            yield* service.transform((editor) =>
+              editor.set("dropped", { type: "remote", url: "https://dropped.example/mcp?key=secret" }),
+            )
+            yield* service.reload()
+            yield* service.reload()
+            const lines = output.filter((entry) => JSON.stringify(entry).includes("blocked an MCP server"))
+            expect(lines).toHaveLength(1)
+            expect(JSON.stringify(lines)).toContain("managed_only")
+            expect(JSON.stringify(output)).not.toContain("secret")
+          }),
+        ).pipe(Effect.provide(Logger.layer([logger])))
+      }),
+    )
+  })
 })

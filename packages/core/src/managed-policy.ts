@@ -2,12 +2,19 @@ export * as ManagedPolicy from "./managed-policy.js"
 
 import { ConfigManaged } from "@orbit/schema/config/managed"
 import { ConfigPolicy } from "@orbit/schema/config/policy"
+import type { Mcp } from "@orbit/schema/mcp"
 import type { Permission } from "@orbit/schema/permission"
 import { Context, Effect, Layer } from "effect"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 
 /** Where organization policy comes from: the managed settings files on disk, or the connected Console. */
 export type Source = "file" | "connection"
+
+/** The MCP servers the managed settings files define, and the timeout defaults they set. */
+export interface McpDefinitions {
+  readonly servers: Readonly<Record<string, Mcp.ServerConfig>>
+  readonly timeout?: Mcp.TimeoutConfig
+}
 
 /** What one managed source supplies. */
 export interface State {
@@ -18,6 +25,8 @@ export interface State {
   readonly agentRules?: Readonly<Record<string, Permission.Ruleset>>
   /** Restrictions from the managed settings files. Only the file source supplies them. */
   readonly restrictions?: ConfigManaged.Restrictions
+  /** The MCP servers the managed settings files define. Only the file source supplies them. */
+  readonly mcp?: McpDefinitions
   /** Organization name for denial messages, when the source knows it. */
   readonly organization?: string
 }
@@ -29,6 +38,8 @@ export interface Current {
   readonly rules: Permission.Ruleset
   readonly agentRules: Readonly<Record<string, Permission.Ruleset>>
   readonly restrictions: ConfigManaged.Restrictions
+  /** The MCP servers the managed settings files define; what runs when `restrictions.mcp.managed_only` is set. */
+  readonly mcp: McpDefinitions
   /** The file's organization, else the connection's. */
   readonly organization?: string
 }
@@ -44,7 +55,7 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Manag
 
 const empty: State = { statements: [] }
 
-const layer = Layer.sync(Service, () => {
+export const layer = Layer.sync(Service, () => {
   const sources: Record<Source, State> = { file: empty, connection: empty }
   return Service.of({
     current: () => {
@@ -54,6 +65,7 @@ const layer = Layer.sync(Service, () => {
         rules: sources.file.rules ?? [],
         agentRules: sources.file.agentRules ?? {},
         restrictions: sources.file.restrictions ?? {},
+        mcp: sources.file.mcp ?? { servers: {} },
         ...(organization === undefined ? {} : { organization }),
       }
     },

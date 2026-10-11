@@ -41,6 +41,7 @@ import { define } from "@orbit/plugin/effect/plugin"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
+import { ToolScheduler } from "@orbit/core/session/runner/tool-scheduler"
 import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { ToolOutput } from "@orbit/core/tool-output"
@@ -49,11 +50,16 @@ import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tmpdir, tmpdirScoped } from "./fixture/tmpdir"
 import { tempGlobalLayer } from "./fixture/global"
 import { ShellSandbox } from "@orbit/core/shell/sandbox"
+import { ManagedPolicy } from "@orbit/core/managed-policy"
+import { which } from "@orbit/core/util/which"
+import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { offlineModels } from "./fixture/models"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
 import { Expected } from "./lib/session-message"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
+
+type ManagedNetwork = NonNullable<ConfigManaged.Restrictions["network"]>
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = Model.Ref.make({ id: Model.ID.make("test"), providerID: Provider.ID.make("test") })
@@ -145,6 +151,7 @@ const shellPluginSupervisor = makeLocationNode({
     Config.node,
     Environment.node,
     FileAccess.node,
+    Location.node,
     Permission.node,
     Session.node,
     Job.node,
@@ -166,6 +173,7 @@ const nodes = LayerNode.group([
   FSUtil.node,
   Global.node,
   SdkPlugins.node,
+  ManagedPolicy.node,
 ])
 const replacements = [
   SessionExecution.node.replace(executionNode),
@@ -921,7 +929,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            expect(yield* toolTraits(registry, "Bash", { command: "echo", description: "echo" })).toMatchObject({
+            expect(yield* toolTraits(registry, "Bash", { command: "touch x", description: "touch" })).toMatchObject({
               readOnly: false,
               concurrencySafe: false,
               cancelSiblingsOnFailure: true,
@@ -931,6 +939,125 @@ describe("ShellTool", () => {
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+  )
+
+  // The positive rows need a PATH the read-only analysis trusts (no empty or relative entry); a Windows Path often has
+  // one, and Linux runs them (tools/linux-test).
+  const cleanPath = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .every((entry) => entry !== "" && path.isAbsolute(entry))
+  const wiring = cleanPath ? it.live : it.live.skip
+  const bashOnly = isWindows ? it.live.skip : wiring
+
+  wiring("schedules a call from its command alone, before any hook", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("sh"))
+            const hooks = yield* PluginHooks.Service
+            yield* hooks.register("tool", "execute.before", (event) =>
+              Effect.sync(() => {
+                ;(event.input as Record<string, unknown>).command = "touch x"
+              }),
+            )
+            const safe = (input: unknown) => toolTraits(registry, "Bash", input)
+            expect(yield* safe({ command: "ls" })).toMatchObject({ concurrencySafe: true, cancelSiblingsOnFailure: true })
+            // The background flag, a timeout and a workdir do not change the answer.
+            expect(yield* safe({ command: "ls", run_in_background: true })).toMatchObject({ concurrencySafe: true })
+            expect(yield* safe({ command: "ls", timeout: 5, workdir: "." })).toMatchObject({ concurrencySafe: true })
+            expect(yield* safe({ command: "touch x" })).toMatchObject({
+              concurrencySafe: false,
+              cancelSiblingsOnFailure: true,
+            })
+            // Input the schema rejects is conservative, and still cancels its siblings.
+            expect(yield* safe({ command: 5 })).toMatchObject({ concurrencySafe: false, cancelSiblingsOnFailure: true })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // Needs a real PowerShell: elsewhere "powershell" falls back to a bash shell, where `ls` is a read-only command.
+  ;(isWindows ? it.live : it.live.skip)("schedules a PowerShell call alone, whatever the command", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("powershell"))
+            for (const command of ["Get-ChildItem", "ls", "Get-Content a.txt"])
+              expect(yield* toolTraits(registry, "Bash", { command })).toMatchObject({
+                concurrencySafe: false,
+                cancelSiblingsOnFailure: true,
+              })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // Real `sleep` calls through the real scheduler, with the registry's traits: read-only calls overlap, a write does not.
+  bashOnly("runs read-only calls together and a write call alone", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("sh"))
+            yield* (yield* Agent.Service).transform((editor) =>
+              editor.update(toolIdentity.agent, (agent) => {
+                agent.permissions = []
+              }),
+            )
+            const events: string[] = []
+            const hooks = yield* PluginHooks.Service
+            yield* hooks.register("tool", "execute.before", (event) =>
+              Effect.sync(() => void events.push(`start ${(event.input as { command: string }).command}`)),
+            )
+            yield* hooks.register("tool", "execute.after", (event) =>
+              Effect.sync(() => void events.push(`end ${(event.input as { command: string }).command}`)),
+            )
+            const batch = (commands: string[]) =>
+              Effect.gen(function* () {
+                events.length = 0
+                const scheduler = ToolScheduler.make<string>({ maxConcurrency: 10 })
+                const entries = commands.map((command, index) => ({
+                  command,
+                  entry: scheduler.register(`${index}`),
+                }))
+                const tools = yield* registry.snapshot()
+                yield* Effect.forEach(
+                  entries,
+                  ({ command, entry }, index) => {
+                    const item = call({ command }, `call-${index}`)
+                    return tools.traits({ call: item.call }).pipe(
+                      Effect.flatMap((traits) => scheduler.run(entry, traits, tools.execute(item))),
+                      Effect.ensuring(scheduler.release(entry)),
+                    )
+                  },
+                  { concurrency: "unbounded", discard: true },
+                )
+                return events.map((event) => event.replace(/ \d+$/, ""))
+              })
+            expect(yield* batch(["sleep 1", "sleep 1"])).toEqual(["start sleep", "start sleep", "end sleep", "end sleep"])
+            expect(yield* batch(["sleep 1", "touch x"])).toEqual(["start sleep", "end sleep", "start touch x", "end touch x"])
+            expect(yield* batch(["touch y", "sleep 1"])).toEqual(["start touch y", "end touch y", "start sleep", "end sleep"])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+    { timeout: 20_000 },
   )
 
   it.live("returns both parallel CodeMode shell results", () =>
@@ -2343,6 +2470,79 @@ describe("ShellTool", () => {
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
+  )
+
+  // `echo` stands in for the sandbox tool, so the command that runs prints the wrapper's own arguments: bubblewrap gets
+  // --unshare-net exactly when the network is off.
+  const sandboxArguments = (network: ManagedNetwork | undefined) =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(tmp.path, "orbit.json"),
+              JSON.stringify({ sandbox: { enabled: true, network: true } }),
+            ),
+          )
+          const previous = { host: { ...ShellSandbox.host }, tool: ShellSandbox.TOOL.linux }
+          Object.assign(ShellSandbox.host, { platform: "linux", release: "6.1.0-generic", env: {}, interop: false })
+          ShellSandbox.TOOL.linux = "echo"
+          return yield* withSession(tmp.path, (registry) =>
+            Effect.gen(function* () {
+              const policy = yield* ManagedPolicy.Service
+              yield* policy.set("file", { statements: [], restrictions: network ? { network } : {} })
+              const settled = yield* executeTool(registry, call({ command: helloCommand }, "call-offline"))
+              expect(settled.status).toBe("completed")
+              return (settled.content ?? []).map((part) => (part.type === "text" ? part.text : "")).join("")
+            }),
+          ).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                Object.assign(ShellSandbox.host, previous.host)
+                if (previous.tool === undefined) delete ShellSandbox.TOOL.linux
+                else ShellSandbox.TOOL.linux = previous.tool
+              }),
+            ),
+          )
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    )
+  const sandboxTest = isWindows ? it.live.skip : it.live
+  for (const [name, network, forced] of [
+    ["denied_domains", { denied_domains: ["x.example"] }, true],
+    ["an empty allowed_domains", { allowed_domains: [] }, true],
+    ["allow_managed_domains_only", { allow_managed_domains_only: true }, true],
+    ["no domain settings (control)", undefined, false],
+  ] as const)
+    sandboxTest(`launches a sandboxed command with the network ${forced ? "off" : "on"} under ${name}`, () =>
+      Effect.gen(function* () {
+        expect((yield* sandboxArguments(network)).includes("--unshare-net")).toBe(forced)
+      }),
+    )
+
+  // Runs the real thing where bubblewrap works. The sandbox mounts its own /proc, so the interfaces listed there are those
+  // of the sandbox's network namespace: only the loopback means the network is off.
+  const bwrapTest =
+    process.platform === "linux" && which("bwrap") !== null && Bun.spawnSync(["bwrap", "--dev-bind", "/", "/", "true"]).exitCode === 0
+      ? it.live
+      : it.live.skip
+  bwrapTest("has no network interface but the loopback when domain settings force the network off", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() =>
+        Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ sandbox: { enabled: true, network: true } })),
+      )
+      const settled = yield* withSession(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          const policy = yield* ManagedPolicy.Service
+          yield* policy.set("file", { statements: [], restrictions: { network: { allow_managed_domains_only: true } } })
+          return yield* executeTool(registry, call({ command: "ls /proc/net/dev_snmp6" }, "call-bwrap"))
+        }),
+      )
+      expect(settled.content?.map((part) => (part.type === "text" ? part.text.trim() : ""))).toEqual(["lo"])
+    }),
   )
 
   it.live("flags no failure for a permission denial", () =>

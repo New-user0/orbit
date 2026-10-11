@@ -31,6 +31,8 @@ type Spec = {
   // Option parsing ends at the first operand, which starts the command that the tool runs.
   stop?: true
   exact?: true
+  // git: an unknown `-5` is the count shorthand, and `--sort=-key` is a reverse sort.
+  git?: true
   doubleDash?: false
   // Returns true to refuse.
   check?: (args: string[]) => boolean
@@ -265,6 +267,8 @@ const BASH: Record<string, Spec> = {
 type PsSpec = {
   flags: "any" | "none" | ReadonlySet<string>
   native?: true
+  // Arguments go to this program's validator (git, gh, docker, dotnet) instead of the flag loop below.
+  program?: "git" | "gh" | "docker" | "dotnet"
   // The first word of the arguments must be this, and arguments after it are free (route print).
   first?: string
   // Parameters whose value is a path that is read, and parameters whose value is some other value.
@@ -388,6 +392,10 @@ const POWERSHELL: Record<string, PsSpec> = {
     reads: true,
   },
   tree: { flags: names("/f /a /q /l"), native: true, reads: true, default: "." },
+  git: { flags: "any", native: true, program: "git" },
+  gh: { flags: "any", native: true, program: "gh" },
+  docker: { flags: "any", native: true, program: "docker" },
+  dotnet: { flags: "any", native: true, program: "dotnet" },
 }
 
 const COMMON = names("verbose debug erroraction warningaction informationaction progressaction errorvariable warningvariable informationvariable outvariable outbuffer pipelinevariable")
@@ -495,6 +503,7 @@ function scanFlags(spec: Spec, args: string[]) {
         inline = fused[2]
         kind = table[name]
       } else {
+        if (spec.git && /^-\d+$/.test(token)) continue
         if (token.startsWith("--") || equals >= 0 || token.length < 3) return undefined
         // A bundle of single-letter flags passes only when every letter is known and takes no value.
         const bundle = [...token.slice(1)].every((letter) => Object.hasOwn(table, `-${letter}`) && table[`-${letter}`] === "")
@@ -514,7 +523,8 @@ function scanFlags(spec: Spec, args: string[]) {
       continue
     }
     const value = inline ?? args[++index]
-    if (value === undefined || (inline === undefined && isFlag(value)) || !valid(value, kind)) return undefined
+    const reversed = spec.git && name === "--sort" && inline !== undefined && /^-[A-Za-z]/.test(inline)
+    if (value === undefined || (inline === undefined && isFlag(value)) || (!reversed && !valid(value, kind))) return undefined
     if (kind === "path" || kind === "patterns") reads.push(value)
     if (kind === "pattern" || kind === "patterns") pattern = true
     seen.push({ name, value })
@@ -551,6 +561,279 @@ function jq(args: string[]): Verdict {
   }
   if (operands.length === 0) return refuse("jq:filter")
   return { ok: true, reads: operands.slice(1) }
+}
+
+// ---- git, gh, docker and dotnet: one validator each, shared by bash and PowerShell. `args` is the argv after the program
+// name. Subcommand words match exactly (case-sensitive). Reasons are fixed codes, never command text.
+
+// Flag groups of git's revision and diff family.
+const REFS = "--all --branches --tags --remotes"
+const DATES = "--since= --after= --until= --before="
+const DISPLAY = "--oneline --graph --decorate --no-decorate --relative-date --date="
+const COUNT = "--max-count=number -n=number"
+const STAT = "--stat --numstat --shortstat --name-only --name-status"
+const COLOR = "--color --no-color"
+const PATCH = "--patch -p --no-patch --no-ext-diff -s"
+const PEOPLE = "--author= --committer= --grep="
+// `-S`, `-G` and `-O` take a required value. `--abbrev` and `--relative` take one only when attached with `=`.
+const DIFF_VALUES = "--word-diff-regex= --ws-error-highlight= --diff-algorithm= --relative=optional --diff-filter= -S= -G= -O=path --abbrev=optional --inter-hunk-context=number"
+
+const gitSpec = (flags: string, more: Partial<Spec> = {}): Spec => ({ flags: table(flags), git: true, ...more })
+
+// Keyed by the subcommand word, or by two words where the second picks a read-only form. `ls-remote` is absent on purpose:
+// a folder's .git/config can name a program for it to run.
+const GIT: Record<string, Spec> = {
+  diff: gitSpec(
+    `${STAT} ${COLOR} --dirstat --summary --patch-with-stat --word-diff --color-words --no-renames --no-ext-diff --check --full-index --binary --break-rewrites --find-renames --find-copies --find-copies-harder --irreversible-delete --histogram --patience --minimal --ignore-space-at-eol --ignore-space-change --ignore-all-space --ignore-blank-lines --function-context --exit-code --quiet --cached --staged --pickaxe-regex --pickaxe-all --no-index -p -u -s -M -C -B -D -l -R ${DIFF_VALUES}`,
+  ),
+  log: gitSpec(
+    `${DISPLAY} ${REFS} ${STAT} ${COLOR} ${PATCH} --abbrev-commit --full-history --dense --sparse --simplify-merges --ancestry-path --source --first-parent --merges --no-merges --reverse --walk-reflogs --no-min-parents --no-max-parents --follow --no-walk --left-right --cherry-mark --cherry-pick --boundary --topo-order --date-order --author-date-order --pickaxe-regex --pickaxe-all ${DATES} ${COUNT} ${PEOPLE} --pretty= --format= --diff-filter= -S= -G= --skip=number --max-age=number --min-age=number`,
+  ),
+  show: gitSpec(
+    `${DISPLAY} ${STAT} ${COLOR} ${PATCH} --abbrev-commit --word-diff --color-words --first-parent --raw -m --quiet --word-diff-regex= --pretty= --format= --diff-filter=`,
+  ),
+  shortlog: gitSpec(`${REFS} -s --summary -n --numbered -e --email -c --committer --no-merges ${DATES} --group= --format= --author=`),
+  // The first word, when there is one, is `show` or `list`: the other forms delete or expire entries.
+  reflog: gitSpec(`${DISPLAY} ${REFS} ${DATES} ${COUNT} ${PEOPLE}`, {
+    check: (args) => args[0] !== undefined && !isFlag(args[0]) && args[0] !== "show" && args[0] !== "list",
+  }),
+  "stash list": gitSpec(`${DISPLAY} ${REFS} ${COUNT}`),
+  "stash show": gitSpec(`${STAT} ${COLOR} ${PATCH} --word-diff --word-diff-regex= --diff-filter= --abbrev=optional`),
+  status: gitSpec(
+    "--short -s --branch -b --porcelain --long --verbose -v --ignored --column --no-column --ahead-behind --no-ahead-behind --renames --no-renames --untracked-files= -u= --ignore-submodules= --find-renames= -M=",
+  ),
+  blame: gitSpec(
+    `${COLOR} --porcelain -p --line-porcelain --incremental --root --show-stats --show-name --show-number -n --show-email -e -f -w -M -C --score-debug -s -l -t -L= --date= --ignore-rev= --ignore-revs-file=path --abbrev=optional`,
+  ),
+  "ls-files": gitSpec(
+    "--cached -c --deleted -d --modified -m --others -o --ignored -i --stage -s --killed -k --unmerged -u --directory --no-empty-directory --eol --full-name --debug -z -t -v -f --exclude-standard --error-unmatch --recurse-submodules --exclude= -x= --exclude-from=path -X=path --exclude-per-directory= --abbrev=optional",
+  ),
+  // Only `--get`, as those two words in that order: --list and --get-regexp print every value, tokens included.
+  "config --get": gitSpec(
+    "--local --global --system --worktree --bool --int --bool-or-int --path --expiry-date -z --null --name-only --show-origin --show-scope --default= --type=",
+  ),
+  // `show` without `-n` contacts the remote, which can start a program that the folder's .git/config names.
+  "remote show": gitSpec("-n", {
+    operands: { min: 1, max: 1 },
+    check: (args) => {
+      const name = args.find((arg) => arg !== "-n")
+      return !args.includes("-n") || name === undefined || !/^[A-Za-z0-9_-]+$/.test(name)
+    },
+  }),
+  remote: gitSpec("-v --verbose", { operands: { max: 0 } }),
+  "merge-base": gitSpec("--is-ancestor --fork-point --octopus --independent --all"),
+  "rev-parse": gitSpec(
+    "--verify --abbrev-ref --symbolic --symbolic-full-name --show-toplevel --show-cdup --show-prefix --git-dir --git-common-dir --absolute-git-dir --show-superproject-working-tree --is-inside-work-tree --is-inside-git-dir --is-bare-repository --is-shallow-repository --is-shallow-update --path-prefix --short=",
+  ),
+  "rev-list": gitSpec(
+    `${REFS} --count --reverse --first-parent --ancestry-path --merges --no-merges --no-min-parents --no-max-parents --walk-reflogs --oneline --abbrev-commit --full-history --dense --sparse --source --graph ${DATES} ${COUNT} ${PEOPLE} --min-parents=number --max-parents=number --skip=number --max-age=number --min-age=number --abbrev=optional --pretty= --format=`,
+  ),
+  describe: gitSpec("--tags --long --always --contains --first-match --exact-match --dirty --broken --match= --exclude= --abbrev=optional --candidates=number"),
+  // Never --batch, which dumps any object named on stdin.
+  "cat-file": gitSpec("-t -s -p -e --batch-check --allow-undetermined-type"),
+  "for-each-ref": gitSpec("--format= --sort= --contains= --no-contains= --merged= --no-merged= --points-at= --count=number"),
+  // Never -O or --open-files-in-pager, which starts a program.
+  grep: gitSpec(
+    "-E --extended-regexp -G --basic-regexp -F --fixed-strings -P --perl-regexp -i --ignore-case -v --invert-match -w --word-regexp -n --line-number -c --count -l --files-with-matches -L --files-without-match -h -H --heading --break --full-name --color --no-color -o --only-matching --and --or --not --untracked --no-index --recurse-submodules --cached -q --quiet -e=pattern -A=number --after-context=number -B=number --before-context=number -C=number --context=number --max-depth=number --threads=number",
+  ),
+  "worktree list": gitSpec("--porcelain -v --verbose --expire="),
+  tag: gitSpec("-l --list --column --no-column -i --ignore-case -n=number --contains= --no-contains= --merged= --no-merged= --sort= --format= --points-at=", {
+    check: (args) => creates(args, new Set(["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format", "-n"]), false),
+  }),
+  // Never --format. `--abbrev` is not in the skip set: git takes its value only when attached, so `--abbrev 7` makes a branch.
+  branch: gitSpec(
+    "-l --list -a --all -r --remotes -v -vv --verbose --color --no-color --column --no-column --no-abbrev --show-current -i --ignore-case --merged --no-merged --abbrev=optional --contains= --no-contains= --points-at= --sort=",
+    { check: (args) => creates(args, new Set(["--contains", "--no-contains", "--points-at", "--sort"]), true) },
+  ),
+}
+
+// For `tag` and `branch`: an operand names something to create unless the command is in list mode (`-l`, `--list` or a
+// short bundle with an `l`). `skip` lists the flags whose value is the next word. Returns true to refuse.
+function creates(args: string[], skip: Set<string>, merged: boolean) {
+  let listing = false
+  let operands = false
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]
+    if (!operands && arg === "--") {
+      operands = true
+      continue
+    }
+    if (!operands && arg.startsWith("-") && arg.length > 1) {
+      if (arg === "-l" || arg === "--list" || (!arg.startsWith("--") && !arg.includes("=") && arg.length > 2 && arg.includes("l"))) listing = true
+      if (skip.has(arg)) index++
+      // The optional commit of --merged.
+      else if (merged && (arg === "--merged" || arg === "--no-merged") && args[index + 1] !== undefined && !args[index + 1].startsWith("-")) index++
+      continue
+    }
+    if (!listing) return true
+  }
+  return false
+}
+
+const GIT_GLOBAL = new Set(["--no-pager", "-P", "--no-optional-locks"])
+
+// Every global option that is not listed refuses: -c, -C, --exec-path, --config-env, --git-dir, --work-tree, -p,
+// --paginate, --attr-source and the rest. Read-only git still runs what the folder's own .git/config names (core.fsmonitor,
+// diff.external, textconv drivers); the choice of a trusted-folder gate or -c overrides lands here, in this one function.
+function git(args: string[], ctx: ShellAnalysis.Context): Verdict {
+  if (args.length === 0 || (args.length === 1 && args[0] === "--version")) return { ok: true, reads: [] }
+  let start = 0
+  while (start < args.length && args[start].startsWith("-")) {
+    if (!GIT_GLOBAL.has(args[start])) return refuse("git:global")
+    start++
+  }
+  const sub = args[start]
+  if (sub === undefined) return refuse("git:subcommand")
+  const two = args[start + 1] === undefined ? undefined : `${sub} ${args[start + 1]}`
+  const key = two !== undefined && Object.hasOwn(GIT, two) ? two : sub
+  if (!Object.hasOwn(GIT, key)) return refuse("git:subcommand")
+  const rest = args.slice(start + (key === sub ? 1 : 2))
+  const spec = GIT[key]
+  const scanned = scanFlags(spec, rest)
+  if (!scanned) return refuse("git:flag")
+  if (spec.check?.(rest)) return refuse("git:operand")
+  const limits = spec.operands
+  if ((limits?.max !== undefined && scanned.operands.length > limits.max) || (limits?.min !== undefined && scanned.operands.length < limits.min))
+    return refuse("git:operand")
+  const noIndex = scanned.seen.some((item) => item.name === "--no-index")
+  // --no-index reads plain files: the first two operands of diff, every operand after the pattern of grep.
+  // diff also switches to no-index mode on its own for two words wherever `--` sits (and, outside a repository, for any two),
+  // so its first two operands, words after `--` included, are listed as read paths even without the flag.
+  const files =
+    key === "diff"
+      ? scanned.operands.slice(0, 2)
+      : noIndex && key === "grep"
+        ? scanned.pattern
+          ? scanned.operands
+          : scanned.operands.slice(1)
+        : []
+  return { ok: true, reads: [...scanned.reads, ...files].map((path) => expandHome(path, ctx)) }
+}
+
+// ---- gh
+
+const REPO = "--repo= -R="
+const LIMIT = "--limit=number -L=number"
+const ghSpec = (flags: string): Spec => ({ flags: table(flags) })
+
+// No `api`, no `auth token`, no `-t`/`--show-token`, no `--web` (`-w` is `--workflow` only where it says so), no `--jq`.
+const GH: Record<string, Spec> = {
+  "pr view": ghSpec(`--comments --json= ${REPO}`),
+  "pr list": ghSpec(`--draft --state= -s= --author= --assignee= --label= --base= --head= --search= --json= --app= ${REPO} ${LIMIT}`),
+  "pr diff": ghSpec(`--name-only --patch --color= ${REPO}`),
+  "pr checks": ghSpec(`--watch --required --fail-fast --json= ${REPO} --interval=number`),
+  "pr status": ghSpec(`--conflict-status -c --json= ${REPO}`),
+  "issue view": ghSpec(`--comments --json= ${REPO}`),
+  "issue list": ghSpec(`--state= -s= --assignee= --author= --label= --milestone= --search= --json= --app= ${REPO} ${LIMIT}`),
+  "issue status": ghSpec(`--json= ${REPO}`),
+  "repo view": ghSpec("--json="),
+  "run list": ghSpec(`--branch= -b= --status= -s= --workflow= -w= --json= ${REPO} --event= -e= --user= -u= --created= --commit= -c= ${LIMIT}`),
+  "run view": ghSpec(`--log --log-failed --exit-status --verbose -v --json= ${REPO} --job= -j= --attempt=number -a=number`),
+  "auth status": ghSpec("--active -a --hostname= -h= --json="),
+  "release list": ghSpec(`--exclude-drafts --exclude-pre-releases --json= --order= -O= ${REPO} ${LIMIT}`),
+  "release view": ghSpec(`--json= ${REPO}`),
+  "workflow list": ghSpec(`--all -a --json= ${REPO} ${LIMIT}`),
+  "workflow view": ghSpec(`--yaml -y --ref= -r= ${REPO}`),
+  "label list": ghSpec(`--json= --order= --search= -S= --sort= ${REPO} ${LIMIT}`),
+  "search repos": ghSpec(
+    `--archived --created= --followers= --forks= --good-first-issues= --help-wanted-issues= --include-forks= --json= --language= --license= --match= --number-topics= --order= --owner= --size= --sort= --stars= --topic= --updated= --visibility= ${LIMIT}`,
+  ),
+  "search issues": ghSpec(
+    `--include-prs --locked --no-assignee --no-label --no-milestone --no-project --app= --assignee= --author= --closed= --commenter= --comments= --created= --interactions= --involves= --json= --label= --language= --match= --mentions= --milestone= --order= --owner= --project= --reactions= ${REPO} --sort= --state= --team-mentions= --updated= --visibility= ${LIMIT}`,
+  ),
+  "search prs": ghSpec(
+    `--draft --locked --merged --no-assignee --no-label --no-milestone --no-project --app= --assignee= --author= --base= -B= --checks= --closed= --commenter= --comments= --created= --head= -H= --interactions= --involves= --json= --label= --language= --match= --mentions= --merged-at= --milestone= --order= --owner= --project= --reactions= ${REPO} --review= --review-requested= --reviewed-by= --sort= --state= --team-mentions= --updated= --visibility= ${LIMIT}`,
+  ),
+  "search commits": ghSpec(
+    `--merge --author= --author-date= --author-email= --author-name= --committer= --committer-date= --committer-email= --committer-name= --hash= --json= --order= --owner= --parent= ${REPO} --sort= --tree= --visibility= ${LIMIT}`,
+  ),
+  "search code": ghSpec(`--extension= --filename= --json= --language= --match= --owner= ${REPO} --size= ${LIMIT}`),
+}
+
+function gh(args: string[]): Verdict {
+  if (args.length === 0) return { ok: true, reads: [] }
+  const key = args.length > 1 ? `${args[0]} ${args[1]}` : undefined
+  if (key === undefined || !Object.hasOwn(GH, key)) return refuse("gh:subcommand")
+  const rest = args.slice(2)
+  if (!scanFlags(GH[key], rest)) return refuse("gh:flag")
+  // A repository is OWNER/REPO. Three segments are HOST/OWNER/REPO, and a URL or an address names a host as well: gh would send
+  // the request, with the owner segment carrying any data, to a host that the command chose.
+  const hosted = rest.some((arg) => {
+    const value = arg.startsWith("-") ? (arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : undefined) : arg
+    return value !== undefined && (value.includes("://") || value.includes("@") || value.split("/").length > 2)
+  })
+  return hosted ? refuse("gh:host") : { ok: true, reads: [] }
+}
+
+// ---- docker: only ps, images, logs and inspect. A global option before the subcommand matches nothing. No `compose`: it
+// loads the folder's compose files before it prints anything.
+
+const DOCKER: Record<string, Spec> = {
+  ps: { flags: table("-a --all -l --latest --no-trunc -q --quiet -s --size -f= --filter= --format= -n=number --last=number"), operands: { max: 0 } },
+  images: { flags: table("-a --all --digests --no-trunc -q --quiet -f= --filter= --format="), operands: { max: 1 } },
+  logs: { flags: table("--follow -f --timestamps -t --details --tail= -n= --since= --until="), operands: { min: 1, max: 1 } },
+  inspect: { flags: table("--size -s --format= -f= --type="), operands: { min: 1 } },
+}
+
+function docker(args: string[]): Verdict {
+  if (args.length === 0) return { ok: true, reads: [] }
+  if (!Object.hasOwn(DOCKER, args[0])) return refuse("docker:subcommand")
+  const spec = DOCKER[args[0]]
+  const scanned = scanFlags(spec, args.slice(1))
+  if (!scanned) return refuse("docker:flag")
+  const limits = spec.operands
+  if ((limits?.max !== undefined && scanned.operands.length > limits.max) || (limits?.min !== undefined && scanned.operands.length < limits.min))
+    return refuse("docker:operand")
+  return { ok: true, reads: [] }
+}
+
+// `--version` and `--info` are answered by the SDK that the folder's global.json selects, which can be a folder inside the
+// repository: they ask until the owner decides.
+function dotnet(args: string[], ctx: ShellAnalysis.Context): Verdict {
+  const same = (arg: string, name: string) => (ctx.platform === "win32" ? arg.toLowerCase() === name : arg === name)
+  if (args.length === 0 || !args.every((arg) => same(arg, "--list-runtimes") || same(arg, "--list-sdks"))) return refuse("dotnet:args")
+  return { ok: true, reads: [] }
+}
+
+// PowerShell hands a native program the words below: a constant is its value, a parameter is its text, and a parameter
+// bound with a colon refuses (PowerShell hands a program two words for `-n: 5`); `--pretty=format:%h` is a string constant,
+// not a bound parameter. What PowerShell may change on the way
+// refuses, because the validator would judge an argv that the program does not receive.
+function program(name: NonNullable<PsSpec["program"]>, command: ShellAnalysis.Command, ctx: ShellAnalysis.Context): Verdict {
+  const source = command.source!
+  // Linux and macOS find `GIT` and `git` as two programs.
+  if (ctx.platform !== "win32" && source.written !== name) return refuse("command")
+  const args: string[] = []
+  for (const arg of source.arguments) {
+    if (arg.kind === "CommandParameterAst") {
+      // An en dash, em dash or horizontal bar starts a parameter to PowerShell but reaches a native as written.
+      if (!arg.text.startsWith("-") || arg.text === "--") return refuse("argument:dash")
+      if (arg.bound) return refuse("bound")
+      args.push(arg.text)
+      continue
+    }
+    if (arg.kind === "ArrayLiteralAst") return refuse("array:native")
+    if (!CONSTANT.has(arg.kind) || arg.value === undefined) return refuse("argument")
+    // `--` is PowerShell's own end of parameters, and whether it reaches the program depends on the edition.
+    if (/^[–—―]/.test(arg.text)) return refuse("argument:dash")
+    // A number reaches a native as written (0x10, 1e3), not as its converted value.
+    const value = arg.kind === "ConstantExpressionAst" ? arg.text : arg.value
+    if (value === "--" || !sound(value, ctx)) return refuse("argument:split")
+    // pwsh on Linux and macOS expands a bareword that has a wildcard against the folder before it starts the program, and
+    // so does a partly quoted one (`*''`, `a'*'`); only a whole quoted string is left alone.
+    if (ctx.platform !== "win32" && /[*?[]/.test(value) && !WHOLE_QUOTED.test(arg.text)) return refuse("argument:glob")
+    args.push(value)
+  }
+  if (name === "git") return git(args, ctx)
+  if (name === "gh") return gh(args)
+  if (name === "docker") return docker(args)
+  return dotnet(args, ctx)
+}
+
+const WHOLE_QUOTED = /^(?:'(?:[^']|'')*'|"(?:[^"`]|`.|"")*")$/
+
+function sound(value: string, ctx: ShellAnalysis.Context) {
+  return !splits(value) && !namedProvider(value) && !share(value, ctx)
 }
 
 /** `~` and `~/x` through the injected path module; undefined for a word that is not a plain path. */
@@ -643,6 +926,10 @@ function tool(head: string, args: string[], ctx: ShellAnalysis.Context, command?
   if (head === "find") return find(args, ctx)
   if (head === "sed") return sed(args, ctx)
   if (head === "xargs") return command ? xargs(args, ctx, command, producer) : refuse("xargs:nested")
+  if (head === "git") return git(args, ctx)
+  if (head === "gh") return gh(args)
+  if (head === "docker") return docker(args)
+  if (head === "dotnet") return dotnet(args, ctx)
   if (!Object.hasOwn(BASH, head)) return refuse("head:unlisted")
   const spec = BASH[head]
   if (spec.exact) return args.length === 0 ? { ok: true, reads: [] } : refuse("args")
@@ -879,8 +1166,9 @@ const CONSTANT = new Set(["StringConstantExpressionAst", "ConstantExpressionAst"
 // Windows PowerShell 5.1 (and pwsh before 7.3) builds a native command line without escaping: a value with whitespace is
 // wrapped in quotes, so an embedded `"` closes the wrapper early and a trailing `\` escapes its closing quote. The
 // program's C runtime then splits the line again, so one judged value can arrive as several arguments.
+// An empty argument is dropped by those versions, so every later word shifts left.
 function splits(value: string) {
-  return value.includes('"') || (/\s/.test(value) && value.endsWith("\\"))
+  return value === "" || value.includes('"') || (/\s/.test(value) && value.endsWith("\\"))
 }
 
 /** Whether one PowerShell command is allowlisted, and the paths it reads. `command.head` is the alias-resolved name. */
@@ -893,6 +1181,7 @@ export function powershell(command: ShellAnalysis.Command, ctx: ShellAnalysis.Co
   const spec = POWERSHELL[head]
   if (spec.native && projectLocal(head, ctx)) return refuse("head:local")
   if (head === "out-null" && !later) return refuse("position")
+  if (spec.program) return program(spec.program, command, ctx)
   const reads: string[] = []
   // What the next positional argument is, after a parameter that takes a value.
   let pending: "path" | "other" | undefined

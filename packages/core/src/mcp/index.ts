@@ -15,6 +15,8 @@ import { Form } from "../form.js"
 import { Integration } from "../integration.js"
 import { KeyedMutex } from "../effect/keyed-mutex.js"
 import { Location } from "../location.js"
+import { ManagedPolicy } from "../managed-policy.js"
+import { McpRestriction } from "./restriction.js"
 import { waitForAbort } from "@orbit/util/process"
 import { State } from "../state.js"
 import type { McpClient } from "./client.js"
@@ -53,6 +55,21 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("MCP.NotF
 }) {
   override get message() {
     return `MCP server not found: ${this.server}`
+  }
+}
+
+/** The organization's MCP lists do not let this server exist, so `add` refused it and nothing was stored. */
+export class BlockedError extends Schema.TaggedError<BlockedError>()("MCP.BlockedError", {
+  server: ServerName,
+  reason: Schema.Literals(["managed_only", "denied", "not_allowed"]),
+  organization: Schema.String.pipe(Schema.optional),
+}) {
+  override get message() {
+    if (this.reason === "managed_only")
+      return `MCP server "${this.server}" was not added: ${this.organization === undefined ? "managed settings allow" : `${this.organization}'s managed settings allow`} only the MCP servers they define`
+    return this.reason === "denied"
+      ? `MCP server "${this.server}" is blocked by managed settings`
+      : `MCP server "${this.server}" is not on the allow list in managed settings`
   }
 }
 
@@ -112,7 +129,7 @@ const cloneConfig = (config: Mcp.ServerConfig) => structuredClone(config) as Typ
 
 export interface Interface extends State.Transformable<Editor> {
   readonly servers: () => Effect.Effect<ServerInfo[]>
-  readonly add: (server: ServerName | string, config: Mcp.ServerConfig) => Effect.Effect<void>
+  readonly add: (server: ServerName | string, config: Mcp.ServerConfig) => Effect.Effect<void, BlockedError>
   readonly connect: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
   readonly disconnect: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
   readonly remove: (server: ServerName | string) => Effect.Effect<void, NotFoundError>
@@ -160,6 +177,7 @@ export const layer = (options?: Options) =>
       const forms = yield* Form.Service
       const integration = yield* Integration.Service
       const credentials = yield* Credential.Service
+      const policy = yield* ManagedPolicy.Service
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
 
@@ -534,8 +552,45 @@ export const layer = (options?: Options) =>
       let applied: Map<ServerName, Mcp.ServerConfig> | undefined
       const overrides = new Map<ServerName, Mcp.ServerConfig | false>()
       const reconcileLock = Semaphore.makeUnsafe(1)
+      // What the last reconcile blocked, so a block is logged when it starts or changes and not on every reconcile.
+      let blocked = new Map<ServerName, string>()
       const reconcile = Effect.fnUntraced(function* () {
-        const servers = state.get().servers
+        // The organization's lists are applied here, after every door has merged its servers, so no transform that
+        // runs later can bring a blocked one back. The filtered set is what `applied` remembers: lifting a restriction
+        // starts the server on the next reconcile, and a new one stops it.
+        const current = policy.current()
+        const restrictions = current.restrictions.mcp
+        const now = new Map<ServerName, string>()
+        // When managed settings run only their own servers, the input is their definitions and not the transformed
+        // state: a transform that claims a managed name first, or edits a managed server in place, cannot change what
+        // runs. Each definition is shaped as the config plugin shapes one, from the managed timeout alone.
+        const managedOnly = restrictions?.managed_only === true
+        const candidates = managedOnly
+          ? Object.entries(current.mcp.servers).flatMap(([key, server]) => {
+              const name = ServerName.make(key)
+              return state.get().removed.has(name)
+                ? []
+                : [[name, { ...cloneConfig(server), timeout: { ...current.mcp.timeout, ...server.timeout } }] as const]
+            })
+          : Array.from(state.get().servers)
+        if (managedOnly)
+          Array.from(state.get().servers.keys())
+            .filter((name) => !Object.hasOwn(current.mcp.servers, name))
+            .forEach((name) => now.set(name, "managed_only"))
+        const servers = new Map(
+          candidates.filter(([name, server]) => {
+            const checked = McpRestriction.check(restrictions, name, server)
+            if (!checked.allowed) now.set(name, checked.reason)
+            return checked.allowed
+          }),
+        )
+        // The name and reason only: a command or URL may carry a secret.
+        yield* Effect.forEach(
+          Array.from(now).filter(([name, reason]) => blocked.get(name) !== reason),
+          ([name, reason]) => Effect.logWarning("blocked an MCP server by managed settings", { server: name, reason }),
+          { discard: true },
+        )
+        blocked = now
         if (!applied && entries.size === 0) {
           for (const [name, server] of servers) {
             entries.set(name, {
@@ -634,6 +689,15 @@ export const layer = (options?: Options) =>
         }),
         add: Effect.fn("MCP.add")(function* (server, config) {
           const name = ServerName.make(server)
+          // Refused at the door so nothing is stored; the reconcile filter is the backstop for every other door.
+          const current = policy.current()
+          const checked = McpRestriction.admit(current.restrictions.mcp, name, config)
+          if (!checked.allowed)
+            return yield* new BlockedError({
+              server: name,
+              reason: checked.reason,
+              ...(current.organization === undefined ? {} : { organization: current.organization }),
+            })
           overrides.set(name, config)
           yield* state.reload()
         }),
@@ -775,7 +839,7 @@ export function configured(options?: Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node],
+    deps: [Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, ManagedPolicy.node],
   })
 }
 

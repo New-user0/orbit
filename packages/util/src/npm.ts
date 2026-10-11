@@ -46,6 +46,12 @@ export async function isRegistryPackage(pkg: string) {
   return (await parse(pkg))?.type === "registry"
 }
 
+/** The package name of a registry spec (a version, range or tag), without the version; undefined for any other spec. */
+export async function registryName(pkg: string) {
+  const target = await parse(pkg)
+  return target?.type === "registry" ? target.name : undefined
+}
+
 export async function isInstallablePackage(pkg: string) {
   return (await parse(pkg)) !== undefined
 }

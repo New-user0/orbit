@@ -14,7 +14,9 @@ import { ConfigPermissionExpand } from "./config/expand-permissions.js"
 import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigVariable } from "./config/variable.js"
 import { Watcher } from "./filesystem/watcher.js"
+import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
+import { PluginRestriction } from "@orbit/plugin/restriction"
 
 /** A problem found in one managed settings file. It costs only the file or the entry it names. */
 export interface Diagnostic {
@@ -61,6 +63,11 @@ const lists = {
   plugins: ["allow", "block", "marketplaces"],
   network: ["allowed_domains", "denied_domains"],
 } as const
+
+// The one boolean in `managed.network`; the other keys there are lists of hosts.
+const domainsOnly = "allow_managed_domains_only"
+// The one boolean in `managed.mcp`; the other keys there are lists of selectors.
+const mcpOnly = "managed_only"
 
 interface Loaded {
   readonly present: boolean
@@ -301,12 +308,38 @@ function cleanRestrictions(raw: unknown) {
       if (entries === undefined) return
       if (!Array.isArray(entries)) return bad(`${group}.${key}`, "ignored a value that is not a list")
       kept[key] = entries.flatMap((entry, index) => {
-        if (typeof entry === "string") return [entry]
-        bad(`${group}.${key}.${index}`, "ignored an entry that is not a string")
+        if (typeof entry !== "string") {
+          bad(`${group}.${key}.${index}`, "ignored an entry that is not a string")
+          return []
+        }
+        if (
+          group === "plugins" &&
+          key !== "marketplaces" &&
+          entry.includes("*") &&
+          !PluginRestriction.wildcard(entry)
+        ) {
+          bad(
+            `${group}.${key}.${index}`,
+            "ignored a selector whose * is not the whole entry or the end of a .* or /* prefix",
+          )
+          return []
+        }
+        if (group !== "network") return [entry]
+        // A domain is checked once here, so the matchers only ever see a normalized host or `*.` pattern.
+        const domain = ManagedNetwork.pattern(entry)
+        if (domain !== undefined) return [domain]
+        bad(`${group}.${key}.${index}`, "ignored an entry that is not a host name or a *.domain pattern")
         return []
       })
     })
-    value[group] = kept
+    const booleanKey = group === "network" ? domainsOnly : group === "mcp" ? mcpOnly : undefined
+    const flag = booleanKey === undefined ? undefined : section[booleanKey]
+    if (booleanKey === undefined || flag === undefined) {
+      value[group] = kept
+      return
+    }
+    if (typeof flag !== "boolean") bad(`${group}.${booleanKey}`, "ignored a value that is not a boolean")
+    value[group] = typeof flag === "boolean" ? { ...kept, [booleanKey]: flag } : kept
   })
   const unknown = (at: string) =>
     problems.push({ kind: "unsupported", path: `$.managed.${at}`, message: "ignored an unknown key" })
@@ -318,7 +351,12 @@ function cleanRestrictions(raw: unknown) {
     const section = raw[group]
     if (!isRecord(section)) return
     Object.keys(section)
-      .filter((key) => !(keys as readonly string[]).includes(key))
+      .filter(
+        (key) =>
+          !(keys as readonly string[]).includes(key) &&
+          !(group === "network" && key === domainsOnly) &&
+          !(group === "mcp" && key === mcpOnly),
+      )
       .forEach((key) => unknown(`${group}.${key}`))
   })
   if (raw.env !== undefined)
@@ -415,6 +453,10 @@ export const layer = (options?: Options) =>
             ),
           ),
           restrictions: snapshot.restrictions,
+          mcp: {
+            servers: snapshot.info.mcp?.servers ?? {},
+            ...(snapshot.info.mcp?.timeout === undefined ? {} : { timeout: snapshot.info.mcp.timeout }),
+          },
           ...(snapshot.restrictions.organization === undefined
             ? {}
             : { organization: snapshot.restrictions.organization }),

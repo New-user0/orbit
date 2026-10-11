@@ -29,11 +29,15 @@ export const Restrictions = Schema.Struct({
   mcp: Schema.Struct({
     allow: Selectors.pipe(optional),
     deny: Selectors.pipe(optional),
+    managed_only: Schema.Boolean.pipe(optional).annotate({
+      description:
+        "Run only the MCP servers that managed settings define. Every other source of servers is ignored and adding one is refused.",
+    }),
   })
     .pipe(optional)
     .annotate({
       description:
-        "Which MCP servers may run. A selector is a name glob, `command:<glob>` to match the command of a local server, or `url:<glob>` to match the URL of a remote one.",
+        "Which MCP servers may run, and whether only the ones managed settings define may. A selector is a name glob, `command:<glob>` to match the command of a local server, or `url:<glob>` to match the URL of a remote one.",
     }),
   plugins: Schema.Struct({
     allow: Selectors.pipe(optional),
@@ -45,9 +49,15 @@ export const Restrictions = Schema.Struct({
   network: Schema.Struct({
     allowed_domains: Selectors.pipe(optional),
     denied_domains: Selectors.pipe(optional),
+    allow_managed_domains_only: Schema.Boolean.pipe(optional).annotate({
+      description: "Let shell commands reach only the domains that managed settings allow.",
+    }),
   })
     .pipe(optional)
-    .annotate({ description: "Which domains tools may reach." }),
+    .annotate({
+      description:
+        "Which domains tools may reach. `denied_domains` binds every tool that fetches a URL. `allowed_domains` and `allow_managed_domains_only` bind shell commands in the sandbox.",
+    }),
 })
 export type Restrictions = typeof Restrictions.Type
 

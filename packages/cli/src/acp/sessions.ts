@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util"
 import type { McpServer, RequestError } from "@agentclientprotocol/sdk"
-import type { OrbitClient, OrbitEvent, SessionInfo } from "@orbit/client/promise"
+import { isForbiddenError, type OrbitClient, type OrbitEvent, type SessionInfo } from "@orbit/client/promise"
 import { Context, Deferred, Effect, Exit, Queue, Ref, Scope, Stream } from "effect"
 import type { ACPCatalog, Catalog } from "./catalog"
 import { availableCommands, configOptions, type Selection } from "./config-option"
@@ -105,8 +105,27 @@ export const make = Effect.fnUntraced(function* (input: {
             if (registered.has(key)) return Effect.void
             registered.add(key)
             return ACPPromise.promise(() =>
-              input.client.mcp.add({ server: server.name, location: { directory: attached.cwd }, config }),
+              input.client.mcp
+                .add({ server: server.name, location: { directory: attached.cwd }, config })
+                .then(() => undefined)
+                // Managed settings do not allow this server: their lists block it, or they run only the servers they define. It costs only itself; the session goes on without it.
+                .catch((error: unknown) => {
+                  if (isForbiddenError(error)) return error.message
+                  throw error
+                }),
             ).pipe(
+              Effect.flatMap((refusal) =>
+                refusal === undefined
+                  ? Effect.void
+                  : // Forgotten, so a later attach after the restriction lifts adds the server.
+                    Effect.sync(() => registered.delete(key)).pipe(
+                      Effect.andThen(
+                        Effect.logWarning("skipped an MCP server that managed settings do not allow", {
+                          server: server.name,
+                        }),
+                      ),
+                    ),
+              ),
               Effect.onError(() => Effect.sync(() => registered.delete(key))),
               Effect.uninterruptible,
             )

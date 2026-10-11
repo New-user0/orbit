@@ -8,6 +8,7 @@ import { errorMessage } from "../../util/error"
 import { findResumeSession } from "../../session-target"
 import { ConfigOverlay } from "../../config-overlay"
 import { bypassRefusal } from "../../util/managed-bypass"
+import { mcpConfigRefusal } from "../../util/managed-mcp"
 import { trustRefusal } from "../../util/trust"
 import { directory } from "./flow/execute"
 
@@ -73,7 +74,7 @@ export function headlessInput(input: HeadlessInput) {
     }
     // --settings, --mcp-config and --agents reach the private server through ORBIT_CONFIG_CONTENT_FILE, set here for the
     // same reason.
-    const applied = yield* ConfigOverlay.apply({
+    const applied = yield* ConfigOverlay.applyNamed({
       settings: input.settings,
       mcpConfig: input.mcpConfig,
       agents: Option.getOrUndefined(input.agents),
@@ -81,7 +82,7 @@ export function headlessInput(input: HeadlessInput) {
     }).pipe(Effect.catch((error) => Effect.succeed(error)))
     // Like every refusal before a session exists, in the format that was asked for.
     if (applied instanceof Error) return reportRunError({ format, envelope }, applied.message)
-    const overlay = applied
+    const overlay = applied.overlay
     const server = yield* ServerConnection.resolve({
       server: Option.getOrUndefined(input.server),
       standalone: input.standalone || input.bare || overlay,
@@ -150,6 +151,8 @@ export function headlessInput(input: HeadlessInput) {
       input.auto || input.yolo || input.dangerouslySkipPermissions,
     )
     if (bypass !== undefined) return reportRunError({ format, envelope }, bypass)
+    const mcpOnly = yield* mcpConfigRefusal(client, directory(), applied.named)
+    if (mcpOnly !== undefined) return reportRunError({ format, envelope }, mcpOnly)
     yield* Effect.promise(() =>
       runNonInteractive({
         server,

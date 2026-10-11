@@ -93,7 +93,17 @@ const request = (row: Row): MiniPermissionRequest => ({
 
 test("the matrix has every tool, every spelling and both trust states", () => {
   const tools = new Set(golden.map((row) => row.id.split("/")[0]))
-  expect([...tools].sort()).toEqual(["Edit", "LSP", "NotebookEdit", "Patch", "Patch (move)", "Read", "Write"])
+  expect([...tools].sort()).toEqual([
+    "Edit",
+    "LSP",
+    "NotebookEdit",
+    "Patch",
+    "Patch (add over)",
+    "Patch (move onto)",
+    "Patch (move)",
+    "Read",
+    "Write",
+  ])
   const spellings = new Set(golden.map((row) => row.id.split("/")[1]))
   for (const name of ["relative path", "absolute path", "dot-dot path", "absolute path outside", "tilde path", "link"])
     expect(spellings.has(name)).toBe(true)

@@ -90,13 +90,16 @@ export async function build(input: Input) {
   const settings = input.settings?.length
     ? await settingsSource(input.settings, input.cwd)
     : { layer: undefined, file: undefined }
+  const mcpLayers = await Promise.all(mcpConfig.map((value) => mcpLayer(value, input.cwd)))
+  // Whether the --mcp-config values name a server, counted from the layers the server will read.
+  const named = mcpLayers.some((layer) => layer.count > 0)
   const layers = [
     ...(settings.layer ? [settings.layer] : []),
-    ...(await Promise.all(mcpConfig.map((value) => mcpLayer(value, input.cwd)))),
+    ...mcpLayers.map((layer) => ({ mcp: layer.mcp })),
     ...(input.agents === undefined ? [] : [await agentsLayer(input.agents, input.cwd)]),
   ]
   // A file alone leaves the inherited content where it is: the server still reads it from the environment.
-  if (layers.length === 0) return { file: settings.file }
+  if (layers.length === 0) return { file: settings.file, named }
   const inherited =
     input.inherited === undefined
       ? {}
@@ -107,7 +110,7 @@ export async function build(input: Input) {
     throw new Error(
       `The config given with --settings, --mcp-config and --agents is ${size} bytes; the most one run takes is ${MAX_BYTES}`,
     )
-  return { content, file: settings.file }
+  return { content, file: settings.file, named }
 }
 
 /**
@@ -121,7 +124,8 @@ export async function write(document: { readonly content?: string; readonly file
   // mkdtemp creates the folder mode 0700 and fails when the name exists, so no other user can have made it first.
   const folder = await fs.mkdtemp(path.join(base(), "overlay-"))
   const file = path.join(folder, `${randomUUID()}.json`)
-  await fs.writeFile(file, JSON.stringify({ version: 2, ...document }), { mode: 0o600, flag: "wx" })
+  const envelope = { version: 2, content: document.content, file: document.file }
+  await fs.writeFile(file, JSON.stringify(envelope), { mode: 0o600, flag: "wx" })
   return { file, remove: () => fs.rm(folder, { recursive: true, force: true }) }
 }
 
@@ -158,7 +162,14 @@ export async function consume(file: string) {
  * ORBIT_CONFIG_CONTENT_FILE for the server this process starts next. Returns whether the run needs its own server;
  * the file is removed when the scope closes.
  */
-export const apply = Effect.fn("cli.config-overlay.apply")(function* (
+export const apply = (input: Omit<Input, "cwd" | "inherited"> & { readonly server: string | undefined }) =>
+  applyNamed(input).pipe(Effect.map((applied) => applied.overlay))
+
+/**
+ * `apply`, and whether the --mcp-config values name at least one server, which is read from the same text the private
+ * server is handed so that a file that changes afterwards cannot change the answer.
+ */
+export const applyNamed = Effect.fn("cli.config-overlay.apply")(function* (
   input: Omit<Input, "cwd" | "inherited"> & { readonly server: string | undefined },
 ) {
   const refused = conflict({ server: input.server, flags: given(input) })
@@ -170,7 +181,7 @@ export const apply = Effect.fn("cli.config-overlay.apply")(function* (
   if (document === undefined) {
     // No flag: a value inherited from the environment is not this run's to hand to the server it starts.
     delete process.env.ORBIT_CONFIG_CONTENT_FILE
-    return false
+    return { overlay: false, named: false }
   }
   const written = yield* Effect.tryPromise({
     try: () => write(document),
@@ -183,7 +194,7 @@ export const apply = Effect.fn("cli.config-overlay.apply")(function* (
       await written.remove().catch(() => undefined)
     }),
   )
-  return true
+  return { overlay: true, named: document.named }
 })
 
 /**
@@ -287,9 +298,10 @@ async function mcpLayer(value: string, cwd: string) {
   const decoded = decodeMcp(document, { onExcessProperty: "error", errors: "all" })
   if (decoded._tag === "Failure") throw new Error(describe(flag, decoded.failure.issue))
   const servers = decoded.success.servers
-  if (servers === undefined) return { mcp: anchorFiles(flag, document, source.directory) }
+  if (servers === undefined) return { count: 0, mcp: anchorFiles(flag, document, source.directory) }
   const raw = document.servers as Record<string, Json>
   return {
+    count: Object.keys(servers).length,
     mcp: anchorFiles(
       flag,
       {

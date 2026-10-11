@@ -1,6 +1,8 @@
 export * as FileMutation from "./file-mutation.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { ToolFailure } from "@orbit/ai"
+import { Tool } from "@orbit/schema/tool"
 import { Context, Effect, Layer } from "effect"
 import path from "path"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
@@ -48,6 +50,8 @@ export const readText = Effect.fn("FileMutation.readText")(function* (files: Fil
   return Bom.decodeBytes((yield* files.read(target)).bytes)
 })
 
+export type Snapshot = { readonly text: string; readonly digest: string }
+
 /**
  * The decoded text of a file with the modification time and byte digest of the same read, so the FileLedger can check
  * freshness and a tool can record the result without another stat or read.
@@ -55,6 +59,37 @@ export const readText = Effect.fn("FileMutation.readText")(function* (files: Fil
 export const readSnapshot = Effect.fn("FileMutation.readSnapshot")(function* (files: Files, target: string) {
   const file = yield* files.read(target)
   return { ...Bom.decodeBytes(file.bytes), mtimeMs: file.info.mtimeMs, digest: FileLedger.digest(file.bytes) }
+})
+
+/**
+ * Fails with `edit.stale` unless `target` is still what it was when `before` was read: absent if `before` is undefined,
+ * otherwise the same bytes. Only content counts, so a touch passes. Run it under the file's lock after approval and
+ * immediately before the first write; a file that cannot be read now counts as changed.
+ */
+export const assertUnchanged = Effect.fn("FileMutation.assertUnchanged")(function* (
+  files: Files,
+  target: string,
+  display: string,
+  before: Snapshot | undefined,
+) {
+  const now = yield* readSnapshot(files, target).pipe(
+    Effect.catchTag("Environment.NotFound", () => Effect.undefined),
+    Effect.catch((error) =>
+      Effect.logWarning(`could not read ${target} again after approval`, error).pipe(Effect.as("unreadable" as const)),
+    ),
+  )
+  // The digest folds line endings; the decoded text keeps them, so both together mean the same bytes.
+  const same =
+    now === "unreadable"
+      ? false
+      : now === undefined
+        ? before === undefined
+        : before !== undefined && before.digest === now.digest && before.text === now.text
+  if (same) return
+  return yield* new ToolFailure({
+    message: `${display} changed on disk while the change waited for approval, so nothing was written. Read it again before changing it.`,
+    code: Tool.ErrorCode.EditStale,
+  })
 })
 
 export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
@@ -66,6 +101,18 @@ export const syncTextBom = Effect.fn("FileMutation.syncTextBom")(function* (
   if (synced.bytes) yield* files.write(target, synced.bytes)
   return synced.text
 })
+
+// The key is the file's long name (for a file that exists; a new file keeps the spelling it is given) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock. A path that cannot be resolved keeps its lexical key.
+function lockKey(target: string) {
+  const lexical = FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target)))
+  // Resolving a share's path connects to its host. Outside the project's own folder FileAccess refuses such a path, and every file tool checks before it locks, so a key for one stays lexical.
+  if (process.platform === "win32" && (lexical.startsWith("\\\\") || lexical.startsWith("//"))) return lexical
+  try {
+    return FSUtil.resolve(lexical)
+  } catch {
+    return lexical
+  }
+}
 
 /** Share transaction locks across Location graphs that address the same file. */
 const transactionLocks = KeyedMutex.makeUnsafe<string>()
@@ -80,14 +127,12 @@ const layer = Layer.effect(
     const environment = yield* Environment.Service
     const locks = KeyedMutex.makeUnsafe<string>()
     const withLock: Interface["withLock"] = (targets) => (effect) =>
-      // The key is the file's long name (for a file that exists; a new file keeps the spelling it is given) with the periods and spaces Windows drops, so `cfg.` and `cfg` share one lock.
-      [
-        ...new Set(
-          targets.map((target) => FSUtil.resolve(FSUtil.windowsTrim(path.resolve(FSUtil.windowsPath(target))))),
-        ),
-      ]
-        .sort()
-        .reduceRight((result, target) => transactionLocks.withLock(target)(result), effect)
+      // Keys are computed inside the effect: a path that cannot be resolved (a link loop, no access) must reach the tool as its own error, not a defect.
+      Effect.suspend(() =>
+        [...new Set(targets.map(lockKey))]
+          .sort()
+          .reduceRight((result, target) => transactionLocks.withLock(target)(result), effect),
+      )
     const withTargetLock =
       (target: Target) =>
       <A, E, R>(effect: Effect.Effect<A, E, R>) =>

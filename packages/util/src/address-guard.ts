@@ -118,7 +118,7 @@ async function resolve(name: string, resolver: NonNullable<Options["lookup"]>) {
 // lowercase form in brackets, and a name in lowercase without a trailing dot. A zone id (fe80::1%eth0) says which
 // interface to use and is no part of the address. Undefined when the text is not only a host: a port, a path, credentials
 // or a space would be read as something else, and the URL would then be about another host than the text names.
-function canonical(host: string) {
+export function canonical(host: string) {
   if (/[\s/?#@\\]/.test(host)) return undefined
   const bare = host.replace(/^\[(.*)\]$/, "$1")
   const href = `http://${bare.includes(":") ? `[${bare.replace(/%.*$/, "")}]` : bare}/`

@@ -2,7 +2,7 @@ import { Location } from "@orbit/schema/location"
 import { Plugin } from "@orbit/schema/plugin"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { InvalidRequestError, ServiceUnavailableError } from "../errors.js"
+import { ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const PluginGroup = HttpApiGroup.make("server.plugin")
@@ -41,7 +41,7 @@ export const PluginGroup = HttpApiGroup.make("server.plugin")
       query: LocationQuery,
       payload: Schema.Struct({ targets: Schema.Array(Schema.String) }),
       success: HttpApiSchema.NoContent,
-      error: [InvalidRequestError, ServiceUnavailableError],
+      error: [InvalidRequestError, ForbiddenError, ServiceUnavailableError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

@@ -1,10 +1,28 @@
+import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginUpdate } from "@orbit/core/plugin/update"
-import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
+import { ForbiddenError, InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
+import { PluginRestriction } from "@orbit/plugin/restriction"
 import { Cause, Effect, Exit } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { response } from "../location"
+
+/**
+ * Why the organization's plugin lists keep a package from being installed, or undefined when they let it through. It
+ * is asked before any registry request, the same way `orb plugin add` asks it.
+ */
+const refusal = (target: string) =>
+  Effect.gen(function* () {
+    const policy = yield* ManagedPolicy.Service
+    const restrictions = policy.current().restrictions.plugins ?? {}
+    const identity = yield* Effect.promise(() => PluginRestriction.identify(target))
+    const checked = PluginRestriction.check(restrictions, identity)
+    if (checked.allowed) return undefined
+    return checked.reason === "blocked"
+      ? `Plugin "${target}" is blocked by managed settings`
+      : `Plugin "${target}" is not on the allow list in managed settings`
+  })
 
 export const PluginHandler = HttpApiBuilder.group(Api, "server.plugin", (handlers) =>
   handlers
@@ -20,6 +38,10 @@ export const PluginHandler = HttpApiBuilder.group(Api, "server.plugin", (handler
         const targets = [
           ...new Set(inventory.flatMap((plugin) => (plugin.source.type === "package" ? [plugin.source.target] : []))),
         ].filter((target) => ctx.payload.target === undefined || target === ctx.payload.target)
+        // A blocked package stays in the inventory as a failed entry, but it is never asked about: that is a request to its registry.
+        const refused = new Set(
+          yield* Effect.filter(targets, (target) => refusal(target).pipe(Effect.map((reason) => reason !== undefined))),
+        )
         if (ctx.payload.target !== undefined && !targets.length)
           return yield* new InvalidRequestError({
             message: `Plugin package is not in the current server inventory: ${ctx.payload.target}`,
@@ -28,7 +50,7 @@ export const PluginHandler = HttpApiBuilder.group(Api, "server.plugin", (handler
         const updates = yield* PluginUpdate.Service
         const outdated = new Map(
           yield* Effect.forEach(
-            targets,
+            targets.filter((target) => !refused.has(target)),
             (target) => updates.check(target, { refresh: true }).pipe(Effect.map((value) => [target, value] as const)),
             { concurrency: "unbounded" },
           ),
@@ -64,6 +86,11 @@ export const PluginHandler = HttpApiBuilder.group(Api, "server.plugin", (handler
             message: `Plugin packages are not in the current server inventory: ${unknown.join(", ")}`,
             field: "targets",
           })
+        // Before any update starts, so one blocked target downloads nothing and the others are not half-applied.
+        const refusals = (yield* Effect.forEach(ctx.payload.targets, refusal)).filter(
+          (reason): reason is string => reason !== undefined,
+        )
+        if (refusals.length) return yield* new ForbiddenError({ message: refusals.join("; ") })
         const updates = yield* PluginUpdate.Service
         // Let every update run to completion instead of interrupting the rest on the first failure.
         const failures = yield* Effect.forEach(

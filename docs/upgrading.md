@@ -347,6 +347,33 @@ without limit, and SDK callers that read `shell_tool` from the config schema.
 Raise `shell_tool.timeout` and `shell_tool.max_timeout` if a command should be waited
 for longer before it moves.
 
+### Managed MCP, plugin and network-domain restrictions are enforced
+
+The `mcp`, `plugins` and `network` lists of a managed `managed` block now take effect. Only managed settings can set them; a repository, user or flag file cannot.
+
+- **MCP.** `mcp.deny` and `mcp.allow` hold selectors: a server name, `command:<pattern>` (a local server's command joined with single spaces) and `url:<pattern>` (a remote server's URL, tried both as written and as the URL parser serializes it). In a pattern `*` matches any run of characters and everything else is literal, case counts and nothing depends on the operating system. Joining a command with spaces cannot tell `["node", "a b"]` from `["node", "a", "b"]`; write commands without spaces inside an argument when that matters. Deny wins. No `allow` allows everything and `allow: []` allows nothing. With an `allow`, a local server must match a `command:` selector when the list has any (a name alone no longer admits it) and a name otherwise; a remote server likewise with `url:`. The lists apply to servers from every document, **the managed document's own servers included**, and to plugins, Code Mode defaults and `Mcp.add`. A blocked server does not exist: it is not listed, never starts, and the server logs one line (name and reason, never the command or URL) when its state changes. `PUT /api/experimental/mcp/:server` answers a blocked server with 403 `ForbiddenError` and stores nothing; an ACP session skips only that server, and `orb mcp add` refuses a blocked server with the denied or not-on-the-allow-list wording and writes nothing. A new or lifted restriction takes effect on the running server.
+- **Plugins.** `plugins.block` and `plugins.allow` hold `*`, `prefix.*`, `@scope/*` or exact selectors; any other `*` is reported as an invalid entry and dropped, because it would match nothing. An absolute path selector matches the whole path and holds no `*` (`/opt/plugins/*` and `C:/plugins/*` are reported as invalid and dropped); it is made real once per activation, so one written through a link meets the real path of a target. `block` wins. `allow: []` allows no external plugin, and a plugin that the managed document names is held to `allow` too. A registry package is matched by its name without the version (`@corp/x@^1` is `@corp/x`), a local plugin by its real absolute path (exact; separators are normalized and case folds on Windows only; Windows 8.3 short names are expanded, but a UNC admin-share spelling such as `//localhost/C$/...` or a copy of the folder is a different path, so a path block matches the real path only and only an allow list holds against another spelling), and a spec whose package cannot be named (git, alias, tarball) is not allowed while `allow` is set. Built-in, SDK and instance plugins are never held back. A blocked or unlisted target is never installed or imported (the server's source scan still lists its folder before the check); `orb plugin add` refuses it before the registry is contacted, `POST /api/plugin/update` answers 403 for it without a registry request, a path that cannot be resolved (a target under a file, a link loop, an unreachable network share) is one unverified entry that is refused under an allow list and never stops the other plugins, and a plugin that was running when its ID was blocked is not kept running by a failed reload. It shows as failed with "Blocked by managed settings". A plugin ID is known only after import, so `block` by ID stops the plugin's setup but **its top-level module code has already run**; to stop code from running at all, block the target. The terminal UI applies the same lists in its own process to the plugins only it loads, and loads no external plugin when the server does not report them (`GET /api/config/effective` has a new `plugins` field). `plugins.marketplaces` is read and kept for a later release.
+- **Network.** `network.denied_domains` denies every URL-bearing tool (WebFetch and Code Mode `fetch`, for the first URL and for every redirect hop) whose host matches: an exact host, or `*.domain` for subdomains at any depth but never the domain itself or an IP address. Hosts are compared in canonical form, so `127.1` and `2130706433` are `127.0.0.1`. A URL action whose resource cannot be read as an http(s) URL is denied while the list is not empty. Each entry is checked when the file is read: a scheme, path, port, `*`, `*.com`, a stray `*` or whitespace is reported and dropped, and a one-label name such as `intranet` is accepted. `network.allowed_domains` and the new `network.allow_managed_domains_only` do not limit WebFetch or Code Mode `fetch`; use managed permission rules for that. They bind shell commands in the sandbox, which can only allow all of the network or none of it, so until a per-host proxy exists **any of `denied_domains`, `allowed_domains` or `allow_managed_domains_only` launches a sandboxed command with the network off**. Commands outside the sandbox (including every command on native Windows, which has no sandbox), remote MCP servers and language servers are not bound; set `sandbox.enabled` in the managed settings, and the server logs once when domain lists exist but a command ran unsandboxed.
+
+**Affects:** organizations that ship managed settings, and people on their machines who run MCP servers, plugins or sandboxed shell commands.
+
+**What to do:** nothing unless your organization manages Orbit.
+
+### Managed settings can run only the MCP servers they define
+
+Set `managed.mcp.managed_only` to `true` in the managed settings (only managed files can set it) and Orbit runs only the servers in the managed document's own `mcp.servers`. Servers from every other source are ignored: user, project, local, flag (`--mcp-config`, `--settings`, `ORBIT_CONFIG_CONTENT`) and well-known config, plugins and their transforms, and `.mcp.json`. A server that the flag drops is not listed and never starts, and the server logs one line (name and reason, never the command or URL) when that state changes. The organization's `mcp.allow` and `mcp.deny` still apply to the managed servers, and a later drop-in's value wins over an earlier file's, as for the other managed flags. A value that is not a boolean is ignored with a diagnostic and costs only itself.
+
+- A managed server runs as the managed files write it. Its `timeout` defaults come from the managed `mcp.timeout` alone, so a person's `mcp.timeout` and Orbit's Code Mode defaults do not shape it; write `codemode` in the managed definition if you want it.
+- `PUT /api/experimental/mcp/:server` (`Mcp.add`) answers 403 `ForbiddenError` for every server, including a replacement of a managed server's name, and stores nothing. The refusal is given before the deny and allow lists, so it names the real cause. `orb mcp add` refuses and writes no file, and an ACP session attaches without each server it names and adds it on a later attach once the flag is off.
+- `orb`, `orb -p` and `orb run` with `--mcp-config` that names at least one server stop with exit code 1 before the first request. An empty `{"servers":{}}` runs. A server that does not report `config.effective.mcp` (an older one) stops the run too.
+- `Mcp.remove` works on a managed server, and a removed one stays out until restart.
+- The change takes effect live: turning the flag on stops the other servers on the running server, a managed server whose definition did not change keeps its process, and turning it off starts the others again.
+- `GET /api/config/effective` reports `mcp.managed_only`; it is absent from a server that predates it, which clients read as unknown.
+
+**Affects:** organizations that ship managed settings, and people on their machines who add MCP servers by any route, plus SDK callers of `Config.Effective`, which gains an optional `mcp` field.
+
+**What to do:** nothing unless your organization manages Orbit. To use it, define the servers in the managed `mcp.servers` and set `managed.mcp.managed_only` to `true`.
+
 ### A background shell command that stops at a prompt is reported once
 
 Orbit now watches every shell command that runs in the background (asked for, moved at its deadline, or moved by a
@@ -1462,6 +1489,35 @@ the scanner treats the word as dynamic. Such a command is now seen as two comman
 
 **What to do:** Nothing; write the character itself instead of the escape if a command is refused.
 
+### A file that changes while its edit waits for approval is not overwritten
+
+`edit`, `write`, `patch` and `notebook_edit` used to write the bytes they had prepared even when the file changed while
+the person was deciding. They now read every file they will write once more after approval, and write nothing if any of
+them differs from what was shown: the call fails with the error type `edit.stale`. The file keeps the other writer's
+content, and a file that appeared or vanished in the meantime counts as changed. For `patch` this covers every path, the
+destination of a move included, and no path is written when one is stale. Only content counts: a file that was touched
+or rewritten with the same bytes is not stale, but a change of line endings alone or of a leading byte-order mark is.
+
+`write` now also waits for another `write` to the same file. A file that cannot be read
+after approval counts as changed. `edit.stale` differs from `file.stale`: the first means the file changed during the
+approval, the second that it changed since the session last read it. After either, read the file again and retry.
+
+`patch` now shows what it replaces. An `Add File` hunk on a file that already exists is listed as `modified` with the
+old lines as removed, not as `added`, and a move onto an existing file lists the destination as a second entry in
+`metadata.files` (and in the result) with its current text as removed. A move destination that already exists must now
+have been read by the session and unchanged since, as an `Add File` target must: otherwise the call fails with
+`file.unread` or `file.stale` and nothing is written.
+
+`patch` now also refuses, before anything is asked, a patch that reaches one file under two names: a `Move to` that
+names its own source (the same path, another letter case on any case-insensitive file system, or a link or hard link to it), or two
+hunks that name one existing file by different spellings (for a new file, letter case is compared on Windows and macOS). Such a patch used to delete the file. Rename a file's letter case with
+the shell instead. An `Add File` over an existing file now keeps that file's byte-order mark, as `write` does.
+
+**Affects:** code that reads a failed tool call's `error.type`, and anyone whose editor, formatter or script writes a file
+while a change to it is waiting for approval: the change now fails instead of overwriting.
+
+**What to do:** Read the file again and repeat the change. Nothing for code that does not read the type.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -2129,6 +2185,21 @@ and plugin or SDK code that compares the result text exactly.
 
 **What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.
 
+### Read-only shell calls run at the same time
+
+Before, every `Bash` call in a step ran alone, in the order the model wrote them. Now a call whose command the shell
+analysis judges read-only (`ls`, `git status`, `cat a | grep b`, `sleep 1`) runs beside other safe calls, up to
+`tool_execution.max_concurrency`. Any other call, such as `touch x` or `echo hi > f`, still runs alone and waits for
+the calls before it. The decision uses the command text the model sent, before any hook rewrites it, and ignores
+`run_in_background`, the timeout and the paths the command reads. A command that cannot be analysed, an empty command,
+and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has an empty or relative
+entry (a trailing `;` in the Windows `Path` is enough) no command counts as read-only, so shell calls stay serial.
+
+**Affects:** people whose model issues several read-only shell commands in one step, and plugins that observe the
+`execute.before` and `execute.after` hooks of `Bash` and assume they never overlap.
+
+**What to do:** Nothing. To keep shell calls serial, set `tool_execution.max_concurrency` to 1.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.
@@ -2306,10 +2377,18 @@ type `invalid_input`, `unknown_request` or `input_failed` for a line or operatio
 sent with `delivery: "steer"` joins the work that is running and shares its result; `"queue"` waits and gets its own. When
 standard input closes, every ask that is still open is rejected (a question is cancelled) with feedback so the model carries on,
 the queued work finishes, and the exit status is 1 if the last result was an error and 0 otherwise. A first message may also be
-given on the command line. Like `orb -p`, it refuses an untrusted folder. Without `--yolo` every ask goes to the program;
-with it, asks are approved without being shown.
+given on the command line. Like `orb -p`, it refuses an untrusted folder. Without `--yolo`, `--auto` or `--dangerously-skip-permissions` every ask goes to the program;
+with one of them, asks are approved without being shown.
 
 **Affects:** nothing that exists: the flag is new. `--input-format` is a new `-p` flag, so a script that passes it to a
 root command without `-p` now gets the usual usage error.
 
 **What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.
+
+### The question tool has limits and option previews
+
+The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
+
+**Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with no options or one option, more than four options, or more than four questions.
+
+**What to do:** Nothing for most setups. Clients that do not draw previews keep working because the field is optional.

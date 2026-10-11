@@ -134,7 +134,7 @@ const spellings: {
   },
 ]
 
-const tools = ["Edit", "Write", "NotebookEdit", "Patch", "Patch (move)", "Read", "LSP"] as const
+const tools = ["Edit", "Write", "NotebookEdit", "Patch", "Patch (move)", "Patch (move onto)", "Patch (add over)", "Read", "LSP"] as const
 
 describe("approval values: the request carries what the tool acts on", () => {
   for (const trusted of [false, true])
@@ -159,6 +159,8 @@ describe("approval values: the request carries what the tool acts on", () => {
                   await fs.mkdir(folder, { recursive: true })
                   if (spelling.link) await fs.symlink(outside.path, path.join(project.path, "linked"), "junction")
                   if (tool !== "Write") await fs.writeFile(real, tool === "NotebookEdit" ? notebook : "alpha\n")
+                  // The destination a move replaces.
+                  if (tool === "Patch (move onto)") await fs.writeFile(path.join(folder, "file-moved.txt"), "omega\n")
                 })
                 const input: Record<string, unknown> =
                   tool === "Edit"
@@ -171,13 +173,16 @@ describe("approval values: the request carries what the tool acts on", () => {
                           ? {
                               patchText: `*** Begin Patch\n*** Update File: ${spelled}\n@@\n-alpha\n+beta\n*** End Patch`,
                             }
-                          : tool === "Patch (move)"
+                          : tool === "Patch (move)" || tool === "Patch (move onto)"
                             ? {
                                 patchText: `*** Begin Patch\n*** Update File: ${spelled}\n*** Move to: ${moved}\n@@\n-alpha\n+beta\n*** End Patch`,
                               }
-                            : tool === "LSP"
+                            : tool === "Patch (add over)"
+                              ? { patchText: `*** Begin Patch\n*** Add File: ${spelled}\n+beta\n*** End Patch` }
+                              : tool === "LSP"
                           ? { action: "diagnostics", path: spelled }
                           : { file_path: spelled }
+                const moves = tool === "Patch (move)" || tool === "Patch (move onto)"
                 const call = withAdded(input)
                 const assertions: Permission.AssertInput[] = []
                 // The places the tool reports as its first act, for a client to name when no rule asks about the call.
@@ -196,7 +201,7 @@ describe("approval values: the request carries what the tool acts on", () => {
                         call: {
                           type: "tool-call",
                           id: "call-values",
-                          name: tool === "Patch (move)" ? "Patch" : tool,
+                          name: tool.startsWith("Patch") ? "Patch" : tool,
                           input: call,
                         },
                       }).pipe(
@@ -209,7 +214,7 @@ describe("approval values: the request carries what the tool acts on", () => {
                 const request = assertions.find((item) => item.action !== "external_directory")
                 expect(request).toBeDefined()
                 const places =
-                  tool === "Patch (move)" ? [named("file.txt"), named("file-moved.txt")] : [named(path.basename(real))]
+                  moves ? [named("file.txt"), named("file-moved.txt")] : [named(path.basename(real))]
                 const same = (items: readonly string[]) => items.map((item) => path.resolve(item))
                 expect(same(request!.metadata?.paths as string[])).toEqual(same(places))
                 expect(JSON.stringify(request)).not.toContain(decoy)
@@ -220,33 +225,35 @@ describe("approval values: the request carries what the tool acts on", () => {
                 // The runner acted where the request says, and on no decoy.
                 const content = (name: string) => fs.readFile(name, "utf8")
                 const acted = yield* Effect.promise(async () =>
-                  tool === "Edit" || tool === "Patch"
+                  tool === "Edit" || tool === "Patch" || tool === "Patch (add over)"
                     ? content(real)
                     : tool === "Write"
                       ? content(real)
                       : tool === "NotebookEdit"
                         ? content(real)
-                        : tool === "Patch (move)"
+                        : moves
                           ? content(path.join(folder, "file-moved.txt"))
                           : "",
                 )
-                if (tool === "Edit" || tool === "Patch" || tool === "Patch (move)") expect(acted).toBe("beta\n")
+                if (tool === "Edit" || tool === "Patch" || tool === "Patch (add over)" || moves)
+                  expect(acted).toBe("beta\n")
                 if (tool === "Write") expect(acted).toBe("written\n")
                 if (tool === "NotebookEdit") expect(acted).toContain("print(2)")
 
                 // Each diff names the place it will be written to, and a moved file the place it comes from.
                 const files = (request!.metadata?.files ?? []) as { file: string; place?: string; from?: string }[]
                 if (tool !== "Read" && tool !== "LSP") {
-                  expect(files).toHaveLength(1)
-                  expect(same([files[0]!.place!])).toEqual(same([places.at(-1)!]))
-                  if (tool === "Patch (move)") expect(same([files[0]!.from!])).toEqual(same([places[0]!]))
+                  // A move onto an existing file also shows what it replaces, at the destination.
+                  expect(files).toHaveLength(tool === "Patch (move onto)" ? 2 : 1)
+                  for (const file of files) expect(same([file.place!])).toEqual(same([places.at(-1)!]))
+                  if (moves) expect(same([files[0]!.from!])).toEqual(same([places[0]!]))
                 }
 
                 recorded.push(
                   normalize(
                     {
                       id: `${tool}/${spelling.name}/${trusted ? "trusted" : "untrusted"}`,
-                      tool: tool === "Patch (move)" ? "Patch" : tool,
+                      tool: tool.startsWith("Patch") ? "Patch" : tool,
                       input: call,
                       request: {
                         action: request!.action,
@@ -255,9 +262,9 @@ describe("approval values: the request carries what the tool acts on", () => {
                       },
                       truth: {
                         places,
-                        files: files.map(() => ({
+                        files: files.map((_, index) => ({
                           place: places.at(-1)!,
-                          ...(tool === "Patch (move)" ? { from: places[0]! } : {}),
+                          ...(moves && index === 0 ? { from: places[0]! } : {}),
                         })),
                       },
                     },
