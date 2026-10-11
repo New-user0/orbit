@@ -133,7 +133,8 @@ export async function runStream(input: StreamInput) {
   let period: Period | undefined
   let closed = false
   let finished = false
-  let interruptedByUser = false
+  // Set by the first SIGINT, after which the run stops reading and winds down.
+  let signalled = false
   let exitCode = 0
   let lastFailed: boolean | undefined
   let spentCost = 0
@@ -144,11 +145,29 @@ export async function runStream(input: StreamInput) {
   const fatal = async (message: string, type = "unknown") => {
     if (fatalError) return
     fatalError = true
-    emit("error", Date.now(), { subtype: "error", error: { type, message } })
     reading = false
     inputStopped.resolve()
     closed = true
     await input.client.session.interrupt({ sessionID }).catch(() => {})
+    // After a SIGINT the server may already be shutting down with this process, so what is left is to say that the run
+    // was interrupted, not that something broke.
+    if (signalled) {
+      const state = period
+      period = undefined
+      writeResult({
+        failed: true,
+        outcome: "interrupted",
+        reason: "interrupted",
+        error: undefined,
+        text: "",
+        userInterrupt: true,
+        periodState: state,
+      })
+      finished = true
+      stopped.resolve()
+      return
+    }
+    emit("error", Date.now(), { subtype: "error", error: { type, message } })
     writeResult({ failed: true, outcome: "failed", reason: "error", error: message, text: "", periodState: undefined })
     finished = true
     stopped.resolve()
@@ -358,7 +377,6 @@ export async function runStream(input: StreamInput) {
       unaccounted.delete(id)
       accounted.add(id)
     })
-    interruptedByUser = false
     const changed = accountedChanged
     accountedChanged = Promise.withResolvers<void>()
     changed.resolve()
@@ -691,6 +709,7 @@ export async function runStream(input: StreamInput) {
     const began = Date.now()
     let error = cause
     for (let attempt = 0; !finished; attempt++) {
+      if (signalled) return fatal(errorMessage(error))
       if (permanentStatus(error)) return fatal(`The event stream cannot be reopened: ${errorMessage(error)}`)
       if (Date.now() - began >= reconnectTiming.giveUpMs)
         return fatal(`The event stream did not come back: ${errorMessage(error)}`)
@@ -980,8 +999,8 @@ export async function runStream(input: StreamInput) {
   // ---- run ------------------------------------------------------------------------------------------------------
 
   const onSigint = () => {
-    if (interruptedByUser) process.exit(130)
-    interruptedByUser = true
+    if (signalled) process.exit(130)
+    signalled = true
     exitCode = 130
     reading = false
     inputStopped.resolve()
