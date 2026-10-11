@@ -63,10 +63,24 @@ export function headlessInput(input: HeadlessInput) {
   const envelope = input.envelope || stream
   return Effect.gen(function* () {
     const { reportRunError, runNonInteractive } = yield* Effect.promise(() => import("../../run/run"))
-    const schemaFile = Option.getOrUndefined(input.jsonSchema)
-    const jsonSchema = schemaFile ? yield* Effect.promise(() => Bun.file(schemaFile).json()) : undefined
+    const schemaValue = Option.getOrUndefined(input.jsonSchema)
     // Without the envelope a schema always prints the result object; with it the format picks what is printed.
-    const format = jsonSchema === undefined || envelope ? input.format : "result"
+    const format = schemaValue === undefined || envelope ? input.format : "result"
+    // A schema that cannot be read, or an attempts override that is not 1 to 20, is a usage error: it is reported in the
+    // requested format before any session exists.
+    const output =
+      schemaValue === undefined
+        ? undefined
+        : yield* Effect.promise(async () => {
+            const { readAttempts, readOutputSchema } = await import("../../run/output-schema")
+            const schema = await readOutputSchema(schemaValue)
+            if ("error" in schema) return schema
+            const attempts = readAttempts(process.env)
+            return "error" in attempts ? attempts : { schema: schema.schema, attempts: attempts.attempts }
+          })
+    if (output && "error" in output) return reportRunError({ format, envelope }, output.error)
+    const jsonSchema = output?.schema
+    const attempts = output?.attempts
     // The private server inherits this process's environment, which is how --bare reaches it.
     if (input.bare) {
       process.env.ORBIT_DISABLE_PROJECT_CONFIG = "1"
@@ -163,6 +177,7 @@ export function headlessInput(input: HeadlessInput) {
         agent: Option.getOrUndefined(input.agent),
         format,
         jsonSchema,
+        attempts,
         file: [...input.file],
         title: Option.getOrUndefined(input.title),
         thinking: input.thinking,

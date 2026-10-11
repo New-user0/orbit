@@ -3,6 +3,7 @@ export * as ServerManaged from "./managed"
 import { ConfigEnv } from "@orbit/core/config/env"
 import { ManagedSettings } from "@orbit/core/managed-settings"
 import { McpRestriction } from "@orbit/core/mcp/restriction"
+import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { PluginRestriction } from "@orbit/plugin/restriction"
 import type { Mcp } from "@orbit/schema/mcp"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -59,3 +60,10 @@ export const pluginRefusal = (directory: string, spec: string) =>
       ? `Plugin "${spec}" is blocked by managed settings`
       : `Plugin "${spec}" is not on the allow list in managed settings`
   })
+
+/**
+ * What a shell command would meet if the sandbox were on, asked of the runner's own launch so `orb doctor` and the
+ * runner cannot disagree about the platform or about which program is found. Starts nothing.
+ */
+export const sandboxProbe = () =>
+  ShellSandbox.launch({ settings: { enabled: true }, shell: "sh", args: [], cwd: process.cwd(), writable: [] })

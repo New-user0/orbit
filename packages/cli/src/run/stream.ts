@@ -27,8 +27,9 @@ import {
   markResultWritten,
   partID,
   prepareFile,
+  failureReason,
   sameLocation,
-  schemaInstruction,
+  structuredAnswer,
   subtype,
   toMillis,
   toolKey,
@@ -385,9 +386,10 @@ export async function runStream(input: StreamInput) {
           ? "interrupted"
           : interrupted
             ? end.reason
-            : "error",
+            : (failureReason(end.kind === "failed" ? end.error.type : undefined) ?? "error"),
       error: failure,
       text,
+      structured: structuredAnswer(messages),
       truncated,
       limit,
       userInterrupt: interrupted && end.reason === "user",
@@ -408,6 +410,7 @@ export async function runStream(input: StreamInput) {
     reason: string | undefined
     error: string | undefined
     text: string
+    structured?: { value: unknown }
     truncated?: boolean
     limit?: SessionStructuredError
     userInterrupt?: boolean
@@ -419,6 +422,7 @@ export async function runStream(input: StreamInput) {
       text: result.text,
       failed: result.failed,
       schema: input.jsonSchema,
+      structured: result.structured,
       subtype: subtype({ failed: result.failed, interrupted: result.userInterrupt ?? false, limit: result.limit }),
       truncated: result.truncated ?? false,
       outcome: result.outcome,
@@ -857,11 +861,7 @@ export async function runStream(input: StreamInput) {
       .prompt({
         sessionID,
         id: messageID,
-        text: [
-          message,
-          ...prepared.flatMap((file) => (file.text ? [file.text] : [])),
-          ...(input.jsonSchema === undefined ? [] : [schemaInstruction(input.jsonSchema)]),
-        ].join("\n\n"),
+        text: [message, ...prepared.flatMap((file) => (file.text ? [file.text] : []))].join("\n\n"),
         files: prepared.flatMap((file) => (file.attachment ? [file.attachment] : [])),
         delivery,
         ...(turn ? { turn } : {}),
@@ -873,7 +873,7 @@ export async function runStream(input: StreamInput) {
     // An older server drops the fields it does not know, so it would run without the limits that were asked for.
     if (turn && !echoes(turn, response.payload?.turn))
       await fatal(
-        "The server did not accept the limits or fallback model for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens and --fallback-model.",
+        "The server did not accept the limits, fallback model or output schema for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens, --fallback-model and --json-schema.",
         "version-mismatch",
       )
   }

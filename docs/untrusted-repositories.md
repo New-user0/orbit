@@ -227,6 +227,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   (no host, spawn, timeout, exit, empty output, bad JSON, too long, parse errors) is an invalid result that callers read
   as "ask". Proof: `test/shell-scan/powershell-parse.test.ts` (the real parser on the hiding spellings listed in its row tables, the injected
   host for each failure, and `.exe`, `.bat` and `.cmd` decoys in the working folder with a control that runs them).
+- The sed flavor probe (`SedScript.flavor` in `packages/core/src/shell/sed.ts`): to decide whether a `sed -i` command can be
+  computed by Orbit, it runs the shell the shell tool uses (a full path it was given, started through the injected
+  `ChildProcessSpawner`) once with the fixed script `sed --version`, nothing on stdin, the given environment only, in the
+  system temp folder (never the project, so a relative `PATH` entry cannot reach a planted `sed`), with a 3 second deadline
+  and a capped read. No repository text reaches the probe. A timeout, a failed start and a non-zero exit are no output, which
+  is `unknown` (no emulation) outside macOS. The emulator itself reads no file; the caller that wires it (shell-safety-15b) adds
+  its own rows. Proof: `test/shell-analysis/sed.test.ts` (`SedScript.flavor`: one process per shell and `PATH`, the arguments,
+  working folder and environment, the exit, failure and hang rows).
 - Programs that Orbit starts by a bare name (`hg`, `git` when `which` finds none, `node` or `uvx` as the command of an
   MCP server, the pager's `cmd /c more`): on Windows Bun's spawn, Node's, cross-spawn and `cmd.exe` look in the working
   folder before `PATH` for a bare name, unless the process that starts it has `NoDefaultCurrentDirectoryInExePath`.
@@ -275,6 +283,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/print.test.ts` ("a hostile $name input reaches no terminal through the $sink",
   "a hostile tool name", "--verbose tool output"),
   `packages/cli/test/run/noninteractive.test.ts` ("output channels"), `packages/util/src/plain.test.ts`.
+- Structured output: `--json-schema` names a file (or inline JSON) on the person's own command line, not one the folder
+  supplies, so it is not a loader and needs no trust gate; a workflow or agent file that later supplies a schema joins
+  this inventory and the gate. Every decoder has an explicit result and none runs a turn without validation: a schema
+  that is unreadable, not JSON, not an object root, has an unknown keyword, a remote or unresolved `$ref`, or is over
+  256 KiB or 64 levels is refused (the CLI before any session, the server at admission as a 400); a stored schema that no
+  longer compiles fails the step; a validator that throws rejects that one hand-in. The validator interprets the schema
+  and never builds code (no `new Function`, no `eval`), and a `$ref` loop that reads nothing ends as a failure. Property
+  names the model chooses reach the model through the rejection text with control characters escaped, and the accepted
+  value reaches a person only through `jsonLine`. Proof: `packages/core/test/session-output.test.ts`,
+  `packages/core/test/session-prompt.test.ts` ("refuses ... when the prompt is admitted"),
+  `packages/core/test/session-runner.test.ts` ("structured output"), `packages/cli/test/print.test.ts`
+  ("--json-schema") and `packages/cli/test/run/noninteractive.test.ts` ("structured output").
 - The run-scoped config of `--settings`, `--mcp-config` and `--agents` (`packages/cli/src/config-overlay.ts`), which
   reads a file by name, hands its content (or, for a `--settings` file, its real path) to a private server, and can
   start programs through `--mcp-config`. `--settings` decides file or inline by the value's shape alone, `stat`s a file
