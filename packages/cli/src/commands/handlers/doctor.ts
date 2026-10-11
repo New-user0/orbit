@@ -9,6 +9,7 @@ import path from "node:path"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { ServerConnection } from "../../services/server-connection"
+import { sandboxCheck, sandboxState } from "../../util/doctor-sandbox"
 import { settledModels } from "../../util/models"
 import { ORBIT_VERSION } from "../../version"
 
@@ -32,6 +33,8 @@ export default Runtime.handler(
     const model = Option.getOrUndefined(input.model)
     const { ServerManaged } = yield* Effect.promise(() => import("@orbit/server/managed"))
     const managed = yield* ServerManaged.read(ManagedPath.directory(process.platform, process.env))
+    // The runner's own answer to "what would a shell command meet", so the line cannot disagree with it.
+    const probed = ServerManaged.sandboxProbe()
     const checks = [
       { ok: undefined, label: "orb", detail: `${ORBIT_VERSION} on ${process.platform}-${process.arch}` },
       network(),
@@ -42,6 +45,7 @@ export default Runtime.handler(
       },
       ripgrep(),
       git(),
+      sandboxCheck(probed, sandboxState(managed.info.sandbox)),
       tachyon(),
       ...managedChecks(managed),
     ] satisfies Check[]
@@ -202,13 +206,15 @@ function names(list: readonly string[]) {
   return list.filter((name) => process.env[name] || process.env[name.toLowerCase()]).join(", ")
 }
 
+// Every label and detail is escaped here, at the sink: a PATH folder, a model ID, a provider error or a model name can
+// hold control characters, and no check should have to remember to escape its own.
 function print(checks: readonly Check[]) {
-  const width = Math.max(...checks.map((check) => check.label.length))
+  const width = Math.max(...checks.map((check) => plain(check.label).length))
   process.stdout.write(
     checks
       .map(
         (check) =>
-          `${check.ok === undefined ? "  " : check.ok ? "ok" : "!!"} ${check.label.padEnd(width)}  ${check.detail}${EOL}`,
+          `${check.ok === undefined ? "  " : check.ok ? "ok" : "!!"} ${plain(check.label).padEnd(width)}  ${plain(check.detail)}${EOL}`,
       )
       .join(""),
   )

@@ -55,9 +55,13 @@ test.each([40, 120])("a waiting shell notice reads as waiting, never finished, a
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await setup.waitForFrame((frame) => frame.includes("Shell waiting"))
+    await setup.waitForFrame((frame) => frame.includes("Shell waiting for input"))
     await setup.waitForVisualIdle()
     const frame = setup.captureCharFrame()
+    expect(frame).toContain("Shell waiting for input")
+    expect(frame).toContain("npm")
+    expect(frame).not.toContain("failed")
+    expect(frame).not.toContain("cancelled")
     expect(frame).not.toContain("Shell finished")
     expect(frame).not.toContain("OVERWRITTEN")
     expect(frame).not.toContain("pwned")
