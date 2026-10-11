@@ -5,6 +5,8 @@ describe("ShellDestructive.matches", () => {
   test.each([
     "rm -rf x",
     "git clean -n && git clean -fd",
+    "git clean --dry-run -d && git clean -fd",
+    "git reset --hard&&ls",
     "git clean -n; git clean -fdx",
     "git reset --hard; git status",
     "(git reset --hard)",
@@ -84,6 +86,9 @@ describe("ShellDestructive.matches", () => {
     "{ rm x -Force}",
     "Remove-Item x -Force|Out-Null",
     "git clean -n; git clean -fd",
+    "git reset --hard; git status",
+    "git push -f; echo done",
+    "Remove-Item x -Force:$true",
     "Clear-Content *.log",
     "Format-Volume",
     "Clear-Disk",
