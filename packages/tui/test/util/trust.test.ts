@@ -1,5 +1,6 @@
 import type { TrustStatus, TrustWithheld } from "@orbit/client"
 import { expect, test } from "bun:test"
+import { shellArgument } from "@orbit/util/shell-argument"
 import { groupWithheld, holdsBack, trustCommands } from "../../src/util/trust"
 
 const own: TrustWithheld = { path: "/projects/app/orbit.json", kinds: ["hooks"] }
@@ -44,9 +45,16 @@ test("names the location a folder above the project is trusted through, and no c
   const folder = "/projects"
   expect(trustCommands([above], "/projects/app")).toBe("`orb trust /projects --for /projects/app`")
   expect(trustCommands([above], folder)).toBe("`orb trust /projects`")
+  // A name with a space is one argument, quoted as the platform's shells take it.
   expect(trustCommands([{ ...above, directory: "/my work" }], "/my projects/app")).toBe(
-    '`orb trust "/my work" --for "/my projects/app"`',
+    `\`orb trust ${shellArgument("/my work")} --for ${shellArgument("/my projects/app")}\``,
   )
+  // A name a shell would act on is never the bare argument of a command: it is quoted, or there is no command.
+  for (const name of ["/work/$(touch PWNED)", "/work/`touch PWNED`", "/work/a\u001bb"]) {
+    const text = trustCommands([{ ...above, directory: name }], "/projects/app")
+    expect(text).not.toContain(`orb trust ${name}`)
+    expect(text).not.toContain("\u001b")
+  }
   expect(trustCommands([{ ...above, directory: "/", persistent: false }], "/projects/app")).not.toContain("orb trust /")
   expect(trustCommands([{ ...above, directory: "/", persistent: false }], "/projects/app")).toContain("--trust")
 })

@@ -1,5 +1,6 @@
 import type { TrustStatus } from "@orbit/client"
 import { expect, test } from "bun:test"
+import { shellArgument } from "@orbit/util/shell-argument"
 import { announceTrust } from "../../src/mini/trust.shared"
 import { createApi, json } from "../fixture/tui-client"
 
@@ -97,7 +98,7 @@ test("quotes a folder whose name has a space in it, as it has to be typed", asyn
     }),
   )
 
-  expect(result.written[0]).toContain('`orb trust "/my work" --for /projects/app/packages`')
+  expect(result.written[0]).toContain(`\`orb trust ${shellArgument("/my work")} --for /projects/app/packages\``)
 })
 
 test("points a home directory, which orb trust refuses, at the full terminal UI", async () => {

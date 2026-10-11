@@ -2370,7 +2370,7 @@ test("the refusal for the folder that holds the file names that folder to trust 
   // A folder with a space in its name is quoted as a shell takes it as one argument.
   const spaced = path.resolve("/trust spaced")
   expect(holderRefusal({ ...status, directory: spaced }, path.join(spaced, "plan.ts"))).toContain(
-    `\`orb trust "${spaced}"\``,
+    `\`orb trust ${quoted(spaced)}\``,
   )
 
   // A home directory or a filesystem root cannot be trusted for good, so only --trust is offered.
