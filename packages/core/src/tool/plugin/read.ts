@@ -151,7 +151,12 @@ export const Plugin = {
               Effect.flatMap((result) =>
                 Effect.gen(function* () {
                   const content = toModelContent(result.path, input.offset, result.output)
-                  const metadata = { truncated: result.output.type === "file" ? false : result.output.truncated }
+                  const metadata = {
+                    truncated: result.output.type === "file" ? false : result.output.truncated,
+                    ...(result.output.type === "file" && result.output.dimensions
+                      ? { image: result.output.dimensions }
+                      : {}),
+                  }
                   // Lists and media are never answered with a stub. Text is, when this range showed the same text before.
                   const repeatable =
                     typeof content === "string" &&
@@ -292,7 +297,9 @@ export const toModelContent = (path: string, offset: number | undefined, output:
         type: "text",
         text:
           output.mime !== "application/pdf"
-            ? "Image read successfully"
+            ? output.dimensions
+              ? `Image read successfully (${output.dimensions.width}×${output.dimensions.height} px, ${output.mime})`
+              : `Image read successfully (${output.mime})`
             : output.pages
               ? `Read ${path}, PDF pages ${output.pages.first}-${output.pages.last} of ${output.pages.total}`
               : `Read PDF ${path}`,

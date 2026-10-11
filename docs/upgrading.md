@@ -2436,3 +2436,11 @@ The question tool now accepts 1 to 4 questions per call, with 2 to 4 options eac
 **Affects:** SDK callers that build question forms and read `Form.Option`, which gains an optional `preview`, and anyone whose agents or plugins send questions with no options or one option, more than four options, or more than four questions.
 
 **What to do:** Nothing for most setups. Clients that do not draw previews keep working because the field is optional.
+
+### Read reports image sizes, and a resized image comes with a note
+
+Read now opens an image with a header line that names its pixel size and type, for example "Image read successfully (1920×1080 px, image/png)", and puts the same size in the result metadata under `image`. When the size cannot be read from the header, the line names the type alone. Whenever an image that a tool returns directly is scaled down to fit the size limits, a short bracketed note follows it with the original size, the size it is shown at and a factor (original width divided by shown width, two decimals) for turning positions read from the shown image into positions in the original. An image that is only re-encoded at the same pixel size gets no note, and neither does one passed through because the resizer is unavailable. An image returned to a Code Mode program (the Execute tool) is resized as before and gets no note yet, and images in your own prompts are resized as before and get no note yet.
+
+**Affects:** anyone who matches Read's exact "Image read successfully" text, SDK callers that read the Read tool output schema (images gain an optional `dimensions`), and sessions that read large images.
+
+**What to do:** Nothing for most setups. Match the line by its prefix if you parse it.

@@ -43,14 +43,19 @@ export type Editor = {
   configure: (limits: Partial<Limits>) => void
 }
 
+export type Size = { width: number; height: number }
+
+export type Normalized = {
+  content: FileSystem.Content & { readonly encoding: "base64" }
+  /** Present only when the pixel size changed: a re-encode at the same size is not a resize. */
+  resized?: { from: Size; to: Size }
+}
+
 export interface Interface extends State.Transformable<Editor> {
   readonly normalize: (
     resource: string,
     content: FileSystem.Content & { readonly encoding: "base64" },
-  ) => Effect.Effect<
-    FileSystem.Content & { readonly encoding: "base64" },
-    ResizerUnavailableError | DecodeError | SizeError
-  >
+  ) => Effect.Effect<Normalized, ResizerUnavailableError | DecodeError | SizeError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Image") {}

@@ -146,10 +146,10 @@ const normalizeImageAttachment = Effect.fn("SessionPrompt.normalizeImageAttachme
   const label = attachmentLabel(input)
   const content = { uri: label, content: data, encoding: "base64" as const, mime }
   const normalized = yield* image.normalize(label, content).pipe(
-    Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed(content)),
+    Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed({ content })),
     Effect.mapError((error) => new AttachmentError({ uri: label, message: error.message })),
   )
-  return { data: Base64.make(normalized.content), mime: normalized.mime }
+  return { data: Base64.make(normalized.content.content), mime: normalized.content.mime }
 })
 
 const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(function* (uri: string) {

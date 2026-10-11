@@ -441,6 +441,7 @@ describe("ReadTool", () => {
         content: png,
         encoding: "base64",
         mime: "image/png",
+        dimensions: { width: 1, height: 1 },
       }
       const registry = yield* Tool.Service
 
@@ -452,7 +453,7 @@ describe("ReadTool", () => {
       expect(execution.status).toBe("completed")
       if (execution.status !== "completed") return
       expect(execution.content).toEqual([
-        { type: "text", text: "Image read successfully" },
+        { type: "text", text: "Image read successfully (1×1 px, image/png)" },
         { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png", name: "pixel.png" },
       ])
       expect(readCalls).toEqual([
@@ -469,9 +470,9 @@ describe("ReadTool", () => {
       })
       expect(settled.status).toBe("completed")
       if (settled.status !== "completed") return
-      expect(settled.metadata).toEqual({ truncated: false })
+      expect(settled.metadata).toEqual({ truncated: false, image: { width: 1, height: 1 } })
       expect(settled.content).toMatchObject([
-        { type: "text", text: "Image read successfully" },
+        { type: "text", text: "Image read successfully (1×1 px, image/png)" },
         { type: "file", mime: "image/png", uri: `data:image/png;base64,${png}` },
       ])
     }),
@@ -510,9 +511,26 @@ describe("ReadTool", () => {
         encoding: "base64",
       })
       expect(settled.content).toEqual([
-        { type: "text", text: "Image read successfully" },
+        { type: "text", text: "Image read successfully (image/png)" },
         { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png", name: "large.png" },
       ])
+    }),
+  )
+
+  it.effect("names the type alone when the header gives no size", () =>
+    Effect.gen(function* () {
+      const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      readResult = { type: "file", uri: "file:///pixel.png", name: "pixel.png", content: png, encoding: "base64", mime: "image/png" }
+      const registry = yield* Tool.Service
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-no-size", name: "Read", input: { file_path: "pixel.png" } },
+      })
+      expect(result.status).toBe("completed")
+      if (result.status !== "completed") return
+      expect(result.metadata).toEqual({ truncated: false })
+      expect(result.content?.[0]).toEqual({ type: "text", text: "Image read successfully (image/png)" })
     }),
   )
 
@@ -526,9 +544,11 @@ describe("ReadTool", () => {
         content: png,
         encoding: "base64",
         mime: "image/png",
+        dimensions: { width: 1, height: 1 },
       }
       const registry = yield* Tool.Service
 
+      // The header still names the size from the file, and no resize note follows an image passed through unchanged.
       expect(
         yield* executeTool(registry, {
           sessionID,
@@ -537,7 +557,10 @@ describe("ReadTool", () => {
         }),
       ).toMatchObject({
         status: "completed",
-        content: [{ type: "text" }, { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png" }],
+        content: [
+          { type: "text", text: "Image read successfully (1×1 px, image/png)" },
+          { type: "file", uri: `data:image/png;base64,${png}`, mime: "image/png" },
+        ],
       })
     }),
   )
@@ -563,7 +586,7 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "Image read successfully" },
+          { type: "text", text: "Image read successfully (image/png)" },
           { type: "text", text: "[1 image omitted: could not be decoded.]" },
         ],
       })
@@ -597,7 +620,7 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "Image read successfully" },
+          { type: "text", text: "Image read successfully (image/png)" },
           { type: "text", text: "[1 image omitted: could not be resized below the image size limit.]" },
         ],
       })
@@ -639,6 +662,87 @@ describe("ReadTool", () => {
     }),
   )
 
+  it.effect("names the original and shown sizes and the width factor after a resized image", () =>
+    Effect.gen(function* () {
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const source = new photon.PhotonImage(new Uint8Array(Array.from({ length: 1_000 * 7 * 4 }, () => 255)), 1_000, 7)
+      const base64 = Buffer.from(source.get_bytes()).toString("base64")
+      source.free()
+      readResult = {
+        type: "file",
+        uri: "file:///wide.png",
+        name: "wide.png",
+        content: base64,
+        encoding: "base64",
+        mime: "image/png",
+        dimensions: { width: 1_000, height: 7 },
+      }
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxWidth: 300 }))
+      const registry = yield* Tool.Service
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-resize-note", name: "Read", input: { file_path: "wide.png" } },
+      })
+
+      expect(result.status).toBe("completed")
+      if (result.status !== "completed") return
+      const media = result.content?.[1]
+      if (media?.type !== "file") throw new Error("expected the image")
+      const shown = photon.PhotonImage.new_from_byteslice(Buffer.from(media.uri.split(",")[1] ?? "", "base64"))
+      const size = { width: shown.get_width(), height: shown.get_height() }
+      shown.free()
+      expect(size).toEqual({ width: 300, height: 2 })
+      expect(result.metadata).toEqual({ truncated: false, image: { width: 1_000, height: 7 } })
+      // The factor is the width ratio (1000 / 300), not the height ratio (7 / 2), printed to two places.
+      expect(result.content).toEqual([
+        { type: "text", text: "Image read successfully (1000×7 px, image/png)" },
+        { type: "file", uri: media.uri, mime: media.mime, name: "wide.png" },
+        {
+          type: "text",
+          text: "[Image resized: the original is 1000×7 px and it is shown at 300×2 px. Multiply coordinates read from the shown image by 3.33 to get coordinates in the original.]",
+        },
+      ])
+    }),
+  )
+
+  it.effect("gives no resize note when the image is only re-encoded at its own pixel size", () =>
+    Effect.gen(function* () {
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const pixels = Uint8Array.from({ length: 256 * 256 * 4 }, (_, index) => (index * 73 + (index >> 3)) % 256)
+      const source = new photon.PhotonImage(pixels, 256, 256)
+      const png = Buffer.from(source.get_bytes()).toString("base64")
+      source.free()
+      readResult = {
+        type: "file",
+        uri: "file:///large.png",
+        name: "large.png",
+        content: png,
+        encoding: "base64",
+        mime: "image/png",
+        dimensions: { width: 256, height: 256 },
+      }
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxBase64Bytes: png.length - 1 }))
+      const registry = yield* Tool.Service
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-reencode", name: "Read", input: { file_path: "large.png" } },
+      })
+
+      expect(result.status).toBe("completed")
+      if (result.status !== "completed") return
+      expect(result.content?.map((item) => item.type)).toEqual(["text", "file"])
+      const media = result.content?.[1]
+      if (media?.type !== "file") throw new Error("expected the image")
+      const shown = photon.PhotonImage.new_from_byteslice(Buffer.from(media.uri.split(",")[1] ?? "", "base64"))
+      expect([shown.get_width(), shown.get_height()]).toEqual([256, 256])
+      shown.free()
+    }),
+  )
+
   it.effect("accepts PNG candidates at the exact base64 limit and skips them one byte below", () =>
     Effect.gen(function* () {
       const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
@@ -662,18 +766,44 @@ describe("ReadTool", () => {
         [6, ""],
       ] as const) {
         yield* image.transform((editor) => editor.configure({ maxWidth, maxBase64Bytes: 1_024 }))
-        const candidate = yield* image.normalize("wide.png", content)
+        const candidate = (yield* image.normalize("wide.png", content)).content
         expect(candidate.mime).toBe("image/png")
         expect(candidate.content.match(/=*$/)?.[0]).toBe(padding)
 
         yield* image.transform((editor) => editor.configure({ maxBase64Bytes: candidate.content.length }))
-        expect(yield* image.normalize("wide.png", content)).toEqual(candidate)
+        expect((yield* image.normalize("wide.png", content)).content).toEqual(candidate)
 
         yield* image.transform((editor) => editor.configure({ maxBase64Bytes: candidate.content.length - 1 }))
-        const smaller = yield* image.normalize("wide.png", content)
+        const smaller = (yield* image.normalize("wide.png", content)).content
         expect(smaller.mime).toBe("image/png")
         expect(smaller.content.length).toBeLessThan(candidate.content.length)
       }
+    }),
+  )
+
+  it.effect("gives no resize note to a GIF whose logical screen is 0x0", () =>
+    Effect.gen(function* () {
+      // A 1x1 frame on a 0x0 screen, padded with a comment extension so it is over the byte cap.
+      const gif = Uint8Array.from([
+        ...Array.from("GIF89a").map((c) => c.charCodeAt(0)),
+        0, 0, 0, 0, 0x80, 0, 0,
+        0, 0, 0, 0xff, 0xff, 0xff,
+        0x21, 0xfe, 200, ...Array.from({ length: 200 }, () => 0x61), 0,
+        0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0,
+        2, 2, 0x44, 0x01, 0,
+        0x3b,
+      ])
+      const image = yield* Image.Service
+      yield* image.transform((editor) => editor.configure({ maxBase64Bytes: 200 }))
+      const content = { uri: "file:///empty.gif", content: Buffer.from(gif).toString("base64"), encoding: "base64" as const, mime: "image/gif" }
+      const photon = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const decoded = photon.PhotonImage.new_from_byteslice(gif)
+      // Control: the fixture really is a 0x0 image to the resizer, so the test is not vacuous.
+      expect([decoded.get_width(), decoded.get_height()]).toEqual([0, 0])
+      decoded.free()
+      const result = yield* image.normalize("empty.gif", content)
+      expect(result.content.content.length).toBeLessThanOrEqual(200)
+      expect(result).not.toHaveProperty("resized")
     }),
   )
 
@@ -701,7 +831,7 @@ describe("ReadTool", () => {
       ).toMatchObject({
         status: "completed",
         content: [
-          { type: "text", text: "Image read successfully" },
+          { type: "text", text: "Image read successfully (image/png)" },
           { type: "text", text: "[1 image omitted: could not be resized below the image size limit.]" },
         ],
       })
