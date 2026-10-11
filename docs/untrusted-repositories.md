@@ -1682,9 +1682,9 @@ fixes it or asks.
   `directory.startsWith(prefix + path.sep)`, which class 4 forbids. It is harmless today, because the prefix is a folder
   that `runFolder` has already checked, but it is the model that a reader would copy. Replace it with a `path.relative`
   check: `@orbit/flow` does not depend on `@orbit/util`, so it cannot use `FSUtil.contains` without a new dependency.
-- **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name in every form Bun writes (`import("#x")`, `import"#x"`, `from"#x"`, `__require("#x")` and a call through the minified `import.meta.require` alias)
+- **Build checks.** `verifyArtifact` fails the build on an import or a `require` of a `#` name in the forms Bun writes in an unsplit build (`import("#x")`, `import"#x"`, `from"#x"`, `__require("#x")` and a call through the minified `import.meta.require` alias)
   (`packages/cli/test/verify-artifact.test.ts`), and `provider-compiled.test.ts` and `pdf-compiled.test.ts` import the
-  autoload options instead of copying them. It still does not fail the build on a stray bare name: a text scan of the
+  autoload options instead of copying them. The alias set covers the whole file, so a minifier that reuses the alias name for another call could fail the build wrongly, and a `splitting: true` build, where a chunk imports the alias from an earlier or later chunk, is not covered and has no test. It still does not fail the build on a stray bare name: a text scan of the
   compiled binary finds hundreds of candidates, most of them guarded optional requires in dependencies (`ajv/dist/...`,
   `node-fetch`, `@aws-sdk/signature-v4-crt`) and bytecode noise, so a reliable check needs the bundler's own list of
   unresolved imports. Two names are not replaced in `packages/cli/script/runtime-requires.ts`, because nothing loads code through either
@@ -1703,7 +1703,7 @@ fixes it or asks.
   process with a deadline, whole and by range, with a valid deep tree as the control). Still open: the library inflates
   object streams whole at load time and follows filter arrays, so a 1,407-byte file with `[/FlateDecode /FlateDecode]`
   took the process from 79 MiB to 1,629 MiB peak RSS. The 32 MiB source cap bounds neither that nor any other time or
-  memory a hostile file can take, so a crafted PDF can still exhaust the Location's memory. The reference bounds both
+  memory a hostile file can take, so a crafted PDF can still exhaust the memory of the server process, which every session shares. The library also interns every distinct `n g R` reference in a module-global pool that is never cleared: a 28 MiB one-page PDF with 2.5M distinct references took heapUsed from 67 MiB to 567 MiB, and it stayed there after a full GC and further reads (RSS 1.9 GiB), until the process exits. A worker that exits after each parse would free it. The reference bounds both
   with subprocess timeouts. Parsing in a worker with a time and memory limit was deferred as a follow-up on the premise
   that the cap was enough; these numbers say it is not, so it goes back to the owner for a new decision. The parser
   evaluates nothing (`tool-read-pdf.test.ts` plants a script action and a marker).

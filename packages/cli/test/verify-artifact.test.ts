@@ -36,9 +36,9 @@ const bundle = async (source: string, minify: boolean) => {
   return built.outputs[0].text()
 }
 
-test.each(Object.entries(sources).flatMap(([name, source]) => [true, false].map((minify) => [name, source, minify] as const)))(
+test.each(Object.entries(sources).flatMap(([name, source]) => [true, false].map((minify) => [name, minify, source] as const)))(
   "finds a # import in bundler output: %s (minified: %p)",
-  async (_name, source, minify) => {
+  async (_name, minify, source) => {
     expect(findHashImport(await bundle(source, minify))).toBeDefined()
   },
 )

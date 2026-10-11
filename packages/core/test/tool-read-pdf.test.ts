@@ -363,6 +363,26 @@ describe("a PDF is refused when a few bytes would make the parser stall", () => 
       expect(result).toEqual(kids === "[]" ? { total: 0 } : { refused: "corrupt" })
     }
   })
+
+  test("a root that is not a page tree is refused instead of counted as one page", async () => {
+    const page = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>"
+    const untypedRoot = rawPdf(["<< /Type /Catalog /Pages 2 0 R >>", "<< /Kids [3 0 R 4 0 R] /Count 2 >>", page, page])
+    expect(await run(untypedRoot)).toEqual({ code: 0, result: { refused: "corrupt" } })
+    expect(await run(untypedRoot, 1, 1)).toEqual({ code: 0, result: { refused: "corrupt" } })
+
+    const pageRoot = rawPdf(["<< /Type /Catalog /Pages 2 0 R >>", page])
+    expect(await run(pageRoot)).toEqual({ code: 0, result: { refused: "corrupt" } })
+  })
+
+  test("an untyped kid is not counted as a page", async () => {
+    const tree = rawPdf([
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 10 10] >>",
+      "<< /Parent 2 0 R >>",
+    ])
+    expect(await run(tree)).toEqual({ code: 0, result: { total: 1 } })
+  })
 })
 
 describe("what the strict parse refuses", () => {

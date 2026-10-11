@@ -80,23 +80,21 @@ const load = Effect.fnUntraced(function* (bytes: Uint8Array, resource: string) {
         reason: cause instanceof globalThis.Error && cause.message.includes("is encrypted") ? "encrypted" : "corrupt",
       }),
   })
-  // The count is our own walk, run before the library's recursive one can: that one visits a node once per time it is
+  // The walk is a guard only; the count comes from the library so that it counts what the library can cut. It runs before the library's recursive one can: that one visits a node once per time it is
   // listed, so a few KB of nodes that each list the same child twice make it visit 2^depth leaves and block the server.
   const pages = yield* Effect.try({
     try: () => {
       const visited = new Set<unknown>()
       const pending: unknown[] = [document.catalog.get(PDFName.of("Pages"))]
-      let leaves = 0
       while (pending.length > 0) {
         const entry = pending.pop()
         if (visited.has(entry)) throw new globalThis.Error("page tree node reached twice")
         visited.add(entry)
         const node = document.context.lookup(entry as never)
         if (node instanceof PDFPageTree) pending.push(...node.Kids().asArray())
-        else if (node instanceof PDFDict) leaves++
-        else throw new globalThis.Error("page tree entry is not a dictionary")
+        else if (!(node instanceof PDFDict)) throw new globalThis.Error("page tree entry is not a dictionary")
       }
-      return leaves
+      return document.getPageCount()
     },
     catch: () => new Error({ resource, reason: "corrupt" }),
   })
