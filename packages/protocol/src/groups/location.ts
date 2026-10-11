@@ -1,4 +1,5 @@
 import { Location } from "@orbit/schema/location"
+import { AbsolutePath } from "@orbit/schema/schema"
 import { Trust } from "@orbit/schema/trust"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -88,6 +89,10 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             description:
               "Whether a grant is stored on disk (true when omitted) or lasts only until the serving process restarts. A grant for the home directory or a filesystem root always lasts only until the restart. Ignored when trust is false.",
           }),
+          holder: Schema.optional(Schema.String).annotate({
+            description:
+              "A folder to trust instead of the location's project: the project's own root, or the `directory` of a file in `withheld` that sits in a folder above the project. Any other folder trusts nothing and leaves the status as it is. The answer is always the location's status. Ignored when trust is false.",
+          }),
         }),
         success: Trust.Status,
       })
@@ -112,6 +117,27 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
           summary: "List trusted folders",
           description:
             "List the grants stored on disk, ordered by folder. A grant that lasts only until the serving process restarts is not listed.",
+        }),
+      ),
+    )
+    .add(
+      // Like the list, a grant belongs to the server: this one ends it by the folder's name, so a deleted folder works.
+      HttpApiEndpoint.post("trust.revoke", "/api/trust/revoke", {
+        payload: Schema.Struct({
+          directory: Schema.String.annotate({
+            description:
+              "The folder as it is listed or as it was typed. It is matched by name, never looked up on disk, so a folder that was deleted can still be revoked; on a file system that ignores case, a different case matches.",
+          }),
+        }),
+        success: Schema.Array(AbsolutePath).annotate({
+          description: "The folders whose stored grants this ended. Empty when none matched.",
+        }),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "trust.revoke",
+          summary: "Revoke a trusted folder by name",
+          description:
+            "End the stored grant for a folder, and what it recorded about the folder's config, by the folder's name. Only narrows trust, and publishes trust.updated for each folder it ends.",
         }),
       ),
     )

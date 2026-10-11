@@ -43,6 +43,33 @@ test("splits what trusting the folder turns on from what stays off above it", ()
   expect(aboveFolders(untrusted)).toEqual([outer])
 })
 
+test("asks about the changes of a trusted folder, listing only what changed", () => {
+  const changed = {
+    directory: repo,
+    trusted: true,
+    source: "saved",
+    persistent: true,
+    withheld: [
+      { path: path.join(repo, "orbit.json"), kinds: ["hooks"] },
+      { path: path.join(outer, "orbit.json"), kinds: ["mcp"], directory: outer },
+    ],
+    changed: [{ path: path.join(repo, "orbit.json"), kinds: ["hooks"] }],
+  } satisfies TrustStatus
+
+  expect(holdsBack(changed)).toBe(true)
+  // A trusted folder whose only held-back config is above it has nothing that trusting it would turn on.
+  expect(holdsBack({ ...changed, changed: [], withheld: [changed.withheld[1]] })).toBe(false)
+  const shown = view(changed, repo)
+  expect(shown.changed).toBe(true)
+  expect(shown.held).toEqual([{ name: "orbit.json", kinds: "hooks" }])
+  const asked = prompt(shown)
+  expect(asked.message).toBe(`Trust the changes in ${repo}?`)
+  expect(asked.detail).toContain("changed since you trusted it")
+  expect(asked.accept).toBe("Trust changes")
+  // The question for an untrusted folder is the one it was.
+  expect(prompt(view(untrusted, repo)).accept).toBe("Trust this folder")
+})
+
 test("names the folder VS Code opened when it is not the project's folder", () => {
   const sub = path.join(repo, "packages", "app")
 

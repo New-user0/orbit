@@ -17,6 +17,8 @@ import type {
   LocationTrustUpdateInput,
   LocationTrustUpdateOutput,
   LocationTrustListOutput,
+  LocationTrustRevokeInput,
+  LocationTrustRevokeOutput,
   AgentListInput,
   AgentListOutput,
   AgentGetInput,
@@ -327,12 +329,17 @@ const EndpointLocationTrustUpdate = (raw: RawClient["server.location"]) => (inpu
   preserveEffect<LocationTrustUpdateOutput>()(
     raw["location.trust.update"]({
       query: { location: input["location"] },
-      payload: { trust: input["trust"], persist: input["persist"] },
+      payload: { trust: input["trust"], persist: input["persist"], holder: input["holder"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
 const EndpointLocationTrustList = (raw: RawClient["server.location"]) => () =>
   preserveEffect<LocationTrustListOutput>()(raw["trust.list"]({}).pipe(Effect.mapError(mapClientError)))
+
+const EndpointLocationTrustRevoke = (raw: RawClient["server.location"]) => (input: LocationTrustRevokeInput) =>
+  preserveEffect<LocationTrustRevokeOutput>()(
+    raw["trust.revoke"]({ payload: { directory: input["directory"] } }).pipe(Effect.mapError(mapClientError)),
+  )
 
 const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
   get: EndpointLocationGet(raw),
@@ -341,6 +348,7 @@ const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
     get: EndpointLocationTrustGet(raw),
     update: EndpointLocationTrustUpdate(raw),
     list: EndpointLocationTrustList(raw),
+    revoke: EndpointLocationTrustRevoke(raw),
   },
 })
 

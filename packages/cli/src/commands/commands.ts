@@ -885,6 +885,12 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           Flag.withDescription("List the folders that are trusted for good"),
           Flag.withDefault(false),
         ),
+        for: Flag.string("for").pipe(
+          Flag.withDescription(
+            "Trust the folder through this location: the folder is above the project of that location and holds back config for it, which the refusal that names the command says",
+          ),
+          Flag.optional,
+        ),
       },
     }),
     Spec.make("pair", {

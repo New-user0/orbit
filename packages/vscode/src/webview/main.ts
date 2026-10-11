@@ -517,7 +517,10 @@ function paintTrust(trust: TrustView | undefined) {
   banner.hidden = trust === undefined
   if (!trust) return banner.replaceChildren()
   const head = element("div", "trust-head")
-  head.append(element("span", "strong", "⊙ Untrusted"), element("span", "muted grow trust-folder", trust.directory))
+  head.append(
+    element("span", "strong", trust.changed === true ? "⊙ Changed" : "⊙ Untrusted"),
+    element("span", "muted grow trust-folder", trust.directory),
+  )
   const files = element("details", "trust-files")
   files.append(
     element("summary", undefined, `${trust.held.length} ${trust.held.length === 1 ? "file" : "files"} held back`),
@@ -529,7 +532,13 @@ function paintTrust(trust: TrustView | undefined) {
   )
   banner.replaceChildren(
     head,
-    element("div", undefined, `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`),
+    element(
+      "div",
+      undefined,
+      trust.changed === true
+        ? `This folder's config changed since you trusted it, and Orbit is leaving out what changed: ${trust.summary}.`
+        : `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`,
+    ),
     files,
     ...(trust.opened === undefined
       ? []

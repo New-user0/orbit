@@ -1,5 +1,6 @@
 import { ClientError, type OrbitClient, type TrustStatus } from "@orbit/client/promise"
 import { plain } from "@orbit/flow/plain"
+import { shellArgument } from "@orbit/util/shell-argument"
 import { Effect } from "effect"
 import { EOL } from "node:os"
 import path from "node:path"
@@ -95,10 +96,12 @@ export const trustRefusal = Effect.fn("cli.trust.refusal")(function* (
     )
     return undefined
   }
-  const status = options.grant && !current.trusted ? yield* grant(client, location) : current
+  const status =
+    options.grant && (!current.trusted || (current.changed ?? []).length > 0) ? yield* grant(client, location) : current
   if (blocked(status, options.imports, defined, options.strict))
-    return refusal(status, options.imports, defined, options.strict)
-  if (status.withheld.length > 0) yield* Effect.sync(() => process.stderr.write(`Warning: ${notice(status)}${EOL}`))
+    return refusal(status, options.imports, defined, options.strict, location.directory)
+  if (status.withheld.length > 0)
+    yield* Effect.sync(() => process.stderr.write(`Warning: ${notice(status, location.directory)}${EOL}`))
   // The folder that holds the file is the run's own unless the command was given a path elsewhere, and another project
   // can own that folder: the run takes nothing from it but the file, and the file is what its trust is for. Getting here
   // with a file means that the project of the run is trusted, so a folder of the same project is trusted as well.
@@ -130,7 +133,7 @@ export const requireTrust = Effect.fn("cli.trust.require")(function* (
 export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: OrbitClient, directory: string) {
   const status = yield* call((signal) => client.location.trust.get({ location: { directory } }, { signal }))
   if (status.withheld.length === 0) return
-  process.stderr.write(`orb acp: ${notice(status)}${EOL}`)
+  process.stderr.write(`orb acp: ${notice(status, directory)}${EOL}`)
 })
 
 /**
@@ -139,7 +142,14 @@ export const warnUntrusted = Effect.fn("cli.trust.warn")(function* (client: Orbi
  * it imports (`imports`), or what it defines (`defines`), which is listed: shell commands, nodes that approve what
  * their agents ask permission for, and nodes that run as an agent the file names.
  */
-export function refusal(status: TrustStatus, imports?: string, defines?: Defined, strict?: boolean) {
+export function refusal(
+  status: TrustStatus,
+  imports?: string,
+  defines?: Defined,
+  strict?: boolean,
+  location: string = status.directory,
+) {
+  if (status.trusted) return changedRefusal(status, location)
   const own = status.withheld.filter((item) => item.directory === undefined)
   const above = status.withheld.filter((item) => item.directory !== undefined)
   const loads = imports ?? defines?.file
@@ -156,7 +166,7 @@ export function refusal(status: TrustStatus, imports?: string, defines?: Defined
         : "the file and those files"
   return [
     ...lead(
-      `Orbit stopped before doing any work: ${status.directory} is not trusted`,
+      `Orbit stopped before doing any work: ${plain(status.directory)} is not trusted`,
       status.directory,
       imports,
       defines,
@@ -183,7 +193,35 @@ export function refusal(status: TrustStatus, imports?: string, defines?: Defined
     ...(above.length === 0
       ? []
       : [
-          `The files above the project stay off until the folder that holds them is trusted, which trusting the project does not do. Look them over, then trust it for good with ${trustCommands(above)}.`,
+          `The files above the project stay off until the folder that holds them is trusted, which trusting the project does not do. Look them over, then ${aboveAdvice(above, location)}.`,
+        ]),
+  ].join(EOL)
+}
+
+/**
+ * What a refusal says when the folder is trusted but the executable config in it differs from what was trusted: the
+ * hooks, servers, plugins, providers, shell, formatters, language servers, environment, sandbox or skills that a pull, a
+ * branch switch or an edit changed. Only those kinds are off, so it names them with the file each is in.
+ */
+export function changedRefusal(status: TrustStatus, location: string = status.directory) {
+  const paths = new Set((status.changed ?? []).map((item) => item.path))
+  const items = status.withheld.filter((item) => paths.has(item.path))
+  const own = items.filter((item) => item.directory === undefined)
+  const above = items.filter((item) => item.directory !== undefined)
+  return [
+    `Orbit stopped before doing any work: the project config in ${plain(status.directory)} changed since the folder was trusted, so what changed is held back:`,
+    "",
+    ...heldLines(status.directory, items),
+    "",
+    ...(own.length === 0
+      ? []
+      : [
+          `Look it over, then trust the changes with \`orb trust\`, or for this run only with --trust.`,
+        ]),
+    ...(above.length === 0
+      ? []
+      : [
+          `The files above the project are decided by the folder that holds them, which trusting the project does not do. Look them over, then ${aboveAdvice(above, location)}.`,
         ]),
   ].join(EOL)
 }
@@ -216,7 +254,7 @@ export function unanswered(directory: string, imports?: string, defines?: Define
 export function holderRefusal(status: TrustStatus, imports?: string, defines?: Defined) {
   return [
     ...lead(
-      `Orbit stopped before doing any work: ${status.directory} is not trusted`,
+      `Orbit stopped before doing any work: ${plain(status.directory)} is not trusted`,
       status.directory,
       imports,
       defines,
@@ -224,7 +262,11 @@ export function holderRefusal(status: TrustStatus, imports?: string, defines?: D
     "",
     `The file is in another project than the one the command runs in, and each project is trusted on its own. ${
       status.persistent
-        ? `Look the file over, then trust its folder for good with \`orb trust ${quoted(status.directory)}\`, or for this run only with --trust.`
+        ? `Look the file over, then trust its folder for good ${
+            quoted(status.directory) === undefined
+              ? "by typing `orb trust` and the folder (its name is not printed as a command because a shell could act on it)"
+              : `with \`orb trust ${quoted(status.directory)}\``
+          }, or for this run only with --trust.`
         : "Its folder is a home directory or a filesystem root, which Orbit never trusts for good, so `orb trust` refuses it. Pass --trust to trust it for this run only, or keep the file in a project folder."
     }`,
   ].join(EOL)
@@ -237,17 +279,55 @@ export function heldLines(directory: string, items: ReadonlyArray<Withheld>) {
   return named.map((item) => `  ${item.name.padEnd(width)}  ${item.kinds}`)
 }
 
-/** The commands that trust each folder that holds some of what is held back above the project, as they are typed. */
-export function trustCommands(items: ReadonlyArray<Withheld>) {
-  return [...new Set(items.flatMap((item) => item.directory ?? []))]
-    .map((folder) => `\`orb trust ${quoted(folder)}\``)
-    .join(", ")
+/**
+ * The command that trusts a folder that holds some of what is held back above a project, as it is typed. A folder is
+ * trusted through a location whose config holds something back for it, and the location the command opens decides which
+ * project the grant goes to, so it names both and works from any folder: a plain `orb trust <folder>` would open a
+ * location for the folder itself, whose project can be another one.
+ */
+export function trustCommand(folder: string, location: string) {
+  const same = path.resolve(folder) === path.resolve(location)
+  const holder = quoted(folder)
+  const through = quoted(location)
+  if (holder === undefined || through === undefined) return undefined
+  return `orb trust ${holder}${same ? "" : ` --for ${through}`}`
 }
 
-/** A folder as a shell takes it as one argument. */
-export function quoted(folder: string) {
-  return /\s/.test(folder) ? `"${folder}"` : folder
+/**
+ * What to do about the folders above a project that hold something back, as the end of a sentence: a command for each
+ * one that can be trusted for good, and for each home directory or filesystem root, which cannot, the way to trust it for
+ * one run.
+ */
+export function aboveAdvice(items: ReadonlyArray<Withheld>, location: string) {
+  const holders = [
+    ...new Map(
+      items.flatMap((item) => (item.directory === undefined ? [] : [[item.directory, item.persistent !== false] as const])),
+    ),
+  ]
+  const commands = holders.flatMap(([folder, persistent]) =>
+    persistent ? [{ folder, command: trustCommand(folder, location) }] : [],
+  )
+  const good = commands.flatMap((item) => (item.command === undefined ? [] : [`\`${item.command}\``]))
+  // A name that no quoting makes safe to paste is shown escaped, with no command to run.
+  const odd = commands.flatMap((item) => (item.command === undefined ? [plain(item.folder)] : []))
+  const never = holders.flatMap(([folder, persistent]) => (persistent ? [] : [plain(folder)]))
+  return [
+    ...(good.length === 0 ? [] : [`trust ${good.length === 1 ? "it" : "them"} for good with ${good.join(", ")}`]),
+    ...(odd.length === 0
+      ? []
+      : [
+          `${odd.join(", ")} ${odd.length === 1 ? "has a name" : "have names"} that a shell could act on, so no command is printed: type the folder yourself, as \`orb trust <folder> --for <project>\``,
+        ]),
+    ...(never.length === 0
+      ? []
+      : [
+          `${never.join(", ")} ${never.length === 1 ? "is a home directory or a filesystem root" : "are home directories or filesystem roots"}, which Orbit never trusts for good, so pass --trust to trust ${never.length === 1 ? "it" : "them"} for one run`,
+        ]),
+  ].join(", and ")
 }
+
+/** A folder as a shell takes it as one argument, or undefined when it cannot be quoted so that no shell expands it. */
+export const quoted = (folder: string) => shellArgument(folder)
 
 /** Whether the server has no such route, as one older than the trust routes answers: a command can say so or go without. */
 export const unsupported = (cause: unknown) =>
@@ -266,20 +346,25 @@ export const call = <A>(request: (signal: AbortSignal) => Promise<A>) =>
 const unchecked = (directory: string) => (cause: unknown) =>
   new Error(`Could not check whether ${directory} is trusted: ${errorMessage(cause)}`, { cause })
 
-// One sentence on what stays off: the project's own files while it is untrusted, and what sits in folders above it.
-function notice(status: TrustStatus) {
+// One sentence on what stays off: the project's own files while it is untrusted or after they changed, and what sits in
+// folders above it.
+function notice(status: TrustStatus, location: string) {
   const above = status.withheld.filter((item) => item.directory !== undefined)
   const own = status.withheld.filter((item) => item.directory === undefined)
   return [
     ...(own.length === 0
       ? []
-      : [
-          `${status.directory} is not trusted, so its project config is held back (${summary(status.directory, own)}). ${status.persistent ? "Trust it with `orb trust`." : "Orbit never trusts that folder for good."}`,
-        ]),
+      : status.trusted
+        ? [
+            `${plain(status.directory)} is trusted, but its project config changed since then, so what changed is held back (${summary(status.directory, own)}). Trust the changes with \`orb trust\`.`,
+          ]
+        : [
+            `${plain(status.directory)} is not trusted, so its project config is held back (${summary(status.directory, own)}). ${status.persistent ? "Trust it with `orb trust`." : "Orbit never trusts that folder for good."}`,
+          ]),
     ...(above.length === 0
       ? []
       : [
-          `Config in a folder above ${status.directory} stays off until that folder is trusted too (${summary(status.directory, above)}): ${trustCommands(above)}.`,
+          `Config in a folder above ${plain(status.directory)} stays off until that folder is trusted too (${summary(status.directory, above)}): ${aboveAdvice(above, location)}.`,
         ]),
   ].join(" ")
 }
@@ -393,4 +478,6 @@ const blocked = (
   defines: Defined | undefined,
   strict: boolean | undefined,
 ) =>
-  !status.trusted && (strict === true || imports !== undefined || defines !== undefined || status.withheld.length > 0)
+  status.trusted
+    ? (status.changed ?? []).length > 0
+    : strict === true || imports !== undefined || defines !== undefined || status.withheld.length > 0

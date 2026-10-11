@@ -79,6 +79,7 @@ import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
+import { grantWithRecords } from "./fixture/grant"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { expectOneSpelling, received, spellingEnv, withLookupVariable } from "./fixture/child-env"
@@ -320,6 +321,8 @@ function resourceMcpLayer(
                 compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
                 compat: () => Effect.succeed(Config.defaultCompat),
                 changes: () => Stream.never,
+                fingerprints: () => Effect.succeed([]),
+                pluginsChanged: () => Effect.succeed(false),
               }),
             )
           : Config.testLayer([
@@ -1953,7 +1956,7 @@ describe("MCP servers from .mcp.json", () => {
 
         // The config reloads a moment after the decision, and says so when it has.
         const granted = yield* nextUpdate
-        yield* trust.grant(project, { persist: false, via: "test" })
+        yield* grantWithRecords(project, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         expect(yield* registered(yield* config.entries())).toEqual({
           personal: { status: "connected" },

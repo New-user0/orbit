@@ -17,6 +17,7 @@ import path from "path"
 import { realpath, stat } from "fs/promises"
 import { PluginRestriction } from "@orbit/plugin/restriction"
 import { fileURLToPath } from "url"
+import { FSUtil } from "@orbit/util/fs-util"
 import type { Page } from "@orbit/plugin/tui/context"
 import { Host } from "@orbit/plugin/host"
 import { resolveSlots, type Claim } from "./structure"
@@ -29,6 +30,7 @@ import { useClient } from "../context/client"
 import { useData } from "../context/data"
 import { useTrust } from "../context/trust"
 import { errorMessage } from "../util/error"
+import { pluginTrust } from "../util/trust"
 import { createPluginContext, usePluginHost, type Dispose, type RegisteredSlot, type SlotRender } from "./api"
 import { createSourceWatcher } from "./watch"
 import {
@@ -324,12 +326,25 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     // The plugins of a project import into this process, so they are read only while its folder is trusted, and not
     // from a folder around it that the server still holds back. Nothing else here depends on the trust: the user's
     // directories and config load either way, and the server's own list already leaves out what the folder keeps.
-    const directories = trustedPluginDirectories(props.directories, trust.startup.trusted(), trust.startup.above())
+    // A plugin file that shows up in a watched folder is seen here before the server has reloaded, so the status is read
+    // again first: the server compares the plugins on the disk with the grant when it answers.
+    // The decision is made from the answer of that read itself: the shared status may still hold an older one when the
+    // read failed, timed out, or was overtaken by a newer read. With no answer, the project's plugins are left out.
+    const read = await trust.startup.refresh()
+    if (read === undefined) log.warn("project plugins left out: workspace trust could not be read", { id })
+    const startup = pluginTrust(read)
+    const directories = trustedPluginDirectories(props.directories, startup.trusted, startup.above, startup.changed)
     await trace("watch", { reconciliation: id, directories }, () =>
       Promise.all(directories.map(watcher.wait)).then(() => undefined),
     )
     const discovered = await trace("discover", { reconciliation: id, directories }, () =>
-      discoverPluginTargets(directories),
+      Promise.all([
+        discoverPluginTargets(directories.filter((item) => !props.directories.project.includes(item))),
+        discoverPluginTargets(
+          directories.filter((item) => props.directories.project.includes(item)),
+          props.directories.root,
+        ),
+      ]).then((targets) => targets.flat()),
     )
     // Discovery admits TUI-only plugins while server inventory carries combined plugins.
     // Their overlap is intentional; explicit configuration remains the final authority.
@@ -418,6 +433,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
             sources.read,
             trace,
             id,
+            local !== undefined && props.directories.project.some((item) => FSUtil.contains(item, fileURLToPath(local))),
           ).catch((error) => ({
             status: "failed" as const,
             error: errorMessage(error),
@@ -605,6 +621,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
               config.data.plugins ?? [],
               trust.startup.trusted(),
               trust.startup.above(),
+              trust.startup.changedPlugins(),
               restrictions(),
             ])
           : undefined,
@@ -752,6 +769,7 @@ async function resolvePlugin(
   readSource: ReturnType<typeof createPluginSources>["read"],
   trace: Trace,
   reconciliation: number,
+  confined: boolean,
 ) {
   // Package entrypoints never change within a session, so a loaded previous
   // version needs no re-resolution (which could otherwise hit npm).
@@ -762,6 +780,10 @@ async function resolvePlugin(
     : await trace("prepare", { reconciliation, target: spec, install }, () => packages.prepare(spec, install))
   const entrypoint = Host.resolve(target).tui
   if (!entrypoint) return { status: "unsupported" as const }
+  // A project plugin's entry stays inside its folder: the fingerprints digest the folder, and read nothing that a link
+  // leads out of it, so such an entry would change without the folder being asked again.
+  if (confined && local && !FSUtil.contains(await realpath(fileURLToPath(local)), await realpath(fileURLToPath(entrypoint))))
+    throw new Error(`Project plugin entry leaves its folder: ${spec}`)
   // Content remains stable across the several mtimes one save may expose to
   // filesystem watchers, while the generation keeps reverted modules fresh.
   let source = local

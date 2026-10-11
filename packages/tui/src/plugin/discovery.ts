@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises"
+import { readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { localSource } from "@orbit/plugin/source"
 import { isMissingPath, localProjectDirectory, projectConfigDirectories } from "../util/config-directories"
@@ -11,6 +11,8 @@ export type PluginDirectories = {
   readonly global: readonly string[]
   /** The project's: the `.orbit` directories from its root down to the working directory. */
   readonly project: readonly string[]
+  /** The project's root, which a plugin of the project must stay inside once every link in it is followed. */
+  readonly root: string
 }
 
 export async function localPluginDirectories(
@@ -38,6 +40,7 @@ export async function localPluginDirectories(
   return {
     global: [path.join(directories.config, "plugins"), ...found.filter((item) => item.own).map((item) => item.plugins)],
     project: found.filter((item) => !item.own).map((item) => item.plugins),
+    root: projectDirectory,
   }
 }
 
@@ -48,20 +51,49 @@ export async function localPluginDirectories(
  * `above` is the folders around the project whose config the server still holds back, each waiting on its own decision.
  * The terminal UI finds the project's root without asking the server, so when the two disagree, a folder the server
  * counts as above its project can lie inside the terminal UI's walk, and its plugins wait like the server's.
+ *
+ * `changed` is the config directories whose plugins changed since their folder was trusted, which the server holds back
+ * too: they wait until the changes are trusted, while the folder's other directories keep loading.
  */
-export function trustedPluginDirectories(directories: PluginDirectories, trusted: boolean, above: readonly string[]) {
+export function trustedPluginDirectories(
+  directories: Pick<PluginDirectories, "global" | "project">,
+  trusted: boolean,
+  above: readonly string[],
+  changed: readonly string[] = [],
+) {
   if (!trusted) return [...directories.global]
   return [
     ...directories.global,
     // A plugins directory sits in `.orbit` in the folder that holds it. path.relative compares case-insensitively where
     // Windows does.
     ...directories.project.filter(
-      (plugins) => !above.some((folder) => path.relative(folder, path.dirname(path.dirname(plugins))) === ""),
+      (plugins) =>
+        !above.some((folder) => path.relative(folder, path.dirname(path.dirname(plugins))) === "") &&
+        !changed.some((orbit) => path.relative(orbit, path.dirname(plugins)) === ""),
     ),
   ]
 }
 
-export async function discoverPluginTargets(directories: string[]) {
+/**
+ * The plugins in these directories. With `within`, a plugin whose real path lies outside that folder is left out, and
+ * so is every plugin of a directory that itself leads out: a link out of the project is not tracked by the server's
+ * fingerprints, so what it points at could change after the folder was trusted without being asked about again.
+ */
+export async function discoverPluginTargets(directories: string[], within?: string) {
+  const bound = within === undefined ? undefined : await realpath(within).catch(() => within)
+  const stays = async (target: string) => {
+    if (bound === undefined) return true
+    const real = await realpath(target).catch(() => undefined)
+    if (real === undefined) return false
+    const relative = path.relative(bound, real)
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+  }
+  const found = await discoverAll(directories)
+  const kept = await Promise.all(found.map(async (target) => ((await stays(target)) ? [target] : [])))
+  return kept.flat()
+}
+
+async function discoverAll(directories: string[]) {
   return (
     await Promise.all(
       directories.map(async (directory) => {
@@ -72,7 +104,7 @@ export async function discoverPluginTargets(directories: string[]) {
         return (
           await Promise.all(
             entries
-              .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+              .filter((entry) => entry.name !== "node_modules" && (entry.isDirectory() || entry.isSymbolicLink()))
               .sort((a, b) => a.name.localeCompare(b.name))
               .map(async (entry): Promise<string | undefined> => {
                 const plugin = path.join(directory, entry.name)

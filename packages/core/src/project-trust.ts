@@ -9,6 +9,8 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Config } from "./config.js"
 import { AgentFile } from "./config/plugin/agent-file.js"
 import { CommandFile } from "./config/plugin/command-file.js"
+import { Fingerprint } from "./config/fingerprint.js"
+import { LinkShare } from "./config/link-share.js"
 import { ConfigTrust } from "./config/trust.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
@@ -35,8 +37,18 @@ export interface Interface {
    * and it names that folder as its `directory`.
    */
   readonly status: () => Effect.Effect<Trust.Status>
-  /** Trusts this Location's project; see `WorkspaceTrust.grant`. Config applies what it held back once it reloads. */
-  readonly grant: (input: { readonly persist: boolean; readonly via: string }) => Effect.Effect<Trust.Status>
+  /**
+   * Trusts this Location's project; see `WorkspaceTrust.grant`. It records the executable config of the sources the
+   * config last read for that folder, so that a later change to it is asked about again. Config applies what it held
+   * back once it reloads. With `holder` it trusts that folder instead, when this Location holds something back for it
+   * (the `directory` of a held-back file above the project) or it is the project's own; for any other folder it trusts
+   * nothing and answers with the status as it is. The answer is always this Location's status.
+   */
+  readonly grant: (input: {
+    readonly persist: boolean
+    readonly via: string
+    readonly holder?: string
+  }) => Effect.Effect<Trust.Status>
   /** Ends the grants for this Location's project; see `WorkspaceTrust.revoke`. */
   readonly revoke: () => Effect.Effect<Trust.Status>
   /**
@@ -52,8 +64,11 @@ export interface Interface {
   /**
    * Whether a file may run the code it carries, such as the hooks in a skill's or an agent's front matter, or any other
    * file that something would execute. Callers must ask this before running any such code; see `ConfigTrust.allows`.
+   * The decision is the store's at this moment, never the stamp of the last config load, which trails a revoke. With a
+   * `kind`, a config directory whose files of that kind changed since its folder was trusted, as the disk says now,
+   * refuses its own files.
    */
-  readonly allows: (file: string) => Effect.Effect<boolean>
+  readonly allows: (file: string, kind?: Trust.Kind) => Effect.Effect<boolean>
   /**
    * Whether the text of a file may go into the prompt as part of this project, such as an instruction file. Any file may
    * while the project is trusted. Until then only a file inside the project's folders whose real path is inside them too
@@ -118,28 +133,8 @@ const layer = Layer.effect(
         return target === undefined ? named : yield* follow(path.resolve(path.dirname(named), target), depth + 1)
       })
 
-    // The share that a link on the way to a file names, when one does: opening a path through such a link connects to the
-    // share, so the links are read one part at a time, which touches no share, and the share is named as the link says.
-    // Only Windows has them.
-    const share = (file: string, depth = 0): Effect.Effect<string | undefined> =>
-      Effect.gen(function* () {
-        if (process.platform !== "win32" || depth >= 40) return undefined
-        const parts = path.relative(path.parse(file).root, file).split(path.sep)
-        for (const index of parts.keys()) {
-          const named = path.join(path.parse(file).root, ...parts.slice(0, index + 1))
-          const target = yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined))
-          if (target === undefined) continue
-          // A link to a device path (`\\?\Volume{…}\…`, `\\.\…`) reads back in the NT form `\??\…`, which `path.resolve`
-          // would take for a folder named `??` on the current drive. It is named as the device path it is.
-          if (target.startsWith("\\??\\"))
-            return path.join(`\\\\?\\${target.slice(4)}`, ...parts.slice(index + 1))
-          const leads = path.join(path.resolve(path.dirname(named), target), ...parts.slice(index + 1))
-          if (leads.startsWith("\\\\")) return leads
-          const deeper = yield* share(leads, depth + 1)
-          if (deeper !== undefined) return deeper
-        }
-        return undefined
-      })
+    // The share that a link on the way to a file names, when one does, is not connected to: see `LinkShare`.
+    const share = (file: string) => LinkShare.of(fs, file)
     const lead = (file: string) =>
       share(file).pipe(Effect.flatMap((shared) => (shared === undefined ? follow(file) : Effect.succeed(shared))))
 
@@ -152,14 +147,24 @@ const layer = Layer.effect(
     // Files that were left out, so that one that keeps being asked for is reported once.
     const skipped = new Set<string>()
 
+    // The folders that the config of a source may supply files from, and that its fingerprints are read within: the
+    // project's own folders, or for a source above the project what `ConfigTrust.reach` gives. A holder that is the home
+    // directory or a filesystem root contains everything below it, so it cannot stand for what the config may supply:
+    // only the config container does, and a source that sits directly in the root nothing.
+    const boundOf = Effect.fnUntraced(function* (source: string) {
+      if (inside(source)) return folders
+      const holder = ConfigTrust.holder(source)
+      return ConfigTrust.reach({ holder, container: source, persistent: (yield* trust.status(holder)).persistent })
+    })
+
     const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
       if (source.scope !== "project" && source.scope !== "local") return true
       // The project's own folders follow the decision just made, because a stamp can trail it, and what sits above
       // them follows the decision for the folder that holds it, which only its stamp knows.
       const own = inside(source.path)
       if (own ? (yield* trust.status(root)).trusted : source.trusted !== false) return true
-      const holder = ConfigTrust.holder(source.path)
-      if (yield* stays(own ? [...folders, ...real] : [holder, yield* fs.resolve(holder)], file)) return true
+      const roots = yield* boundOf(source.path)
+      if (yield* stays([...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
       if (skipped.has(file)) return false
       skipped.add(file)
       yield* Effect.logWarning("config file skipped", {
@@ -202,52 +207,139 @@ const layer = Layer.effect(
     // What a project or local entry holds back now. The entries are stamped by the last config load, which can trail a
     // decision by a moment, so for the project's own files the decision just made counts: a trusted project holds nothing
     // back, and an entry that is not stamped yet is read for what it would lose. An entry above the project follows the
-    // decision for its own folder, which only its stamp knows.
-    const heldBack = Effect.fnUntraced(function* (entry: Entry, file: string, trusted: boolean) {
-      const untrusted = inside(file) ? !trusted : entry.trusted === false
-      if (!untrusted) return []
+    // decision for its own folder, which the store knows now and the stamp only as of the last load.
+    const heldBack = Effect.fnUntraced(function* (
+      entry: Entry,
+      file: string,
+      trusted: boolean,
+      changed: ReadonlyMap<string, readonly Trust.Kind[]>,
+    ) {
+      const untrusted = !trusted
+      // A trusted entry holds back only what changed since its folder was trusted, as the store says it does now.
+      if (!untrusted) return changed.get(file) ?? []
       // The files of a directory are not part of its entry, so they are read from the disk.
       if (entry.type === "directory") return yield* inDirectory(entry.path)
       if (entry.trusted === false) return entry.withheld ?? []
       return ConfigTrust.sanitize(entry.info, { roots: folders, directory: path.dirname(file) }).withheld
     })
 
+    // The observations of the last load that belong to a folder's grant, by the folder's key.
+    const observationsOf = Effect.fnUntraced(function* (folder: string) {
+      const wanted = WorkspaceTrust.key(yield* fs.resolve(folder))
+      return yield* Effect.filter(yield* config.fingerprints(), (item) =>
+        fs.resolve(item.root).pipe(Effect.map((resolved) => WorkspaceTrust.key(resolved) === wanted)),
+      )
+    })
+
+    // Which sources differ from their folder's grant now, by path: the observations are those of the last load, and the
+    // comparison is the store's at this moment, so a grant or a revoke shows before the config has reloaded.
+    // The plugins of a config directory are read from the disk now, not taken from the last load: a client imports them
+    // as soon as a file shows up, before the debounced reload has seen it, so a plugin planted after the grant must
+    // already count as changed.
+    const differences = Effect.fnUntraced(function* () {
+      const observed = yield* Effect.forEach(yield* config.fingerprints(), (item) =>
+        Effect.gen(function* () {
+          if (!(yield* fs.isDir(item.path))) return item
+          const { plugins: _, ...rest } = item.digests
+          const now = yield* Fingerprint.pluginsOf(fs, item.path, yield* boundOf(item.path))
+          return { ...item, digests: now === undefined ? rest : { ...rest, plugins: now } }
+        }),
+      )
+      const groups = Map.groupBy(observed, (item) => item.root)
+      const found = yield* Effect.forEach([...groups], ([folder, items]) => trust.compare(folder, items))
+      return new Map(found.flat().map((item) => [item.path, item.kinds] as const))
+    })
+
+    // The folder a client names to trust, when this Location holds something back for it: the project's own root, or a
+    // folder that a held-back file above the project lists as its `directory`. Unset for any other.
+    const holderOf = Effect.fnUntraced(function* (named: string) {
+      const wanted = WorkspaceTrust.key(yield* fs.resolve(named))
+      if (WorkspaceTrust.key(yield* fs.resolve(root)) === wanted) return root
+      const listed = (yield* report(yield* trust.status(root))).withheld.flatMap((item) => item.directory ?? [])
+      const found = yield* Effect.filter(listed, (item) =>
+        fs.resolve(item).pipe(Effect.map((resolved) => WorkspaceTrust.key(resolved) === wanted)),
+      )
+      return found.at(0)
+    })
+
     const report = Effect.fnUntraced(function* (state: WorkspaceTrust.State) {
       const entries = yield* config.entries()
+      const changed = yield* differences()
       const listed = yield* Effect.forEach(entries, (entry) =>
         Effect.gen(function* () {
           if (entry.path === undefined) return []
           if (entry.scope !== "project" && entry.scope !== "local") return []
-          const kinds = yield* heldBack(entry, entry.path, state.trusted)
+          // The folder that holds an entry above the project is asked now: its stamp trails a grant or a revoke.
+          const holder = inside(entry.path) ? undefined : ConfigTrust.covered(entry)
+          const decided = holder === undefined ? undefined : yield* trust.status(holder)
+          const kinds = yield* heldBack(entry, entry.path, decided?.trusted ?? state.trusted, changed)
           if (kinds.length === 0) return []
           // What the project's own folders hold is lifted by trusting the project. What sits above them is not, so it
           // names the folder whose trust does lift it, which a caller can tell the person to trust.
-          const directory = inside(entry.path) ? undefined : ConfigTrust.covered(entry)
+          const directory = holder
           return [
             {
               path: entry.path,
               kinds,
-              ...(directory === undefined ? {} : { directory: AbsolutePath.make(directory) }),
+              ...(directory === undefined
+                ? {}
+                : { directory: AbsolutePath.make(directory), persistent: decided?.persistent }),
             },
           ]
         }),
       )
-      return { ...state, withheld: listed.flat() } satisfies Trust.Status
+      return {
+        ...state,
+        withheld: listed.flat(),
+        changed: [...changed].flatMap(([file, kinds]) => (kinds.length === 0 ? [] : [{ path: AbsolutePath.make(file), kinds }])),
+      } satisfies Trust.Status
     })
 
     return Service.of({
       trusted: Effect.fn("ProjectTrust.trusted")(() => trust.status(root).pipe(Effect.map((state) => state.trusted))),
       status: Effect.fn("ProjectTrust.status")(() => trust.status(root).pipe(Effect.flatMap(report))),
-      grant: Effect.fn("ProjectTrust.grant")((input) => trust.grant(root, input).pipe(Effect.flatMap(report))),
+      grant: Effect.fn("ProjectTrust.grant")(function* (input) {
+        // The folder to trust is the project's, or the one a held-back file above it names; nothing else is trusted
+        // through a Location, so that a client cannot use this to grant an arbitrary path.
+        const target = input.holder === undefined ? root : yield* holderOf(input.holder)
+        if (target === undefined) {
+          yield* Effect.logWarning("trust grant refused", { holder: input.holder, reason: "holds nothing back here" })
+          return yield* report(yield* trust.status(root))
+        }
+        const state = yield* trust.grant(target, {
+          persist: input.persist,
+          via: input.via,
+          observations: yield* observationsOf(target),
+        })
+        return yield* report(target === root ? state : yield* trust.status(root))
+      }),
       revoke: Effect.fn("ProjectTrust.revoke")(() => trust.revoke(root).pipe(Effect.flatMap(report))),
-      allows: Effect.fn("ProjectTrust.allows")(function* (file) {
+      // The decision is the store's now, for every entry that the file could be under: an entry's stamp is the last
+      // load's, and a revoke it has not seen yet must not let the file run.
+      allows: Effect.fn("ProjectTrust.allows")(function* (file, kind) {
         const state = yield* trust.status(root)
         const compat = yield* config.compat()
-        return ConfigTrust.allows(yield* config.entries(), file, {
-          roots: folders,
-          trusted: state.trusted,
-          compat: compat.roots,
-        })
+        const entries = yield* config.entries()
+        const verdicts = new Map<Entry, { readonly trusted: boolean; readonly withheld: readonly Trust.Kind[] }>()
+        for (const entry of entries) {
+          const cover = entry.scope === "project" || entry.scope === "local" ? ConfigTrust.covered(entry) : undefined
+          if (cover === undefined) continue
+          const holder = inside(cover) ? root : yield* fs.resolve(cover)
+          const decided = inside(cover) ? state : yield* trust.status(holder)
+          const asked =
+            kind !== undefined && entry.type === "directory" && decided.trusted && FSUtil.contains(entry.path, file)
+          const found = asked
+            ? yield* trust.compare(holder, [
+                {
+                  path: entry.path,
+                  identity: yield* fs.resolve(entry.path),
+                  digests: yield* Fingerprint.directory(fs, entry.path, yield* boundOf(entry.path)),
+                },
+              ])
+            : []
+          verdicts.set(entry, { trusted: decided.trusted, withheld: found.flatMap((item) => item.kinds) })
+        }
+        return ConfigTrust.allows(entries, file, { roots: folders, trusted: state.trusted, compat: compat.roots, verdicts }, kind)
       }),
       reachable: Effect.fn("ProjectTrust.reachable")(function* (file) {
         if ((yield* trust.status(root)).trusted) return true

@@ -3,11 +3,10 @@ export * as ConfigPluginSource from "./source.js"
 import { Directory, Document, type Entry } from "@orbit/schema/config"
 import { ConfigPlugin } from "@orbit/schema/config/plugin"
 import { FSUtil } from "@orbit/util/fs-util"
-import { Host } from "@orbit/plugin/host"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, Effect, Layer, Option, PubSub, Scope, Stream } from "effect"
 import path from "path"
-import { fileURLToPath, pathToFileURL } from "url"
+import { fileURLToPath } from "url"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
 import { Location } from "../../location.js"
@@ -74,7 +73,7 @@ export const layer = Layer.effect(
     return Service.of({
       operations: Effect.fn("ConfigPluginSource.operations")(function* () {
         const entries = yield* config.entries()
-        const operations = yield* scan(fs, location, entries)
+        const operations = yield* scan(fs, location, entries, config.pluginsChanged)
         yield* watchConfiguredSources(entries, operations)
         return operations
       }),
@@ -123,13 +122,20 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
   fs: FSUtil.Interface,
   location: Location.Interface,
   entries: readonly Entry[],
+  pluginsChanged: (directory: string) => Effect.Effect<boolean>,
 ) {
   const discovered = yield* Effect.forEach(
-    // A plugin runs in this process, so the plugins a folder keeps wait for the folder to be trusted. Trusting it
-    // reloads the config, which makes the supervisor activate again.
-    entries.filter((entry): entry is Directory => entry.type === "directory" && entry.trusted !== false),
+    // A plugin runs in this process, so the plugins a folder keeps wait for the folder to be trusted, and for the
+    // trust again when they change after it. Trusting it reloads the config, which makes the supervisor activate again.
+    entries.filter(
+      (entry): entry is Directory =>
+        entry.type === "directory" && entry.trusted !== false && entry.withheld?.includes("plugins") !== true,
+    ),
     (entry) =>
-      PluginSourceDirectory.discover(fs, entry.path).pipe(
+      // This runs when a file under the directory changes, which is before the config reloads and so before its
+      // entry says so: a plugin added after the grant must not be activated in that gap.
+      pluginsChanged(entry.path).pipe(
+        Effect.flatMap((changed) => (changed ? Effect.succeed([]) : discoverHeld(fs, location, entry))),
         Effect.map((targets) => targets.map((target): Operation => ({ type: "add", target, options: {} }))),
       ),
   ).pipe(Effect.map((items) => items.flat()))
@@ -162,23 +168,10 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
     Effect.gen(function* () {
       if (operation.type === "remove" || !path.isAbsolute(operation.target)) return [operation]
       if (!(yield* fs.existsSafe(operation.target))) return [operation]
-      const directory = yield* fs.isDir(operation.target)
-      const entrypoints: Host.Entrypoints = directory
-        ? yield* Effect.sync(() => Host.resolve({ directory: operation.target }))
-        : { server: pathToFileURL(operation.target).href }
-      if (!entrypoints.server) return []
-      if (directory) {
-        const root = yield* fs.resolve(operation.target)
-        const server = yield* fs.resolve(fileURLToPath(entrypoints.server))
-        if (!FSUtil.contains(root, server)) return []
-      }
+      const entrypoints = yield* PluginSourceDirectory.entrypoints(fs, operation.target)
+      if (!entrypoints) return []
       const times = yield* Effect.forEach(
-        [
-          ...Object.values(entrypoints)
-            .filter((entry) => entry !== undefined)
-            .map((entry) => fileURLToPath(entry)),
-          path.join(directory ? operation.target : path.dirname(operation.target), "package.json"),
-        ],
+        [...entrypoints.files, entrypoints.manifest],
         (entry) =>
           fs.stat(entry).pipe(
             Effect.map((info) => Option.getOrElse(info.mtime, () => new Date(0)).getTime()),
@@ -188,6 +181,27 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
       return [{ ...operation, mtime: Math.max(...times) }]
     }),
   ).pipe(Effect.map((operations) => operations.flat()))
+})
+
+// The plugins a config directory keeps. Those of a project stay inside the folders its trust is decided for, once every
+// link is followed, because the fingerprints compare only what lies inside them: a plugin that a link leads out would
+// otherwise change without the folder being asked again. A directory above the project is held to itself.
+const discoverHeld = Effect.fnUntraced(function* (fs: FSUtil.Interface, location: Location.Interface, entry: Directory) {
+  const targets = yield* PluginSourceDirectory.discover(fs, entry.path)
+  if (entry.scope !== "project" && entry.scope !== "local") return targets
+  const folders = [location.directory, location.project.directory, location.project.canonical]
+  const bound = yield* Effect.forEach(
+    folders.some((folder) => FSUtil.contains(folder, entry.path)) ? folders : [entry.path],
+    (folder) => fs.resolve(folder),
+  )
+  return yield* Effect.filter(targets, (target) =>
+    fs.resolve(target).pipe(
+      Effect.map((real) => bound.some((folder) => FSUtil.contains(folder, real))),
+      Effect.tap((stays) =>
+        stays ? Effect.void : Effect.logWarning("plugin skipped", { path: target, reason: "it leads out of the folder it is in" }),
+      ),
+    ),
+  )
 })
 
 function isPluginSource(entries: readonly Entry[], file: string) {

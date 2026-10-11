@@ -423,6 +423,42 @@ holds a relative entry that Orbit's own lookups used to honor.
 **What to do:** Move variables you want in Orbit's child processes into `env`. Replace a relative `PATH` entry with an
 absolute one.
 
+### Changed project config asks to be trusted again
+
+A trusted folder used to keep every part of its project config on for good, whatever a `git pull`, a branch switch or an
+edit did to it afterwards. Now Orbit records, when you trust a folder, a digest of the parts of each project and local
+config source that start programs: the `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`,
+`sandbox` and `skills` fields of the settings files (the other products' hook settings and `.mcp.json` included), the
+plugin files and `package.json` of a `.orbit` directory, the `hooks` in the front matter of its skills and agents, and
+the `mcp_servers` in the front matter of its agents. Permissions, commands and grants are not digested. When one of them
+differs from the record, only that kind of that file or directory is left out, as in an untrusted folder, and the rest of
+the folder keeps running: a new hook does not stop its MCP servers. Reformatting a file, reordering keys, comments and
+line endings are not changes, and neither is removing a file or a field. Trust the changes and the kind comes back.
+A digest that cannot be computed, such as a locked file, counts as changed until it can be.
+
+The `skills` setting now has a kind of its own (`skills`) where an untrusted folder used to report it as `settings`.
+
+Links are followed when they stay inside the project. A `.orbit/plugins` folder, a plugin file or folder, or an `agents` or
+`skills` folder that is a link to another folder of the same project counts for its real contents, so editing the target or
+adding a plugin there asks again. A link that leads out of the project is not read at all: the digest holds its name and
+where the link points, so pointing it somewhere else asks, editing what it points at does not, and a project plugin behind
+such a link is not loaded, in the server or in the terminal UI, whether the folder is trusted or not.
+
+You are asked once after each change to executable config, however it got there: a `git pull`, a branch switch or an
+edit. Orbit does not tell its own writes from anyone else's, so a command that edits project config, such as `orb mcp
+add` at project scope, asks as well. A folder you trusted before this version has no record, so each of its sources
+asks once, and so does a nested folder's config that no grant has recorded yet. The headless commands (`orb run` and the
+others) stop with the kinds and the files that changed, `orb trust` renews the grant ("Trusted … again"), `--trust`
+accepts the changes for one run, and the terminal UI, Mini and VS Code ask "Trust the changes?". `Trust.Status` has a new
+`changed` list, and the kinds in it are in `withheld` too. A server older than this version sends no `changed`, which
+the clients read as none.
+
+**Affects:** anyone who trusted a project folder, SDK callers and clients that read `Trust.Status`, and plugins or
+scripts that edit executable project config while Orbit runs.
+
+**What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
+in a folder you have not trusted.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -1282,6 +1318,31 @@ users, who get the new notices unless they turn `orbit.notifications` off.
 
 **What to do:** Nothing. Set `"attention": { "backend": "system" }` to use the operating system's notifications, and
 `orbit.notifications` to `false` to silence the VS Code notices.
+
+### `orb trust` can trust the folder above a project, and revoke a folder that was deleted
+
+When a file in a folder above the project holds config back, the advice used to be `orb trust <folder>`. That command
+opens a location of its own for the folder, and the grant goes to that location's project, which can be another one
+(an outer repository, a plain folder in it, and an inner repository: trusting the middle folder trusted the outer
+repository and left the middle folder's config off). The refusal, the terminal UI, Mini and `orb trust` now print
+`orb trust <folder> --for <location>`, which names both and works from any folder. `--for` trusts the folder only
+when the location holds config back for it; for any other folder nothing is trusted. A home directory or a filesystem
+root is never offered a command, because it is trusted only for one run (`--trust`) or until Orbit restarts.
+
+`orb trust --revoke <folder>` now ends the stored grant, and what it recorded, of a folder that no longer exists. It
+matches the name given or listed by `orb trust --list`, ignoring case on Windows, and says "is not trusted" when none
+matches; before, it asked you to create the folder again. The server has a new `POST /api/trust/revoke` route for this.
+
+**Affects:** scripts that parse the advice of `orb trust` or the refusal text, and anyone who revokes a folder they
+deleted.
+
+**What to do:** Copy the printed command as it is. Nothing otherwise.
+
+The printed command quotes the folder names: a name with a space, a quote, `$(` or a backtick is wrapped so that no
+shell runs it, and a name that no quoting makes safe (a control character, a line break, or on Windows anything PowerShell
+or cmd would expand) gets no command, only its escaped name and the way to type it yourself. `orb trust --revoke <folder>`
+now ends a folder that is a stored grant by its own name, wherever it is a location: after `orb trust M --for I`, the
+revoke it prints removes M and leaves the grant of the repository around it.
 
 ## Permissions
 
@@ -2523,3 +2584,11 @@ Read now opens an image with a header line that names its pixel size and type, f
 **Affects:** anyone who matches Read's exact "Image read successfully" text, SDK callers that read the Read tool output schema (images gain an optional `dimensions`), and sessions that read large images.
 
 **What to do:** Nothing for most setups. Match the line by its prefix if you parse it.
+
+### Editing any file of a plugin folder asks about the folder again
+
+A project plugin folder is now fingerprinted by every regular file in it, not only its entry files and `package.json`, so a change to a helper module counts like a change to the entry. A folder named `node_modules` directly in `plugin/` or `plugins/` is never a plugin: it is not read and not loaded. Inside a plugin folder, `node_modules` is named but not read, so a change inside an existing `node_modules` does not ask again, while creating it (a first install) or changing a lockfile or `package.json` does. Before a folder is trusted, Orbit lists a plugin folder without following links that lead out of the project or onto a network share.
+
+**Affects:** projects with plugin folders that hold more than the entry files, under a trust grant made before this change.
+
+**What to do:** Nothing; grant the folder again if it asks.
