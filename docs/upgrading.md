@@ -2642,3 +2642,11 @@ A shell command that outlives its timeout now keeps running in the background, a
 **Affects:** scripts and CI jobs that run `orb run` or `orb -p` with commands longer than the shell timeout, or that start a long-lived command in the background (a dev server) and expect the run to end without it.
 
 **What to do:** Nothing for commands that end. Stop a long-lived command before the model's last step, or interrupt the run.
+
+### Deny and ask rules also see where a link in a trusted project leads
+
+A link in a trusted project (a symlink or a junction) was followed, but the rules were checked against the link's own name only, so `keys/id_rsa` passed a Read or Edit deny written for `~/.ssh/*` when `keys` led to that folder, and a managed deny did not hold. The file tools (Read, Grep, Glob, LSP, Edit, Write, Patch, NotebookEdit) now also check the deny and ask rules, the person's and the managed ones, against the place the path really leads to, a link that points nowhere included. An allow written for the real place alone never lifts the link: only a deny or an ask on that place applies.
+
+**Affects:** projects that hold links to folders outside them, under deny or ask rules written for those folders.
+
+**What to do:** Nothing. Write the rule for the real folder as before; it now covers the links to it.

@@ -289,6 +289,7 @@ export const Plugin = {
                   action: "Edit",
                   resources: [...new Set(targets.map((target) => target.resource))],
                   save: ["*"],
+                  ...FileAccess.leadsOf(targets),
                   metadata: {
                     filepath: targets.map((target) => target.resource).join(", "),
                     // Every place the patch touches as resolved here, absolute: a move's source and its destination too.

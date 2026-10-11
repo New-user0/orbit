@@ -57,6 +57,10 @@ export const AssertInput = Schema.Struct({
   // agent for its own folders (`Agent.folders`) do not decide them, only the person's own rules and approvals do. They
   // stay off the public Request.
   escaped: Schema.Array(Schema.String).pipe(Schema.optional),
+  // Where each resource really leads once its links are followed, keyed by that resource, in a project that is trusted.
+  // They steer evaluation only and stay off the public Request: a deny or an ask that matches such a place applies to the
+  // resource, and an allow that matches only such a place never does.
+  leads: Schema.Record(Schema.String, Schema.Array(Schema.String)).pipe(Schema.optional),
   // Set on the deny-only checks a shell command makes for the files it names: the rules that a mode puts on an agent
   // (`Agent.modeRule`) do not apply to them, since the mode asks about the command itself.
   probe: Schema.Boolean.pipe(Schema.optional),
@@ -159,6 +163,7 @@ interface Pending {
   // Kept here rather than on the public Request so re-evaluating a pending request after an "always" reply sees them.
   readonly aliases?: AssertInput["aliases"]
   readonly escaped?: AssertInput["escaped"]
+  readonly leads?: AssertInput["leads"]
   readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
   // The tool call that was executing when the request was made, for deciding and explaining it. Never on the public Request.
   readonly call?: ToolCurrentCall.Call
@@ -181,17 +186,19 @@ const layer = Layer.effect(
     // Saved approvals are the person's own answers, so they join after Orbit's allows are taken out: one that has the
     // same value as an allow of Orbit's (an "always" for the global config folder) still decides a place a link leads to.
     const decide = (
-      input: Pick<AssertInput, "action" | "aliases" | "escaped">,
+      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
       resource: string,
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
-    ) =>
-      evaluate(
-        input.action,
-        resource,
-        [...(input.escaped?.includes(resource) ? own(rules) : rules), ...approvals],
-        input.aliases?.[resource],
-      )
+    ) => {
+      const all = [...(input.escaped?.includes(resource) ? own(rules) : rules), ...approvals]
+      const decided = evaluate(input.action, resource, all, input.aliases?.[resource])
+      if (decided.effect === "deny") return decided
+      const led = stricter(input.action, input.leads?.[resource], all)
+      return led === "deny" || (led === "ask" && decided.effect === "allow")
+        ? ({ action: input.action, resource: "*", effect: led } satisfies Permission.Rule)
+        : decided
+    }
     let closed = false
 
     const close = Effect.gen(function* () {
@@ -239,7 +246,7 @@ const layer = Layer.effect(
 
     // The last managed rule that matches a resource decides it. No match leaves the resource to the hooks and the rest.
     function managedEffect(
-      input: Pick<AssertInput, "action" | "aliases">,
+      input: Pick<AssertInput, "action" | "aliases" | "leads">,
       resource: string,
       rules: Permission.Ruleset,
     ): Permission.Effect | undefined {
@@ -252,15 +259,30 @@ const layer = Layer.effect(
         ...(absolute ? [path.resolve(location.directory, resource)] : []),
         ...(input.aliases?.[resource] ?? []),
       ]
-      return rules.findLast(
+      const own = rules.findLast(
         (rule) =>
           actionMatches(input.action, rule.action) &&
           subjects.some((subject) => Wildcard.match(subject, rule.resource)),
       )?.effect
+      if (own === "deny") return own
+      const led = stricter(input.action, input.leads?.[resource], rules)
+      return led === "deny" || (led === "ask" && own !== "ask") ? led : own
+    }
+
+    // What the rules say about the real places a resource leads to, when it is a deny or an ask. An allow written for such a
+    // place never lifts the resource, since the person wrote it for the place and not for the link's spelling.
+    function stricter(action: string, leads: ReadonlyArray<string> | undefined, rules: Permission.Ruleset) {
+      const effects = (leads ?? []).flatMap((lead) => {
+        const effect = rules.findLast(
+          (rule) => actionMatches(action, rule.action) && Wildcard.match(lead, rule.resource),
+        )?.effect
+        return effect === "deny" || effect === "ask" ? [effect] : []
+      })
+      return effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : undefined
     }
 
     function anyDenied(
-      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped">,
+      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped" | "leads">,
       rules: Permission.Ruleset,
     ) {
       return input.resources.some((resource) => decide(input, resource, rules).effect === "deny")
@@ -360,7 +382,7 @@ const layer = Layer.effect(
       }
     }
 
-    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped">) =>
+    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads">) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
@@ -369,6 +391,7 @@ const layer = Layer.effect(
             agent: input.agent,
             aliases: input.aliases,
             escaped: input.escaped,
+            leads: input.leads,
             deferred,
             call: yield* ToolCurrentCall.Current,
           }
@@ -492,6 +515,7 @@ const layer = Layer.effect(
               agent: item.agent,
               aliases: item.aliases,
               escaped: item.escaped,
+              leads: item.leads,
             }).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.undefined))
             if (result?.effect !== "allow") continue
             yield* bus.publish(Permission.Event.Replied, {

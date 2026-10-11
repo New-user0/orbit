@@ -62,6 +62,11 @@ export interface Target {
    * `absolute` otherwise. A request names this place, so an approval does not show a link as a folder of the project.
    */
   readonly place: AbsolutePath
+  /**
+   * Where `absolute` really leads once its links are followed, when that differs from `absolute` in a project that is
+   * trusted. It is a subject for deny and ask rules only (`Permission.AssertInput.leads`), never for an allow.
+   */
+  readonly leads?: AbsolutePath
   /** Location-relative for internal paths, absolute for external paths. */
   readonly resource: string
   readonly externalDirectory?: ExternalDirectoryAuthorization
@@ -127,6 +132,13 @@ const shareFailure = (spelled: string) =>
     message: `${spelled} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
     code: Tool.ErrorCode.FileSpelling,
   })
+/** The `leads` of a permission request for these targets: the real places they lead to, keyed by their resource. */
+export const leadsOf = (targets: readonly Target[]) => {
+  const entries = targets.flatMap((target) =>
+    target.leads === undefined ? [] : [[target.resource, [target.leads]] as const],
+  )
+  return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
+}
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({
   sessionID: context.sessionID,
@@ -282,9 +294,16 @@ const layer = Layer.effect(
       // anything is asked or opened.
       if (escapes !== undefined && isShare(escapes)) return yield* shareFailure(input.path)
       if (escapes !== undefined) return yield* external(absolute, input.kind, escapes)
+      // A trusted project follows its links, but the person's deny and ask rules, and the managed ones, are written against
+      // the place a file really is: a link to `~/.ssh` is that folder to them. The real place joins as a subject that only
+      // a deny or an ask can use.
+      const leads = yield* trust.leads(absolute)
       return {
         absolute,
         place: absolute,
+        ...(FSUtil.contains(leads, absolute) && FSUtil.contains(absolute, leads)
+          ? {}
+          : { leads: AbsolutePath.make(leads) }),
         resource: slash(path.relative(location.directory, absolute) || "."),
       } satisfies Target
     })
@@ -360,6 +379,7 @@ const layer = Layer.effect(
         // The place as resolved here, absolute, so a client shows it rather than the input's spelling, and the real place
         // when a link in an untrusted project leads there.
         metadata: { paths: [target.place] },
+        ...leadsOf([target]),
         ...invocation(context),
       })
       return target
