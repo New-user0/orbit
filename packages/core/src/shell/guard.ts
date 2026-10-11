@@ -94,7 +94,9 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   }
 
   const resolveCandidate = Effect.fnUntraced(function* (candidate: string, spec: Spec) {
-    const lexical = Option.getOrUndefined(yield* access.resolve({ path: candidate, kind: spec.kind }).pipe(Effect.option))
+    const lexical = Option.getOrUndefined(
+      yield* access.resolve({ path: candidate, kind: spec.kind }).pipe(Effect.option),
+    )
     const leads = spec.removal
       ? path.join(yield* trust.leads(path.dirname(candidate)), path.basename(candidate))
       : yield* trust.leads(candidate)
@@ -117,7 +119,15 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
 
   const resolvePlace = Effect.fnUntraced(function* (spec: Spec, skip?: Place["why"]): Effect.fn.Return<Resolved> {
     if (skip !== undefined || spec.candidates.length === 0)
-      return { level: spec.level, role: spec.role, status: "unresolved", why: skip ?? "dynamic", real: [], resources: [], external: [] }
+      return {
+        level: spec.level,
+        role: spec.role,
+        status: "unresolved",
+        why: skip ?? "dynamic",
+        real: [],
+        resources: [],
+        external: [],
+      }
     const found = yield* Effect.forEach(spec.candidates, (candidate) => resolveCandidate(candidate, spec))
     const external = found.flatMap((item) => (item.external ? [item.external] : []))
     const refused = found.some((item) => item.unresolved)
@@ -136,9 +146,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     }
   })
 
-  const operands = all.flatMap((level) =>
-    level.analysis.paths.files.map((operand, file) => ({ level, operand, file })),
-  )
+  const operands = all.flatMap((level) => level.analysis.paths.files.map((operand, file) => ({ level, operand, file })))
   const resolved = yield* Effect.forEach(operands, ({ level, operand }) => {
     const command = level.analysis.commands[operand.command]
     const skip = operand.flags.includes("share")
@@ -150,7 +158,10 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
           : operand.form === "dynamic"
             ? ("dynamic" as const)
             : undefined
-    const kind = operand.form === "glob" || operand.flags.includes("directory") || CD.has(command?.head ?? "") ? "directory" : "file"
+    const kind =
+      operand.form === "glob" || operand.flags.includes("directory") || CD.has(command?.head ?? "")
+        ? "directory"
+        : "file"
     return resolvePlace(
       {
         candidates: operand.candidates,
@@ -211,7 +222,15 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
 })
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
-  return list.findIndex((item) => item.kind === finding.kind && item.reason === finding.reason && item.command === finding.command && item.place === finding.place) === index
+  return (
+    list.findIndex(
+      (item) =>
+        item.kind === finding.kind &&
+        item.reason === finding.reason &&
+        item.command === finding.command &&
+        item.place === finding.place,
+    ) === index
+  )
 }
 
 // The guard's own findings: what the places say that the text alone did not.
@@ -225,16 +244,24 @@ function own(
   operands.forEach(({ level, operand }, index) => {
     const at = level.depth === 0 ? operand.command : undefined
     const place = resolved[index]!
-    const unplaceable = place.status === "unresolved" && (WRITES.has(operand.role) || (place.why !== undefined && place.why !== "dynamic"))
+    const unplaceable =
+      place.status === "unresolved" &&
+      (WRITES.has(operand.role) || (place.why !== undefined && place.why !== "dynamic"))
     if (unplaceable) found.push(ShellSafety.finding("too-complex", "unresolved-path", at))
-    if (operand.form === "glob" && (WRITES.has(operand.role) || ps)) found.push(ShellSafety.finding("too-complex", "glob-write", at))
+    if (operand.form === "glob" && (WRITES.has(operand.role) || ps))
+      found.push(ShellSafety.finding("too-complex", "glob-write", at))
     if (ps && operand.flags.includes("provider")) found.push(ShellSafety.finding("provider", "provider-path", at))
   })
   all.forEach((level) => {
     const files = level.analysis.paths
-    files.unvalidatable.forEach((item) => found.push(ShellSafety.finding("too-complex", "unvalidatable", level.depth === 0 ? item.command : undefined)))
+    files.unvalidatable.forEach((item) =>
+      found.push(ShellSafety.finding("too-complex", "unvalidatable", level.depth === 0 ? item.command : undefined)),
+    )
     if (ps) {
-      if (files.directoryChanges > 0 && files.files.some((operand) => !CD.has(level.analysis.commands[operand.command]?.head ?? "")))
+      if (
+        files.directoryChanges > 0 &&
+        files.files.some((operand) => !CD.has(level.analysis.commands[operand.command]?.head ?? ""))
+      )
         found.push(ShellSafety.finding("directory", "location-path"))
       return
     }
@@ -281,7 +308,9 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
     env: input.env,
   }
   // The one parse of the call. Input that cannot be analysed is a value here, never an error.
-  const analysis = yield* inspect(input.command, ctx, { nested: true }).pipe(Effect.provideService(PowerShellParse.Service, parser))
+  const analysis = yield* inspect(input.command, ctx, { nested: true }).pipe(
+    Effect.provideService(PowerShellParse.Service, parser),
+  )
   const ps = isPowerShell(analysis)
   // An input over the length limit is not scanned at all: the scan is not cheap, and the input is asked about whole.
   const scanned =
@@ -303,7 +332,11 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
   })
   // A plain word of the command that a link in an untrusted project leads out of it, such as `cfg/orbit.json` in
   // `cat cfg/orbit.json`, is asked about as the folder it really is in. A path the command builds as it runs is not.
-  const literal = ps ? words(analysis) : analysis.opaque?.reason === "length" ? [] : yield* ShellParse.operands(input.command, input.shell)
+  const literal = ps
+    ? words(analysis)
+    : analysis.opaque?.reason === "length"
+      ? []
+      : yield* ShellParse.operands(input.command, input.shell)
   const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, operand)))
   const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
   const requested = request(analysis, input.command, scanned, gathered.findings)
@@ -320,7 +353,9 @@ export const authorize = Effect.fn("ShellGuard.authorize")(function* (input: Aut
   const requests = [
     ...(shell ? [shell] : []),
     ...(external ? [external] : []),
-    ...gathered.probes.map((probe): Permission.AssertInput => ({ action: probe.action, resources: probe.resources, ...input.base })),
+    ...gathered.probes.map(
+      (probe): Permission.AssertInput => ({ action: probe.action, resources: probe.resources, ...input.base }),
+    ),
   ]
   yield* Effect.forEach(requests, (item) =>
     permission.denied(item).pipe(Effect.flatMap((denied) => (denied ? permission.assert(item) : Effect.void))),
@@ -357,7 +392,12 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
   let dynamic = false
   const share = (file: string) => process.platform === "win32" && /^[\\/]{2}/.test(file)
   const type = (file: string) =>
-    share(file) ? Effect.succeed(undefined) : fs.stat(file).pipe(Effect.map((info) => info.type), Effect.orElseSucceed(() => undefined))
+    share(file)
+      ? Effect.succeed(undefined)
+      : fs.stat(file).pipe(
+          Effect.map((info) => info.type),
+          Effect.orElseSucceed(() => undefined),
+        )
   const same = (left: string, right: string) =>
     process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right
 
@@ -400,7 +440,10 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
   // or sit under an enclosing repository's modules folder. Anything else a repository ships is unverified.
   const verified = Effect.fnUntraced(function* (folder: string) {
     const file = path.join(folder, ".git")
-    const size = yield* fs.stat(file).pipe(Effect.map((info) => Number(info.size)), Effect.orElseSucceed(() => Infinity))
+    const size = yield* fs.stat(file).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.orElseSucceed(() => Infinity),
+    )
     if (size > GITDIR_LIMIT) return false
     const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""))
     const line = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(text)
@@ -453,13 +496,18 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
     }),
   )
   return {
-    bare: found.filter((item, index) => found.findIndex((other) => other.base === item.base && other.why === item.why) === index),
+    bare: found.filter(
+      (item, index) => found.findIndex((other) => other.base === item.base && other.why === item.why) === index,
+    ),
     dynamic,
   }
 })
 
 function gitProgram(command: Command) {
-  const name = path.basename(command.inner[0] ?? "").toLowerCase().replace(/\.exe$/, "")
+  const name = path
+    .basename(command.inner[0] ?? "")
+    .toLowerCase()
+    .replace(/\.exe$/, "")
   return name === "git"
 }
 
@@ -477,7 +525,12 @@ export type Request = {
  * declarations without substitutions, directory changes and comments. `scan` is the bash scanner's result (the legacy
  * one when the analysis could not read the input).
  */
-export function request(analysis: Analysis, text: string, scan: ShellParse.Result | undefined, findings: ShellSafety.Finding[]): Request | undefined {
+export function request(
+  analysis: Analysis,
+  text: string,
+  scan: ShellParse.Result | undefined,
+  findings: ShellSafety.Finding[],
+): Request | undefined {
   const whole = text.trim()
   if (analysis.opaque) return opaque(analysis, whole, scan)
   if (isPowerShell(analysis)) return powershell(analysis, whole, findings)
@@ -497,9 +550,16 @@ function distinct<A>(list: readonly A[]) {
 // or ask but never lift the whole.
 function opaque(analysis: Analysis, whole: string, scan: ShellParse.Result | undefined): Request {
   const ps = isPowerShell(analysis)
-  const pieces = ps ? ShellSafety.fragments(whole).map((piece) => piece.replace(/^(["'])(.*?)\1(?=\s|$)/, "$2")) : bashFragments(whole)
+  const pieces = ps
+    ? ShellSafety.fragments(whole).map((piece) => piece.replace(/^(["'])(.*?)\1(?=\s|$)/, "$2"))
+    : bashFragments(whole)
   return {
-    resources: distinct([whole, ...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? []), ...pieces]).filter((item) => item !== ""),
+    resources: distinct([
+      whole,
+      ...(scan?.commands.map((command) => command.resource) ?? []),
+      ...(scan?.bare ?? []),
+      ...pieces,
+    ]).filter((item) => item !== ""),
     save: [],
   }
 }
@@ -517,7 +577,18 @@ function bashFragments(text: string) {
     .filter((piece) => piece !== "")
 }
 
-const DECLARATIONS = new Set(["export", "declare", "typeset", "local", "readonly", "unset", "cd", "chdir", "pushd", "popd"])
+const DECLARATIONS = new Set([
+  "export",
+  "declare",
+  "typeset",
+  "local",
+  "readonly",
+  "unset",
+  "cd",
+  "chdir",
+  "pushd",
+  "popd",
+])
 
 function inert(analysis: Analysis) {
   return (
@@ -527,7 +598,8 @@ function inert(analysis: Analysis) {
     !analysis.features.heredoc &&
     !analysis.features.herestring &&
     analysis.commands.every(
-      (command) => DECLARATIONS.has(command.head) && command.redirects.length === 0 && command.argv.every((word) => word.literal),
+      (command) =>
+        DECLARATIONS.has(command.head) && command.redirects.length === 0 && command.argv.every((word) => word.literal),
     )
   )
 }
@@ -576,18 +648,27 @@ function powershell(analysis: Analysis, whole: string, findings: ShellSafety.Fin
     .filter((statement) => statement.top)
     .forEach((statement) => {
       const text = statement.text.trim()
-      const commands = statement.kind === "PipelineAst" && !statement.assignment && statement.elements.every((element) => element.kind === "command")
+      const commands =
+        statement.kind === "PipelineAst" &&
+        !statement.assignment &&
+        statement.elements.every((element) => element.kind === "command")
       if (!commands) {
         resources.push(text)
         if (!/[*?\r\n]/.test(text)) save.push(text)
         return
       }
       // A redirect to a file is asked about as the statement, which no grant for its commands covers.
-      if (statement.redirects.some((redirect) => redirect.kind === "file" && redirect.nullSink !== true)) resources.push(text)
+      if (statement.redirects.some((redirect) => redirect.kind === "file" && redirect.nullSink !== true))
+        resources.push(text)
     })
 
   const distinctresources = distinct(resources).filter((item) => item !== "")
-  if (distinctresources.length > 0) return { resources: distinctresources, save: distinct(save), ...(Object.keys(aliases).length > 0 ? { aliases } : {}) }
+  if (distinctresources.length > 0)
+    return {
+      resources: distinctresources,
+      save: distinct(save),
+      ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
+    }
   if (findings.length === 0 && inertPowerShell(summary)) return undefined
   return { resources: [whole], save: [] }
 }
@@ -603,8 +684,11 @@ function inertPowerShell(summary: PowerShellParse.Summary) {
         !statement.subexpression &&
         !statement.expandable &&
         !statement.scriptBlock &&
-        (/^\$(?!env:)[A-Za-z_]\w*\s*=\s*(?:'[^']*'|"[^"$`]*"|\d+(?:\.\d+)?|\$(?:true|false|null))$/i.test(statement.text.trim()) ||
-          (statement.kind === "PipelineAst" && statement.elements.every((element) => element.kind === "command" && LOCATION.has(element.command.name)))),
+        (/^\$(?!env:)[A-Za-z_]\w*\s*=\s*(?:'[^']*'|"[^"$`]*"|\d+(?:\.\d+)?|\$(?:true|false|null))$/i.test(
+          statement.text.trim(),
+        ) ||
+          (statement.kind === "PipelineAst" &&
+            statement.elements.every((element) => element.kind === "command" && LOCATION.has(element.command.name)))),
     )
 }
 
@@ -636,7 +720,12 @@ function saved(command: PowerShellParse.Command) {
   const words = [written]
   for (const argument of command.arguments) {
     if (argument.parameter !== undefined) continue
-    if (argument.kind !== "StringConstantExpressionAst" || argument.value === undefined || /[\s\\]/.test(argument.value)) break
+    if (
+      argument.kind !== "StringConstantExpressionAst" ||
+      argument.value === undefined ||
+      /[\s\\]/.test(argument.value)
+    )
+      break
     positional.push(argument.value)
     words.push(argument.value)
   }
@@ -653,10 +742,17 @@ function saved(command: PowerShellParse.Command) {
  */
 export function expansions(analysis: Analysis, cwd: string, shell: string) {
   return (analysis.summary?.commands ?? [])
-    .filter((command) => LOCATION.has(command.name) && command.name !== "new-psdrive" && command.name !== "pop-location")
+    .filter(
+      (command) => LOCATION.has(command.name) && command.name !== "new-psdrive" && command.name !== "pop-location",
+    )
     .flatMap((command) =>
       command.arguments.flatMap((argument) => {
-        const text = argument.parameter === undefined ? argument.text : /^(?:p|l)/i.test(argument.parameter) ? argument.bound?.text : undefined
+        const text =
+          argument.parameter === undefined
+            ? argument.text
+            : /^(?:p|l)/i.test(argument.parameter)
+              ? argument.bound?.text
+              : undefined
         const folder = text === undefined ? undefined : ShellParse.directoryArgument(text, true, cwd, shell)
         return folder === undefined ? [] : [folder]
       }),
@@ -672,7 +768,9 @@ export function words(analysis: Analysis) {
   return (analysis.summary?.statements ?? []).flatMap((statement) => [
     ...statement.elements.flatMap((element) =>
       element.command.arguments.flatMap((argument) =>
-        argument.parameter === undefined && argument.value !== undefined && argument.value !== "" ? [argument.value] : [],
+        argument.parameter === undefined && argument.value !== undefined && argument.value !== ""
+          ? [argument.value]
+          : [],
       ),
     ),
     ...statement.redirects.flatMap((redirect) => (redirect.value === undefined ? [] : [redirect.value])),

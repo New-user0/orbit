@@ -226,8 +226,7 @@ const repository = async (folder: string) => {
 }
 
 describe("ShellGuard.facts: the bare-repository probe", () => {
-  const probe = (command: string, cwd: string, root: string) =>
-    facts(command, { cwd }).pipe(provide(root, true))
+  const probe = (command: string, cwd: string, root: string) => facts(command, { cwd }).pipe(provide(root, true))
   const why = (found: ShellGuard.Facts) => found.bare.map((item) => item.why)
 
   it.live("finds nothing in a normal repository, at its root or below it", () =>
@@ -247,7 +246,9 @@ describe("ShellGuard.facts: the bare-repository probe", () => {
       Effect.gen(function* () {
         const { project } = yield* layout
         yield* Effect.promise(() =>
-          indicator === "HEAD" ? fs.writeFile(path.join(project, "HEAD"), "ref: x\n") : fs.mkdir(path.join(project, indicator)),
+          indicator === "HEAD"
+            ? fs.writeFile(path.join(project, "HEAD"), "ref: x\n")
+            : fs.mkdir(path.join(project, indicator)),
         )
         expect(why(yield* probe("git status", project, project))).toEqual(["indicators"])
       }),
@@ -419,7 +420,7 @@ describe("ShellGuard.request", () => {
     "cat <<EOF\n$(printf hello)\nEOF",
     "for f in a b; do printf %s $f; done",
     'greet() { case "$1" in a) printf hello;; *) printf other;; esac; }; greet a',
-    "[[ -n <(printf reached > marker) ]]; wait \"$!\"",
+    '[[ -n <(printf reached > marker) ]]; wait "$!"',
   ])
     it.live(`reads ${JSON.stringify(command)} as opaque, so it asks`, () =>
       Effect.gen(function* () {
@@ -459,22 +460,32 @@ describe("ShellGuard.authorize", () => {
         })
       }).pipe(
         Effect.provide(
-          AppNodeBuilder.build(LayerNode.group([FileAccess.node, Permission.node, ProjectTrust.node, FSUtil.node, Location.node]), [
-            Location.node.replace(
-              Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
-            ),
-            Permission.node.replace(
-              permissionLayer({
-                assert: (input) =>
-                  denied(input)
-                    ? Effect.fail(
-                        new Permission.BlockedError({ rules: [], permission: input.action, resources: input.resources }),
-                      )
-                    : Effect.sync(() => void asked.push(input)),
-                denied: (input) => Effect.succeed(denied(input)),
-              }),
-            ),
-          ]),
+          AppNodeBuilder.build(
+            LayerNode.group([FileAccess.node, Permission.node, ProjectTrust.node, FSUtil.node, Location.node]),
+            [
+              Location.node.replace(
+                Layer.succeed(
+                  Location.Service,
+                  Location.Service.of(location({ directory: AbsolutePath.make(project) })),
+                ),
+              ),
+              Permission.node.replace(
+                permissionLayer({
+                  assert: (input) =>
+                    denied(input)
+                      ? Effect.fail(
+                          new Permission.BlockedError({
+                            rules: [],
+                            permission: input.action,
+                            resources: input.resources,
+                          }),
+                        )
+                      : Effect.sync(() => void asked.push(input)),
+                  denied: (input) => Effect.succeed(denied(input)),
+                }),
+              ),
+            ],
+          ),
         ),
         Effect.provideService(PowerShellParse.Service, noHost),
         Effect.exit,

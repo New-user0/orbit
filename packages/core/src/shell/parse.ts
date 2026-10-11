@@ -187,8 +187,8 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),
     (tree) =>
-      Effect.sync(() => ({
-        ...tree.rootNode.descendantsOfType("command").reduce(
+      Effect.sync(() => {
+        const result = tree.rootNode.descendantsOfType("command").reduce(
           (result, node) => {
             if (!node) return result
             const command = parts(node)
@@ -206,13 +206,17 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
             return result
           },
           { commands: [] as Array<{ resource: string; save: string }>, directories: [] as string[] },
-        ),
-        bare: powershell
+        )
+        // A redirected statement with no command (`> file`) creates or truncates a file and has no command node. A result
+        // without one is what it always was.
+        const bare = powershell
           ? []
-          : tree.rootNode.descendantsOfType("redirected_statement").flatMap((node) =>
-              node && node.childForFieldName("body") === null ? [node.text.trim()] : [],
-            ),
-      })),
+          : tree.rootNode
+              .descendantsOfType("redirected_statement")
+              .flatMap((node) => (node && node.childForFieldName("body") === null ? [node.text.trim()] : []))
+        const output: Result = bare.length > 0 ? { ...result, bare } : result
+        return output
+      }),
     (tree) => Effect.sync(() => tree.delete()),
   )
 })
