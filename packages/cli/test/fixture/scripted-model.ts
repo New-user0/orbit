@@ -7,7 +7,7 @@ export type ScriptedRequest = {
   readonly system: string
   /** The text of the last user message. */
   readonly user: string
-  readonly body: { messages: Array<{ role: string; content?: unknown }> }
+  readonly body: { model?: string; messages: Array<{ role: string; content?: unknown }> }
 }
 
 /**
@@ -35,6 +35,8 @@ export function scriptedModel(
   contextLength = 32_768,
   /** Called for each request before it is answered, so a test can look at the machine while the run is in progress. */
   observe?: (request: ScriptedRequest) => void | Promise<void>,
+  /** Names of further models the server lists next to `scripted:1b`, for a test that switches models. */
+  extraModels: ReadonlyArray<string> = [],
 ) {
   const requests: ScriptedRequest[] = []
   const details = {
@@ -51,16 +53,14 @@ export function scriptedModel(
       const pathname = new URL(request.url).pathname
       if (pathname === "/api/tags")
         return Response.json({
-          models: [
-            {
-              name: "scripted:1b",
-              model: "scripted:1b",
-              modified_at: "2026-01-01T00:00:00Z",
-              size: 1,
-              digest: "d",
-              details,
-            },
-          ],
+          models: ["scripted:1b", ...extraModels].map((name) => ({
+            name,
+            model: name,
+            modified_at: "2026-01-01T00:00:00Z",
+            size: 1,
+            digest: "d",
+            details,
+          })),
         })
       if (pathname === "/api/show")
         return Response.json({

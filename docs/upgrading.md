@@ -2429,6 +2429,26 @@ Read takes a new optional `pages` argument for PDFs: a page such as `3` or a ran
 
 **What to do:** Pass `pages`, for example `"1-5"`, for a long PDF. A model that cannot take PDF input still receives the usual unsupported-media text.
 
+### `--input-format stream-json` lets a program drive a headless run
+
+`orb -p --input-format stream-json --output-format stream-json` (and `orb run --input-format stream-json --format stream-json`)
+reads one JSON input per line from standard input while the run goes on, instead of sending one message and exiting. The
+inputs are `user` (`text`, optional `files`, `delivery` `steer` or `queue`, `id`), `interrupt`, `permission_reply`,
+`form_reply`, `form_cancel`, `set_model` and `end`. Output is the envelope of `--output-format stream-json`, with an init
+line first and one `result` line for each busy period, plus `permission_request` and `form_request` lines for the asks and
+questions the program should answer, `request_cancelled` when one of them is settled by someone else, and `error` lines with
+type `invalid_input`, `unknown_request` or `input_failed` for a line or operation that failed (the run goes on). A message
+sent with `delivery: "steer"` joins the work that is running and shares its result; `"queue"` waits and gets its own. When
+standard input closes, every ask that is still open is rejected (a question is cancelled) with feedback so the model carries on,
+the queued work finishes, and the exit status is 1 if the last result was an error and 0 otherwise. A first message may also be
+given on the command line. Like `orb -p`, it refuses an untrusted folder. Without `--yolo`, `--auto` or `--dangerously-skip-permissions` every ask goes to the program;
+with one of them, asks are approved without being shown.
+
+**Affects:** nothing that exists: the flag is new. `--input-format` is a new `-p` flag, so a script that passes it to a
+root command without `-p` now gets the usual usage error.
+
+**What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.
+
 ### The question tool has limits and option previews
 
 The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
