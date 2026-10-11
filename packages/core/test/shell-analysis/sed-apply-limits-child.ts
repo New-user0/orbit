@@ -8,6 +8,8 @@ const rows = [
   ["sed -i 's/a*a*a*b/Z/' f", "a".repeat(20_000)],
   ["sed -Ei 's/a+a+b/Z/' f", "a".repeat(20_000)],
   ["sed -i '/a*a*b/d' f", "a".repeat(20_000)],
+  ["sed -i 's/.*.*.*x/Z/' f", "a".repeat(999)],
+  ["sed -i 's/.\\{0,32767\\}x.\\{0,32767\\}y/Z/' f", "a".repeat(9999)],
 ]
 const out = rows.map(([command, text]) => {
   const planned = SedScript.plan(bash(command), "gnu")

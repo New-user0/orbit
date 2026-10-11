@@ -184,10 +184,10 @@ export type Applied = { ok: true; text: string } | { ok: false; reason: string }
 
 /** The most text `apply` takes in one file. */
 export const MAX_TEXT = 1_048_576
-/** A line longer than this is refused when a pattern has an unbounded quantifier: the match is quadratic in the line. */
-const MAX_LINE = 10_000
-/** A line longer than this is refused when a pattern has two: the match is cubic in the line. */
-const MAX_LINE_STACKED = 1000
+/** A match costs about `longest ** (unbounded + 1)` steps; a line is refused when that passes this budget. */
+const MAX_COST = 1e8
+/** An interval whose maximum passes this counts as unbounded: a large `{0,n}` backtracks like `*`. */
+const MAX_INTERVAL = 16
 const DUP_MAX = 32_767
 // Delimiters that mean nothing in a regular expression or a replacement, so `\<delimiter>` is that character.
 const PLAIN_DELIMITERS = '/#,:@!%_;=~"-'
@@ -267,7 +267,7 @@ export function apply(text: string, edit: Edit): Applied {
   if (matchers.some((matcher) => matcher.ascii) && /[^\x00-\x7f]/.test(text.startsWith("\uFEFF") ? text.slice(1) : text)) return refuse("content")
   const lines = split(text)
   const longest = lines.reduce((size, line) => Math.max(size, line.text.length), 0)
-  if (matchers.some((matcher) => (matcher.unbounded >= 1 && longest > MAX_LINE) || (matcher.unbounded >= 2 && longest > MAX_LINE_STACKED))) return refuse("limit")
+  if (matchers.some((matcher) => longest ** (matcher.unbounded + 1) > MAX_COST)) return refuse("limit")
   const compiled = edit.commands.map((step) => ({
     step,
     address: step.address?.kind === "regex" ? compile(step.address.matcher, "") : undefined,
@@ -397,7 +397,10 @@ function compileStep(item: Command, extended: boolean, flavor: Flavor): Step | s
   if (item.name !== "s") return "command"
   // The tokenizer already refused `w` and `e`; `p` would write into the file and `m` changes what `^` and `$` mean.
   const digits = item.flags.replace(/\D/g, "")
-  if (/[pmM]/.test(item.flags) || digits.length > 9) return "flag"
+  // Only g, i, I and digits are flags this emulator reproduces; sed itself rejects G and P.
+  if (/[^gIi0-9]/.test(item.flags) || digits.length > 9) return "flag"
+  // BSD sed rejects a number combined with g.
+  if (flavor === "bsd" && digits !== "" && item.flags.includes("g")) return "flag"
   const matcher = translate(item.pattern, item.delimiter, extended, flavor, /[Ii]/.test(item.flags))
   if (typeof matcher === "string") return matcher
   const parts = replacement(item.replacement, item.delimiter, matcher.groups, flavor)
@@ -564,7 +567,7 @@ function readInterval(pattern: string, start: number, closing: string) {
   if (min > DUP_MAX || (max !== undefined && (max > DUP_MAX || max < min))) return undefined
   return {
     text: found[2] === undefined ? `{${min}}` : max === undefined ? `{${min},}` : `{${min},${max}}`,
-    open: max === undefined,
+    open: max === undefined || max > MAX_INTERVAL,
     next: start + found[0].length + closing.length,
   }
 }
@@ -586,7 +589,8 @@ function bracket(pattern: string, start: number): { source: string; next: number
     if (char === "\\") return "regex"
     if (char === "[" && ":=.".includes(pattern[index + 1] ?? "x")) {
       const close = pattern.indexOf(`${pattern[index + 1]}]`, index + 2)
-      const set = pattern[index + 1] === ":" && close > 0 ? CLASSES[pattern.slice(index + 2, close)] : undefined
+      const name = pattern.slice(index + 2, close)
+      const set = pattern[index + 1] === ":" && close > 0 && Object.hasOwn(CLASSES, name) ? CLASSES[name] : undefined
       if (!set) return "regex"
       items.push(set)
       ascii = true
@@ -598,6 +602,9 @@ function bracket(pattern: string, start: number): { source: string; next: number
       // A range needs a single character on both sides.
       const high = pattern[index + 1]
       if (last !== "char" || high === undefined || high === "\\" || high === "-" || (high === "[" && ":=.".includes(pattern[index + 2] ?? "x")) || high < low) return "regex"
+      // Ranges follow the locale in GNU sed, so only ranges that mean the same in every locale are emulated.
+      if (!(/[a-z]/.test(low) && /[a-z]/.test(high)) && !(/[A-Z]/.test(low) && /[A-Z]/.test(high)) && !(/[0-9]/.test(low) && /[0-9]/.test(high))) return "regex"
+      ascii = true
       items[items.length - 1] = `${escape(low)}-${escape(high)}`
       last = "range"
       index += 2

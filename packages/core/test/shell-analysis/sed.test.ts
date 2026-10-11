@@ -98,6 +98,8 @@ describe("SedScript.plan refuses", () => {
     ["the same file twice", "sed -i 's/a/b/' f f", "gnu", "sed-edit:operand"],
     ["a glob", "sed -i 's/a/b/' *.txt", "gnu", "sed-edit:operand"],
     ["a tilde", "sed -i 's/a/b/' ~/f", "gnu", "sed-edit:operand"],
+    ["a tilde after = (bash expands it)", "sed -i 's/a/b/' f=~/x", "gnu", "sed-edit:operand"],
+    ["a tilde after a : in an assignment-like word", "sed -i 's/a/b/' g=a:~/y", "gnu", "sed-edit:operand"],
     // The analysis itself calls these opaque or non-literal, so they are refused as a shape.
     ['a variable "$f"', 'sed -i \'s/a/b/\' "$f"', "gnu", "sed-edit:shape"],
     ["a brace expansion", "sed -i 's/a/b/' {a,b}.txt", "gnu", "sed-edit:shape"],
@@ -145,6 +147,13 @@ describe("SedScript.plan refuses", () => {
     ["s///p", "sed -i 's/a/b/p' f", "gnu", "sed-edit:flag"],
     ["s///m", "sed -i 's/a/b/m' f", "gnu", "sed-edit:flag"],
     ["s///M", "sed -i 's/a/b/M' f", "gnu", "sed-edit:flag"],
+    ["s///G (sed rejects it)", "sed -i 's/a/b/G' f", "gnu", "sed-edit:flag"],
+    ["s///P (sed rejects it)", "sed -i 's/a/b/P' f", "gnu", "sed-edit:flag"],
+    ["s///2P", "sed -i 's/a/b/2P' f", "gnu", "sed-edit:flag"],
+    ["BSD s///G", "sed -i '' 's/a/b/G' f", "bsd", "sed-edit:flag"],
+    ["BSD s///P", "sed -i '' 's/a/b/P' f", "bsd", "sed-edit:flag"],
+    ["BSD s///2g (BSD rejects a number with g)", "sed -i '' 's/a/b/2g' f", "bsd", "sed-edit:flag"],
+    ["BSD s///g2", "sed -i '' 's/a/b/g2' f", "bsd", "sed-edit:flag"],
     // Addresses
     ["a range that starts with a regex", "sed -i '/x/,$d' f", "gnu", "sed-edit:address"],
     ["a range that starts at $", "sed -i '$,3d' f", "gnu", "sed-edit:address"],
@@ -182,6 +191,12 @@ describe("SedScript.plan refuses", () => {
     ["an unterminated bracket", "sed -i 's/[a/x/' f", "gnu", "sed-edit:regex"],
     ["a reversed range", "sed -i 's/[z-a]/x/' f", "gnu", "sed-edit:regex"],
     ["an unknown class", "sed -i 's/[[:nope:]]/x/' f", "gnu", "sed-edit:regex"],
+    ["a class named like an Object.prototype key", "sed -i 's/[[:constructor:]]/x/' f", "gnu", "sed-edit:regex"],
+    ["a class named __proto__", "sed -i 's/[[:__proto__:]]/x/' f", "gnu", "sed-edit:regex"],
+    ["a class named toString", "sed -i 's/[[:toString:]]/x/' f", "gnu", "sed-edit:regex"],
+    ["a range that mixes cases (locale dependent)", "sed -i 's/[A-c]/x/' f", "gnu", "sed-edit:regex"],
+    ["a range that mixes digits and letters", "sed -i 's/[0-z]/x/' f", "gnu", "sed-edit:regex"],
+    ["a punctuation range (locale dependent)", "sed -i 's/[ -~]/x/' f", "gnu", "sed-edit:regex"],
     ["\\r", "sed -i 's/\\r//' f", "gnu", "sed-edit:regex"],
     ["\\x41", "sed -i 's/\\x41/x/' f", "gnu", "sed-edit:regex"],
     ["\\n in a pattern", "sed -i 's/\\n/x/' f", "gnu", "sed-edit:regex"],
@@ -442,8 +457,18 @@ describe("SedScript.apply limits", () => {
 
   test("a very long line is refused when the pattern has one unbounded quantifier", () => {
     expect(run("s/a*b/Z/", "a".repeat(20_000) + "\n")).toBe("sed-edit:limit")
-    // A bounded quantifier is not counted: the cost of a match does not grow with the line.
+    // A small bounded quantifier is not counted: the cost of a match does not grow with the line.
     expect(run("s/a\\{1,3\\}b/Z/", "a".repeat(20_000) + "\n")).toBe("a".repeat(20_000) + "\n")
+  })
+
+  test("a large interval counts as unbounded, and stacked quantifiers shrink the line limit", () => {
+    expect(run("s/.\\{0,32767\\}x/Z/", "a".repeat(20_000) + "\n")).toBe("sed-edit:limit")
+    expect(run("s/.*.*.*x/Z/", "a".repeat(999) + "\n")).toBe("sed-edit:limit")
+  })
+
+  test("a range of letters is a content rule: non-ASCII text is refused", () => {
+    expect(run("s/[a-z]/X/", "caf\u00e9\n")).toBe("sed-edit:content")
+    expect(run("s/[a-z]/X/", "abc\n")).toBe("Xbc\n")
   })
 
   test("a replacement that grows the text past the cap is refused", () => {
@@ -464,7 +489,7 @@ describe("SedScript.apply limits", () => {
     const output = await new Response(child.stdout).text()
     clearTimeout(timer)
     expect(await child.exited).toBe(0)
-    expect(JSON.parse(output)).toEqual(["sed-edit:limit", "sed-edit:limit", "sed-edit:limit", "sed-edit:limit"])
+    expect(JSON.parse(output)).toEqual(Array(6).fill("sed-edit:limit"))
   }, 15_000)
 })
 

@@ -21,6 +21,9 @@ import { ShellWrappers } from "./wrappers.js"
 // A command that cannot be analysed is a value (`opaque`), never an error. Opaque reasons are fixed codes: they never
 // carry text from the command, because a reason can reach a person (class 9).
 
+// Bash expands a tilde after the = (or a :) of a word that looks like an assignment.
+const ASSIGNMENT_TILDE = /^[A-Za-z_][A-Za-z0-9_]*=(?:[^:]*:)*~/
+
 export type Dialect = "bash" | "powershell-5.1" | "pwsh" | "unanalysed"
 type PathModule = typeof path.posix
 
@@ -731,6 +734,7 @@ class BashWalk {
           glob: unescapedGlob(node.text),
           arithmetic: false,
           tilde: node.text.startsWith("~") && !bad,
+          ...(ASSIGNMENT_TILDE.test(node.text) ? { equalsTilde: true as const } : {}),
           ...(node.text.includes("\\") ? { escaped: true as const } : {}),
         }
       }
@@ -772,7 +776,7 @@ class BashWalk {
       glob: parts.some((part) => part.glob),
       arithmetic: parts.some((part) => part.arithmetic),
       tilde,
-      equalsTilde: kids(node)[0].type === "word" && /^[^=]+=~\//.test(kids(node)[0].text),
+      equalsTilde: kids(node)[0].type === "word" && (/^[^=]+=~\//.test(kids(node)[0].text) || ASSIGNMENT_TILDE.test(kids(node)[0].text)),
     }
   }
 
