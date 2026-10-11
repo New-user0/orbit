@@ -1411,4 +1411,57 @@ describe("Session.inbox", () => {
       expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxCancelled.type, 1))).toBe(1)
     }),
   )
+
+  const nested = (levels: number) =>
+    Array.from({ length: levels }).reduce<Record<string, unknown>>(
+      (inner) => ({ type: "object", properties: { a: inner } }),
+      { type: "string" },
+    )
+  // Each schema is one the validator cannot enforce; admission must refuse it before an inbox row or an event exists.
+  const refused: ReadonlyArray<readonly [string, unknown, RegExp]> = [
+    ["a type that is a number", { type: "object", properties: { a: { type: 3 } } }, /"type"/],
+    ["an array root", { type: "array", items: { type: "string" } }, /"type": "object"/],
+    ["a root without a type", { properties: { a: { type: "string" } } }, /"type": "object"/],
+    ["a remote reference", { type: "object", properties: { a: { $ref: "https://example.com/a.json" } } }, /outside the schema/],
+    ["a reference that does not resolve", { type: "object", properties: { a: { $ref: "#/$defs/missing" } } }, /does not point/],
+    ["a reference into a number", { type: "object", properties: { a: { $ref: "#/maxItems" } }, maxItems: 3 }, /does not point/],
+    ["a nested $id", { type: "object", properties: { a: { $id: "https://example.com/a", type: "string" } } }, /only allowed at the root/],
+    ["an unknown keyword", { type: "object", frobnicate: true }, /Unknown keyword "frobnicate"/],
+    ["a misspelt keyword", { type: "object", requred: ["a"] }, /Did you mean "required"/],
+    ["an unsupported $schema", { $schema: "http://json-schema.org/draft-04/schema#", type: "object" }, /\$schema/],
+    ["a pattern that is not a regular expression", { type: "object", properties: { a: { type: "string", pattern: "(" } } }, /regular expression/],
+    ["a schema over 256 KiB", { type: "object", description: "x".repeat(257 * 1024) }, /256 KiB/],
+    ["a schema 65 levels deep", nested(65), /64 levels/],
+  ]
+  for (const [name, schema, message] of refused)
+    it.effect(`refuses ${name} when the prompt is admitted`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* Session.Service
+
+        const error = yield* session
+          .prompt({ sessionID, text: "Work", turn: { output: { schema: schema as Record<string, never> } }, resume: false })
+          .pipe(Effect.flip)
+
+        expect(error).toMatchObject({ _tag: "Session.OutputSchemaError" })
+        expect(error.message).toMatch(message)
+        expect(yield* admittedCount).toBe(0)
+        expect(yield* eventCount(Bus.versionedType(SessionEvent.InboxEnqueued.type, 1))).toBe(0)
+      }),
+    )
+
+  it.effect("admits a schema it can enforce and records it with the prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const output = {
+        schema: { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+        attempts: 3,
+      }
+
+      const message = yield* session.prompt({ sessionID, text: "Work", turn: { output }, resume: false })
+
+      expect(yield* admitted(message.id)).toMatchObject({ type: "user", payload: { turn: { output } } })
+    }),
+  )
 })

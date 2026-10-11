@@ -1,5 +1,5 @@
 import { Service, type Endpoint } from "@orbit/client/effect/service"
-import { Orbit, type OrbitClient, type SessionMessageAssistantTool } from "@orbit/client/promise"
+import { Orbit, type JsonValue, type OrbitClient, type SessionMessageAssistantTool } from "@orbit/client/promise"
 import { body, jsonLine, progress } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
 import { open } from "node:fs/promises"
@@ -27,7 +27,10 @@ export type RunCommandInput = {
   model?: string
   agent?: string
   format: "default" | "json" | "stream-json" | "result"
-  jsonSchema?: unknown
+  /** The schema the final answer must follow, handed to the server as `turn.output`. */
+  jsonSchema?: { readonly [key: string]: JsonValue }
+  /** How many responses may hand in a non-matching answer; the server's default when absent. */
+  attempts?: number
   file: string[]
   title?: string
   thinking?: boolean
@@ -119,13 +122,25 @@ async function execute(
   const explicit = parseRunModel(input.model)
   const fallback = parseSessionTargetModel(input.fallbackModel)
   const turn =
-    input.maxSteps === undefined && input.maxCost === undefined && input.maxTokens === undefined && !fallback
+    input.maxSteps === undefined &&
+    input.maxCost === undefined &&
+    input.maxTokens === undefined &&
+    !fallback &&
+    input.jsonSchema === undefined
       ? undefined
       : {
           ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
           ...(input.maxCost === undefined ? {} : { maxCost: input.maxCost }),
           ...(input.maxTokens === undefined ? {} : { maxTokens: input.maxTokens }),
           ...(fallback ? { fallbackModel: fallback } : {}),
+          ...(input.jsonSchema === undefined
+            ? {}
+            : {
+                output: {
+                  schema: input.jsonSchema,
+                  ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
+                },
+              }),
         }
   const target = await resolveSessionTarget({
     client,

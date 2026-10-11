@@ -26,16 +26,15 @@ import {
   formAlreadySettled,
   formRequestOptions,
   markResultWritten,
-  parseJson,
+  failureReason,
   partID,
   prepareFile,
   projectedPartID,
   sameLocation,
-  schemaInstruction,
+  structuredAnswer,
   subtype,
   toMillis,
   toolKey,
-  unfence,
   type EnvelopeResult,
   type File,
 } from "./format"
@@ -179,6 +178,9 @@ export async function runNonInteractivePrompt(input: Input) {
   const spent = { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
   let lastFinish: string | undefined
   let limit: SessionStructuredError | undefined
+  // The type of the error that ended the busy period, and the accepted structured answer read from the history.
+  let endType: string | undefined
+  let structured: { value: unknown } | undefined
   let ended = false
 
   const streaming = input.format === "json" || input.format === "stream-json"
@@ -794,6 +796,7 @@ export async function runNonInteractivePrompt(input: Input) {
         pendingStepError = undefined
         endEvents()
         if (event.data.error.type.startsWith("limit.")) limit = event.data.error
+        endType = event.data.error.type
         if (!emittedError && !formCancelled) {
           emittedError = true
           process.exitCode = 1
@@ -861,6 +864,7 @@ export async function runNonInteractivePrompt(input: Input) {
 
   const reconcile = async () => {
     const projected = await projectedMessages()
+    structured = structuredAnswer(projected.messages)
     Object.assign(spent, { steps: 0, cost: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
     for (const message of projected.messages) {
       if (message.type === "synthetic") {
@@ -1041,11 +1045,7 @@ export async function runNonInteractivePrompt(input: Input) {
         {
           sessionID: input.sessionID,
           id: messageID,
-          text: [
-            input.message,
-            ...prepared.flatMap((file) => (file.text ? [file.text] : [])),
-            ...(input.jsonSchema === undefined ? [] : [schemaInstruction(input.jsonSchema)]),
-          ].join("\n\n"),
+          text: [input.message, ...prepared.flatMap((file) => (file.text ? [file.text] : []))].join("\n\n"),
           files: prepared.flatMap((file) => (file.attachment ? [file.attachment] : [])),
           delivery: "steer",
           ...(input.turn ? { turn: input.turn } : {}),
@@ -1068,7 +1068,7 @@ export async function runNonInteractivePrompt(input: Input) {
       emittedError = true
       process.exitCode = 1
       failure =
-        "The server did not accept the limits or fallback model for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens and --fallback-model."
+        "The server did not accept the limits, fallback model or output schema for this run, so it may be an older version than this client. Update the server, or run without --max-steps, --max-cost, --max-tokens, --fallback-model and --json-schema."
       await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
       controller.abort()
       await completed?.catch(() => {})
@@ -1162,6 +1162,7 @@ export async function runNonInteractivePrompt(input: Input) {
         text: answer.join("\n\n"),
         failed,
         schema: input.jsonSchema,
+        structured,
         subtype: subtype({ failed, interrupted, limit }),
         truncated,
         outcome: interrupted || interruption !== undefined ? "interrupted" : failed ? "failed" : "succeeded",
@@ -1172,7 +1173,7 @@ export async function runNonInteractivePrompt(input: Input) {
             : interruption !== undefined
               ? interruption
               : failure !== undefined
-                ? "error"
+                ? (failureReason(endType) ?? "error")
                 : permissionRejected
                   ? "permission_rejected"
                   : formCancelled
@@ -1185,13 +1186,14 @@ export async function runNonInteractivePrompt(input: Input) {
         tokens: totals.tokens,
         rejected,
       })
-    } else if (schemaText) writeSchemaText(answer.join("\n\n"), failed)
+    } else if (schemaText) writeSchemaText(structured, failed)
     else if (input.format === "result")
       writeResult({
         sessionID: input.sessionID,
         text: answer.join("\n\n"),
         failed,
         schema: input.jsonSchema,
+        structured,
         subtype: subtype({ failed, interrupted, limit }),
         usage: spent,
         truncated,
@@ -1235,6 +1237,7 @@ function writeResult(input: {
   text: string
   failed: boolean
   schema: unknown
+  structured: { value: unknown } | undefined
   subtype: string
   usage: {
     steps: number
@@ -1248,8 +1251,7 @@ function writeResult(input: {
   truncated: boolean
   error: string | undefined
 }) {
-  const parsed = input.schema === undefined ? undefined : parseJson(unfence(input.text))
-  const invalid = input.schema !== undefined && parsed === undefined
+  const invalid = input.schema !== undefined && !input.failed && input.structured === undefined
   if (input.failed || invalid) process.exitCode = 1
   markResultWritten()
   process.stdout.write(
@@ -1270,8 +1272,12 @@ function writeResult(input: {
         },
       },
       truncated: input.truncated,
-      ...(parsed === undefined ? {} : { structured_output: parsed.value }),
-      ...(invalid ? { error: "The answer was not valid JSON." } : input.error ? { error: input.error } : {}),
+      ...(input.structured === undefined || input.failed ? {} : { structured_output: input.structured.value }),
+      ...(invalid
+        ? { error: "The run ended without an accepted structured answer." }
+        : input.error
+          ? { error: input.error }
+          : {}),
     }) + EOL,
   )
 }
@@ -1284,12 +1290,11 @@ function writeEnvelopeResult(run: EnvelopeResult) {
   process.stdout.write(result.line + EOL)
 }
 
-// `orb -p --json-schema` in text format: stdout holds only the parsed answer, and an answer that is not JSON is an error.
-function writeSchemaText(text: string, failed: boolean) {
-  const parsed = parseJson(unfence(text))
-  if (failed || !parsed) process.exitCode = process.exitCode || 1
+// `orb -p --json-schema` in text format: stdout holds only the accepted answer, and a run without one is an error.
+function writeSchemaText(answer: { value: unknown } | undefined, failed: boolean) {
+  if (failed || !answer) process.exitCode = process.exitCode || 1
   // The error was already printed when it happened.
   if (failed) return
-  if (!parsed) return UI.error("The answer was not valid JSON.")
-  process.stdout.write(jsonLine(parsed.value) + EOL)
+  if (!answer) return UI.error("The run ended without an accepted structured answer.")
+  process.stdout.write(jsonLine(answer.value) + EOL)
 }
