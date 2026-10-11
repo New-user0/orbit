@@ -2170,6 +2170,21 @@ and plugin or SDK code that compares the result text exactly.
 
 **What to do:** Nothing, unless you parse the result text: expect the reminder line before the first result.
 
+### Read-only shell calls run at the same time
+
+Before, every `Bash` call in a step ran alone, in the order the model wrote them. Now a call whose command the shell
+analysis judges read-only (`ls`, `git status`, `cat a | grep b`, `sleep 1`) runs beside other safe calls, up to
+`tool_execution.max_concurrency`. Any other call, such as `touch x` or `echo hi > f`, still runs alone and waits for
+the calls before it. The decision uses the command text the model sent, before any hook rewrites it, and ignores
+`run_in_background`, the timeout and the paths the command reads. A command that cannot be analysed, an empty command,
+and every call under PowerShell, `cmd.exe` or an unrecognised shell stay serial. When `PATH` has an empty or relative
+entry (a trailing `;` in the Windows `Path` is enough) no command counts as read-only, so shell calls stay serial.
+
+**Affects:** people whose model issues several read-only shell commands in one step, and plugins that observe the
+`execute.before` and `execute.after` hooks of `Bash` and assume they never overlap.
+
+**What to do:** Nothing. To keep shell calls serial, set `tool_execution.max_concurrency` to 1.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.
