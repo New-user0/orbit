@@ -305,6 +305,35 @@ describe("fileEdit in bash", () => {
     expect(files(bash(text))).toEqual(written)
   })
 
+  // A read-class command that fails the read-only check still reads what it names; no allow rule may hide that.
+  test.each([
+    ["sort -o out /etc/shadow", ["read /work/out", "read /etc/shadow"]],
+    ["find /etc -delete", ["read /etc"]],
+    ["find ~/.ssh -exec cat {} +", ["read /home/u/.ssh", "read /work/cat", "read /work/{}", "read /work/+"]],
+    ["timeout 5 cat /etc/shadow > out", ["read /etc/shadow"]],
+    ["nice cat /etc/shadow > out", ["read /etc/shadow"]],
+    ["A=1 cat /etc/shadow > out", ["read /etc/shadow"]],
+    ["cat /etc/shadow > out", ["read /etc/shadow"]],
+    ["git diff --no-index /etc/shadow x", ["read /etc/shadow", "read /work/x"]],
+    ["git status /etc", []],
+  ])("%s reports its reads", (text, read) => {
+    expect(reading(text)).toEqual(read)
+  })
+
+  test.each(["PATH=bin; rm x", "PATH=/work/bin; rm x", "for PATH in bin; do rm x; done"])("%s is no edit", (text) => {
+    expect(bash(text).paths.fileEdit).toBe(false)
+  })
+  test("an unrelated assignment stays an edit", () => expect(bash("FOO=1; rm x").paths.fileEdit).toBe(true))
+
+  test.each([
+    ["echo a > '~/x'", ["write< /work/~/x"]],
+    ['echo a > "~"/x', ["write< /work/~/x"]],
+    ["dd if='~/x' of=y", ["source /work/~/x", "write /work/y"]],
+    ['dd if=~/"x y" of=y', ["source /home/u/x y", "write /work/y"]],
+  ])("%s keeps a quoted tilde literal", (text, expected) => {
+    expect(files(bash(text))).toEqual(expected)
+  })
+
   test("a reader that is not read-only asks, so it is not an edit", () => {
     for (const text of ["find /etc -delete", "sort -o out /etc/shadow"]) expect(bash(text).paths.fileEdit).toBe(false)
   })
@@ -412,8 +441,12 @@ describe("PowerShell extraction", () => {
     expect(powershell("New-Item -ItemType Directory build", pwsh()).paths.links).toBe(false)
   })
 
+  test("a backtick argument is dynamic, like a backtick redirect", () => {
+    expect(files(powershell("Remove-Item a`b", pwsh()))[0]).toContain("(dynamic)")
+  })
+
   test("a backtick in a path flags it", () => {
-    expect(files(powershell("Remove-Item a`b", pwsh()))[0]).toEndWith("[escape]")
+    expect(files(powershell("Remove-Item a`b", pwsh()))[0]).toContain("[escape]")
   })
 
   test("a path of the cmdlet's own -Stream is an alternate stream whatever the platform", () => {

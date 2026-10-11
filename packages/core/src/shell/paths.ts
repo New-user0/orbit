@@ -63,7 +63,7 @@ export type Reason =
   | "native"
 
 export type Facts = {
-  /** Every write-class operand, every source, every write redirect, and the read paths of the read-only commands. */
+  /** Every write-class operand, every source, every write redirect, and the read paths of the read-class commands. */
   files: Operand[]
   /** Commands whose paths cannot be told from their text. A fixed code, never text from the command. */
   unvalidatable: { command: number; reason: Reason }[]
@@ -154,7 +154,8 @@ function operand(state: State, input: Input): Operand {
     flags.add("expansion")
   }
   if (!dynamic && state.powershell) {
-    if (text.includes("`")) {
+    // A backtick escape is already resolved in the text by the caller; the flag is what remains of it.
+    if (text.includes("`") || flags.has("escape")) {
       dynamic = true
       flags.add("escape")
     }
@@ -469,7 +470,7 @@ function dd(words: Word[], sink: Sink) {
     }
     const key = item.value.slice(0, at)
     // Bash also expands a tilde after the equals sign of a word shaped like an assignment.
-    const value = { ...item, value: item.value.slice(at + 1), glob: false, tilde: true }
+    const value = { ...item, value: item.value.slice(at + 1), glob: false, tilde: !item.quoted || item.equalsTilde === true }
     if (key === "if") sink("source", value)
     else if (key === "of") sink("write", value)
   }
@@ -540,6 +541,8 @@ export type BashInput = {
   homeChanged: boolean
   /** The first command is a `cd` into the working folder that the analysis drops. */
   dropped: boolean
+  /** The input assigns a variable that changes which program or library runs (`PATH`, `LD_PRELOAD`). */
+  sensitive: boolean
 }
 
 export function bash(input: BashInput): Facts {
@@ -550,7 +553,8 @@ export function bash(input: BashInput): Facts {
   const verdicts = input.commands.map((command) => bareVerdict(input.commands, command, ctx))
   input.commands.forEach((command, index) => {
     const verdict = verdicts[index]
-    reads(state, index, verdict.ok ? verdict.reads : [])
+    if (verdict.ok) reads(state, index, verdict.reads)
+    else operands(state, index, command, ctx)
     if (command.wrapper) refuse(state, index, "wrapper")
     const name = headName(command.inner[0] ?? "", ctx)
     const words = command.argv.slice(command.argv.length - command.inner.length + 1)
@@ -564,11 +568,32 @@ export function bash(input: BashInput): Facts {
     }
     for (const redirect of command.redirects) {
       if (!redirect.write || redirect.nullSink || redirect.target === undefined) continue
-      add(state, { command: index, role: "write", via: "redirect", text: redirect.target, literal: redirect.literal, glob: redirect.glob, tilde: true })
+      add(state, { command: index, role: "write", via: "redirect", text: redirect.target, literal: redirect.literal, glob: redirect.glob, tilde: redirect.tilde !== false })
     }
   })
-  state.facts.fileEdit = bashFileEdit(input, state.facts, verdicts)
+  state.facts.fileEdit = !input.sensitive && bashFileEdit(input, state.facts, verdicts)
   return state.facts
+}
+
+const READ_CLASS = new Set(
+  "ls find cat head tail sort uniq wc cut paste column tr file stat diff awk strings hexdump od base64 nl grep rg jq sha256sum sha1sum md5sum".split(" "),
+)
+
+// A read-class command that the read-only check does not pass still reads what it names, so a read rule or an allow rule
+// for the command must not hide it: every word that is not an option (and every word after `--`) is a read operand. `git`
+// names paths only in `diff --no-index`.
+function operands(state: State, index: number, command: Command, ctx: Context) {
+  const name = headName(command.inner[0] ?? "", ctx)
+  const words = command.argv.slice(command.argv.length - command.inner.length + 1)
+  const named = name === "git" ? (words.some((item) => item.value === "diff") && words.some((item) => item.value === "--no-index") ? words.slice(words.findIndex((item) => item.value === "diff") + 1) : []) : READ_CLASS.has(name) ? words : []
+  let ended = false
+  for (const item of named) {
+    if (!ended && item.value === "--") {
+      ended = true
+      continue
+    }
+    if (ended || !item.value.startsWith("-")) word(state, index, "read", item)
+  }
 }
 
 function bareVerdict(commands: Command[], command: Command, ctx: Context) {

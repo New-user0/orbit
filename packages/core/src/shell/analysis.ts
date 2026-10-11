@@ -48,6 +48,8 @@ export type Word = {
   arithmetic: boolean
   /** A leading `~` or `~/`, which is expanded with the injected home. */
   tilde: boolean
+  /** A word shaped like `name=~/x` whose tilde after the equals sign is unquoted, so bash expands it. */
+  equalsTilde?: boolean
 }
 
 export type Redirect = {
@@ -60,6 +62,8 @@ export type Redirect = {
   read: boolean
   literal: boolean
   glob: boolean
+  /** The target begins with an unquoted `~` that the shell expands. */
+  tilde?: boolean
 }
 
 export type Command = {
@@ -330,6 +334,7 @@ class BashWalk {
       ctx,
       homeChanged: this.homeAssigned,
       dropped,
+      sensitive: this.sensitive,
     })
     return {
       dialect: "bash",
@@ -714,6 +719,7 @@ class BashWalk {
       glob: parts.some((part) => part.glob),
       arithmetic: parts.some((part) => part.arithmetic),
       tilde,
+      equalsTilde: kids(node)[0].type === "word" && /^[^=]+=~\//.test(kids(node)[0].text),
     }
   }
 
@@ -822,6 +828,7 @@ class BashWalk {
       read,
       literal: word.literal,
       glob: word.glob,
+      tilde: word.tilde,
     }
   }
 
