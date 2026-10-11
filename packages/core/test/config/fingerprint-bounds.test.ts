@@ -142,9 +142,9 @@ describe("Fingerprint reads only inside the folder", () => {
         const place = yield* layout
         if (!(yield* row.plant(place))) return
         const recording = watched(files)
-        const before = yield* Fingerprint.directory(recording.view, place.folder)
+        const before = yield* Fingerprint.directory(recording.view, place.folder, [place.folder])
         yield* changeOutside(place.outside)
-        const after = yield* Fingerprint.directory(recording.view, place.folder)
+        const after = yield* Fingerprint.directory(recording.view, place.folder, [place.folder])
         expect(after).toEqual(before)
         expect(after[row.kind]).not.toBe("unreadable")
         // Nothing outside was listed, opened or read.
@@ -160,9 +160,9 @@ describe("Fingerprint reads only inside the folder", () => {
       const files = yield* FSUtil.Service
       const place = yield* layout
       yield* Effect.promise(() => fs.mkdir(path.join(place.folder, "agents"), { recursive: true }))
-      const none = yield* Fingerprint.directory(files, place.folder)
+      const none = yield* Fingerprint.directory(files, place.folder, [place.folder])
       if (!(yield* fileLink(path.join(place.outside, "agent.md"), path.join(place.folder, "agents", "team.md")))) return
-      const linked = yield* Fingerprint.directory(files, place.folder)
+      const linked = yield* Fingerprint.directory(files, place.folder, [place.folder])
       expect(none.hooks).toBeUndefined()
       expect(linked.hooks).toMatch(/^[0-9a-f]{64}$/)
     }),
@@ -178,11 +178,11 @@ describe("Fingerprint reads only inside the folder", () => {
         await fs.writeFile(real, "---\ndescription: a\nhooks:\n  Stop:\n    - command: echo one\n---\nbody\n")
       })
       if (!(yield* fileLink(real, path.join(place.folder, "agents", "linked.md")))) return
-      const before = yield* Fingerprint.directory(files, place.folder)
+      const before = yield* Fingerprint.directory(files, place.folder, [place.folder])
       yield* Effect.promise(() =>
         fs.writeFile(real, "---\ndescription: a\nhooks:\n  Stop:\n    - command: echo two\n---\nbody\n"),
       )
-      expect((yield* Fingerprint.directory(files, place.folder)).hooks).not.toBe(before.hooks)
+      expect((yield* Fingerprint.directory(files, place.folder, [place.folder])).hooks).not.toBe(before.hooks)
     }),
   )
 
@@ -255,7 +255,7 @@ describe("Fingerprint reads only inside the folder", () => {
       const place = yield* layout
       yield* fileLink("/dev/zero", path.join(place.folder, "agents", "z.md"))
       const started = Date.now()
-      const found = yield* Fingerprint.directory(files, place.folder)
+      const found = yield* Fingerprint.directory(files, place.folder, [place.folder])
       expect(Date.now() - started).toBeLessThan(2000)
       expect(found.hooks).toMatch(/^[0-9a-f]{64}$/)
     }),

@@ -139,7 +139,7 @@ describe("Fingerprint.directory", () => {
       const files = yield* FSUtil.Service
       const root = (yield* tmpdirScoped()).path
       yield* Effect.promise(() => fs.mkdir(path.join(root, ".orbit"), { recursive: true }))
-      expect(yield* Fingerprint.directory(files, path.join(root, ".orbit"))).toEqual({})
+      expect(yield* Fingerprint.directory(files, path.join(root, ".orbit"), [path.join(root, ".orbit")])).toEqual({})
     }),
   )
 
@@ -149,15 +149,15 @@ describe("Fingerprint.directory", () => {
       const folder = path.join((yield* tmpdirScoped()).path, ".orbit")
       yield* Effect.promise(() => fs.mkdir(folder, { recursive: true }))
       yield* plugin(folder, "greeter.ts", "export default 1\n")
-      const first = yield* Fingerprint.directory(files, folder)
+      const first = yield* Fingerprint.directory(files, folder, [folder])
       expect(Object.keys(first)).toEqual(["plugins"])
 
       yield* plugin(folder, "second.ts", "export default 2\n")
-      const added = yield* Fingerprint.directory(files, folder)
+      const added = yield* Fingerprint.directory(files, folder, [folder])
       expect(added.plugins).not.toBe(first.plugins)
 
       yield* plugin(folder, "greeter.ts", "export default 3\n")
-      const edited = yield* Fingerprint.directory(files, folder)
+      const edited = yield* Fingerprint.directory(files, folder, [folder])
       expect(edited.plugins).not.toBe(added.plugins)
 
       yield* Effect.promise(() =>
@@ -165,11 +165,11 @@ describe("Fingerprint.directory", () => {
           fs.writeFile(path.join(folder, "plugins", "pkg", "index.ts"), "export default 4\n"),
         ),
       )
-      const withPackage = yield* Fingerprint.directory(files, folder)
+      const withPackage = yield* Fingerprint.directory(files, folder, [folder])
       yield* Effect.promise(() =>
         fs.writeFile(path.join(folder, "plugins", "pkg", "package.json"), JSON.stringify({ name: "pkg", main: "index.ts" })),
       )
-      const manifest = yield* Fingerprint.directory(files, folder)
+      const manifest = yield* Fingerprint.directory(files, folder, [folder])
       expect(manifest.plugins).not.toBe(withPackage.plugins)
     }),
   )
@@ -181,15 +181,15 @@ describe("Fingerprint.directory", () => {
       yield* Effect.promise(() => fs.mkdir(folder, { recursive: true }))
       yield* plugin(folder, "greeter.ts", "export default 1\n")
       const file = path.join(folder, "plugins", "greeter.ts")
-      const before = yield* Fingerprint.directory(files, folder)
+      const before = yield* Fingerprint.directory(files, folder, [folder])
       const stamp = (yield* Effect.promise(() => fs.stat(file))).mtime
 
       yield* Effect.promise(() => fs.utimes(file, new Date(), new Date(Date.now() + 5000)))
-      expect(yield* Fingerprint.directory(files, folder)).toEqual(before)
+      expect(yield* Fingerprint.directory(files, folder, [folder])).toEqual(before)
 
       yield* plugin(folder, "greeter.ts", "export default 9\n")
       yield* Effect.promise(() => fs.utimes(file, stamp, stamp))
-      expect((yield* Fingerprint.directory(files, folder)).plugins).not.toBe(before.plugins)
+      expect((yield* Fingerprint.directory(files, folder, [folder])).plugins).not.toBe(before.plugins)
     }),
   )
 
@@ -201,7 +201,7 @@ describe("Fingerprint.directory", () => {
       yield* Effect.promise(() => fs.mkdir(path.join(folder, "agents"), { recursive: true }))
       // Text only: nothing to digest.
       yield* Effect.promise(() => fs.writeFile(path.join(folder, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n"))
-      expect(yield* Fingerprint.directory(files, folder)).toEqual({})
+      expect(yield* Fingerprint.directory(files, folder, [folder])).toEqual({})
 
       yield* Effect.promise(() =>
         fs.writeFile(
@@ -209,7 +209,7 @@ describe("Fingerprint.directory", () => {
           "---\nname: x\ndescription: d\nhooks:\n  PreToolUse:\n    - command: echo hi\n---\nbody\n",
         ),
       )
-      const skill = yield* Fingerprint.directory(files, folder)
+      const skill = yield* Fingerprint.directory(files, folder, [folder])
       expect(Object.keys(skill)).toEqual(["hooks"])
 
       yield* Effect.promise(() =>
@@ -218,7 +218,7 @@ describe("Fingerprint.directory", () => {
           "---\ndescription: ops\nmcp_servers:\n  docs:\n    command: docs-server\n---\nprompt\n",
         ),
       )
-      const agent = yield* Fingerprint.directory(files, folder)
+      const agent = yield* Fingerprint.directory(files, folder, [folder])
       expect(Object.keys(agent).sort()).toEqual(["hooks", "mcp"])
       // The agent's servers moved mcp only, and the skill's hooks did not move.
       expect(agent.hooks).toBe(skill.hooks)
@@ -226,7 +226,7 @@ describe("Fingerprint.directory", () => {
       yield* Effect.promise(() =>
         fs.writeFile(path.join(folder, "agents", "ops.md"), "---\ndescription: ops\nhooks:\n  Stop:\n    - command: echo bye\n---\nprompt\n"),
       )
-      const hooked = yield* Fingerprint.directory(files, folder)
+      const hooked = yield* Fingerprint.directory(files, folder, [folder])
       expect(hooked.hooks).not.toBe(skill.hooks)
       expect(hooked.mcp).toBeUndefined()
     }),
@@ -246,7 +246,7 @@ describe("Fingerprint.directory", () => {
         readFileString: (file, ...rest) =>
           file === bad ? Effect.die(new Error("locked")) : files.readFileString(file, ...rest),
       }
-      const found = yield* Fingerprint.directory(locked, folder)
+      const found = yield* Fingerprint.directory(locked, folder, [folder])
       expect(found.hooks).toBe(WorkspaceTrust.unreadable)
       expect(found.mcp).toBe(WorkspaceTrust.unreadable)
       // The plugins of the same directory are digested as usual.

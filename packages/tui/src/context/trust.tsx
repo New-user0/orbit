@@ -5,7 +5,7 @@ import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { abbreviateHome } from "../util/path-format"
-import { groupWithheld, holdsBack, trustCommands } from "../util/trust"
+import { groupWithheld, holdsBack, pluginTrust, trustCommands } from "../util/trust"
 import { useClient } from "./client"
 import { useData } from "./data"
 import { createSimpleContext } from "./helper"
@@ -21,7 +21,7 @@ const DialogTrustKey = Symbol("DialogTrust")
  * turns true: a server that cannot answer, such as one older than workspace trust, or that does not answer in time, must
  * not hold anything up.
  */
-function createTrustStatus(input: {
+export function createTrustStatus(input: {
   client: ReturnType<typeof useClient>
   log: ReturnType<typeof useLog>
   directory: () => string
@@ -33,23 +33,28 @@ function createTrustStatus(input: {
   let generation = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
-  const refresh = async () => {
+  // The answer is the read's own, even when a newer read has started since and this one no longer shows in `status`; it
+  // is unset when the read failed or timed out. Whoever acts on the answer right now, such as the plugin loader,
+  // decides from this value and not from `status`, which may still hold an older one.
+  const refresh = async (): Promise<TrustStatus | undefined> => {
     const attempt = ++generation
-    await input.client.api.location.trust
+    return await input.client.api.location.trust
       // A server that takes the request and never answers would otherwise leave the terminal UI on its loading screen,
       // as nothing starts before the first answer. Two seconds, as `orb mini` allows; timing out is a failed read.
       .get({ location: { directory: directory() } }, { signal: AbortSignal.timeout(2_000) })
       .then(
         (next) => {
-          if (attempt !== generation) return
-          batch(() => {
-            setStatus(next)
-            setSettled(true)
-          })
+          if (attempt === generation)
+            batch(() => {
+              setStatus(next)
+              setSettled(true)
+            })
+          return next
         },
         (error) => {
           input.log.warn("failed to read workspace trust", { error })
           if (attempt === generation) setSettled(true)
+          return undefined
         },
       )
   }
@@ -181,7 +186,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
          * the same answer, so that a read that finds nothing new does not rebuild the plugins.
          */
         above: createMemo(
-          () => groupWithheld(startup.status()?.withheld ?? []).above.flatMap((item) => item.directory ?? []),
+          () => pluginTrust(startup.status()).above,
           [],
           { equals: isDeepEqual },
         ),
@@ -190,8 +195,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
          * the changes are trusted. The terminal UI imports a project's plugins itself, so it leaves these out too.
          */
         changedPlugins: createMemo(
-          () =>
-            (startup.status()?.changed ?? []).flatMap((item) => (item.kinds.includes("plugins") ? item.path : [])),
+          () => pluginTrust(startup.status()).changed,
           [],
           { equals: isDeepEqual },
         ),

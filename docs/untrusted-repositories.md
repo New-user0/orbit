@@ -123,17 +123,30 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     (`fingerprint.test.ts`). Nothing runs them yet; `ProjectTrust.allows(file, kind)` is what hooks-21 and
     agents-extensibility-9 ask (`project-trust.test.ts`).
   - A digest that cannot be read: `fingerprint.test.ts`, `workspace-trust-records.test.ts`.
-  - What the digests read is bounded (class 1, 4 and 6), the same before a folder is trusted and after, so the first
-    grant records what the trusted load computes: a config directory's own real path for its plugins, skills and agents,
-    and the project's folders for the paths a document's `skills` names. A path that leads out (an absolute one, `~/`,
-    `..`, a link, a junction) is not listed, opened or hashed: its name and the fact that it leads out are. A network path
-    (`\\host\share`, `//host/share`, `\\?\UNC\…`) is not touched at all, not even to look at it. Only regular files are read,
-    so a link to a device is named and not waited on. Glob matches are not followed through links. Proof:
+  - What the digests read is bounded (class 1, 4 and 6) by the folders that `ProjectTrust.supplies` holds the config to:
+    the project's own folders (the Location's directory, the project's directory and its canonical root) for a source
+    inside the project, and `ConfigTrust.reach` for a source above it. `Config.observe`, `ProjectTrust.allows`,
+    `ProjectTrust.status` (`differences`) and `Config.pluginsChanged` pass the same folders, so a grant, a load and a later
+    comparison compute the same digest, before a folder is trusted and after. A path whose real path lies inside them is
+    followed through any link, wherever the link sits, and hashed at the real path: a plugins folder, a plugin file or
+    folder, an agents/ or skills/ folder, or a folder nested in them, that links to another folder of the project. A path
+    whose real path lies outside (an absolute one, `~/`, `..`, a link or junction that leads out, `.orbit` itself as a link
+    out) is not listed, opened or hashed: its name and the links on the way to it, each as written and one hop, are, so
+    pointing a link somewhere else is a change and editing what it points at is not. A network path (`\\host\share`,
+    `//host/share`, `\\?\UNC\…`), or a link that names one (`LinkShare`, shared with `ProjectTrust`), is not touched at
+    all, not even to look at it. Only regular files are read, so a link to a device is named and not waited on. The walk of
+    agents/ and skills/ enters a link only when its real path is inside the bound, and stops at a loop. Proof:
     `test/config/fingerprint-bounds.test.ts`, one row per spelling (agents/ and skills/ as a link out, a link out inside
     agents/, a file link in agents/ and plugins/, plugins/ and a plugin as a link out, absolute, `..`, the folder around the
     project, three network spellings, a device on Linux), each with the outside content changed between two digests and a
-    recorder of every path the file system was given, and trusted controls. `PluginSourceDirectory.entrypoints` loads no
-    plugin whose server, tui or rpc entry leads out of its folder.
+    recorder of every path the file system was given, and trusted controls; `test/config/fingerprint-links.test.ts`
+    (plugins/ as a link to a project folder with a plugin added, a plugin file link, a plugin folder link, agents/ as a link
+    into the project, a re-pointed link out, `.orbit` as a link out, and the loaders: the plugin is held back after the
+    change and offered again after a new grant, and one behind a link out is never offered); and
+    `test/config/fingerprint-container.test.ts` (an untrusted load with `.orbit` as a link out).
+    `PluginSourceDirectory.entrypoints` loads no plugin whose server, tui or rpc entry leads out of its folder, and
+    `ConfigPluginSource.scan` and the terminal UI's plugin discovery (`discoverPluginTargets`, `plugin-trust-read.test.ts`)
+    leave out a project plugin whose real path lies outside the project, so no plugin is loaded that the digest cannot see.
   - Records are per source, kept beside the grant and dropped with it (`workspace-trust-records.test.ts`); two locations
     under one root do not invalidate each other (`config-trust.test.ts`).
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
@@ -1676,9 +1689,6 @@ fixes it or asks.
   machine with a store that calls one folder a root ("root-like" in `config-trust.test.ts`), but the test that plants a
   config file in a real root writes outside the sandbox of the test, so it returns without testing unless the root is
   writable (Linux as root, `tools/linux-test`). Run it there before a milestone closes.
-- **A link to a folder nested inside agents/ or skills/ is not followed by the fingerprints.** The loaders follow it, the
-  digest names nothing for it (a glob does not descend a link), so a hook planted behind such a link is not asked about.
-  Planting a file link, or making agents/ or skills/ itself a link out, is named and so is a change.
 - **VS Code gives the advice for the folder above a project without a command to run.** It names the folder and says
   that each folder is trusted on its own (`packages/vscode/test/trust-text.test.ts`); the terminal UI, Mini, `orb run` and
   `orb trust` print the `orb trust <folder> --for <location>` command.

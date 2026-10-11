@@ -183,8 +183,14 @@ export const layer = (options?: Options) =>
       let observed: readonly Observed[] = []
       const applied = new Map<string, string>()
       // The folders that the project's own decision covers: its own, and the main checkout when it is a linked worktree.
+      // They are the folders `ProjectTrust` holds the project's config to, so that both bound a read the same way.
       const projectFolders = [
-        ...new Set(yield* Effect.forEach([location.project.directory, location.project.canonical], fs.resolve)),
+        ...new Set(
+          yield* Effect.forEach(
+            [location.directory, location.project.directory, location.project.canonical],
+            fs.resolve,
+          ),
+        ),
       ]
       const reloadLock = Semaphore.makeUnsafe(1)
       const updateLock = Semaphore.makeUnsafe(1)
@@ -404,7 +410,7 @@ export const layer = (options?: Options) =>
         if (entry.path === undefined) return undefined
         const digests =
           entry.type === "directory"
-            ? yield* Fingerprint.directory(fs, entry.path)
+            ? yield* Fingerprint.directory(fs, entry.path, within)
             : yield* Fingerprint.document(fs, entry.path, entry.info, skillRoots(entry.info), within)
         return { path: entry.path, identity: yield* fs.resolve(entry.path), digests } satisfies WorkspaceTrust.Observation
       })
@@ -703,7 +709,7 @@ export const layer = (options?: Options) =>
           const place = yield* standing(directory, decideNow)
           const state = yield* trust.status(place.root)
           if (!state.trusted || state.source === "implicit") return false
-          const plugins = yield* Fingerprint.pluginsOf(fs, directory)
+          const plugins = yield* Fingerprint.pluginsOf(fs, directory, place.roots)
           if (plugins === undefined) return false
           const identity = yield* fs.resolve(directory)
           return (yield* trust.compare(place.root, [{ path: directory, identity, digests: { plugins } }])).length > 0

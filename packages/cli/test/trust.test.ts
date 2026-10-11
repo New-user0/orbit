@@ -1727,6 +1727,34 @@ test("orb trust --revoke ends the grant of a folder that was deleted, by its nam
   expect(again.stdout).toContain("is not trusted.")
 }, 240_000)
 
+// A folder name that acts on a terminal: it moves the title and clears the screen.
+const escaping = "inner]0;owned[2J"
+
+test("orb trust prints a folder name that acts on a terminal without its control characters, on every line that names one", async () => {
+  // Not a folder: the name is the argument as typed, which no platform needs to accept as a file name.
+  const typo = await orb(root, ["trust", "--standalone", escaping])
+  expect(typo.code).toBe(1)
+  expect(typo.stderr).toContain("Not a folder:")
+  expect(typo.stderr).not.toContain("")
+  expect(typo.stderr).not.toContain("")
+}, 120_000)
+
+// Windows does not allow a control character in a file name, so the lines that name a stored folder are tried where it does.
+test.skipIf(process.platform === "win32")("orb trust --list and --revoke print a stored folder name without its control characters", async () => {
+  const repository = path.join(root, "work", `escaping-${escaping}`)
+  await Bun.write(path.join(repository, "orbit.json"), JSON.stringify(guard))
+  succeeded(await orb(repository, ["trust", "--standalone"]))
+  const listed = await orb(root, ["trust", "--standalone", "--list"])
+  succeeded(listed)
+  expect(listed.stdout).toContain("escaping-")
+  expect(listed.stdout).not.toContain("")
+  await fs.rm(repository, { recursive: true, force: true })
+  const revoked = await orb(root, ["trust", "--standalone", "--revoke", repository])
+  succeeded(revoked)
+  expect(revoked.stdout).toContain("Stopped trusting")
+  expect(revoked.stdout).not.toContain("")
+}, 240_000)
+
 test("orb run stops when the config of a trusted folder changed, names what changed, and orb trust renews the grant", async () => {
   const repository = await hooked("changed")
   succeeded(await orb(repository, ["trust", "--standalone"]))

@@ -29,6 +29,7 @@ import { useClient } from "../context/client"
 import { useData } from "../context/data"
 import { useTrust } from "../context/trust"
 import { errorMessage } from "../util/error"
+import { pluginTrust } from "../util/trust"
 import { createPluginContext, usePluginHost, type Dispose, type RegisteredSlot, type SlotRender } from "./api"
 import { createSourceWatcher } from "./watch"
 import {
@@ -326,18 +327,23 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     // directories and config load either way, and the server's own list already leaves out what the folder keeps.
     // A plugin file that shows up in a watched folder is seen here before the server has reloaded, so the status is read
     // again first: the server compares the plugins on the disk with the grant when it answers.
-    await trust.startup.refresh()
-    const directories = trustedPluginDirectories(
-      props.directories,
-      trust.startup.trusted(),
-      trust.startup.above(),
-      trust.startup.changedPlugins(),
-    )
+    // The decision is made from the answer of that read itself: the shared status may still hold an older one when the
+    // read failed, timed out, or was overtaken by a newer read. With no answer, the project's plugins are left out.
+    const read = await trust.startup.refresh()
+    if (read === undefined) log.warn("project plugins left out: workspace trust could not be read", { id })
+    const startup = pluginTrust(read)
+    const directories = trustedPluginDirectories(props.directories, startup.trusted, startup.above, startup.changed)
     await trace("watch", { reconciliation: id, directories }, () =>
       Promise.all(directories.map(watcher.wait)).then(() => undefined),
     )
     const discovered = await trace("discover", { reconciliation: id, directories }, () =>
-      discoverPluginTargets(directories),
+      Promise.all([
+        discoverPluginTargets(directories.filter((item) => !props.directories.project.includes(item))),
+        discoverPluginTargets(
+          directories.filter((item) => props.directories.project.includes(item)),
+          props.directories.root,
+        ),
+      ]).then((targets) => targets.flat()),
     )
     // Discovery admits TUI-only plugins while server inventory carries combined plugins.
     // Their overlap is intentional; explicit configuration remains the final authority.

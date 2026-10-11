@@ -52,3 +52,15 @@ export function trustCommands(items: readonly TrustWithheld[], location: string)
     })
     .join(", ")
 }
+
+/**
+ * What the plugin loader needs from one read of the startup folder's status. A read that did not come back (unset) is an
+ * untrusted folder with nothing above it, so no project plugin loads on an answer that was not there.
+ */
+export function pluginTrust(status: TrustStatus | undefined) {
+  return {
+    trusted: status?.trusted === true,
+    above: groupWithheld(status?.withheld ?? []).above.flatMap((item) => item.directory ?? []),
+    changed: (status?.changed ?? []).flatMap((item) => (item.kinds.includes("plugins") ? item.path : [])),
+  }
+}

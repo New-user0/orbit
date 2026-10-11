@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises"
+import { readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { localSource } from "@orbit/plugin/source"
 import { isMissingPath, localProjectDirectory, projectConfigDirectories } from "../util/config-directories"
@@ -11,6 +11,8 @@ export type PluginDirectories = {
   readonly global: readonly string[]
   /** The project's: the `.orbit` directories from its root down to the working directory. */
   readonly project: readonly string[]
+  /** The project's root, which a plugin of the project must stay inside once every link in it is followed. */
+  readonly root: string
 }
 
 export async function localPluginDirectories(
@@ -38,6 +40,7 @@ export async function localPluginDirectories(
   return {
     global: [path.join(directories.config, "plugins"), ...found.filter((item) => item.own).map((item) => item.plugins)],
     project: found.filter((item) => !item.own).map((item) => item.plugins),
+    root: projectDirectory,
   }
 }
 
@@ -53,7 +56,7 @@ export async function localPluginDirectories(
  * too: they wait until the changes are trusted, while the folder's other directories keep loading.
  */
 export function trustedPluginDirectories(
-  directories: PluginDirectories,
+  directories: Pick<PluginDirectories, "global" | "project">,
   trusted: boolean,
   above: readonly string[],
   changed: readonly string[] = [],
@@ -71,7 +74,26 @@ export function trustedPluginDirectories(
   ]
 }
 
-export async function discoverPluginTargets(directories: string[]) {
+/**
+ * The plugins in these directories. With `within`, a plugin whose real path lies outside that folder is left out, and
+ * so is every plugin of a directory that itself leads out: a link out of the project is not tracked by the server's
+ * fingerprints, so what it points at could change after the folder was trusted without being asked about again.
+ */
+export async function discoverPluginTargets(directories: string[], within?: string) {
+  const bound = within === undefined ? undefined : await realpath(within).catch(() => within)
+  const stays = async (target: string) => {
+    if (bound === undefined) return true
+    const real = await realpath(target).catch(() => undefined)
+    if (real === undefined) return false
+    const relative = path.relative(bound, real)
+    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
+  }
+  const found = await discoverAll(directories)
+  const kept = await Promise.all(found.map(async (target) => ((await stays(target)) ? [target] : [])))
+  return kept.flat()
+}
+
+async function discoverAll(directories: string[]) {
   return (
     await Promise.all(
       directories.map(async (directory) => {

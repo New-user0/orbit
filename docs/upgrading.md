@@ -438,6 +438,12 @@ A digest that cannot be computed, such as a locked file, counts as changed until
 
 The `skills` setting now has a kind of its own (`skills`) where an untrusted folder used to report it as `settings`.
 
+Links are followed when they stay inside the project. A `.orbit/plugins` folder, a plugin file or folder, or an `agents` or
+`skills` folder that is a link to another folder of the same project counts for its real contents, so editing the target or
+adding a plugin there asks again. A link that leads out of the project is not read at all: the digest holds its name and
+where the link points, so pointing it somewhere else asks, editing what it points at does not, and a project plugin behind
+such a link is not loaded, in the server or in the terminal UI, whether the folder is trusted or not.
+
 You are asked once after each change to executable config, however it got there: a `git pull`, a branch switch or an
 edit. Orbit does not tell its own writes from anyone else's, so a command that edits project config, such as `orb mcp
 add` at project scope, asks as well. A folder you trusted before this version has no record, so each of its sources

@@ -30,7 +30,7 @@ export default Runtime.handler(
       return yield* print(
         grants.length === 0
           ? ["No folder is trusted for good."]
-          : grants.map((grant) => `${grant.directory}  ${new Date(grant.time).toISOString()}`),
+          : grants.map((grant) => `${plain(grant.directory)}  ${new Date(grant.time).toISOString()}`),
       )
     }
 
@@ -63,12 +63,12 @@ export default Runtime.handler(
       return yield* print([
         ended.length === 0
           ? `${plain(location.directory)} is not trusted.`
-          : `Stopped trusting ${ended.join(", ")}.`,
+          : `Stopped trusting ${ended.map(plain).join(", ")}.`,
       ])
     }
     if (missing !== undefined) {
       process.exitCode = 1
-      return yield* print([`Not a folder: ${missing}`], process.stderr)
+      return yield* print([`Not a folder: ${plain(missing)}`], process.stderr)
     }
     if (input.revoke) {
       const status = yield* ask((signal) => client.location.trust.update({ location, trust: false }, { signal }))
@@ -107,7 +107,7 @@ export default Runtime.handler(
       process.exitCode = 1
       return yield* print(
         [
-          `${before.directory} is a home directory or a filesystem root, and Orbit never trusts those for good: that would trust every folder below it.`,
+          `${plain(before.directory)} is a home directory or a filesystem root, and Orbit never trusts those for good: that would trust every folder below it.`,
           "To work there, choose to trust it until Orbit restarts in the terminal UI, or pass --trust to `orb run`, `orb loop`, `orb flow` or `orb eval` for a single run.",
         ],
         process.stderr,

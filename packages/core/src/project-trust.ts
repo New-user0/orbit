@@ -10,6 +10,7 @@ import { Config } from "./config.js"
 import { AgentFile } from "./config/plugin/agent-file.js"
 import { CommandFile } from "./config/plugin/command-file.js"
 import { Fingerprint } from "./config/fingerprint.js"
+import { LinkShare } from "./config/link-share.js"
 import { ConfigTrust } from "./config/trust.js"
 import { Location } from "./location.js"
 import { PluginSourceDirectory } from "./plugin/source-directory.js"
@@ -132,28 +133,8 @@ const layer = Layer.effect(
         return target === undefined ? named : yield* follow(path.resolve(path.dirname(named), target), depth + 1)
       })
 
-    // The share that a link on the way to a file names, when one does: opening a path through such a link connects to the
-    // share, so the links are read one part at a time, which touches no share, and the share is named as the link says.
-    // Only Windows has them.
-    const share = (file: string, depth = 0): Effect.Effect<string | undefined> =>
-      Effect.gen(function* () {
-        if (process.platform !== "win32" || depth >= 40) return undefined
-        const parts = path.relative(path.parse(file).root, file).split(path.sep)
-        for (const index of parts.keys()) {
-          const named = path.join(path.parse(file).root, ...parts.slice(0, index + 1))
-          const target = yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined))
-          if (target === undefined) continue
-          // A link to a device path (`\\?\Volume{…}\…`, `\\.\…`) reads back in the NT form `\??\…`, which `path.resolve`
-          // would take for a folder named `??` on the current drive. It is named as the device path it is.
-          if (target.startsWith("\\??\\"))
-            return path.join(`\\\\?\\${target.slice(4)}`, ...parts.slice(index + 1))
-          const leads = path.join(path.resolve(path.dirname(named), target), ...parts.slice(index + 1))
-          if (leads.startsWith("\\\\")) return leads
-          const deeper = yield* share(leads, depth + 1)
-          if (deeper !== undefined) return deeper
-        }
-        return undefined
-      })
+    // The share that a link on the way to a file names, when one does, is not connected to: see `LinkShare`.
+    const share = (file: string) => LinkShare.of(fs, file)
     const lead = (file: string) =>
       share(file).pipe(Effect.flatMap((shared) => (shared === undefined ? follow(file) : Effect.succeed(shared))))
 
@@ -166,26 +147,24 @@ const layer = Layer.effect(
     // Files that were left out, so that one that keeps being asked for is reported once.
     const skipped = new Set<string>()
 
+    // The folders that the config of a source may supply files from, and that its fingerprints are read within: the
+    // project's own folders, or for a source above the project what `ConfigTrust.reach` gives. A holder that is the home
+    // directory or a filesystem root contains everything below it, so it cannot stand for what the config may supply:
+    // only the config container does, and a source that sits directly in the root nothing.
+    const boundOf = Effect.fnUntraced(function* (source: string) {
+      if (inside(source)) return folders
+      const holder = ConfigTrust.holder(source)
+      return ConfigTrust.reach({ holder, container: source, persistent: (yield* trust.status(holder)).persistent })
+    })
+
     const supplies = Effect.fn("ProjectTrust.supplies")(function* (source: Source, file: string) {
       if (source.scope !== "project" && source.scope !== "local") return true
       // The project's own folders follow the decision just made, because a stamp can trail it, and what sits above
       // them follows the decision for the folder that holds it, which only its stamp knows.
       const own = inside(source.path)
       if (own ? (yield* trust.status(root)).trusted : source.trusted !== false) return true
-      const holder = ConfigTrust.holder(source.path)
-      // A holder that is the home directory or a filesystem root contains everything below it, so it cannot stand for
-      // what the config may supply: only the config container does, and a source that sits directly in the root nothing.
-      const roots = own
-        ? [...folders, ...real]
-        : yield* Effect.forEach(
-            ConfigTrust.reach({
-              holder,
-              container: source.path,
-              persistent: (yield* trust.status(holder)).persistent,
-            }),
-            (folder) => fs.resolve(folder).pipe(Effect.map((resolved) => [folder, resolved])),
-          ).pipe(Effect.map((pairs) => pairs.flat()))
-      if (yield* stays(roots, file)) return true
+      const roots = yield* boundOf(source.path)
+      if (yield* stays([...roots, ...(yield* Effect.forEach(roots, fs.resolve))], file)) return true
       if (skipped.has(file)) return false
       skipped.add(file)
       yield* Effect.logWarning("config file skipped", {
@@ -262,7 +241,7 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           if (!(yield* fs.isDir(item.path))) return item
           const { plugins: _, ...rest } = item.digests
-          const now = yield* Fingerprint.pluginsOf(fs, item.path)
+          const now = yield* Fingerprint.pluginsOf(fs, item.path, yield* boundOf(item.path))
           return { ...item, digests: now === undefined ? rest : { ...rest, plugins: now } }
         }),
       )
@@ -354,7 +333,7 @@ const layer = Layer.effect(
                 {
                   path: entry.path,
                   identity: yield* fs.resolve(entry.path),
-                  digests: yield* Fingerprint.directory(fs, entry.path),
+                  digests: yield* Fingerprint.directory(fs, entry.path, yield* boundOf(entry.path)),
                 },
               ])
             : []

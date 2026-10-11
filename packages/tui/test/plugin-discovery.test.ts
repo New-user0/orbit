@@ -92,6 +92,7 @@ test("plugin directories are the user's global config directory and the project'
     // The project's root is always watched, so a plugins directory created there later is seen; one further down only
     // when it exists, and packages has none.
     project: [path.join(project, ".orbit", "plugins"), path.join(app, ".orbit", "plugins")],
+    root: project,
   })
 })
 
@@ -104,5 +105,6 @@ test("the .orbit directory in the home directory is the user's own, even inside 
   expect(await localPluginDirectories(home, { config: path.join(root.path, "config"), home })).toEqual({
     global: [path.join(root.path, "config", "plugins"), path.join(home, ".orbit", "plugins")],
     project: [path.join(root.path, ".orbit", "plugins")],
+    root: root.path,
   })
 })

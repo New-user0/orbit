@@ -117,3 +117,31 @@ test.each([
 ])("says nothing for %s", async (_, respond) => {
   expect((await announced(respond)).written).toEqual([])
 })
+
+test.each([
+  ["trusted, with changes", { trusted: true, changed: true, above: false }],
+  ["untrusted", { trusted: false, changed: false, above: false }],
+  ["untrusted, with config above", { trusted: false, changed: false, above: true }],
+])("shows a project folder whose name acts on a terminal without its control characters: %s", async (_, row) => {
+  // In a layout of outer, middle and inner folders, the inner folder's name is the clone's to choose.
+  const folder = "/work/outer/mid/inner\u001b]0;owned\u0007\u001b[2J"
+  const status: TrustStatus = {
+    directory: folder,
+    trusted: row.trusted,
+    persistent: true,
+    changed: row.changed ? [{ path: `${folder}/orbit.json`, kinds: ["hooks"] }] : [],
+    withheld: [
+      { path: `${folder}/orbit.json`, kinds: ["hooks"] },
+      ...(row.above ? [{ path: "/work/outer/orbit.json", directory: "/work/outer", kinds: ["hooks" as const] }] : []),
+    ],
+  }
+  const written: string[] = []
+  const fetch = Object.assign(async () => json(status), { preconnect: () => {} })
+
+  await announceTrust({ sdk: createApi(fetch), directory: folder, write: (text) => written.push(text) })
+
+  const text = written.join("")
+  expect(text).toContain("inner")
+  expect(text).not.toContain("\u001b")
+  expect(text).not.toContain("\u0007")
+})

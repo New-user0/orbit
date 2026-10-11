@@ -135,7 +135,7 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
       // This runs when a file under the directory changes, which is before the config reloads and so before its
       // entry says so: a plugin added after the grant must not be activated in that gap.
       pluginsChanged(entry.path).pipe(
-        Effect.flatMap((changed) => (changed ? Effect.succeed([]) : PluginSourceDirectory.discover(fs, entry.path))),
+        Effect.flatMap((changed) => (changed ? Effect.succeed([]) : discoverHeld(fs, location, entry))),
         Effect.map((targets) => targets.map((target): Operation => ({ type: "add", target, options: {} }))),
       ),
   ).pipe(Effect.map((items) => items.flat()))
@@ -181,6 +181,27 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
       return [{ ...operation, mtime: Math.max(...times) }]
     }),
   ).pipe(Effect.map((operations) => operations.flat()))
+})
+
+// The plugins a config directory keeps. Those of a project stay inside the folders its trust is decided for, once every
+// link is followed, because the fingerprints compare only what lies inside them: a plugin that a link leads out would
+// otherwise change without the folder being asked again. A directory above the project is held to itself.
+const discoverHeld = Effect.fnUntraced(function* (fs: FSUtil.Interface, location: Location.Interface, entry: Directory) {
+  const targets = yield* PluginSourceDirectory.discover(fs, entry.path)
+  if (entry.scope !== "project" && entry.scope !== "local") return targets
+  const folders = [location.directory, location.project.directory, location.project.canonical]
+  const bound = yield* Effect.forEach(
+    folders.some((folder) => FSUtil.contains(folder, entry.path)) ? folders : [entry.path],
+    (folder) => fs.resolve(folder),
+  )
+  return yield* Effect.filter(targets, (target) =>
+    fs.resolve(target).pipe(
+      Effect.map((real) => bound.some((folder) => FSUtil.contains(folder, real))),
+      Effect.tap((stays) =>
+        stays ? Effect.void : Effect.logWarning("plugin skipped", { path: target, reason: "it leads out of the folder it is in" }),
+      ),
+    ),
+  )
 })
 
 function isPluginSource(entries: readonly Entry[], file: string) {

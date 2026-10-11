@@ -227,9 +227,15 @@ test.each(["$(touch PWNED)", "`touch PWNED`", 'say "hi"', "it's", "a\u001b[2Jb"]
       const frame = fixture.app.captureCharFrame()
       expect(frame).not.toContain("\u001b")
       expect(frame).toMatch(/Config\s+above\s+this\s+folder/)
-      // The name is never the bare argument of a printed command: it is inside quotes, or there is no command.
+      // The frame wraps lines wherever it likes, so the text is compared with its white space taken out.
+      const squeezed = frame.replace(/\s+/g, "")
       expect(frame).not.toMatch(/orb\s+trust\s+\/tmp\/orbit\/(\$|`|say|it|a)/)
       if (name.includes("\u001b")) expect(frame).toContain("\\x1b")
+      // On a POSIX shell the name is the one argument inside single quotes, which expand nothing. On Windows neither
+      // PowerShell nor cmd has quotes that expand nothing, so no command is printed for any of these names.
+      if (process.platform === "win32" || name.includes("\u001b"))
+        expect(squeezed).toContain("itsnameisnotprintedasacommand")
+      else expect(squeezed).toContain(`orbtrust'/tmp/orbit/${name.replaceAll("'", "'\\''").replace(/\s+/g, "")}'`)
     } finally {
       fixture.app.renderer.destroy()
     }

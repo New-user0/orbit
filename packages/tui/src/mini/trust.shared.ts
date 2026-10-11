@@ -1,3 +1,4 @@
+import { plain } from "@orbit/flow/plain"
 import type { OrbitClient, TrustWithheld } from "@orbit/client"
 import { changedOwn, groupWithheld, trustCommands } from "../util/trust"
 
@@ -22,13 +23,13 @@ export async function announceTrust(input: { sdk: OrbitClient; directory: string
       ? []
       : status.trusted
         ? [
-            `${status.directory} is trusted, but its project config changed since then, so what changed is held back (${kinds(own)}). Run \`orb trust\` to trust the changes.`,
+            `${plain(status.directory)} is trusted, but its project config changed since then, so what changed is held back (${kinds(own)}). Run \`orb trust\` to trust the changes.`,
           ]
-        : [`${status.directory} is not trusted, so its project config is held back (${kinds(own)}). ${advice}`]),
+        : [`${plain(status.directory)} is not trusted, so its project config is held back (${kinds(own)}). ${advice}`]),
     ...(held.above.length === 0
       ? []
       : [
-          `Config in a folder above ${status.directory} stays off until that folder is trusted too ` +
+          `Config in a folder above ${plain(status.directory)} stays off until that folder is trusted too ` +
             `(${kinds(held.above)}): ${trustCommands(held.above, input.directory)}.`,
         ]),
   ]
