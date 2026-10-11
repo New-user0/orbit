@@ -439,6 +439,7 @@ test("-p reads a piped message, and with no message at all it fails", async () =
 // handler runs the interface with no limit and no warning, so this list is the one to extend.
 const printedRunFlags: ReadonlyArray<readonly [string, ...string[]]> = [
   ["--output-format", "json"],
+  ["--input-format", "stream-json"],
   ["--json-schema", "schema.json"],
   ["--file", "a.txt"],
   ["--title", "x"],
