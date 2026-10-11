@@ -20,6 +20,7 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { SessionEnvironment } from "./session/environment.js"
 import { SessionSchema } from "./session/schema.js"
 import { Config } from "./config.js"
+import { ConfigEnv } from "./config/env.js"
 import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
 import { ToolOutput } from "./tool-output.js"
@@ -277,11 +278,15 @@ const layer = () =>
           cwd: input.cwd ?? location.directory,
           timeout: input.timeout ?? 0,
           shell: input.shell ?? (yield* shell.resolve({ priority: "config" })),
-          env: {
-            ...(sessionEnvironment ?? process.env),
-            TERM: "xterm-256color",
-            ORBIT_TERMINAL: "1",
-          },
+          // The session's environment, then the settings' `env`, then Orbit's own variables. A workspace-bound location
+          // takes no settings overlay: its environment is not this host's.
+          env: ConfigEnv.applyTo(
+            ConfigEnv.applyTo(
+              { ...(sessionEnvironment ?? process.env) },
+              location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
+            ),
+            { TERM: "xterm-256color", ORBIT_TERMINAL: "1" },
+          ),
         }
         yield* hooks.trigger("shell", "create.before", invocation)
         if (before) yield* before(invocation)

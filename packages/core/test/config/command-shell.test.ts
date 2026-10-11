@@ -43,6 +43,7 @@ const decode = Schema.decodeUnknownSync(Info)
 
 // Spawns and permission requests are recorded instead of performed, so every test can prove what did not happen.
 const spawned: { command: string; args: readonly string[]; cwd?: string }[] = []
+const spawnedEnv: (Record<string, string | undefined> | undefined)[] = []
 const asserted: Permission.AssertInput[] = []
 const denied = new Set<string>()
 const failing = new Set<string>()
@@ -53,6 +54,7 @@ const processes = Layer.mock(AppProcess.Service, {
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("expected a standard command")
       spawned.push({ command: command.command, args: command.args, cwd: command.options.cwd })
+      spawnedEnv.push(command.options.env)
       const source = command.args.at(-1) ?? ""
       if (failing.has(source))
         return yield* new AppProcess.AppProcessError({
@@ -135,6 +137,7 @@ const routed = testEffect(
 
 beforeEach(() => {
   spawned.length = 0
+  spawnedEnv.length = 0
   asserted.length = 0
   denied.clear()
   failing.clear()
@@ -254,6 +257,22 @@ describe("command template shell spans", () => {
       const probe = yield* install("Status: !`git status`")
       yield* probe.execute("")
       expect(spawned.map((spawn) => spawn.command)).toEqual(["sh"])
+    }),
+  )
+
+  // A span starts like the shell tool does: the settings' `env` is over the process environment, and a name taken out
+  // of the settings stops applying to the next span.
+  it.live("starts a span with the settings' env, managed last, and without a name the settings dropped", () =>
+    Effect.gen(function* () {
+      const document = (env: Record<string, string>, scope: Document["scope"]) =>
+        new Document({ type: "document", scope, info: decode({ commands: { probe: { template: "!`env`" } }, env }) })
+      yield* (yield* installEntries([
+        document({ ZZ_SNIPPET_A: "user", ZZ_SNIPPET_B: "user" }, "user"),
+        document({ ZZ_SNIPPET_B: "managed" }, "managed"),
+      ])).execute("")
+      yield* (yield* installEntries([document({ ZZ_SNIPPET_A: "user" }, "user")])).execute("")
+
+      expect(spawnedEnv).toEqual([{ ZZ_SNIPPET_A: "user", ZZ_SNIPPET_B: "managed" }, { ZZ_SNIPPET_A: "user" }])
     }),
   )
 

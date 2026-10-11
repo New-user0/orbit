@@ -10,6 +10,7 @@ import { AppProcess } from "@orbit/util/process"
 import { Duration, Effect, Option, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../../config.js"
+import { ConfigEnv } from "../env.js"
 import { HookSources } from "../hook-sources.js"
 import { Location } from "../../location.js"
 import { ManagedPolicy } from "../../managed-policy.js"
@@ -196,6 +197,7 @@ export const Plugin = define({
       if (configured.length === 0) return NOTHING
       const shell = yield* shells.resolve({ priority: "compat" })
       const compat = yield* config.compatEnabled()
+      const settingsEnv = location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {}
       const stdin = (tool: string | undefined, foreign: boolean) =>
         JSON.stringify({
           hook_event_name: event,
@@ -218,10 +220,11 @@ export const Plugin = define({
               ChildProcess.make(shell, ShellSelect.args(shell, item.hook.command), {
                 cwd: location.directory,
                 extendEnv: true,
-                env: {
+                // The settings' `env` sits under Orbit's own variables.
+                env: ConfigEnv.applyTo(ConfigEnv.applyTo({}, settingsEnv), {
                   ORBIT_PROJECT_DIR: location.directory,
                   ...(compat ? CompatAliases.hookEnv(item.directory) : {}),
-                },
+                }),
               }),
               {
                 stdin: stdin(item.tool, item.foreign),

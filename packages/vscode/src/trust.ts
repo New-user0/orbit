@@ -15,6 +15,7 @@ const labels: Record<TrustKind, string> = {
   permissions: "permission rules",
   providers: "providers",
   shell: "shell",
+  env: "environment variables",
   formatter: "formatters",
   lsp: "language servers",
   sandbox: "sandbox",

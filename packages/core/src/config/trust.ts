@@ -197,6 +197,8 @@ export const classification = {
   info: {
     $schema: inert,
     shell: withhold("shell"),
+    // It can put PATH, NODE_OPTIONS, LD_PRELOAD, proxies, CA bundles or provider keys into every program Orbit starts.
+    env: withhold("env"),
     // A model, a provider or a budget is paid for by the user, and the owner decided that an untrusted folder cannot pick one.
     model: withhold("providers"),
     fallback_model: withhold("providers"),

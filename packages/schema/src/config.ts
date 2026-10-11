@@ -36,6 +36,13 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   shell: Schema.String.pipe(optional).annotate({
     description: "Default shell to use for terminal and shell tool execution",
   }),
+  env: Schema.Record(
+    Schema.String.check(Schema.isPattern(/^[^=\u0000]+$/)),
+    Schema.String.check(Schema.isPattern(/^[^\u0000]*$/)),
+  ).pipe(optional).annotate({
+    description:
+      "Variables added to the environment of the programs Orbit starts for a project: the shell, terminals, hooks, MCP servers, language servers and formatters. A program's own variables and Orbit's win over these. Set in every scope; a project's or local file's env waits until the folder is trusted, and the organization's managed value wins. A number or boolean is kept as its text; a name that is empty or holds an equals sign is ignored",
+  }),
   model: ConfigModel.Selection.pipe(optional).annotate({
     description: "Default model to use when no session or agent model is selected",
   }),

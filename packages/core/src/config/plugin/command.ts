@@ -11,6 +11,7 @@ import { Effect, PubSub, Schema, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Agent } from "../../agent.js"
 import { Config } from "../../config.js"
+import { ConfigEnv } from "../env.js"
 import { Location } from "../../location.js"
 import { ManagedNetwork } from "../../managed-network.js"
 import { ManagedPolicy } from "../../managed-policy.js"
@@ -258,6 +259,7 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
     const sandbox = Config.latest(entries, "sandbox")
     const portable = Config.latest(entries, "experimental")?.portable_shell_scanner === true
     const cwd = services.location.directory
+    const settingsEnv = services.location.workspaceID === undefined ? ConfigEnv.resolve(entries) : {}
     const commands = yield* Effect.forEach(sources, (source) =>
       Effect.gen(function* () {
         const parsed = yield* ShellParse.scan(source, shell, cwd, { portable })
@@ -289,7 +291,13 @@ function runSpans(sources: readonly string[], sessionID: SessionSchema.ID, servi
         if (sandboxed.type === "unsupported") return yield* Effect.fail(new Error(sandboxed.reason))
         if (sandboxed.type === "unwrapped") yield* ManagedNetwork.unbound(network)
         const launch = sandboxed.type === "wrapped" ? sandboxed : { command: shell, args }
-        return ChildProcess.make(launch.command, launch.args, { cwd, stdin: "ignore" })
+        // A snippet starts like the shell tool does: the settings' `env` over the process environment, host-local only.
+        return ChildProcess.make(launch.command, launch.args, {
+          cwd,
+          stdin: "ignore",
+          extendEnv: true,
+          env: settingsEnv,
+        })
       }).pipe(
         Effect.mapError((error) =>
           interpolationError(source, error instanceof Permission.CorrectedError ? error.feedback : error.message),

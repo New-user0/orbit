@@ -5,6 +5,8 @@ import { ChildProcess } from "effect/unstable/process"
 import path from "path"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { AppProcess } from "@orbit/util/process"
+import { Config } from "./config.js"
+import { ConfigEnv } from "./config/env.js"
 import { Location } from "./location.js"
 import type { Info } from "./formatter/builtins.js"
 import { ProjectTrust } from "./project-trust.js"
@@ -31,6 +33,7 @@ const layer = Layer.effect(
     const location = yield* Location.Service
     const processes = yield* AppProcess.Service
     const trust = yield* ProjectTrust.Service
+    const config = yield* Config.Service
     const commands = new WeakMap<Info, string[] | false>()
     const state = State.create<Data, Editor>({
       name: "formatter",
@@ -74,7 +77,14 @@ const layer = Layer.effect(
           .run(
             ChildProcess.make(cmd[0], cmd.slice(1), {
               cwd: location.directory,
-              env: formatter.environment,
+              // The settings' `env` sits under the formatter's own variables.
+              env: ConfigEnv.applyTo(
+                ConfigEnv.applyTo(
+                  {},
+                  location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
+                ),
+                formatter.environment ?? {},
+              ),
               extendEnv: true,
               stdin: "ignore",
               stdout: "ignore",
@@ -108,5 +118,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Location.node, AppProcess.node, ProjectTrust.node],
+  deps: [Config.node, Location.node, AppProcess.node, ProjectTrust.node],
 })

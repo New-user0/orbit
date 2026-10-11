@@ -19,6 +19,7 @@ import { Config } from "@orbit/core/config"
 import { ConfigMcpPlugin } from "@orbit/core/config/plugin/mcp"
 import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Bus } from "@orbit/core/bus"
 import { ID, type Payload } from "@orbit/schema/event"
@@ -80,6 +81,7 @@ import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
+import { expectOneSpelling, received, spellingEnv, withLookupVariable } from "./fixture/child-env"
 import { hostEnvironmentLayer, recordingEnvironmentLayer } from "./fixture/environment"
 import {
   codeModeListings,
@@ -736,6 +738,82 @@ test("spawns local MCP servers through the location environment", async () => {
   expect(command.options.cwd).toBe(cwd)
   expect(command.options.extendEnv).toBe(true)
   expect(command.options.env).toEqual({ MCP_LOCATION_TEST: "configured" })
+})
+
+test("starts a local MCP server with the settings' env under the server's own environment", async () => {
+  const spawns: Array<ChildProcess.Command> = []
+  const config = new ConfigMCP.Local({
+    type: "local",
+    command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-output-schema.ts")],
+    environment: { ZZ_ENV_B: "server" },
+  })
+  const entries = [
+    new Document({
+      type: "document",
+      info: new Info({
+        env: { ZZ_ENV_A: "from-settings", ZZ_ENV_B: "from-settings" },
+        mcp: new ConfigMCP.Info({ servers: { resources: config } }),
+      }),
+    }),
+  ]
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* Mcp.Service
+      expect(yield* settled(service)).toEqual({ status: "connected" })
+    }).pipe(
+      Effect.provide(
+        resourceMcpLayer(config, undefined, undefined, {
+          entries: () => Effect.succeed(entries),
+          environment: recordingEnvironmentLayer(spawns),
+        }),
+      ),
+    ),
+  )
+
+  const command = spawns[0]
+  if (!command || !ChildProcess.isStandardCommand(command)) throw new Error("Expected a standard process command")
+  expect(command.options.env).toEqual({ ZZ_ENV_A: "from-settings", ZZ_ENV_B: "server" })
+})
+
+// Windows keeps one variable per name whatever its case: the settings' `path` and the server's own `Path` must reach the
+// child as one, and the settings cannot blank the lookup variable.
+test.skipIf(process.platform !== "win32")("starts a local MCP server with one spelling of PATH", async () => {
+  const spawns: Array<ChildProcess.Command> = []
+  const config = new ConfigMCP.Local({
+    type: "local",
+    command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-output-schema.ts")],
+    environment: { Path: spellingEnv.path },
+  })
+  const entries = [
+    new Document({
+      type: "document",
+      info: new Info({ env: spellingEnv, mcp: new ConfigMCP.Info({ servers: { resources: config } }) }),
+    }),
+  ]
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* Mcp.Service
+      expect(yield* settled(service)).toEqual({ status: "connected" })
+    }).pipe(
+      Effect.provide(
+        resourceMcpLayer(config, undefined, undefined, {
+          entries: () => Effect.succeed(entries),
+          environment: recordingEnvironmentLayer(spawns),
+        }),
+      ),
+    ),
+  )
+
+  const command = spawns[0]
+  if (!command || !ChildProcess.isStandardCommand(command)) throw new Error("Expected a standard process command")
+  expect(Object.keys(command.options.env ?? {}).filter((name) => /^path$/i.test(name))).toEqual(["Path"])
+  expectOneSpelling(
+    await Effect.runPromise(
+      withLookupVariable(received(command.options)).pipe(Effect.provide(LayerNode.compile(CrossSpawnSpawner.node))),
+    ),
+  )
 })
 
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
@@ -2189,8 +2267,10 @@ const shutdownIt = testEffect(
       Environment.node,
       Location.node,
       ManagedPolicy.node,
+      Config.node,
     ]),
     [
+      Config.node.replace(Config.testLayer()),
       Location.node.replace(
         Layer.succeed(
           Location.Service,

@@ -30,6 +30,7 @@ import {
 import { Cause, Effect, Exit, Schema } from "effect"
 import { ConfigMCP } from "@orbit/schema/config/mcp"
 import type { Session } from "@orbit/schema/session"
+import { ConfigEnv } from "../config/env.js"
 import { McpStdio } from "./stdio.js"
 
 const DEFAULT_STARTUP_TIMEOUT = 30_000
@@ -143,6 +144,8 @@ export const connect = Effect.fnUntraced(function* (
   authProvider?: OAuthClientProvider,
   elicitation?: ElicitationHandler,
   clientInfo: Implementation = { name: "orbit", version: "unknown" },
+  // Variables from settings, under the server's own `environment`.
+  settingsEnv: Readonly<Record<string, string>> = {},
 ) {
   // The SDK takes list-changed handlers at construction, but consumers register after connect. On a
   // modern connection the SDK opens the subscriptions/listen stream behind these itself.
@@ -230,10 +233,10 @@ export const connect = Effect.fnUntraced(function* (
         command,
         args,
         cwd: config.cwd ? path.resolve(directory, config.cwd) : directory,
-        environment: {
-          ...(command === "orb" ? { BUN_BE_BUN: "1" } : {}),
-          ...config.environment,
-        },
+        environment: ConfigEnv.applyTo(
+          ConfigEnv.applyTo(ConfigEnv.applyTo({}, settingsEnv), command === "orb" ? { BUN_BE_BUN: "1" } : {}),
+          config.environment ?? {},
+        ),
       })
       return yield* initialize(transport)
     }

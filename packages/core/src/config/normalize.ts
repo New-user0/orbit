@@ -8,6 +8,7 @@ import { ConfigAgent } from "@orbit/schema/config/agent"
 import { ConfigCommand } from "@orbit/schema/config/command"
 import { ConfigCompaction } from "@orbit/schema/config/compaction"
 import { ConfigFormatter } from "@orbit/schema/config/formatter"
+import { EnvConfig } from "@orbit/schema/config/env-config"
 import { HookConfig } from "@orbit/schema/config/hook-config"
 import { ConfigLSP } from "@orbit/schema/config/lsp"
 import { ConfigMedia } from "@orbit/schema/config/media"
@@ -206,6 +207,7 @@ export function normalize(input: unknown): Result {
   normalizeFormatter(input, encoded, diagnostics)
   normalizeLsp(input, encoded, diagnostics)
   normalizeHooks(input, encoded, diagnostics)
+  normalizeEnv(input, encoded, diagnostics)
 
   const nativeAtomic = {
     $schema: Info.fields.$schema,
@@ -505,6 +507,13 @@ function normalizeLsp(input: Record<string, unknown>, encoded: Record<string, un
   }
   const entries = decodeMap(input.lsp, ConfigLSP.Entry, ["lsp"], diagnostics, decodeEncoded)
   if (isRecord(input.lsp) && (!Object.keys(input.lsp).length || Object.keys(entries).length)) encoded.lsp = entries
+}
+
+function normalizeEnv(input: Record<string, unknown>, encoded: Record<string, unknown>, diagnostics: Diagnostic[]) {
+  if (!own(input, "env")) return
+  const result = EnvConfig.decode(input.env)
+  diagnostics.push(...result.diagnostics)
+  if (result.env !== undefined) encoded.env = result.env
 }
 
 function normalizeHooks(input: Record<string, unknown>, encoded: Record<string, unknown>, diagnostics: Diagnostic[]) {

@@ -19,6 +19,15 @@ test("the background service never takes its trust from the environment, which b
   expect(ServerProcess.trustOptions("service", { ORBIT_TRUST_PROJECT: "true" })).toEqual({ implicit: false })
 })
 
+test("a server that orb starts puts the managed env into its own environment, and reads the folder the environment names", () => {
+  expect(ServerProcess.managedOptions({})).toEqual({ directory: undefined, applyEnv: true })
+  expect(ServerProcess.managedOptions({ ORBIT_MANAGED_DIR: "" })).toEqual({ directory: undefined, applyEnv: true })
+  expect(ServerProcess.managedOptions({ ORBIT_MANAGED_DIR: "/etc/orbit" })).toEqual({
+    directory: "/etc/orbit",
+    applyEnv: true,
+  })
+})
+
 // The CLI hands a private server its run-scoped config in a file. The shared service must never take it, and no server
 // leaves the variable in the environment of the processes it starts.
 test("a private server reads the overlay file once, deletes it, and removes the variable from its environment", async () => {

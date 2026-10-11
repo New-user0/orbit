@@ -8,6 +8,7 @@ import { CompatNames } from "@orbit/compat/names"
 import { Directory, Document, Event, type Entry } from "@orbit/schema/config"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
+import { ConfigEnv } from "@orbit/core/config/env"
 import { Credential } from "@orbit/core/credential"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Watcher } from "@orbit/core/filesystem/watcher"
@@ -244,6 +245,46 @@ describe("Config under workspace trust", () => {
         })
         expect(withheld?.info.hooks).toBeUndefined()
         expect(Config.latest(yield* config.entries(), "websearch")).toBe(false)
+      }).pipe(Effect.provide(loader(folders)))
+    }),
+  )
+
+  it.live("withholds the env of an untrusted project, local and foreign settings file whole, and applies it once trusted", () =>
+    Effect.gen(function* () {
+      const folders = yield* bare
+      const vendor = path.join(folders.repo, CompatNames.vendor.directory, "settings.json")
+      yield* Effect.promise(() =>
+        Promise.all([
+          write(path.join(folders.globalConfig, "orbit.json"), { env: { USER_ONLY: "u", SHARED: "user" } }),
+          write(path.join(folders.repo, "orbit.json"), { env: { SHARED: "project", PATH: "." } }),
+          write(path.join(folders.repo, "orbit.local.json"), { env: { LOCAL_ONLY: "l" } }),
+          write(vendor, { env: { FOREIGN_ONLY: "f", COUNT: 3 } }),
+        ]),
+      )
+      yield* Effect.gen(function* () {
+        const config = yield* Config.Service
+        const trust = yield* WorkspaceTrust.Service
+        const project = path.join(folders.repo, "orbit.json")
+        const local = path.join(folders.repo, "orbit.local.json")
+
+        const before = yield* config.entries()
+        expect(ConfigEnv.resolve(before, "linux")).toEqual({ USER_ONLY: "u", SHARED: "user" })
+        for (const file of [project, local, vendor]) {
+          expect(named(before, file)).toMatchObject({ trusted: false, withheld: ["env"] })
+          expect(named(before, file)?.info.env).toBeUndefined()
+        }
+
+        const granted = yield* nextUpdate
+        yield* trust.grant(folders.repo, { persist: true, via: "test" })
+        yield* Fiber.join(granted)
+        expect(ConfigEnv.resolve(yield* config.entries(), "linux")).toEqual({
+          USER_ONLY: "u",
+          SHARED: "project",
+          PATH: ".",
+          LOCAL_ONLY: "l",
+          FOREIGN_ONLY: "f",
+          COUNT: "3",
+        })
       }).pipe(Effect.provide(loader(folders)))
     }),
   )

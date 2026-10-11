@@ -14,6 +14,8 @@ import { Environment } from "../environment/index.js"
 import { Form } from "../form.js"
 import { Integration } from "../integration.js"
 import { KeyedMutex } from "../effect/keyed-mutex.js"
+import { Config } from "../config.js"
+import { ConfigEnv } from "../config/env.js"
 import { Location } from "../location.js"
 import { ManagedPolicy } from "../managed-policy.js"
 import { McpRestriction } from "./restriction.js"
@@ -172,6 +174,7 @@ export const layer = (options?: Options) =>
     Service,
     Effect.gen(function* () {
       const location = yield* Location.Service
+      const config = yield* Config.Service
       const environment = yield* Environment.Service
       const bus = yield* Bus.Service
       const forms = yield* Form.Service
@@ -461,6 +464,8 @@ export const layer = (options?: Options) =>
             authProvider,
             elicitation,
             options?.clientInfo,
+            // The settings' `env` sits under the server's own `environment`. A workspace-bound location takes none.
+            location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {},
           ).pipe(
             Effect.flatMap((connection) => connection.tools().pipe(Effect.map((tools) => ({ connection, tools })))),
             // A stdio server is spawned on this location's execution plane, not the host's.
@@ -839,7 +844,7 @@ export function configured(options?: Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, ManagedPolicy.node],
+    deps: [Config.node, Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, ManagedPolicy.node],
   })
 }
 

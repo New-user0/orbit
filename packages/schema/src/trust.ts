@@ -13,6 +13,7 @@ export const Kinds = [
   "permissions",
   "providers",
   "shell",
+  "env",
   "formatter",
   "lsp",
   "sandbox",
@@ -23,7 +24,7 @@ export const Kinds = [
 export const Kind = Schema.Literals(Kinds).annotate({
   identifier: "Trust.Kind",
   description:
-    "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, formatters, language servers, the sandbox, anything that reaches the network or is paid for, and other settings that point Orbit at code or files.",
+    "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, environment variables for the programs it starts, formatters, language servers, the sandbox, anything that reaches the network or is paid for, and other settings that point Orbit at code or files.",
 })
 export type Kind = typeof Kind.Type
 

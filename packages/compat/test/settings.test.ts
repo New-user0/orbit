@@ -104,10 +104,50 @@ describe("CompatSettings.read", () => {
       const result = yield* read(fixture, [root(directory, "project")])
 
       expect(result.documents.map((document) => String(document.path))).toEqual([path.join(directory, shared)])
-      // Nothing but the hooks reaches the configuration.
+      // Nothing but the hooks and the environment variables reaches the configuration.
       expect(Schema.encodeSync(Info)(result.documents[0].info)).toEqual({
+        env: { TOKEN: "secret" },
         hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "./check.sh" }] }] },
       })
+    }),
+  )
+
+  live("reads env at the scope of its file, entry by entry", () =>
+    Effect.gen(function* () {
+      const fixture = yield* tmpdirScoped()
+      const home = path.join(fixture, "home", CompatNames.vendor.directory)
+      const repo = path.join(fixture, "repo", CompatNames.vendor.directory)
+      yield* write([
+        [path.join(home, shared), JSON.stringify({ env: { USER_VAR: "u" } })],
+        [path.join(repo, shared), JSON.stringify({ env: { COUNT: 3, FLAG: true, BAD: { x: 1 }, "A=B": "x", GOOD: "g" } })],
+        [path.join(repo, local), JSON.stringify({ env: { LOCAL_VAR: "l" } })],
+        [path.join(repo, "other.json"), JSON.stringify({ env: "not an object" })],
+      ])
+
+      const result = yield* read(fixture, [root(home, "user"), root(repo, "project")])
+
+      expect(result.documents.map((document) => [document.scope, document.info.env])).toEqual([
+        ["user", { USER_VAR: "u" }],
+        ["project", { COUNT: "3", FLAG: "true", GOOD: "g" }],
+        ["local", { LOCAL_VAR: "l" }],
+      ])
+      expect(result.diagnostics.map((diagnostic) => diagnostic.path)).toEqual([["env", "BAD"], ["env", "A=B"]])
+    }),
+  )
+
+  live("reports an env that is not an object and keeps the file's hooks", () =>
+    Effect.gen(function* () {
+      const fixture = yield* tmpdirScoped()
+      const directory = path.join(fixture, CompatNames.vendor.directory)
+      yield* write([
+        [path.join(directory, shared), JSON.stringify({ env: "x", hooks: { PreToolUse: [guard("./check.sh")] } })],
+      ])
+
+      const result = yield* read(fixture, [root(directory, "project")])
+
+      expect(result.documents).toHaveLength(1)
+      expect(result.documents[0].info.env).toBeUndefined()
+      expect(result.diagnostics.map((diagnostic) => diagnostic.path)).toEqual([["env"]])
     }),
   )
 

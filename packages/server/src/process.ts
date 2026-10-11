@@ -17,6 +17,7 @@ import { isAllowedCorsOrigin } from "./cors"
 import { authorizedRequest, unauthorizedResponse } from "./middleware/authorization"
 import { withoutParentSpan } from "./request-tracing"
 import { createRoutes } from "./routes"
+import { ServerManaged } from "./managed"
 import { ServerInfo } from "./server-info"
 import { Status } from "./service-status"
 import type { ServerOptions } from "./options"
@@ -51,6 +52,11 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
 ) {
   // The server starts programs by name in the folders it is pointed at, whoever started the process. See ProgramLookup.
   ProgramLookup.install()
+  if (options.managed?.applyEnv) {
+    yield* ServerManaged.applyEnvironment(options.managed.directory)
+    // The managed files cannot name the variable, and this keeps the parent's own copy at 1 whatever happened.
+    ProgramLookup.install()
+  }
   const password = options.password
   if (!password) return yield* Effect.fail(new Error("Missing server password"))
   const hostname = options.hostname ?? "127.0.0.1"

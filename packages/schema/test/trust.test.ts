@@ -14,6 +14,7 @@ describe("Trust", () => {
       "permissions",
       "providers",
       "shell",
+      "env",
       "formatter",
       "lsp",
       "sandbox",
@@ -22,7 +23,7 @@ describe("Trust", () => {
     ])
     expect(new Set(Trust.Kinds).size).toBe(Trust.Kinds.length)
     for (const kind of Trust.Kinds) expect(Schema.decodeUnknownSync(Trust.Kind)(kind)).toBe(kind)
-    expect(() => Schema.decodeUnknownSync(Trust.Kind)("env")).toThrow()
+    expect(() => Schema.decodeUnknownSync(Trust.Kind)("environment")).toThrow()
     expect(Trust.Kind.ast.annotations?.identifier).toBe("Trust.Kind")
   })
 
@@ -47,7 +48,7 @@ describe("Trust", () => {
       expect<unknown>(encode(decode(trusted))).toEqual(trusted)
     }
     expect(() => decode({ ...untrusted, source: "remembered" })).toThrow()
-    expect(() => decode({ ...untrusted, withheld: [{ path: "/repo/orbit.json", kinds: ["env"] }] })).toThrow()
+    expect(() => decode({ ...untrusted, withheld: [{ path: "/repo/orbit.json", kinds: ["environment"] }] })).toThrow()
   })
 
   test("round-trips a grant and rejects a negative time", () => {
@@ -109,7 +110,7 @@ describe("Config entries of an untrusted folder", () => {
 
   test("reject a kind that does not exist", () => {
     const decode = Schema.decodeUnknownSync(Config.Entry)
-    expect(() => decode({ type: "document", info: {}, trusted: false, withheld: ["env"] })).toThrow()
+    expect(() => decode({ type: "document", info: {}, trusted: false, withheld: ["environment"] })).toThrow()
     expect(() => decode({ type: "document", info: {}, trusted: "no" })).toThrow()
     expect(() => decode({ type: "directory", path: "/x", trusted: "no" })).toThrow()
   })

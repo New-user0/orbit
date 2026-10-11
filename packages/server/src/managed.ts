@@ -1,10 +1,12 @@
 export * as ServerManaged from "./managed"
 
+import { ConfigEnv } from "@orbit/core/config/env"
 import { ManagedSettings } from "@orbit/core/managed-settings"
 import { McpRestriction } from "@orbit/core/mcp/restriction"
 import { PluginRestriction } from "@orbit/plugin/restriction"
 import type { Mcp } from "@orbit/schema/mcp"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect } from "effect"
 
 export type Snapshot = ManagedSettings.Snapshot
@@ -14,6 +16,19 @@ export type Snapshot = ManagedSettings.Snapshot
  * (`orb doctor`) and may not import Core themselves.
  */
 export const read = (directory: string) => ManagedSettings.read(directory).pipe(Effect.provide(FSUtil.layer))
+
+/**
+ * Puts the managed `env` into this process's own environment, once at boot. Every later child of a CLI-launched server
+ * and the model client's proxy and CA set-up then see it, and a managed file edit applies after a restart. A name the
+ * files decode to is never the reserved lookup variable, and `ProgramLookup.install()` runs again after it regardless.
+ */
+export const applyEnvironment = (directory: string | undefined) =>
+  ManagedSettings.bootEnvironment(directory).pipe(
+    Effect.provide(LayerNode.compile(FSUtil.node)),
+    Effect.map((env) => {
+      ConfigEnv.applyTo(process.env, env)
+    }),
+  )
 
 /**
  * The refusal an `orb mcp add` gets from the organization's MCP lists, or undefined when the server may be added. It

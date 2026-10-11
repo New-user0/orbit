@@ -83,6 +83,22 @@ test("a folder that can be remembered offers trust and not now, and trusting it 
   }
 })
 
+test("a file that sets environment variables is listed with their label", async () => {
+  const fixture = await renderTrust({
+    ...project,
+    withheld: [{ path: "/tmp/orbit/orbit.json", kinds: ["env"] }],
+  })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    const frame = fixture.app.captureCharFrame()
+    expect(frame).toContain("orbit.json")
+    expect(frame).toContain("environment variables")
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 test("config above the folder is listed after the folder's own, with the command that trusts the folder that holds it", async () => {
   const fixture = await renderTrust(layered)
 

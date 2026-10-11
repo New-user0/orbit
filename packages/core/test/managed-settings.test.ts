@@ -369,6 +369,58 @@ describe("ManagedSettings.read", () => {
     }),
   )
 
+  it.live("keeps a top-level env without calling it an unknown key", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, { "managed-settings.json": { env: { HTTPS_PROXY: "http://proxy.example", N: 5 } } })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.env).toEqual({ HTTPS_PROXY: "http://proxy.example", N: "5" })
+      expect(snapshot.diagnostics).toEqual([])
+    }),
+  )
+
+  it.live("applies the top-level env when managed.env is written too, and reports managed.env once", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { env: { A: "top" }, managed: { env: { A: "ignored", B: "ignored" } } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.env).toEqual({ A: "top" })
+      expect(snapshot.diagnostics).toEqual([
+        expect.objectContaining({ path: "$.managed.env", kind: "unsupported", message: expect.stringContaining("top-level env") }),
+      ])
+    }),
+  )
+
+  it.live("merges env by name across the base file and a drop-in, the drop-in winning", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { env: { A: "base", ONLY_BASE: "b" } },
+        "managed-settings.d/10-drop.json": { env: { A: "drop", ONLY_DROP: "d" } },
+      })
+
+      expect((yield* read(tmp.path)).info.env).toEqual({ A: "drop", ONLY_BASE: "b", ONLY_DROP: "d" })
+    }),
+  )
+
+  it.live("reports a bad managed env entry at its own path and keeps its siblings", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, { "managed-settings.json": { env: { GOOD: "1", BAD: { x: 1 }, "A=B": "x" } } })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.env).toEqual({ GOOD: "1" })
+      expect(snapshot.diagnostics.map((item) => item.path).sort()).toEqual(["$.env.A=B", "$.env.BAD"])
+    }),
+  )
+
   it.live("substitutes variables per file", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()

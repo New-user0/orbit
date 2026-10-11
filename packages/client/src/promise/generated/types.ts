@@ -18,6 +18,7 @@ export type TrustKind =
   | "permissions"
   | "providers"
   | "shell"
+  | "env"
   | "formatter"
   | "lsp"
   | "sandbox"
@@ -2208,6 +2209,7 @@ export type ConfigEntry =
       info: {
         $schema?: string
         shell?: string
+        env?: { [x: string]: string }
         model?: string | { providerID: string; model: string; variant?: string }
         fallback_model?: string | { providerID: string; model: string; variant?: string }
         output_token_cap?: number

@@ -131,6 +131,22 @@ describe("cross-spawn spawner", () => {
       }),
     )
 
+    // Windows keeps one variable per name whatever its case. A plain object keeps two keys, and programs disagree on which
+    // one wins, so the merge must leave a single spelling of a name, and the lookup variable must stay at 1.
+    if (process.platform === "win32")
+      fx.effect(
+        "hands the child one spelling of PATH and of the lookup variable",
+        Effect.gen(function* () {
+          const handle = yield* js(
+            "process.stdout.write(JSON.stringify(Object.entries(process.env).filter(([k]) => /^(path|nodefaultcurrentdirectoryinexepath)$/i.test(k))))",
+            { env: { PATH: process.env.Path ?? "", nodefaultcurrentdirectoryinexepath: "" }, extendEnv: true },
+          )
+          const entries = JSON.parse(yield* decodeByteStream(handle.stdout)) as Array<[string, string]>
+          expect(entries.filter(([key]) => /^path$/i.test(key))).toHaveLength(1)
+          expect(entries.filter(([key]) => /^nodefault/i.test(key))).toEqual([["NoDefaultCurrentDirectoryInExePath", "1"]])
+        }),
+      )
+
     fx.effect(
       "passes multiple environment variables",
       Effect.gen(function* () {
