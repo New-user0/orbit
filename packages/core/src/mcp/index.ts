@@ -61,9 +61,12 @@ export class NotFoundError extends Schema.TaggedError<NotFoundError>()("MCP.NotF
 /** The organization's MCP lists do not let this server exist, so `add` refused it and nothing was stored. */
 export class BlockedError extends Schema.TaggedError<BlockedError>()("MCP.BlockedError", {
   server: ServerName,
-  reason: Schema.Literals(["denied", "not_allowed"]),
+  reason: Schema.Literals(["managed_only", "denied", "not_allowed"]),
+  organization: Schema.String.pipe(Schema.optional),
 }) {
   override get message() {
+    if (this.reason === "managed_only")
+      return `MCP server "${this.server}" was not added: ${this.organization === undefined ? "managed settings allow" : `${this.organization}'s managed settings allow`} only the MCP servers they define`
     return this.reason === "denied"
       ? `MCP server "${this.server}" is blocked by managed settings`
       : `MCP server "${this.server}" is not on the allow list in managed settings`
@@ -555,10 +558,27 @@ export const layer = (options?: Options) =>
         // The organization's lists are applied here, after every door has merged its servers, so no transform that
         // runs later can bring a blocked one back. The filtered set is what `applied` remembers: lifting a restriction
         // starts the server on the next reconcile, and a new one stops it.
-        const restrictions = policy.current().restrictions.mcp
+        const current = policy.current()
+        const restrictions = current.restrictions.mcp
         const now = new Map<ServerName, string>()
+        // When managed settings run only their own servers, the input is their definitions and not the transformed
+        // state: a transform that claims a managed name first, or edits a managed server in place, cannot change what
+        // runs. Each definition is shaped as the config plugin shapes one, from the managed timeout alone.
+        const managedOnly = restrictions?.managed_only === true
+        const candidates = managedOnly
+          ? Object.entries(current.mcp.servers).flatMap(([key, server]) => {
+              const name = ServerName.make(key)
+              return state.get().removed.has(name)
+                ? []
+                : [[name, { ...cloneConfig(server), timeout: { ...current.mcp.timeout, ...server.timeout } }] as const]
+            })
+          : Array.from(state.get().servers)
+        if (managedOnly)
+          Array.from(state.get().servers.keys())
+            .filter((name) => !Object.hasOwn(current.mcp.servers, name))
+            .forEach((name) => now.set(name, "managed_only"))
         const servers = new Map(
-          Array.from(state.get().servers).filter(([name, server]) => {
+          candidates.filter(([name, server]) => {
             const checked = McpRestriction.check(restrictions, name, server)
             if (!checked.allowed) now.set(name, checked.reason)
             return checked.allowed
@@ -670,8 +690,14 @@ export const layer = (options?: Options) =>
         add: Effect.fn("MCP.add")(function* (server, config) {
           const name = ServerName.make(server)
           // Refused at the door so nothing is stored; the reconcile filter is the backstop for every other door.
-          const checked = McpRestriction.check(policy.current().restrictions.mcp, name, config)
-          if (!checked.allowed) return yield* new BlockedError({ server: name, reason: checked.reason })
+          const current = policy.current()
+          const checked = McpRestriction.admit(current.restrictions.mcp, name, config)
+          if (!checked.allowed)
+            return yield* new BlockedError({
+              server: name,
+              reason: checked.reason,
+              ...(current.organization === undefined ? {} : { organization: current.organization }),
+            })
           overrides.set(name, config)
           yield* state.reload()
         }),

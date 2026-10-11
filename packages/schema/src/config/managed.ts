@@ -29,11 +29,15 @@ export const Restrictions = Schema.Struct({
   mcp: Schema.Struct({
     allow: Selectors.pipe(optional),
     deny: Selectors.pipe(optional),
+    managed_only: Schema.Boolean.pipe(optional).annotate({
+      description:
+        "Run only the MCP servers that managed settings define. Every other source of servers is ignored and adding one is refused.",
+    }),
   })
     .pipe(optional)
     .annotate({
       description:
-        "Which MCP servers may run. A selector is a name glob, `command:<glob>` to match the command of a local server, or `url:<glob>` to match the URL of a remote one.",
+        "Which MCP servers may run, and whether only the ones managed settings define may. A selector is a name glob, `command:<glob>` to match the command of a local server, or `url:<glob>` to match the URL of a remote one.",
     }),
   plugins: Schema.Struct({
     allow: Selectors.pipe(optional),

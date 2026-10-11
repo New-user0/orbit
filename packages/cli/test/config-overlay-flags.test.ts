@@ -79,9 +79,9 @@ async function orb(
   return { code, stdout, stderr }
 }
 
-async function sent(args: string[]) {
+async function sent(args: string[], env: Record<string, string | undefined> = {}) {
   const before = model.steps.length
-  const result = await orb(["-p", "--model", model.model, ...args, "say ok"])
+  const result = await orb(["-p", "--model", model.model, ...args, "say ok"], env)
   expect({ code: result.code, stderr: result.code === 0 ? "" : result.stderr }).toEqual({ code: 0, stderr: "" })
   return { ...result, requests: model.steps.slice(before) }
 }
@@ -129,6 +129,70 @@ test("--mcp-config adds the tools of the server it names", async () => {
   expect(tools(plain)).not.toContain("fx_first")
   expect(await leftovers()).toEqual([])
 }, 240_000)
+
+test("--mcp-config naming a server stops the run when managed settings run only their own servers", async () => {
+  const servers = JSON.stringify({
+    servers: { fx: { type: "local", command: [process.execPath, fixture], codemode: false } },
+  })
+  const onlyManaged = path.join(root, "managed-only")
+  const open = path.join(root, "managed-open")
+  await Bun.write(
+    path.join(onlyManaged, "managed-settings.json"),
+    JSON.stringify({ managed: { mcp: { managed_only: true } } }),
+  )
+  await Bun.write(path.join(open, "managed-settings.json"), JSON.stringify({ managed: { mcp: { deny: ["other"] } } }))
+  const tools = (requests: Awaited<ReturnType<typeof sent>>["requests"]) =>
+    requests.flatMap((request) =>
+      ((request.body as { tools?: Array<{ function: { name: string } }> }).tools ?? []).map(
+        (tool) => tool.function.name,
+      ),
+    )
+
+  // The control: the same flag in an organization without the rule reaches the model.
+  const allowed = await sent(["--mcp-config", servers], { ORBIT_MANAGED_DIR: open })
+  expect(tools(allowed.requests)).toContain("fx_first")
+
+  const before = model.requests.length
+  const stopped = await orb(["-p", "--model", model.model, "--mcp-config", servers, "say ok"], {
+    ORBIT_MANAGED_DIR: onlyManaged,
+  })
+  const ran = await orb(["run", "--model", model.model, "--mcp-config", servers, "say ok"], {
+    ORBIT_MANAGED_DIR: onlyManaged,
+  })
+  expect(stopped.code).toBe(1)
+  expect(stopped.stdout + stopped.stderr).toContain("Managed settings run only the MCP servers they define")
+  expect(ran.code).toBe(1)
+  expect(ran.stdout + ran.stderr).toContain("Managed settings run only the MCP servers they define")
+  expect(model.requests.length).toBe(before)
+
+  // The root command refuses at its own door, before it starts the interface. The controls name no server, or run in
+  // an organization without the rule, so the message is the rule and not what any root run without a terminal prints.
+  const rootRun = await orb(
+    ["--standalone", "--mcp-config", servers],
+    { ORBIT_MANAGED_DIR: onlyManaged },
+    undefined,
+    60_000,
+  )
+  expect(rootRun.code).toBe(1)
+  expect(rootRun.stdout + rootRun.stderr).toContain("Managed settings run only the MCP servers they define")
+  for (const control of [
+    { flag: '{"servers":{}}', managed: onlyManaged },
+    { flag: servers, managed: open },
+  ]) {
+    const result = await orb(
+      ["--standalone", "--mcp-config", control.flag],
+      { ORBIT_MANAGED_DIR: control.managed },
+      undefined,
+      60_000,
+    )
+    expect(result.stdout + result.stderr).not.toContain("Managed settings run only the MCP servers they define")
+  }
+
+  // An empty set names no server, so the run goes on.
+  const empty = await sent(["--mcp-config", '{"servers":{}}'], { ORBIT_MANAGED_DIR: onlyManaged })
+  expect(tools(empty.requests)).not.toContain("fx_first")
+  expect(await leftovers()).toEqual([])
+}, 300_000)
 
 test("an --agents payload over 40 KB arrives intact", async () => {
   // A file, because a command line holds less than that on Windows; the environment is what the overlay file avoids.

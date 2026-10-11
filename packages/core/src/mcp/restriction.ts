@@ -3,7 +3,19 @@ export * as McpRestriction from "./restriction.js"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
 import type { Mcp } from "@orbit/schema/mcp"
 
-export type Result = { readonly allowed: true } | { readonly allowed: false; readonly reason: "denied" | "not_allowed" }
+export type Result =
+  | { readonly allowed: true }
+  | { readonly allowed: false; readonly reason: "managed_only" | "denied" | "not_allowed" }
+
+/**
+ * Whether a door that adds a server (`Mcp.add`, and through it `orb mcp add` and ACP session servers) may add one. When
+ * managed settings run only the servers they define, no add is allowed, not even a replacement of a managed server's
+ * name, and that is answered before the lists so the refusal names the real cause. Otherwise the lists decide.
+ */
+export function admit(restrictions: ConfigManaged.Restrictions["mcp"], name: string, config: Mcp.ServerConfig): Result {
+  if (restrictions?.managed_only === true) return { allowed: false, reason: "managed_only" }
+  return check(restrictions, name, config)
+}
 
 /**
  * Whether the organization's MCP lists let a server exist. The one place that decides; every door that adds a server

@@ -499,6 +499,7 @@ export type ConfigEffective = {
   compatibility: boolean
   permissions?: { bypass: boolean; always: boolean }
   plugins?: { allow?: Array<string>; block?: Array<string>; organization?: string }
+  mcp?: { managed_only: boolean }
 }
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }

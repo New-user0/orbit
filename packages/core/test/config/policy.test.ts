@@ -402,6 +402,7 @@ describe("ConfigPolicyPlugin.Plugin", () => {
         statements: [provider("deny", "file-one"), provider("deny", "connection-one")],
         rules,
         agentRules: {},
+        mcp: { servers: {} },
         restrictions,
         organization: "FileOrg",
       })
@@ -411,7 +412,13 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       expect(managed.current().rules).toEqual(rules)
 
       yield* managed.set("file", { statements: [] })
-      expect(managed.current()).toEqual({ statements: [], rules: [], agentRules: {}, restrictions: {} })
+      expect(managed.current()).toEqual({
+        statements: [],
+        rules: [],
+        agentRules: {},
+        restrictions: {},
+        mcp: { servers: {} },
+      })
 
       yield* managed.set("connection", { statements: [], organization: "ConsoleOrg" })
       expect(managed.current().organization).toBe("ConsoleOrg")

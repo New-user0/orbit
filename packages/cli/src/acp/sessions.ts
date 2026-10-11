@@ -108,7 +108,7 @@ export const make = Effect.fnUntraced(function* (input: {
               input.client.mcp
                 .add({ server: server.name, location: { directory: attached.cwd }, config })
                 .then(() => undefined)
-                // The organization's MCP lists block this server. It costs only itself; the session goes on without it.
+                // Managed settings do not allow this server: their lists block it, or they run only the servers they define. It costs only itself; the session goes on without it.
                 .catch((error: unknown) => {
                   if (isForbiddenError(error)) return error.message
                   throw error
@@ -117,7 +117,14 @@ export const make = Effect.fnUntraced(function* (input: {
               Effect.flatMap((refusal) =>
                 refusal === undefined
                   ? Effect.void
-                  : Effect.logWarning("skipped an MCP server that managed settings block", { server: server.name }),
+                  : // Forgotten, so a later attach after the restriction lifts adds the server.
+                    Effect.sync(() => registered.delete(key)).pipe(
+                      Effect.andThen(
+                        Effect.logWarning("skipped an MCP server that managed settings do not allow", {
+                          server: server.name,
+                        }),
+                      ),
+                    ),
               ),
               Effect.onError(() => Effect.sync(() => registered.delete(key))),
               Effect.uninterruptible,
