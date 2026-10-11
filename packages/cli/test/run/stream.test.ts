@@ -551,16 +551,18 @@ test("orb run takes the same protocol", async () => {
 
 test("--input-format stream-json needs stream-json output, and starts no server", async () => {
   await scripted(["unused"], async (own, home) => {
-    const runs = await Promise.all([
-      spawnOrb(home, own, ["-p", "--input-format", "stream-json", "hello"]),
-      spawnOrb(home, own, ["-p", "--input-format", "stream-json", "--output-format", "json", "hello"]),
-      spawnOrb(home, own, ["run", "--input-format", "stream-json", "hello"]),
-      spawnOrb(home, own, ["run", "--input-format", "stream-json", "--format", "json", "hello"]),
-    ])
+    const runs = await Promise.all(
+      [
+        [["-p", "--input-format", "stream-json", "hello"], "--output-format stream-json"],
+        [["-p", "--input-format", "stream-json", "--output-format", "json", "hello"], "--output-format stream-json"],
+        [["run", "--input-format", "stream-json", "hello"], "--format stream-json"],
+        [["run", "--input-format", "stream-json", "--format", "json", "hello"], "--format stream-json"],
+      ].map(async ([args, needs]) => ({ needs, run: await spawnOrb(home, own, args as string[]) })),
+    )
 
-    runs.forEach((run) => {
+    runs.forEach(({ run, needs }) => {
       expect(run.code).toBe(1)
-      expect(run.stderr).toContain("--input-format stream-json requires")
+      expect(run.stderr).toContain(`--input-format stream-json requires ${needs}`)
       expect(run.stdout).toBe("")
     })
     expect(own.requests).toHaveLength(0)
