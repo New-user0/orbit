@@ -41,6 +41,7 @@ import { define } from "@orbit/plugin/effect/plugin"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
+import { ToolScheduler } from "@orbit/core/session/runner/tool-scheduler"
 import { ID } from "@orbit/schema/shell"
 import { ShellTool } from "@orbit/core/tool/plugin/shell"
 import { ToolOutput } from "@orbit/core/tool-output"
@@ -150,6 +151,7 @@ const shellPluginSupervisor = makeLocationNode({
     Config.node,
     Environment.node,
     FileAccess.node,
+    Location.node,
     Permission.node,
     Session.node,
     Job.node,
@@ -927,7 +929,7 @@ describe("ShellTool", () => {
         reset()
         return withSession(tmp.path, (registry) =>
           Effect.gen(function* () {
-            expect(yield* toolTraits(registry, "Bash", { command: "echo", description: "echo" })).toMatchObject({
+            expect(yield* toolTraits(registry, "Bash", { command: "touch x", description: "touch" })).toMatchObject({
               readOnly: false,
               concurrencySafe: false,
               cancelSiblingsOnFailure: true,
@@ -937,6 +939,125 @@ describe("ShellTool", () => {
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+  )
+
+  // The positive rows need a PATH the read-only analysis trusts (no empty or relative entry); a Windows Path often has
+  // one, and Linux runs them (tools/linux-test).
+  const cleanPath = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .every((entry) => entry !== "" && path.isAbsolute(entry))
+  const wiring = cleanPath ? it.live : it.live.skip
+  const bashOnly = isWindows ? it.live.skip : wiring
+
+  wiring("schedules a call from its command alone, before any hook", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("sh"))
+            const hooks = yield* PluginHooks.Service
+            yield* hooks.register("tool", "execute.before", (event) =>
+              Effect.sync(() => {
+                ;(event.input as Record<string, unknown>).command = "touch x"
+              }),
+            )
+            const safe = (input: unknown) => toolTraits(registry, "Bash", input)
+            expect(yield* safe({ command: "ls" })).toMatchObject({ concurrencySafe: true, cancelSiblingsOnFailure: true })
+            // The background flag, a timeout and a workdir do not change the answer.
+            expect(yield* safe({ command: "ls", run_in_background: true })).toMatchObject({ concurrencySafe: true })
+            expect(yield* safe({ command: "ls", timeout: 5, workdir: "." })).toMatchObject({ concurrencySafe: true })
+            expect(yield* safe({ command: "touch x" })).toMatchObject({
+              concurrencySafe: false,
+              cancelSiblingsOnFailure: true,
+            })
+            // Input the schema rejects is conservative, and still cancels its siblings.
+            expect(yield* safe({ command: 5 })).toMatchObject({ concurrencySafe: false, cancelSiblingsOnFailure: true })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // Needs a real PowerShell: elsewhere "powershell" falls back to a bash shell, where `ls` is a read-only command.
+  ;(isWindows ? it.live : it.live.skip)("schedules a PowerShell call alone, whatever the command", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("powershell"))
+            for (const command of ["Get-ChildItem", "ls", "Get-Content a.txt"])
+              expect(yield* toolTraits(registry, "Bash", { command })).toMatchObject({
+                concurrencySafe: false,
+                cancelSiblingsOnFailure: true,
+              })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // Real `sleep` calls through the real scheduler, with the registry's traits: read-only calls overlap, a write does not.
+  bashOnly("runs read-only calls together and a write call alone", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const selection = yield* ShellSelect.Service
+            yield* selection.transform((editor) => editor.configure("sh"))
+            yield* (yield* Agent.Service).transform((editor) =>
+              editor.update(toolIdentity.agent, (agent) => {
+                agent.permissions = []
+              }),
+            )
+            const events: string[] = []
+            const hooks = yield* PluginHooks.Service
+            yield* hooks.register("tool", "execute.before", (event) =>
+              Effect.sync(() => void events.push(`start ${(event.input as { command: string }).command}`)),
+            )
+            yield* hooks.register("tool", "execute.after", (event) =>
+              Effect.sync(() => void events.push(`end ${(event.input as { command: string }).command}`)),
+            )
+            const batch = (commands: string[]) =>
+              Effect.gen(function* () {
+                events.length = 0
+                const scheduler = ToolScheduler.make<string>({ maxConcurrency: 10 })
+                const entries = commands.map((command, index) => ({
+                  command,
+                  entry: scheduler.register(`${index}`),
+                }))
+                const tools = yield* registry.snapshot()
+                yield* Effect.forEach(
+                  entries,
+                  ({ command, entry }, index) => {
+                    const item = call({ command }, `call-${index}`)
+                    return tools.traits({ call: item.call }).pipe(
+                      Effect.flatMap((traits) => scheduler.run(entry, traits, tools.execute(item))),
+                      Effect.ensuring(scheduler.release(entry)),
+                    )
+                  },
+                  { concurrency: "unbounded", discard: true },
+                )
+                return events.map((event) => event.replace(/ \d+$/, ""))
+              })
+            expect(yield* batch(["sleep 1", "sleep 1"])).toEqual(["start sleep", "start sleep", "end sleep", "end sleep"])
+            expect(yield* batch(["sleep 1", "touch x"])).toEqual(["start sleep", "end sleep", "start touch x", "end touch x"])
+            expect(yield* batch(["touch y", "sleep 1"])).toEqual(["start touch y", "end touch y", "start sleep", "end sleep"])
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+    { timeout: 20_000 },
   )
 
   it.live("returns both parallel CodeMode shell results", () =>
