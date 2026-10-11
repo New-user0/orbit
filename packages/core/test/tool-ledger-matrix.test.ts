@@ -41,6 +41,7 @@ import { transformEnvironmentFiles } from "./fixture/environment"
 import { canLinkFile } from "./fixture/symlink"
 import { tempLocationLayer } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { makePdf } from "./lib/pdf"
 import { permissionLayer } from "./lib/permission"
 import { globalProjectNode } from "./lib/project"
 import { executeTool, registerToolPlugin } from "./lib/tool"
@@ -502,7 +503,7 @@ describe("Read repeat stubs and the freshness of the edit tools", () => {
     Effect.gen(function* () {
       const { location, run } = yield* setup()
       yield* Effect.promise(() => fs.writeFile(path.join(location.directory, "pixel.png"), png))
-      yield* Effect.promise(() => fs.writeFile(path.join(location.directory, "doc.pdf"), "%PDF-1.4\n%%EOF\n"))
+      yield* Effect.promise(async () => fs.writeFile(path.join(location.directory, "doc.pdf"), await makePdf(1)))
       for (const file of ["pixel.png", "doc.pdf"]) {
         const first = yield* run(`a-${file}`, "Read", { file_path: file })
         const second = yield* run(`b-${file}`, "Read", { file_path: file })
