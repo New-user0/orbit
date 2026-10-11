@@ -14,6 +14,7 @@ const untrusted: TrustStatus = {
   directory: "/projects/app",
   trusted: false,
   persistent: true,
+  changed: [],
   withheld: [{ path: "/projects/app/orbit.json", kinds: ["hooks"] }],
 }
 

@@ -45,21 +45,23 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
   const [root, setRoot] = createSignal(0)
   const [amount, setAmount] = createSignal(0)
   const [above, setAbove] = createSignal(0)
+  // A folder that was trusted and whose config changed since asks "Trust changes?" instead of "Trust this folder?".
+  const [changed, setChanged] = createSignal(false)
   const [message, setMessage] = createSignal("dialog open")
 
   const status = createMemo<TrustStatus>(() => {
     const item = ROOTS[root()]
+    const own = SOURCES.slice(0, AMOUNTS[amount()]).map((source) => ({
+      path: `${item.directory.replace(/\/$/, "")}/${source.path}`,
+      kinds: [...source.kinds],
+    }))
     return {
       directory: item.directory,
-      trusted: false,
+      trusted: changed(),
       persistent: item.persistent,
-      withheld: [
-        ...ABOVE.slice(0, ABOVE_AMOUNTS[above()]).map((source) => ({ ...source, kinds: [...source.kinds] })),
-        ...SOURCES.slice(0, AMOUNTS[amount()]).map((source) => ({
-          path: `${item.directory.replace(/\/$/, "")}/${source.path}`,
-          kinds: [...source.kinds],
-        })),
-      ],
+      ...(changed() ? { source: "saved" as const } : {}),
+      withheld: [...ABOVE.slice(0, ABOVE_AMOUNTS[above()]).map((source) => ({ ...source, kinds: [...source.kinds] })), ...own],
+      changed: changed() ? own : [],
     }
   })
 
@@ -69,6 +71,7 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
       () => (
         <DialogTrust
           status={status()}
+          location={ROOTS[root()].directory}
           onTrust={(persist) => {
             setMessage(`trust chosen, which sends persist:${persist}`)
             props.context.ui.dialog.clear()
@@ -111,6 +114,12 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
         group: "Storybook",
         run: () => setAbove((value) => (value + 1) % ABOVE_AMOUNTS.length),
       },
+      {
+        bind: "c",
+        title: "Toggle: trusted, with config that changed since",
+        group: "Storybook",
+        run: () => setChanged((value) => !value),
+      },
       { bind: "o,return", title: "Open the dialog", group: "Storybook", run: open },
       {
         bind: "x",
@@ -121,6 +130,7 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
             setRoot(0)
             setAmount(0)
             setAbove(0)
+            setChanged(false)
           })
           open()
         },
@@ -140,12 +150,18 @@ function DialogTrustStory(props: { context: Plugin.Context }) {
       <StoryFooter
         context={props.context}
         title="storybook / trust dialog"
-        details={[ROOTS[root()].label, `${AMOUNTS[amount()]} held back`, `${ABOVE_AMOUNTS[above()]} above`]}
+        details={[
+          ROOTS[root()].label,
+          `${AMOUNTS[amount()]} held back`,
+          `${ABOVE_AMOUNTS[above()]} above`,
+          changed() ? "changed since trusted" : "untrusted",
+        ]}
         message={message()}
         controls={[
           { shortcut: "r", label: "root" },
           { shortcut: "s", label: "amount held back" },
           { shortcut: "a", label: "config above" },
+          { shortcut: "c", label: "changed since trusted" },
           { shortcut: "o", label: "open" },
           { shortcut: "x", label: "reset" },
           { shortcut: "esc", label: "back" },

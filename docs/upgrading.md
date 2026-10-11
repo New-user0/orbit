@@ -423,6 +423,36 @@ holds a relative entry that Orbit's own lookups used to honor.
 **What to do:** Move variables you want in Orbit's child processes into `env`. Replace a relative `PATH` entry with an
 absolute one.
 
+### Changed project config asks to be trusted again
+
+A trusted folder used to keep every part of its project config on for good, whatever a `git pull`, a branch switch or an
+edit did to it afterwards. Now Orbit records, when you trust a folder, a digest of the parts of each project and local
+config source that start programs: the `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`,
+`sandbox` and `skills` fields of the settings files (the other products' hook settings and `.mcp.json` included), the
+plugin files and `package.json` of a `.orbit` directory, the `hooks` in the front matter of its skills and agents, and
+the `mcp_servers` in the front matter of its agents. Permissions, commands and grants are not digested. When one of them
+differs from the record, only that kind of that file or directory is left out, as in an untrusted folder, and the rest of
+the folder keeps running: a new hook does not stop its MCP servers. Reformatting a file, reordering keys, comments and
+line endings are not changes, and neither is removing a file or a field. Trust the changes and the kind comes back.
+A digest that cannot be computed, such as a locked file, counts as changed until it can be.
+
+The `skills` setting now has a kind of its own (`skills`) where an untrusted folder used to report it as `settings`.
+
+You are asked once after each change to executable config, however it got there: a `git pull`, a branch switch or an
+edit. Orbit does not tell its own writes from anyone else's, so a command that edits project config, such as `orb mcp
+add` at project scope, asks as well. A folder you trusted before this version has no record, so each of its sources
+asks once, and so does a nested folder's config that no grant has recorded yet. The headless commands (`orb run` and the
+others) stop with the kinds and the files that changed, `orb trust` renews the grant ("Trusted … again"), `--trust`
+accepts the changes for one run, and the terminal UI, Mini and VS Code ask "Trust the changes?". `Trust.Status` has a new
+`changed` list, and the kinds in it are in `withheld` too. A server older than this version sends no `changed`, which
+the clients read as none.
+
+**Affects:** anyone who trusted a project folder, SDK callers and clients that read `Trust.Status`, and plugins or
+scripts that edit executable project config while Orbit runs.
+
+**What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
+in a folder you have not trusted.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -1265,6 +1295,25 @@ users, who get the new notices unless they turn `orbit.notifications` off.
 
 **What to do:** Nothing. Set `"attention": { "backend": "system" }` to use the operating system's notifications, and
 `orbit.notifications` to `false` to silence the VS Code notices.
+
+### `orb trust` can trust the folder above a project, and revoke a folder that was deleted
+
+When a file in a folder above the project holds config back, the advice used to be `orb trust <folder>`. That command
+opens a location of its own for the folder, and the grant goes to that location's project, which can be another one
+(an outer repository, a plain folder in it, and an inner repository: trusting the middle folder trusted the outer
+repository and left the middle folder's config off). The refusal, the terminal UI, Mini and `orb trust` now print
+`orb trust <folder> --for <location>`, which names both and works from any folder. `--for` trusts the folder only
+when the location holds config back for it; for any other folder nothing is trusted. A home directory or a filesystem
+root is never offered a command, because it is trusted only for one run (`--trust`) or until Orbit restarts.
+
+`orb trust --revoke <folder>` now ends the stored grant, and what it recorded, of a folder that no longer exists. It
+matches the name given or listed by `orb trust --list`, ignoring case on Windows, and says "is not trusted" when none
+matches; before, it asked you to create the folder again. The server has a new `POST /api/trust/revoke` route for this.
+
+**Affects:** scripts that parse the advice of `orb trust` or the refusal text, and anyone who revokes a folder they
+deleted.
+
+**What to do:** Copy the printed command as it is. Nothing otherwise.
 
 ## Permissions
 

@@ -1,4 +1,5 @@
 import type { TrustKind, TrustStatus } from "@orbit/client"
+import { plain } from "@orbit/flow/plain"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal, For, Show } from "solid-js"
 import { useTuiPaths } from "../context/runtime"
@@ -7,7 +8,7 @@ import { dialogWidth, useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { Locale } from "../util/locale"
 import { abbreviateHome, formatPath } from "../util/path-format"
-import { groupWithheld, trustCommands } from "../util/trust"
+import { changedOwn, groupWithheld, trustCommands } from "../util/trust"
 
 const labels: Record<TrustKind, string> = {
   hooks: "hooks",
@@ -21,6 +22,7 @@ const labels: Record<TrustKind, string> = {
   formatter: "formatters",
   lsp: "language servers",
   sandbox: "sandbox",
+  skills: "skills",
   network: "network access",
   settings: "other settings",
 }
@@ -33,6 +35,8 @@ const labels: Record<TrustKind, string> = {
  */
 export function DialogTrust(props: {
   status: TrustStatus
+  /** The folder in view, which the commands that trust a folder above the project go through. */
+  location?: string
   onTrust: (persist: boolean) => void | Promise<void>
   onNotNow: () => void
 }) {
@@ -41,17 +45,30 @@ export function DialogTrust(props: {
   const dimensions = useTerminalDimensions()
   const paths = useTuiPaths()
   const [pending, setPending] = createSignal(false)
-  const intro = "Orbit is leaving out what could run code or reach the network:"
-  const held = createMemo(() => groupWithheld(props.status.withheld))
+  // A folder that is trusted already asks again when what it runs changed since: a pull, a branch switch or an edit.
+  const changed = createMemo(() => props.status.trusted)
+  const intro = createMemo(() =>
+    changed()
+      ? "This folder's config changed since you trusted it, and Orbit is leaving out what changed:"
+      : "Orbit is leaving out what could run code or reach the network:",
+  )
+  const held = createMemo(() => ({
+    ...groupWithheld(props.status.withheld),
+    ...(changed() ? { own: changedOwn(props.status) } : {}),
+  }))
   const outro = createMemo(() =>
     [
-      props.status.persistent
-        ? "Trust it only if you trust whoever wrote it.\nIt stays trusted until `orb trust --revoke`."
-        : "Trusting a home directory or filesystem root lasts only until Orbit restarts, or on the background service " +
-          "until the service restarts.\nEnd it sooner with `orb trust --revoke`.",
+      changed()
+        ? "Trust the changes only if you know who made them.\nThe folder stays trusted either way, and the rest of its config keeps running."
+        : props.status.persistent
+          ? "Trust it only if you trust whoever wrote it.\nIt stays trusted until `orb trust --revoke`."
+          : "Trusting a home directory or filesystem root lasts only until Orbit restarts, or on the background service " +
+            "until the service restarts.\nEnd it sooner with `orb trust --revoke`.",
       ...(held().above.length === 0
         ? []
-        : [`Config above this folder stays off until its own folder is trusted: ${trustCommands(held().above)}.`]),
+        : [
+            `Config above this folder stays off until its own folder is trusted: ${trustCommands(held().above, props.location ?? props.status.directory)}.`,
+          ]),
     ].join("\n"),
   )
   // The dialog's own padding is taken off, so a row never runs past its edge.
@@ -60,7 +77,7 @@ export function DialogTrust(props: {
   // trusting the folder turns on comes first, so a list that has to be cut short keeps it.
   const sources = createMemo(() =>
     [...held().own, ...held().above].map((item) => ({
-      name: formatPath(item.path, { base: props.status.directory, home: paths.home, forwardSlashes: true }),
+      name: plain(formatPath(item.path, { base: props.status.directory, home: paths.home, forwardSlashes: true })),
       kinds: item.kinds.map((kind) => labels[kind]).join(", "),
     })),
   )
@@ -71,18 +88,20 @@ export function DialogTrust(props: {
   // It gets the rows left once the paragraphs, and eleven for the title, the status, the choices and the spacing, have
   // theirs; a paragraph takes a row more than its text needs, for the word that wraps early.
   const lines = (text: string) => text.split("\n").reduce((rows, line) => rows + Math.ceil(line.length / width()), 1)
-  const visible = createMemo(() => Math.max(1, Math.min(6, dimensions().height - 11 - lines(intro) - lines(outro()))))
+  const visible = createMemo(() => Math.max(1, Math.min(6, dimensions().height - 11 - lines(intro()) - lines(outro()))))
 
   dialog.setCentered(true)
 
   const trust = async () => {
     setPending(true)
-    await Promise.resolve(props.onTrust(props.status.persistent)).finally(() => setPending(false))
+    // A grant that is stored stays stored when it is renewed, and one that lasts until Orbit restarts stays that way.
+    const persist = changed() ? props.status.source === "saved" : props.status.persistent
+    await Promise.resolve(props.onTrust(persist)).finally(() => setPending(false))
   }
 
   return (
     <DialogSelect
-      title="Trust this folder?"
+      title={changed() ? "Trust the changes?" : "Trust this folder?"}
       renderFilter={false}
       locked={pending()}
       // The dialog can open while a person is typing, so a stray Enter must never be what trusts the folder.
@@ -90,13 +109,13 @@ export function DialogTrust(props: {
       header={
         <box flexDirection="column" gap={1}>
           <text wrapMode="none" truncate>
-            <span style={{ fg: theme.text.feedback.warning.base }}>⊙ Untrusted</span>
+            <span style={{ fg: theme.text.feedback.warning.base }}>{changed() ? "⊙ Changed" : "⊙ Untrusted"}</span>
             <span style={{ fg: theme.text.muted }}>
               {"  " + Locale.truncateLeft(abbreviateHome(props.status.directory, paths.home), width() - 12)}
             </span>
           </text>
           <text fg={theme.text.muted} wrapMode="word">
-            {intro}
+            {intro()}
           </text>
           <box flexDirection="column">
             <For each={sources().slice(0, visible())}>
@@ -119,7 +138,14 @@ export function DialogTrust(props: {
         </box>
       }
       options={[
-        { title: props.status.persistent ? "Trust this folder" : "Trust until Orbit restarts", value: "trust" },
+        {
+          title: changed()
+            ? "Trust changes"
+            : props.status.persistent
+              ? "Trust this folder"
+              : "Trust until Orbit restarts",
+          value: "trust",
+        },
         { title: "Not now", value: "later" },
       ]}
       onSelect={(option) => (option.value === "trust" ? void trust() : props.onNotNow())}

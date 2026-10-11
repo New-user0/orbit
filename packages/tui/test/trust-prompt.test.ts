@@ -13,6 +13,7 @@ function untrusted(root: string): TrustStatus {
     directory: root,
     trusted: false,
     persistent: true,
+    changed: [],
     withheld: [{ path: `${root}/orbit.json`, kinds: ["hooks", "mcp"] }],
   }
 }
@@ -27,7 +28,7 @@ test("Home asks about an untrusted folder once, and the indicator and /trust ask
       if (url.pathname !== "/api/location/trust") return undefined
       if (request.method === "GET") return json(status)
       updates.push(await request.json())
-      status = { ...status, trusted: true, source: "saved", withheld: [] }
+      status = { ...status, trusted: true, source: "saved", withheld: [], changed: [] }
       return json(status)
     },
   })
@@ -60,7 +61,7 @@ test("Home asks about an untrusted folder once, and the indicator and /trust ask
 const above = { path: "/tmp/orbit.json", kinds: ["hooks"], directory: "/tmp" }
 
 test.each([
-  ["a trusted folder", { ...untrusted("/tmp/orbit"), trusted: true, source: "saved", withheld: [] }],
+  ["a trusted folder", { ...untrusted("/tmp/orbit"), trusted: true, source: "saved", withheld: [], changed: [] }],
   ["a trusted folder with config above it held back", { ...untrusted("/tmp/orbit"), trusted: true, withheld: [above] }],
   ["an untrusted folder whose only held-back config is above it", { ...untrusted("/tmp/orbit"), withheld: [above] }],
 ])("%s is not asked about and has no indicator", async (_, answer) => {
@@ -131,7 +132,7 @@ test("a session is asked about for its own folder, which is not the one the term
       return json(
         folder === elsewhere
           ? untrusted(elsewhere)
-          : { directory: folder, trusted: true, persistent: true, source: "saved", withheld: [] },
+          : { directory: folder, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] },
       )
     },
   })
@@ -153,7 +154,7 @@ test("the question about the folder the terminal UI started in is not answered f
   const trusted = new Set<string>()
   const status = (folder: string): TrustStatus =>
     trusted.has(folder)
-      ? { directory: folder, trusted: true, persistent: true, source: "saved", withheld: [] }
+      ? { directory: folder, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] }
       : untrusted(folder)
   await using setup = await createAppFixture({
     state: state.path,

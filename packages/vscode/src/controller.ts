@@ -296,7 +296,8 @@ export class Controller {
   // Then the folder this chat works in is asked about again: both answers must say trusted, and the stricter one stands.
   private async grant(shown: TrustStatus): Promise<TrustGrant> {
     const granted = await this.client.location.trust.update(
-      { location: { directory: shown.directory }, trust: true, persist: shown.persistent },
+      // A grant that is stored stays stored when it is renewed after a change; one that lasts until Orbit restarts, too.
+      { location: { directory: shown.directory }, trust: true, persist: shown.trusted ? shown.source === "saved" : shown.persistent },
       { signal: AbortSignal.timeout(this.wait.grant) },
     )
     // Folder names are the repository's to choose, so they are written out wherever a person reads them.

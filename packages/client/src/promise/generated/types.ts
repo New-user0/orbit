@@ -22,6 +22,7 @@ export type TrustKind =
   | "formatter"
   | "lsp"
   | "sandbox"
+  | "skills"
   | "network"
   | "settings"
 
@@ -505,7 +506,9 @@ export type ConfigEffective = {
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
-export type TrustWithheld = { path: string; kinds: Array<TrustKind>; directory?: string }
+export type TrustWithheld = { path: string; kinds: Array<TrustKind>; directory?: string; persistent?: boolean }
+
+export type TrustChanged = { path: string; kinds: Array<TrustKind> }
 
 export type SessionMessageLocationSwitched = {
   id: string
@@ -1792,6 +1795,7 @@ export type TrustStatus = {
   persistent: boolean
   source?: TrustSource
   withheld: Array<TrustWithheld>
+  changed?: Array<TrustChanged>
 }
 
 export type SessionInboxMove = {
@@ -2412,7 +2416,7 @@ export type ConfigEntry =
         }
       }
     }
-  | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean }
+  | { type: "directory"; path: string; scope?: ConfigScope; trusted?: boolean; withheld?: Array<TrustKind> }
 
 export type SessionsResponse = { data: Array<SessionInfo>; cursor: { previous?: string | null; next?: string | null } }
 
@@ -2929,13 +2933,30 @@ export type LocationTrustGetOutput = TrustStatus
 
 export type LocationTrustUpdateInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
-  readonly trust: { readonly trust: boolean; readonly persist?: boolean | undefined }["trust"]
-  readonly persist?: { readonly trust: boolean; readonly persist?: boolean | undefined }["persist"]
+  readonly trust: {
+    readonly trust: boolean
+    readonly persist?: boolean | undefined
+    readonly holder?: string | undefined
+  }["trust"]
+  readonly persist?: {
+    readonly trust: boolean
+    readonly persist?: boolean | undefined
+    readonly holder?: string | undefined
+  }["persist"]
+  readonly holder?: {
+    readonly trust: boolean
+    readonly persist?: boolean | undefined
+    readonly holder?: string | undefined
+  }["holder"]
 }
 
 export type LocationTrustUpdateOutput = TrustStatus
 
 export type LocationTrustListOutput = Array<TrustGrant>
+
+export type LocationTrustRevokeInput = { readonly directory: { readonly directory: string }["directory"] }
+
+export type LocationTrustRevokeOutput = Array<string>
 
 export type AgentListInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]

@@ -3,11 +3,10 @@ export * as ConfigPluginSource from "./source.js"
 import { Directory, Document, type Entry } from "@orbit/schema/config"
 import { ConfigPlugin } from "@orbit/schema/config/plugin"
 import { FSUtil } from "@orbit/util/fs-util"
-import { Host } from "@orbit/plugin/host"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Context, Effect, Layer, Option, PubSub, Scope, Stream } from "effect"
 import path from "path"
-import { fileURLToPath, pathToFileURL } from "url"
+import { fileURLToPath } from "url"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
 import { Location } from "../../location.js"
@@ -74,7 +73,7 @@ export const layer = Layer.effect(
     return Service.of({
       operations: Effect.fn("ConfigPluginSource.operations")(function* () {
         const entries = yield* config.entries()
-        const operations = yield* scan(fs, location, entries)
+        const operations = yield* scan(fs, location, entries, config.pluginsChanged ?? (() => Effect.succeed(false)))
         yield* watchConfiguredSources(entries, operations)
         return operations
       }),
@@ -123,13 +122,20 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
   fs: FSUtil.Interface,
   location: Location.Interface,
   entries: readonly Entry[],
+  pluginsChanged: (directory: string) => Effect.Effect<boolean>,
 ) {
   const discovered = yield* Effect.forEach(
-    // A plugin runs in this process, so the plugins a folder keeps wait for the folder to be trusted. Trusting it
-    // reloads the config, which makes the supervisor activate again.
-    entries.filter((entry): entry is Directory => entry.type === "directory" && entry.trusted !== false),
+    // A plugin runs in this process, so the plugins a folder keeps wait for the folder to be trusted, and for the
+    // trust again when they change after it. Trusting it reloads the config, which makes the supervisor activate again.
+    entries.filter(
+      (entry): entry is Directory =>
+        entry.type === "directory" && entry.trusted !== false && entry.withheld?.includes("plugins") !== true,
+    ),
     (entry) =>
-      PluginSourceDirectory.discover(fs, entry.path).pipe(
+      // This runs when a file under the directory changes, which is before the config reloads and so before its
+      // entry says so: a plugin added after the grant must not be activated in that gap.
+      pluginsChanged(entry.path).pipe(
+        Effect.flatMap((changed) => (changed ? Effect.succeed([]) : PluginSourceDirectory.discover(fs, entry.path))),
         Effect.map((targets) => targets.map((target): Operation => ({ type: "add", target, options: {} }))),
       ),
   ).pipe(Effect.map((items) => items.flat()))
@@ -162,23 +168,10 @@ const scan = Effect.fn("ConfigPluginSource.scan")(function* (
     Effect.gen(function* () {
       if (operation.type === "remove" || !path.isAbsolute(operation.target)) return [operation]
       if (!(yield* fs.existsSafe(operation.target))) return [operation]
-      const directory = yield* fs.isDir(operation.target)
-      const entrypoints: Host.Entrypoints = directory
-        ? yield* Effect.sync(() => Host.resolve({ directory: operation.target }))
-        : { server: pathToFileURL(operation.target).href }
-      if (!entrypoints.server) return []
-      if (directory) {
-        const root = yield* fs.resolve(operation.target)
-        const server = yield* fs.resolve(fileURLToPath(entrypoints.server))
-        if (!FSUtil.contains(root, server)) return []
-      }
+      const entrypoints = yield* PluginSourceDirectory.entrypoints(fs, operation.target)
+      if (!entrypoints) return []
       const times = yield* Effect.forEach(
-        [
-          ...Object.values(entrypoints)
-            .filter((entry) => entry !== undefined)
-            .map((entry) => fileURLToPath(entry)),
-          path.join(directory ? operation.target : path.dirname(operation.target), "package.json"),
-        ],
+        [...entrypoints.files, entrypoints.manifest],
         (entry) =>
           fs.stat(entry).pipe(
             Effect.map((info) => Option.getOrElse(info.mtime, () => new Date(0)).getTime()),

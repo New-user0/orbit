@@ -324,7 +324,12 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
     // The plugins of a project import into this process, so they are read only while its folder is trusted, and not
     // from a folder around it that the server still holds back. Nothing else here depends on the trust: the user's
     // directories and config load either way, and the server's own list already leaves out what the folder keeps.
-    const directories = trustedPluginDirectories(props.directories, trust.startup.trusted(), trust.startup.above())
+    const directories = trustedPluginDirectories(
+      props.directories,
+      trust.startup.trusted(),
+      trust.startup.above(),
+      trust.startup.changedPlugins(),
+    )
     await trace("watch", { reconciliation: id, directories }, () =>
       Promise.all(directories.map(watcher.wait)).then(() => undefined),
     )
@@ -605,6 +610,7 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
               config.data.plugins ?? [],
               trust.startup.trusted(),
               trust.startup.above(),
+              trust.startup.changedPlugins(),
               restrictions(),
             ])
           : undefined,

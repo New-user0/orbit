@@ -428,6 +428,17 @@
                       }
                     ],
                     "description": "Whether a grant is stored on disk (true when omitted) or lasts only until the serving process restarts. A grant for the home directory or a filesystem root always lasts only until the restart. Ignored when trust is false."
+                  },
+                  "holder": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "A folder to trust instead of the location's project: the project's own root, or the `directory` of a file in `withheld` that sits in a folder above the project. Any other folder trusts nothing and leaves the status as it is. The answer is always the location's status. Ignored when trust is false."
                   }
                 },
                 "required": ["trust"],
@@ -482,6 +493,70 @@
         },
         "description": "List the grants stored on disk, ordered by folder. A grant that lasts only until the serving process restarts is not listed.",
         "summary": "List trusted folders"
+      }
+    },
+    "/api/trust/revoke": {
+      "post": {
+        "tags": ["location"],
+        "operationId": "trust.revoke",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The folders whose stored grants this ended. Empty when none matched.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "The folders whose stored grants this ended. Empty when none matched."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "End the stored grant for a folder, and what it recorded about the folder's config, by the folder's name. Only narrows trust, and publishes trust.updated for each folder it ends.",
+        "summary": "Revoke a trusted folder by name",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "directory": {
+                    "type": "string",
+                    "description": "The folder as it is listed or as it was typed. It is matched by name, never looked up on disk, so a folder that was deleted can still be revoked; on a file system that ignores case, a different case matches."
+                  }
+                },
+                "required": ["directory"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
       }
     },
     "/api/agent": {
@@ -13470,6 +13545,12 @@
           },
           "trusted": {
             "type": "boolean"
+          },
+          "withheld": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trust.Kind"
+            }
           }
         },
         "required": ["type", "path"],
@@ -20365,6 +20446,23 @@
         "required": ["type", "text"],
         "additionalProperties": false
       },
+      "Trust.Changed": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trust.Kind"
+            }
+          }
+        },
+        "required": ["path", "kinds"],
+        "additionalProperties": false,
+        "description": "A configuration file or directory whose executable parts differ from what was there when the folder was trusted, and the kinds that differ."
+      },
       "Trust.Grant": {
         "type": "object",
         "properties": {
@@ -20398,10 +20496,11 @@
           "formatter",
           "lsp",
           "sandbox",
+          "skills",
           "network",
           "settings"
         ],
-        "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, environment variables for the programs it starts, formatters, language servers, the sandbox, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
+        "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, environment variables for the programs it starts, formatters, language servers, the sandbox, skill folders and the hooks their files carry, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
       },
       "Trust.Source": {
         "type": "string",
@@ -20431,6 +20530,12 @@
               "$ref": "#/components/schemas/Trust.Withheld"
             },
             "description": "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do, and names that folder as its `directory`."
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trust.Changed"
+            }
           }
         },
         "required": ["directory", "trusted", "persistent", "withheld"],
@@ -20451,6 +20556,10 @@
           "directory": {
             "type": "string",
             "description": "The folder to trust to lift what this holds back, set only for a file or directory in a folder above the project: trusting the project does not lift it, because each folder is trusted on its own. Unset for the project's own files, which trusting the project lifts."
+          },
+          "persistent": {
+            "type": "boolean",
+            "description": "Whether a grant for `directory` can be stored on disk. False when it is the home directory or a filesystem root, which can only be trusted until the serving process restarts. Set with `directory`."
           }
         },
         "required": ["path", "kinds"],

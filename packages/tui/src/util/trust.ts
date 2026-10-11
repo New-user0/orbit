@@ -12,18 +12,38 @@ export function groupWithheld(items: readonly TrustWithheld[]) {
   }
 }
 
-/**
- * Whether the folder is untrusted and so holds something of its own back, which is what the prompt and the indicator
- * are for. Config in a folder above it follows that folder's own decision, so a folder whose only held-back config
- * sits above it has nothing that trusting it would turn on.
- */
-export function holdsBack(status: TrustStatus | undefined) {
-  return status !== undefined && !status.trusted && groupWithheld(status.withheld).own.length > 0
+/** The files of the folder itself whose executable config changed since the folder was trusted. */
+export function changedOwn(status: TrustStatus) {
+  const changed = new Set((status.changed ?? []).map((item) => item.path))
+  return groupWithheld(status.withheld).own.filter((item) => changed.has(item.path))
 }
 
-/** The commands that trust the folders that hold what sits above the project, as they are typed. */
-export function trustCommands(items: readonly TrustWithheld[]) {
-  return [...new Set(items.flatMap((item) => item.directory ?? []))]
-    .map((folder) => `\`orb trust ${/\s/.test(folder) ? `"${folder}"` : folder}\``)
+/**
+ * Whether the folder holds something of its own back, which is what the prompt and the indicator are for: it is
+ * untrusted, or it is trusted and some of its config changed since. Config in a folder above it follows that folder's
+ * own decision, so a folder whose only held-back config sits above it has nothing that trusting it would turn on.
+ */
+export function holdsBack(status: TrustStatus | undefined) {
+  if (status === undefined) return false
+  return status.trusted ? changedOwn(status).length > 0 : groupWithheld(status.withheld).own.length > 0
+}
+
+/**
+ * What to do about the folders that hold what sits above the project, as they are typed: the command that trusts each
+ * one through the location in view, which the grant would otherwise go to the wrong project for, and for a home
+ * directory or a filesystem root, which can never be trusted for good, the way it is trusted for one run.
+ */
+export function trustCommands(items: readonly TrustWithheld[], location: string) {
+  const quoted = (folder: string) => (/\s/.test(folder) ? `"${folder}"` : folder)
+  return [
+    ...new Map(
+      items.flatMap((item) => (item.directory === undefined ? [] : [[item.directory, item.persistent !== false] as const])),
+    ),
+  ]
+    .map(([folder, persistent]) =>
+      persistent
+        ? `\`orb trust ${quoted(folder)}${folder === location ? "" : ` --for ${quoted(location)}`}\``
+        : `${folder} (a home directory or filesystem root: \`--trust\` for one run)`,
+    )
     .join(", ")
 }

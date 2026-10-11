@@ -88,11 +88,34 @@ export type LocationTrustGetOutput = {
       | "formatter"
       | "lsp"
       | "sandbox"
+      | "skills"
       | "network"
       | "settings"
     >
     readonly directory?: AbsolutePath | undefined
+    readonly persistent?: boolean | undefined
   }>
+  readonly changed?:
+    | ReadonlyArray<{
+        readonly path: AbsolutePath
+        readonly kinds: ReadonlyArray<
+          | "hooks"
+          | "mcp"
+          | "plugins"
+          | "commands"
+          | "permissions"
+          | "providers"
+          | "shell"
+          | "env"
+          | "formatter"
+          | "lsp"
+          | "sandbox"
+          | "skills"
+          | "network"
+          | "settings"
+        >
+      }>
+    | undefined
 }
 export type LocationTrustGetOperation<E = never> = (
   input?: LocationTrustGetInput,
@@ -102,6 +125,7 @@ export type LocationTrustUpdateInput = {
   readonly location?: { readonly directory?: string | undefined } | undefined
   readonly trust: boolean
   readonly persist?: boolean | undefined
+  readonly holder?: string | undefined
 }
 export type LocationTrustUpdateOutput = {
   readonly directory: AbsolutePath
@@ -122,11 +146,34 @@ export type LocationTrustUpdateOutput = {
       | "formatter"
       | "lsp"
       | "sandbox"
+      | "skills"
       | "network"
       | "settings"
     >
     readonly directory?: AbsolutePath | undefined
+    readonly persistent?: boolean | undefined
   }>
+  readonly changed?:
+    | ReadonlyArray<{
+        readonly path: AbsolutePath
+        readonly kinds: ReadonlyArray<
+          | "hooks"
+          | "mcp"
+          | "plugins"
+          | "commands"
+          | "permissions"
+          | "providers"
+          | "shell"
+          | "env"
+          | "formatter"
+          | "lsp"
+          | "sandbox"
+          | "skills"
+          | "network"
+          | "settings"
+        >
+      }>
+    | undefined
 }
 export type LocationTrustUpdateOperation<E = never> = (
   input: LocationTrustUpdateInput,
@@ -139,6 +186,12 @@ export type LocationTrustListOutput = ReadonlyArray<{
 }>
 export type LocationTrustListOperation<E = never> = () => Effect.Effect<LocationTrustListOutput, E>
 
+export type LocationTrustRevokeInput = { readonly directory: string }
+export type LocationTrustRevokeOutput = ReadonlyArray<AbsolutePath>
+export type LocationTrustRevokeOperation<E = never> = (
+  input: LocationTrustRevokeInput,
+) => Effect.Effect<LocationTrustRevokeOutput, E>
+
 export interface LocationApi<E = never> {
   readonly get: LocationGetOperation<E>
   readonly reload: LocationReloadOperation<E>
@@ -146,6 +199,7 @@ export interface LocationApi<E = never> {
     readonly get: LocationTrustGetOperation<E>
     readonly update: LocationTrustUpdateOperation<E>
     readonly list: LocationTrustListOperation<E>
+    readonly revoke: LocationTrustRevokeOperation<E>
   }
 }
 

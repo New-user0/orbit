@@ -59,6 +59,25 @@ test("a plugin directory in a folder above the project waits for that folder's o
   expect(trustedPluginDirectories(directories, false, ["/code"])).toEqual(["/config/plugins"])
 })
 
+test("a directory whose plugins changed since the folder was trusted waits, and the folder's other directories load", () => {
+  const directories = {
+    global: ["/config/plugins"],
+    project: ["/project/.orbit/plugins", "/project/packages/app/.orbit/plugins"],
+  }
+
+  expect(trustedPluginDirectories(directories, true, [], ["/project/packages/app/.orbit"])).toEqual([
+    "/config/plugins",
+    "/project/.orbit/plugins",
+  ])
+  // Only the directory named is held, not one whose path merely starts the same way.
+  expect(trustedPluginDirectories(directories, true, [], ["/project/.orb"])).toEqual([
+    "/config/plugins",
+    ...directories.project,
+  ])
+  // Once the changes are trusted the server stops listing it.
+  expect(trustedPluginDirectories(directories, true, [], [])).toEqual(["/config/plugins", ...directories.project])
+})
+
 test("plugin directories are the user's global config directory and the project's own .orbit directories", async () => {
   await using root = await tmpdir()
   const project = path.join(root.path, "project")

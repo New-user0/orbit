@@ -58,7 +58,7 @@ describe("ConfigTrust.sanitize", () => {
     ["sandbox", { enabled: false }, "sandbox"],
     ["formatter", { prettier: { disabled: true } }, "formatter"],
     ["lsp", { gopls: { command: ["gopls"] } }, "lsp"],
-    ["skills", ["./skills"], "settings"],
+    ["skills", ["./skills"], "skills"],
     ["references", { docs: "https://example.com/docs.git" }, "settings"],
     ["worktree", { directory: "../worktrees" }, "settings"],
     ["experimental", { subagent_depth: 4 }, "settings"],
@@ -476,8 +476,8 @@ describe("ConfigTrust.sanitize", () => {
       "commands",
       "permissions",
       "sandbox",
+      "skills",
       "network",
-      "settings",
     ])
     expect(result.withheld.map((kind) => Trust.Kinds.indexOf(kind))).toEqual(
       result.withheld.map((kind) => Trust.Kinds.indexOf(kind)).toSorted((a, b) => a - b),

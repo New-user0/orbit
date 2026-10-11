@@ -227,7 +227,7 @@ export class Document extends Schema.Class<Document>("Config.Document")({
   trusted,
   withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
     description:
-      "The kinds of configuration removed from info because the folder is not trusted. Present only when trusted is false.",
+      "The kinds of configuration removed from info: all that the folder may not supply while it is not trusted, or only the kinds whose executable parts changed since the folder was trusted. Unset when nothing was removed.",
   }),
   info: Info,
 }) {}
@@ -237,6 +237,10 @@ export class Directory extends Schema.Class<Directory>("Config.Directory")({
   path: AbsolutePath,
   scope: Scope.pipe(optional),
   trusted,
+  withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
+    description:
+      "The kinds of what the directory holds that are off although its folder is trusted, because their files changed since the folder was trusted. Unset when nothing is held back.",
+  }),
 }) {}
 
 export const Entry = Schema.Union([Document, Directory]).annotate({

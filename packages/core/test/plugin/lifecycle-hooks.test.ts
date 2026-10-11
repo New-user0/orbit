@@ -26,6 +26,7 @@ import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect, Exit, Fiber, Layer, Logger, Schema, Stream } from "effect"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
+import { grantWithRecords } from "../fixture/grant"
 import { location, tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -458,7 +459,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
 
         const granted = yield* nextUpdate
-        yield* trust.grant(project, { persist: false, via: "test" })
+        yield* grantWithRecords(project, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         expect(yield* everything).toEqual({ read: true, shell: true, grep: true })
 

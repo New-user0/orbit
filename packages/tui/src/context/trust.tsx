@@ -101,6 +101,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
 
     // A choice is for `target`, the folder the dialog was opened for.
     const grant = async (target: string, persist: boolean) => {
+      // Asked before the grant, which clears it: whether this is a folder that was trusted and whose config changed.
+      const changed = current.status()?.trusted === true
       await client.api.location.trust
         .update({ location: { directory: target }, trust: true, persist })
         .then(async (status) => {
@@ -114,10 +116,14 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
           toast.show({
             variant: "success",
             message: [
-              status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
+              changed
+                ? `Trusted the changes in ${folder}`
+                : status.persistent
+                  ? `Trusted ${folder}`
+                  : `Trusted ${folder} until Orbit restarts`,
               ...(above.length === 0
                 ? []
-                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above)}`]),
+                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above, target)}`]),
             ].join(". "),
           })
         }, toast.error)
@@ -133,6 +139,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         () => (
           <DialogTrust
             status={current.status() ?? status}
+            location={folder}
             onTrust={(persist) => grant(folder, persist)}
             onNotNow={() => dialog.clear()}
           />
@@ -140,7 +147,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         // However the dialog closes, unless the folder is trusted by then the answer is not now. The exception is a
         // dialog that closes because another folder came into view: nobody answered it.
         () => {
-          if (directory() === folder && !current.status()?.trusted)
+          if (directory() === folder && holdsBack(current.status()))
             setDismissed((previous) => new Set(previous).add(status.directory))
         },
         { key: DialogTrustKey },
@@ -148,7 +155,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     }
     // Whoever trusts the folder first, here or with `orb trust`, settles the question.
     createEffect(() => {
-      if (current.status()?.trusted && dialog.key === DialogTrustKey) dialog.clear()
+      const status = current.status()
+      if (status !== undefined && !holdsBack(status) && dialog.key === DialogTrustKey) dialog.clear()
     })
     // Another folder coming into view ends the dialog, and `useTrustPrompt` asks about that folder once its status is
     // read.
@@ -174,6 +182,16 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
          */
         above: createMemo(
           () => groupWithheld(startup.status()?.withheld ?? []).above.flatMap((item) => item.directory ?? []),
+          [],
+          { equals: isDeepEqual },
+        ),
+        /**
+         * The config directories whose plugins changed since their folder was trusted, which the server holds back until
+         * the changes are trusted. The terminal UI imports a project's plugins itself, so it leaves these out too.
+         */
+        changedPlugins: createMemo(
+          () =>
+            (startup.status()?.changed ?? []).flatMap((item) => (item.kinds.includes("plugins") ? item.path : [])),
           [],
           { equals: isDeepEqual },
         ),

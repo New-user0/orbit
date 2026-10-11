@@ -7,6 +7,7 @@ const untrusted: TrustStatus = {
   directory: "/projects/app",
   trusted: false,
   persistent: true,
+  changed: [],
   withheld: [
     { path: "/projects/app/.orbit", kinds: ["plugins", "hooks"] },
     { path: "/projects/app/orbit.json", kinds: ["hooks", "mcp"] },
@@ -58,7 +59,19 @@ test("names the folder that holds config above the project, which trusting the p
     "/projects/app is not trusted, so its project config is held back (plugins, hooks, mcp). " +
       "Run `orb trust` to trust it. " +
       "Config in a folder above /projects/app stays off until that folder is trusted too (hooks, plugins): " +
-      "`orb trust /projects`, `orb trust /projects/shared`.\n",
+      "`orb trust /projects --for /projects/app/packages`, `orb trust /projects/shared --for /projects/app/packages`.\n",
+  ])
+})
+
+test("says that a trusted folder's config changed, and that orb trust trusts the changes", async () => {
+  const hooks = { path: "/projects/app/orbit.json", kinds: ["hooks"] }
+  const result = await announced(() =>
+    json({ ...untrusted, trusted: true, source: "saved", withheld: [hooks], changed: [hooks] }),
+  )
+
+  expect(result.written).toEqual([
+    "/projects/app is trusted, but its project config changed since then, so what changed is held back (hooks). " +
+      "Run `orb trust` to trust the changes.\n",
   ])
 })
 
@@ -70,7 +83,7 @@ test("says only what is above the project when the project has no config of its 
     const result = await announced(() => json({ ...untrusted, trusted, withheld }))
 
     expect(result.written).toEqual([
-      "Config in a folder above /projects/app stays off until that folder is trusted too (hooks): `orb trust /projects`.\n",
+      "Config in a folder above /projects/app stays off until that folder is trusted too (hooks): `orb trust /projects --for /projects/app/packages`.\n",
     ])
   }
 })
@@ -84,7 +97,7 @@ test("quotes a folder whose name has a space in it, as it has to be typed", asyn
     }),
   )
 
-  expect(result.written[0]).toContain('`orb trust "/my work"`')
+  expect(result.written[0]).toContain('`orb trust "/my work" --for /projects/app/packages`')
 })
 
 test("points a home directory, which orb trust refuses, at the full terminal UI", async () => {

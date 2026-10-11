@@ -95,7 +95,31 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   because Windows stops the working-folder lookup for any value of the variable). Proof: `test/config/env.test.ts`,
   `test/config/config-trust.test.ts`.
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
-  `config-trust.test.ts`.
+  `config-trust.test.ts`. The folders it may reach come from `standing()` in `packages/core/src/config.ts`, which for
+  config above the project asks `ConfigTrust.reach`: a holder that is the home directory or a filesystem root
+  (`WorkspaceTrust`'s own `persistent`) reaches only the config container, and a document directly in it nothing.
+  `ProjectTrust.supplies` asks the same function. Proof: the `ConfigTrust.reach` table in
+  `test/config/trust-fingerprint.test.ts`, and end to end in `config-trust.test.ts` ("does not let a file reference …
+  reach the drive"), which needs a root the test may write to and returns without testing elsewhere (Linux as root).
+- Executable config that changed after the folder was trusted (`Fingerprint`, `packages/core/src/config/fingerprint.ts`,
+  `WorkspaceTrust.compare`): the folder's grant records one SHA-256 of canonical JSON (sorted keys) per kind and source,
+  and a kind whose digest differs, or that cannot be read, is cut from that source only (`ConfigTrust.partial`: a document
+  loses the fields, a directory lists `withheld`). Implicit trust records nothing. Each row names the digest input and the
+  test that pins it; a mutation that fails each is in the pull request.
+  - `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`, `sandbox` of a document: that field
+    (`test/config/fingerprint.test.ts`, one row per kind; `config-trust.test.ts`, "stops <kind> after it is edited").
+  - `skills` of a document: the field and the front-matter `hooks` of the skill files under its local paths
+    (`fingerprint.test.ts`).
+  - `plugins` of a directory: the files `ConfigPluginSource.scan` resolves (`PluginSourceDirectory.entrypoints`) and
+    their `package.json`, by content (`fingerprint.test.ts`: edits, a touch, an edit with the old time). `scan` compares
+    again when it runs, because its change feed fires before the reload (`config-trust.test.ts`: "offers no plugin planted
+    after the grant"; `supervisor-reload.test.ts`).
+  - `hooks` and `mcp` of a directory: the front matter `hooks` of its skills and agents, and `mcp_servers` of its agents
+    (`fingerprint.test.ts`). Nothing runs them yet; `ProjectTrust.allows(file, kind)` is what hooks-21 and
+    agents-extensibility-9 ask (`project-trust.test.ts`).
+  - A digest that cannot be read: `fingerprint.test.ts`, `workspace-trust-records.test.ts`.
+  - Records are per source, kept beside the grant and dropped with it (`workspace-trust-records.test.ts`); two locations
+    under one root do not invalidate each other (`config-trust.test.ts`).
 - An MCP server's tool title: `McpTool.traits` (`packages/core/src/tool/mcp.ts`) stores it as the tool's `displayName`
   with control and format characters written out. A plugin or a simulated tool supplies its `displayName` raw, but the
   publisher writes every declared name through `plain` (`@orbit/util/plain`) onto the durable `session.tool.input.started`
@@ -432,9 +456,9 @@ its gate, before the first trust task. It names every surface that M1 found over
   `Lsp` and `Formatter` do this, `ConfigPluginSource.scan` skips untrusted directories, and `ConfigCommandPlugin` throws
   `UntrustedError` for a command with a shell snippet (`ConfigTrust.shellSnippet`, `hasShellSnippet`) before it scans,
   asks about or runs a span. A file that carries code, such as hooks in front matter, must ask
-  `ProjectTrust.allows(file)` first. Nothing consumes `allows` yet, because those hooks do not exist, and it still mixes
-  the live decision with stale stamps for about 100 ms after a grant or a revoke. Fix that (N2 in Known gaps) before
-  the first consumer is written.
+  `ProjectTrust.allows(file, kind)` first, with the kind it would run (`hooks`, `mcp`). It decides by the store now, never
+  by the stamp of the last load, and for a config directory it reads the files now, so a skill whose hooks changed is
+  refused before the config has reloaded (`project-trust.test.ts`, "nested config"). Nothing consumes it yet.
 
 - In a command that loads a file from the folder, call `requireTrust` (or `trustRefusal`, when you report the refusal
   yourself) before the load. Pass `imports` for a file that the command imports and `defines` for a file whose commands,
@@ -1614,16 +1638,17 @@ is carried by it, and one that names none has no task yet: give it one. An entry
 <task>` once the owner has said so in writing. None does yet, so until one does, a change that touches that surface
 fixes it or asks.
 
-- **A holder that is a filesystem root.** `standing()` in `packages/core/src/config.ts` still lets `{file:}` in
-  untrusted config read across the drive when the holder of the file is a filesystem root (#14 re-review, N1).
-- **A stale-stamp window.** `ProjectTrust.allows` mixes the live decision with stale stamps for about 100 ms after a
-  grant or a revoke (N2). Nothing consumes `allows` yet, so fix this before its first consumer, which class 1 prescribes
-  for a file that carries code.
-- **Advice that cannot be followed.** `Trust.Withheld.directory` can name a folder, such as the middle one of outer,
-  middle and inner repositories, that `orb trust` cannot lift, because a grant always goes to `project.canonical`. There
-  is no revoke-by-directory route for a deleted folder. The VS Code extension names such a folder and gives no command
-  for it (`packages/vscode/test/trust-text.test.ts`), which leaves the terminal UI, `orb run` and `orb trust` with the
-  advice.
+- **Fingerprints stop short of three things.** The skill and agent directories of other products' roots
+  are not digested, so a hook added to a skill there is not asked about, and no consumer of those hooks exists yet:
+  hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested
+  either, only the entry files and `package.json`. And a change that lands between the config's last load and the grant
+  is accepted with the grant: binding a grant to the contents a client displayed is hooks-22.
+- **A filesystem root as holder, end to end.** `ConfigTrust.reach` is tabled everywhere, but the test that plants a config
+  file in a real root writes outside the sandbox of the test, so it returns without testing unless the root is writable
+  (Linux as root, `tools/linux-test`). Run it there before a milestone closes.
+- **VS Code gives the advice for the folder above a project without a command to run.** It names the folder and says
+  that each folder is trusted on its own (`packages/vscode/test/trust-text.test.ts`); the terminal UI, Mini, `orb run` and
+  `orb trust` print the `orb trust <folder> --for <location>` command.
 - **Decided: `model`, a provider and a budget are withheld.** The owner decided on 2026-10-08, choosing "Withhold
   all, now": "Every field that picks a model, provider or budget (top-level model, agent model and steps, side/title
   models, fallback_model, output_token_cap) is withheld in untrusted folders; Orbit uses your own settings until you
@@ -1729,7 +1754,9 @@ fixes it or asks.
 - **Shared approvals.** A project's ID comes from its remote URL, so a folder that names the same remote shares the
   saved "always allow" approvals.
 - **Git in the folder.** Orbit runs git in a folder to resolve its project, and git applies that folder's own
-  `.git/config`, which can name programs for git to run (tasks `foundations-18` and `shell-safety-18`).
+  `.git/config`, which can name programs for git to run. `shell-safety-18` carries the read-only `.git/hooks` and
+  `.git/config` of the shell sandbox. The git calls of `Project.resolve` before the folder is trusted have no task yet:
+  give them one (a project's identity can be read from files, without running git). Fingerprints do not cover `.git`.
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.

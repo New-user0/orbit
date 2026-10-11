@@ -11,6 +11,8 @@ import type {
   LocationTrustUpdateInput,
   LocationTrustUpdateOutput,
   LocationTrustListOutput,
+  LocationTrustRevokeInput,
+  LocationTrustRevokeOutput,
   AgentListInput,
   AgentListOutput,
   AgentGetInput,
@@ -491,7 +493,7 @@ export function make(options: ClientOptions) {
               method: "POST",
               path: `/api/location/trust`,
               query: { location: input["location"] },
-              body: { trust: input["trust"], persist: input["persist"] },
+              body: { trust: input["trust"], persist: input["persist"], holder: input["holder"] },
               successStatus: 200,
               declaredStatuses: [400, 401],
               empty: false,
@@ -501,6 +503,18 @@ export function make(options: ClientOptions) {
         list: (requestOptions?: RequestOptions) =>
           request<LocationTrustListOutput>(
             { method: "GET", path: `/api/trust`, successStatus: 200, declaredStatuses: [400, 401], empty: false },
+            requestOptions,
+          ),
+        revoke: (input: LocationTrustRevokeInput, requestOptions?: RequestOptions) =>
+          request<LocationTrustRevokeOutput>(
+            {
+              method: "POST",
+              path: `/api/trust/revoke`,
+              body: { directory: input["directory"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
             requestOptions,
           ),
       },

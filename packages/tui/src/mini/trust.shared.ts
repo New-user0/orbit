@@ -1,5 +1,5 @@
 import type { OrbitClient, TrustWithheld } from "@orbit/client"
-import { groupWithheld, trustCommands } from "../util/trust"
+import { changedOwn, groupWithheld, trustCommands } from "../util/trust"
 
 /**
  * Says in one line, before the terminal is handed over, what the folder holds back and how to turn it on: its own
@@ -16,15 +16,20 @@ export async function announceTrust(input: { sdk: OrbitClient; directory: string
   const advice = status.persistent
     ? "Run `orb trust` to trust it."
     : "`orb trust` refuses this folder; start `orb` to trust it until Orbit restarts."
+  const own = status.trusted ? changedOwn(status) : held.own
   const lines = [
-    ...(held.own.length === 0
+    ...(own.length === 0
       ? []
-      : [`${status.directory} is not trusted, so its project config is held back (${kinds(held.own)}). ${advice}`]),
+      : status.trusted
+        ? [
+            `${status.directory} is trusted, but its project config changed since then, so what changed is held back (${kinds(own)}). Run \`orb trust\` to trust the changes.`,
+          ]
+        : [`${status.directory} is not trusted, so its project config is held back (${kinds(own)}). ${advice}`]),
     ...(held.above.length === 0
       ? []
       : [
           `Config in a folder above ${status.directory} stays off until that folder is trusted too ` +
-            `(${kinds(held.above)}): ${trustCommands(held.above)}.`,
+            `(${kinds(held.above)}): ${trustCommands(held.above, input.directory)}.`,
         ]),
   ]
   if (lines.length > 0) input.write(`${lines.join(" ")}\n`)
