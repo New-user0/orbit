@@ -325,7 +325,17 @@ describe("SedScript.apply substitutions", () => {
     ["an empty replacement", "s/b//", "", "abc", "ac"],
     ["an empty match at the end of a line", "s/$/!/", "", "a\nb", "a!\nb!"],
     ["an empty match at the start of a line", "s/^/> /", "", "a\nb", "> a\n> b"],
-    ["a surrogate pair is one character", "s/x*/-/g", "", "😀", "-😀-"],
+    // Measured: GNU sed 4.9 copies one byte after an empty match, so it writes half of a multi-byte character. The
+    // emulator never writes invalid UTF-8; it refuses instead.
+    ["an empty match before a surrogate pair is refused", "s/x*/-/g", "", "😀", "sed-edit:content"],
+    ["an empty match before a 2-byte character is refused", "s/x*/-/g", "", "é", "sed-edit:content"],
+    ["a rejected adjacent empty match before a non-ASCII character is refused", "s/b*/-/g", "", "bé", "sed-edit:content"],
+    ["a skipped empty match before a non-ASCII character is refused", "s/x*/-/3", "", "aé", "sed-edit:content"],
+    ["the Nth empty match before non-ASCII text needs no step", "s/x*/-/2", "", "aé", "a-é"],
+    ["a replaced empty match that stops there needs no step", "s/x*/-/", "", "é", "-é"],
+    ["a first match before non-ASCII text needs no step", "s/a/-/g", "", "aé", "-é"],
+    ["an empty match after the last non-ASCII character", "s/$/!/g", "", "é", "é!"],
+    ["g with ^ before a byte order mark is refused", "s/^/x/g", "", "﻿a", "sed-edit:content"],
     ["a dot matches a whole code point", "s/./X/g", "", "😀a", "XX"],
     ["a negated bracket on non-ASCII text", "s/[^a]/X/", "", "éa", "Xa"],
   ]

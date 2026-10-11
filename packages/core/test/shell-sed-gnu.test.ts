@@ -186,7 +186,6 @@ describe("SedScript against GNU sed", () => {
       directories.push(directory)
       let compared = 0
       let refused = 0
-      let skipped = 0
       const mismatches: string[] = []
       for (const [index, row] of corpus().entries()) {
         const names = row.files.map((file) => `f${file}.txt`)
@@ -197,12 +196,6 @@ describe("SedScript against GNU sed", () => {
           continue
         }
         const texts = row.files.map((file) => files[file])
-        // Git for Windows' sed steps by byte, not by character, after an empty match (`s/x*/-/g` on a multi-byte character
-        // writes `-` between its bytes), which GNU sed on Linux does not. Non-ASCII rows run on Linux only.
-        if (process.platform === "win32" && texts.some((text) => /[^\x00-\x7f]/.test(text))) {
-          skipped++
-          continue
-        }
         const applied = texts.map((text) => SedScript.apply(text, planned.edit))
         if (applied.some((result) => !result.ok)) {
           refused++
@@ -223,7 +216,7 @@ describe("SedScript against GNU sed", () => {
       // The test must not pass because `plan` started refusing everything (class 14).
       expect(compared).toBeGreaterThanOrEqual(500)
       expect(refused).toBeLessThan(compared)
-      expect(compared + refused + skipped).toBe(1535)
+      expect(compared + refused).toBe(1535)
     },
     240_000,
   )

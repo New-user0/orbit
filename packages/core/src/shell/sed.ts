@@ -285,7 +285,9 @@ export function apply(text: string, edit: Edit): Applied {
         deleted = true
         break
       }
-      space = substitute(space, item.step, item.regex!)
+      const next = substitute(space, item.step, item.regex!)
+      if (next === undefined) return refuse("content")
+      space = next
       if (space.length > MAX_TEXT * 4) return refuse("limit")
     }
     if (deleted) continue
@@ -677,8 +679,9 @@ function selected(address: Located | undefined, regex: RegExp | undefined, line:
   return regex!.test(space)
 }
 
-// GNU never accepts an empty match that begins where the previous match ended, and it copies a character after an
-// empty one. Searching the whole string (never a slice) keeps `^`, `\b` and lookbehind honest.
+// GNU never accepts an empty match that begins where the previous match ended, and it copies one character after an
+// empty one. Searching the whole string (never a slice) keeps `^`, `\b` and lookbehind honest. GNU sed 4.9 copies one
+// byte there, so stepping over a non-ASCII character would write half of it: that is undefined (the caller refuses).
 function substitute(space: string, step: Extract<Step, { name: "s" }>, regex: RegExp) {
   let out = ""
   let copied = 0
@@ -694,7 +697,8 @@ function substitute(space: string, step: Extract<Step, { name: "s" }>, regex: Re
     const end = start + found[0].length
     if (end === start && start === previous) {
       if (start >= space.length) break
-      position = start + codePoint(space, start)
+      if (space.charCodeAt(start) > 0x7f) return undefined
+      position = start + 1
       continue
     }
     count++
@@ -706,11 +710,9 @@ function substitute(space: string, step: Extract<Step, { name: "s" }>, regex: Re
     }
     previous = end
     if (end === start && end >= space.length) break
-    position = end === start ? end + codePoint(space, end) : end
+    if (end === start && space.charCodeAt(end) > 0x7f) return undefined
+    position = end === start ? end + 1 : end
   }
   return replaced ? out + space.slice(copied) : space
 }
 
-function codePoint(text: string, index: number) {
-  return text.codePointAt(index)! > 0xffff ? 2 : 1
-}
