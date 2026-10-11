@@ -25,9 +25,9 @@ export function failed(analysis: ShellAnalysis.Analysis | undefined, exit: numbe
   return exit >= (decider ? (FAILS_AT.get(decider) ?? 1) : 1)
 }
 
-// The name of the program whose status is the line's, only when it is a plain word as written.
+// The name of the program whose status is the line's, only when it is a plain word as written. An opaque analysis has no `last`.
 function decide(analysis: ShellAnalysis.Analysis | undefined) {
-  if (analysis?.dialect !== "bash" || analysis.opaque || analysis.last === undefined) return undefined
+  if (analysis?.dialect !== "bash" || analysis.last === undefined) return undefined
   const command = analysis.commands[analysis.last]
   if (command.env.length > 0) return undefined
   const word = command.argv[0]

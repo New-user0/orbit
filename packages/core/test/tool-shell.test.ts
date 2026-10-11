@@ -1955,9 +1955,9 @@ describe("ShellTool", () => {
     ),
   )
 
-  // `readOnly` is the verdict on the command text alone and relaxes nothing: a read-only `cat` of a file outside the
-  // folder still asks about the external directory.
-  bashOnly("still asks about a path outside the folder for a read-only command", () =>
+  // `readOnly` is the verdict on the command text alone and relaxes nothing: a read-only `ls` in a folder outside the
+  // Location still asks about the external directory.
+  bashOnly("still asks about a folder outside the Location for a read-only command", () =>
     Effect.acquireUseRelease(
       Effect.all([Effect.promise(() => tmpdir()), Effect.promise(() => tmpdir())]),
       ([tmp, outside]) => {
@@ -1966,10 +1966,9 @@ describe("ShellTool", () => {
           Effect.gen(function* () {
             const selection = yield* ShellSelect.Service
             yield* selection.transform((editor) => editor.configure("sh"))
-            const command = `cat ${path.join(outside.path, "secret.txt")}`
-            expect((yield* toolTraits(registry, "Bash", { command })).readOnly).toBe(true)
-            yield* Effect.promise(() => Bun.write(path.join(outside.path, "secret.txt"), "x"))
-            yield* executeTool(registry, call({ command }))
+            const input = { command: "ls", workdir: outside.path }
+            expect((yield* toolTraits(registry, "Bash", input)).readOnly).toBe(true)
+            yield* executeTool(registry, call(input))
             expect(assertions.map((item) => item.action)).toContain("external_directory")
           }),
         )
