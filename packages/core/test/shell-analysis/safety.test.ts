@@ -794,3 +794,88 @@ describe("what the review found unpinned", () => {
     expectHit(run("'if' x"), complex("keyword-head"))
   })
 })
+
+// Review round 2. Class matrix: launcher (PowerShell into a native shell, a native shell into PowerShell) x runtime rewriting
+// (MSYS on Windows, native globbing in pwsh on Linux, MSYS path conversion going the other way) x word spellings.
+describe("a native shell launched from PowerShell reads what the runtime rewrites", () => {
+  const five = windows({ shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })
+  const everywhere = [
+    ["powershell 5.1", five],
+    ["pwsh on Windows", pwsh()],
+    ["pwsh on Linux", pwshLinux()],
+  ] as const
+  // MSYS strips single quotes, expands braces and globs against the folder's files; no script word without a space survives.
+  const msys = ["bash -c 'echo'';echo${IFS}MARKER${IFS}rm${IFS}-rf${IFS}$HOME'''", "bash -c 'ls;a=x*'", "bash -c '{echo,x}'", "bash -c a=x*", "bash -c ~"]
+  for (const [name, ctx] of [everywhere[0], everywhere[1]] as const)
+    test.each(msys)(`${name}: %j cannot be read, so it asks`, (text) => {
+      expectHit(runPowershell(text, ctx), complex("nested-shell"))
+    })
+  // pwsh on Linux globs and tilde-expands an unquoted native argument itself; a quoted one is passed as it is.
+  test.each(["bash -c a=x*", "bash -c ~"])("pwsh on Linux: %j cannot be read, so it asks", (text) => {
+    expectHit(runPowershell(text, pwshLinux()), complex("nested-shell"))
+  })
+  test.each(["bash -c 'ls;a=x*'", "bash -c '{echo,x}'", "bash -c '~'"])("pwsh on Linux: the quoted %j is read", (text) => {
+    expect(sig(runPowershell(text, pwshLinux()))).not.toContain(complex("nested-shell"))
+  })
+  for (const [name, ctx] of everywhere)
+    test(`${name}: a script with a space is quoted by PowerShell and still read`, () => {
+      expectHit(runPowershell("bash -c 'rm -rf ~'", ctx), ASK)
+    })
+
+  test("a wrapper's own empty word is dropped by 5.1, so the program behind it is unknown", () => {
+    for (const text of ["sudo '' bash -c 'rm -rf ~'", "nice '' bash -c 'rm -rf ~'"]) expectHit(runPowershell(text, five), complex("empty-head"))
+  })
+})
+
+describe("Git Bash launching PowerShell", () => {
+  // MSYS turns every word that looks like a POSIX path into a Windows path before PowerShell starts.
+  const converted = ["powershell.exe -c Remove-Item -Recurse /c/Users/u", "powershell.exe -c Write-Output /c/a:/c/b", "pwsh -c Remove-Item -Recurse /c/Users/u", "powershell.exe -c Remove-Item -Path=/c/x"]
+  test.each(converted)("%j cannot be read, so it asks", (text) => {
+    expectHit(run(text, windows()), complex("nested-shell"))
+  })
+  test("one script word with spaces is passed unchanged, so it is read", () => {
+    expect(sig(run('powershell.exe -c "Remove-Item -Recurse /c/Users/u"', windows()))).not.toContain(complex("nested-shell"))
+  })
+  test("on Linux nothing converts the words", () => {
+    expect(sig(run("pwsh -c Remove-Item -Recurse /home/u", linux()))).not.toContain(complex("nested-shell"))
+  })
+})
+
+describe("a relative wildcard after a folder change", () => {
+  const moved = ["cd / && rm -rf [a-z]*", "cd / && rm -rf ?*", "cd ~ && rm -rf *.txt"]
+  test.each(moved)("bash %j asks", (text) => {
+    expectHit(run(text), ASK)
+  })
+  test("Git Bash asks after a change into the home folder", () => {
+    expectHit(run("cd /c/Users/u && rm -rf [a-z]*", windows()), ASK)
+  })
+  test.each(["Set-Location ~; rm -rf [a-z]*", "Set-Location /; rm -rf ?*", "Set-Location ~; rm -rf *.txt"])("pwsh on Linux %j asks", (text) => {
+    expectHit(runPowershell(text, pwshLinux()), ASK)
+  })
+  test("a wildcard at the project root stays quiet", () => {
+    expect(sig(run("rm *.pyc"))).toEqual([])
+    expect(sig(runPowershell("rm *.pyc", pwshLinux()))).toEqual([])
+  })
+})
+
+describe("pwsh on Linux removals", () => {
+  test.each(["rm -rf $HOME", "rm -rf $env:HOME"])("native rm of %j is dynamic", (text) => {
+    expectHit(runPowershell(text, pwshLinux()), complex("dynamic-removal"))
+  })
+  test("Remove-Item of a variable is dynamic too", () => {
+    expectHit(runPowershell("Remove-Item -Recurse $HOME", pwshLinux()), complex("dynamic-removal"))
+  })
+  test.each(["find / | xargs rm -rf", "ls / | xargs rm -rf"])("%j is fed to rm, so it asks", (text) => {
+    expectHit(runPowershell(text, pwshLinux()), ASK)
+  })
+})
+
+describe("Windows PowerShell keeps its own programs", () => {
+  test("timeout /t is the delay program, not the wrapper", () => {
+    expect(sig(runPowershell("timeout /t 5", windows({ shell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })))).not.toContain(complex("wrapper"))
+    expect(sig(runPowershell("timeout /t 5", pwsh()))).not.toContain(complex("wrapper"))
+  })
+  test("[ArgumentCompletions()] is a Constrained Language type", () => {
+    expect(sig(runPowershell("[ArgumentCompletions('a')]")).filter((item) => item.startsWith("powershell"))).toEqual([])
+  })
+})

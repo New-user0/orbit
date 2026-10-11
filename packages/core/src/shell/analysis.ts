@@ -1154,7 +1154,9 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
     const named = powershellHead(source.written, kind, ctx.platform)
     const argv: Word[] = [word(source.written, true), ...source.arguments.map((argument) => argumentWord(argument))]
     // A wrapper program (`sudo`, `env`, `nice`) is stripped as in bash, so the checks see the program it starts.
-    const unwrapped = ShellWrappers.unwrap([named.head, ...argv.slice(1).map((item) => item.value)])
+    const values = [named.head, ...argv.slice(1).map((item) => item.value)]
+    // `timeout` on Windows is the delay program (`timeout /t 5`), not the POSIX wrapper.
+    const unwrapped = ctx.platform === "win32" && named.head === "timeout" ? { inner: values, unanalysable: false } : ShellWrappers.unwrap(values)
     index.set(source, commands.length)
     commands.push({
       text: source.text,
@@ -1216,6 +1218,15 @@ function analyzePowerShell(ctx: Context, kind: Dialect, parse?: Parse): Analysis
     statement.elements.slice(1).forEach((element) => {
       const at = index.get(element.command)
       if (at !== undefined) commands[at].piped = true
+    }),
+  )
+  // Two commands side by side in a pipeline: the second reads the first (`find / | xargs rm -rf`).
+  summary.statements.forEach((statement) =>
+    statement.elements.forEach((element, offset) => {
+      const previous = statement.elements[offset - 1]
+      const at = index.get(element.command)
+      const from = previous === undefined ? undefined : index.get(previous.command)
+      if (element.kind === "command" && previous?.kind === "command" && at !== undefined && from !== undefined) commands[at].input = { from, operator: "|" }
     }),
   )
   const paths = ShellPaths.powershell({

@@ -205,6 +205,8 @@ function visit(level: Level, world: World, options: Options, add: Add) {
   analysis.commands.forEach((command, index) => {
     const here = at(index)
     if (command.wrapper) add("too-complex", "wrapper", here)
+    // PowerShell 5.1 drops an empty argument when it starts a program, so `sudo '' bash` runs bash.
+    if (ps && command.inner[0] === "") add("too-complex", "empty-head", here)
     if (analysis.dialect === "bash") semantic(command, (reason) => add("too-complex", reason, here))
     if (command.source ? !command.source.placeholder && command.source.dynamic : command.dynamicHead)
       // In PowerShell this is a security ask, which beats every allow rule, an exact one included.
@@ -413,7 +415,7 @@ function removalOperands(level: Level, world: World, options: Options, add: Add)
     const where = level.outer ?? operand.command
     const raw = operand.spelled.includes("<unknown>") ? [] : [world.classify(world.normalize(operand.spelled, backslash))]
     // A glob's candidates name the folder before the wildcard, not what is removed: only the wildcard rule judges them.
-    const lexical = operand.form === "glob" ? [globClass(operand, world)] : operand.candidates.map((candidate) => world.classify(world.normalize(candidate, world.win)))
+    const lexical = operand.form === "glob" ? [globClass(operand, world, analysis.paths.scopes[operand.command]?.bases ?? [options.cwd])] : operand.candidates.map((candidate) => world.classify(world.normalize(candidate, world.win)))
     const real = (options.facts?.real ?? []).filter((item) => item.file === file).flatMap((item) => item.places.map((place) => world.classify(world.normalize(place, world.win))))
     const hit = strongest([...raw, ...lexical, ...real])
     if (hit) {
@@ -426,11 +428,19 @@ function removalOperands(level: Level, world: World, options: Options, add: Add)
 }
 
 // A wildcard in the first component below a critical folder (`/u*`, `~/[a-z]*`) reaches whatever that folder holds.
-function globClass(operand: ShellPaths.Operand, world: World) {
-  if (operand.prefix === undefined || operand.prefix === "." || !operand.spelled.startsWith(operand.prefix)) return undefined
+function globClass(operand: ShellPaths.Operand, world: World, bases: string[]) {
+  // A relative wildcard reaches what its folder holds: quiet only where every folder it can resolve from is the project.
+  if (operand.prefix === ".") return relativeGlob(bases, world)
+  if (operand.prefix === undefined || !operand.spelled.startsWith(operand.prefix)) return undefined
   const rest = operand.spelled.slice(operand.prefix.length).replace(/^[\\/]+/, "")
   if (/[\\/]/.test(rest)) return undefined
   return strongest(operand.candidates.map((candidate) => world.classify(world.normalize(candidate, world.win), true)))
+}
+
+function relativeGlob(bases: string[], world: World) {
+  const normal = bases.map((item) => world.normalize(item, world.win))
+  if (normal.every((item) => world.local.has(item))) return undefined
+  return strongest(normal.map((item) => world.classify(item, true)))
 }
 
 const RM_FAMILY = new Set(["rm", "rmdir", "unlink", "shred"])
@@ -452,13 +462,14 @@ function removals(level: Level, index: number, world: World, options: Options, a
     // An earlier directory change led somewhere unknown, so a relative spelling cannot be placed.
     if (scope.lost && !glob && !world.absolute(expanded)) return add("too-complex", "dynamic-removal", where)
     const raw = world.classify(world.normalize(expanded, backslash))
+    if (glob && !world.absolute(expanded) && !/[\\/]/.test(expanded) && relativeGlob(scope.bases, world)) return add("critical-removal", "critical-place", where, { place: spelled })
     const candidates = glob ? [] : scope.bases.map((base) => world.classify(world.normalize(options.path.resolve(base, expanded), world.win)))
     if (strongest([raw, ...candidates])) add("critical-removal", "critical-place", where, { place: spelled })
   }
 
   if (RM_FAMILY.has(name) && command.inner.includes("--no-preserve-root")) add("critical-removal", "no-preserve-root", where)
   if (ps && options.platform !== "win32" && RM_FAMILY.has(name))
-    words.filter((word) => word.literal && !word.value.startsWith("-")).forEach((word) => compare(word.value, index, word.glob))
+    words.filter((word) => !word.value.startsWith("-")).forEach((word) => (word.literal ? compare(word.value, index, word.glob || /[*?[]/.test(word.value)) : add("too-complex", "dynamic-removal", where)))
   if (name === "find") {
     const parsed = ShellWrappers.find(command.inner)
     const removes = parsed.delete || parsed.exec.some((action) => RM_FAMILY.has(ShellLaunch.programName(ShellWrappers.unwrap(action).inner[0] ?? "", options.platform)))

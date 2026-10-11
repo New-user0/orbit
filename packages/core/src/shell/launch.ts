@@ -26,12 +26,25 @@ export function isShell(name: string) {
 
 export function launch(command: Command, platform: NodeJS.Platform): Launch | undefined {
   const found = start(command, platform)
-  if (found?.kind !== "script" || command.source === undefined) return found
+  if (found?.kind !== "script") return found
+  const opaque = { kind: "opaque" as const }
+  const rest = command.argv.slice(command.argv.length - command.inner.length + 1)
+  if (command.source === undefined) {
+    // Git Bash rewrites every word that looks like a POSIX path (`/c/x` becomes `C:/x`, a path list is converted) before
+    // PowerShell starts, so a script given as several words is not the one that was read. One word with spaces is untouched.
+    return platform === "win32" && found.dialect === "powershell" && rest.some((word) => !/\s/.test(word.value) && word.value.includes("/")) ? opaque : found
+  }
   // PowerShell builds a native program's command line itself: before 7.3 (and with legacy passing) it drops an empty argument
   // and leaves a double quote unescaped, and a trailing backslash escapes the closing quote. The script the program receives
-  // is then not the one that was read, so it is opaque.
-  const rest = command.argv.slice(command.argv.length - command.inner.length + 1)
-  return rest.some((word) => word.value === "" || word.value.includes('"') || word.value.endsWith("\\")) ? { kind: "opaque" } : found
+  // is then not the one that was read, so it is opaque. An empty word anywhere after the outer program counts (`sudo '' bash`).
+  if (command.argv.slice(1).some((word) => word.value === "") || rest.some((word) => word.value.includes('"') || word.value.endsWith("\\"))) return opaque
+  if (found.dialect !== "bash") return found
+  // The runtime then rewrites bare words before the shell reads them: on Windows the MSYS runtime strips quotes, expands
+  // braces and globs; elsewhere PowerShell globs an unquoted native argument itself. A word with spaces is quoted by PowerShell
+  // and read literally.
+  if (platform === "win32") return rest.some((word) => !/\s/.test(word.value) && !/^[A-Za-z0-9_.\/:=@%+,-]+$/.test(word.value)) ? opaque : found
+  const written = command.source.arguments.slice(command.source.arguments.length - rest.length)
+  return written.some((item) => !/^(["']).*\1$/s.test(item.text) && (/[*?[]/.test(item.text) || item.text.startsWith("~"))) ? opaque : found
 }
 
 function start(command: Command, platform: NodeJS.Platform): Launch | undefined {
