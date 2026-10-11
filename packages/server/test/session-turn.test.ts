@@ -85,12 +85,31 @@ it.live("takes turn options on a prompt and returns them, with the delivery, on 
       { maxTurns: 9 },
       { maxSteps: 2, max_cost: 1 },
       { maxSteps: 2, fallbackModel: { id: "backup", providerID: "provider" }, maxCosts: 1 },
+      { output: { schema: { type: "object" }, attempts: 0 } },
+      { output: { schema: { type: "object" }, attempts: 21 } },
+      { output: { schema: { type: "object" }, attempts: 1.5 } },
+      { output: { attempts: 3 } },
+      { output: { schema: { type: "object" }, retries: 3 } },
+      { output: { schema: "not an object" } },
     ])
       expect(yield* prompt({ id: ids.first, text: "Refused", turn: invalid })).toMatchObject({
         status: 400,
         body: { _tag: "InvalidRequestError" },
       })
     expect((yield* request(`/api/session/${sessionID}/message?order=asc`)).body.data).toEqual([])
+
+    // A schema that decodes but cannot be enforced is refused at admission with the problem and the field, and admits nothing.
+    for (const [schema, message] of [
+      [{ type: "array" }, /"type": "object"/],
+      [{ type: "object", properties: { a: { $ref: "https://example.com/a.json" } } }, /outside the schema/],
+      [{ type: "object", frobnicate: true }, /Unknown keyword "frobnicate"/],
+    ] as const) {
+      const refused = yield* prompt({ id: ids.first, text: "Refused", turn: { output: { schema } } })
+      expect(refused).toMatchObject({ status: 400, body: { _tag: "InvalidRequestError", field: "turn.output.schema" } })
+      expect(String(refused.body.message)).toMatch(message)
+    }
+    expect((yield* request(`/api/session/${sessionID}/message?order=asc`)).body.data).toEqual([])
+    expect((yield* request(`/api/session/${sessionID}/inbox`)).body.data).toEqual([])
 
     const limited = yield* prompt({ id: ids.first, text: "Limited work", turn })
     expect(limited.status).toBe(200)

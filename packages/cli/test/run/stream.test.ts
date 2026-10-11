@@ -46,6 +46,37 @@ test("two user lines give two result lines in order, and the second sees the fir
   })
 }, 240_000)
 
+test("with --json-schema every user line asks for its own answer and gets its own result line", async () => {
+  const schema = path.join(root, "answer-schema.json")
+  await Bun.write(
+    schema,
+    JSON.stringify({ type: "object", properties: { n: { type: "integer" } }, required: ["n"], additionalProperties: false }),
+  )
+  const handIn = (input: unknown) => ({ tool: { name: "StructuredOutput", input } })
+  // The second line's first hand-in is wrong, so only that line retries, with a budget of its own.
+  await scripted(
+    [handIn({ n: 1 }), "", handIn({ n: "two" }), handIn({ n: 2 }), ""],
+    async (own, home) => {
+      const run = controller(home, own, ["--json-schema", schema])
+      run.send({ type: "user", text: "one" })
+      const first = await run.until((line) => line.type === "result")
+      run.send({ type: "user", text: "two" })
+      await run.until((line) => line.type === "result", first.next)
+      run.end()
+      const done = await run.finish()
+
+      expect(done.code).toBe(0)
+      const lines = results(run.lines)
+      expect(lines).toHaveLength(2)
+      expect(lines[0]).toMatchObject({ is_error: false, subtype: "success", structured_output: { n: 1 } })
+      expect(lines[1]).toMatchObject({ is_error: false, subtype: "success", structured_output: { n: 2 } })
+      // The prompt text is the line itself: the schema travels in the request field, never in the words.
+      expect([...new Set(own.steps.map((step) => step.user))]).toEqual(["one", "two"])
+      expect(JSON.stringify(own.steps.map((step) => step.body.messages))).not.toContain("JSON Schema")
+    },
+  )
+}, 240_000)
+
 // Each decision of the controller on an ask for a write, and what follows from it.
 test.each([
   { decision: "once", message: undefined, written: true, feedback: false },

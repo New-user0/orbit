@@ -56,7 +56,7 @@ const HeadlessParams = {
   ),
   jsonSchema: Flag.string("json-schema").pipe(
     Flag.withDescription(
-      "JSON Schema file the final answer must follow; the result carries the parsed answer as structured_output, and text output prints only the parsed JSON",
+      "JSON Schema the final answer must follow, as JSON text (when it starts with {) or the path of a file. The model hands the answer in through a tool that checks it, and the result carries it as structured_output; text output prints only that JSON. Set ORBIT_MAX_STRUCTURED_OUTPUT_RETRIES (1 to 20, default 5) to change how many wrong answers are allowed",
     ),
     Flag.optional,
   ),

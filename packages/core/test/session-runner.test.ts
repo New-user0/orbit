@@ -54,6 +54,7 @@ import { SessionRunnerLLM } from "@orbit/core/session/runner/llm"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { SessionTurn } from "@orbit/core/session/turn"
 import { ShellResult } from "@orbit/core/shell/result"
+import { SessionOutput } from "@orbit/core/session/output"
 import { SessionTurnEnd } from "@orbit/core/session/turn-end"
 import { SessionUsage } from "@orbit/core/session/usage"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
@@ -223,6 +224,7 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     }).pipe(Effect.andThen(Deferred.succeed(barrier.release, undefined)), Effect.asVoid)
   return {
     currentModel: model,
+    toolsEnabled: true,
     modelCost: [] as Model.Info["cost"],
     compaction,
     modelResolveHook: resolvesModel,
@@ -447,7 +449,7 @@ const makeLayer = (persist: boolean) =>
           Effect.map(() => {
             const selected = session.model?.id === "replacement" ? replacementModel : state.currentModel
             return SessionRunnerModel.resolved(selected, {
-              capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+              capabilities: { tools: state.toolsEnabled, input: ["text", "image"], output: ["text"] },
               cost: state.modelCost,
               limit: modelLimits.get(String(selected.id)) ?? defaultModelLimit,
               variant: session.model?.variant,
@@ -8879,6 +8881,353 @@ describe("SessionRunnerLLM", () => {
 
       expect(s.requests).toHaveLength(1)
       expect(yield* notices(s)).toEqual([])
+    })
+  })
+
+  describe("structured output", () => {
+    const answer = {
+      type: "object",
+      properties: { name: { type: "string" }, age: { type: "integer" } },
+      required: ["name", "age"],
+      additionalProperties: false,
+    }
+    const good = { name: "Ada", age: 36 }
+    const bad = { name: "Ada" }
+    let handed = 0
+    const handIn = (input: unknown) => TestLLM.tool(`output-${handed++}`, SessionOutput.NAME, input)
+    const admitOutput = (s: Scenario, output: { schema: Record<string, any>; attempts?: number } = { schema: answer }, turn = {}) => {
+      // The real check, as the server runs it; the harness otherwise replaces the list with a test hook.
+      s.turnEnd = SessionTurnEnd.structuredOutput(s.db).run
+      return s.session.prompt({ sessionID, text: "Work", turn: { ...turn, output }, resume: false })
+    }
+    const failure = (s: Scenario) =>
+      s.resume.pipe(
+        Effect.flip,
+        Effect.flatMap((error) => (error instanceof StepFailedError ? Effect.succeed(error.error) : Effect.die(error))),
+      )
+    const handIns = (s: Scenario) =>
+      s.context.pipe(
+        Effect.map((messages) =>
+          messages.flatMap((message) =>
+            message.type === "assistant"
+              ? message.content.flatMap((part) =>
+                  part.type === "tool" && part.name === SessionOutput.NAME
+                    ? [
+                        {
+                          id: part.id,
+                          status: part.state.status,
+                          error: part.state.status === "error" ? part.state.error : undefined,
+                          input: part.state.status === "streaming" ? undefined : part.state.input,
+                        },
+                      ]
+                    : [],
+                )
+              : [],
+          ),
+        ),
+      )
+    const notices = (s: Scenario) =>
+      s.context.pipe(
+        Effect.map((messages) =>
+          messages.flatMap((message) => (message.type === "synthetic" && message.metadata?.notice === "turn-end" ? [message] : [])),
+        ),
+      )
+    const toolNames = (s: Scenario, index: number) => s.requests[index]?.tools.map((tool) => tool.name)
+
+    scenario("rejects a hand-in that misses a field, accepts the corrected one, and asks once more", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(handIn(bad), handIn(good), TestLLM.stop())
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(3)
+      const calls = yield* handIns(s)
+      expect(calls.map((call) => call.status)).toEqual(["error", "completed"])
+      expect(calls[0]?.error).toMatchObject({ type: SessionOutput.REJECTED })
+      expect(calls[0]?.error?.message).toContain("/age: is required but missing")
+      expect(calls[1]?.input).toEqual(good)
+      expect(yield* notices(s)).toEqual([])
+      expect(yield* SessionOutput.progress(s.db, sessionID, -1)).toEqual({ latest: "accepted", rejected: 1 })
+    })
+
+    scenario("continues once when the model answers in prose, then accepts the hand-in", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(TestLLM.text("It is Ada, 36.", "prose"), handIn(good), TestLLM.stop())
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(3)
+      expect(yield* notices(s)).toMatchObject([{ metadata: { notice: "turn-end", check: "structured-output" } }])
+      expect((yield* handIns(s)).map((call) => call.status)).toEqual(["completed"])
+    })
+
+    scenario("fails as output.missing when the model never hands in", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(...Array.from({ length: 12 }, (_, index) => TestLLM.text(`Prose ${index}`, `never-${index}`)))
+
+      expect(yield* failure(s)).toMatchObject({ type: "output.missing" })
+
+      expect(s.requests).toHaveLength(1 + SessionTurnEnd.MAX_CONTINUATIONS)
+      expect(yield* notices(s)).toHaveLength(SessionTurnEnd.MAX_CONTINUATIONS)
+    })
+
+    for (const row of [
+      { name: "the default of five", attempts: undefined, requests: 5 },
+      { name: "attempts: 2", attempts: 2, requests: 2 },
+      { name: "attempts: 1", attempts: 1, requests: 1 },
+    ])
+      scenario(`fails as limit.structured-output after ${row.name} rejected responses`, function* (s) {
+        yield* admitOutput(s, { schema: answer, ...(row.attempts === undefined ? {} : { attempts: row.attempts }) })
+        yield* s.llm.push(...Array.from({ length: 10 }, () => handIn(bad)))
+
+        expect(yield* failure(s)).toMatchObject({ type: "limit.structured-output" })
+
+        expect(s.requests).toHaveLength(row.requests)
+      })
+
+    scenario("counts a response with two rejected hand-ins once", function* (s) {
+      yield* admitOutput(s, { schema: answer, attempts: 2 })
+      yield* s.llm.push(
+        TestLLM.toolCalls(
+          LLMEvent.toolCall({ id: "two-a", name: SessionOutput.NAME, input: bad }),
+          LLMEvent.toolCall({ id: "two-b", name: SessionOutput.NAME, input: bad }),
+        ),
+        handIn(good),
+        TestLLM.stop(),
+      )
+
+      yield* s.resume
+
+      // Counted per call, the first response alone would have used both attempts.
+      expect(s.requests).toHaveLength(3)
+      expect(yield* SessionOutput.progress(s.db, sessionID, -1)).toEqual({ latest: "accepted", rejected: 1 })
+    })
+
+    scenario("accepts a valid last attempt instead of failing it", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(handIn(bad), handIn(bad), handIn(bad), handIn(bad), handIn(good), TestLLM.stop())
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(6)
+      expect((yield* handIns(s)).at(-1)).toMatchObject({ status: "completed", input: good })
+    })
+
+    scenario("records the hand-in beside another tool in one response, then asks once more", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(
+        TestLLM.toolCalls(
+          LLMEvent.toolCall({ id: "beside-echo", name: "echo", input: { text: "side" } }),
+          LLMEvent.toolCall({ id: "beside-out", name: SessionOutput.NAME, input: good }),
+        ),
+        TestLLM.stop(),
+      )
+
+      yield* s.resume
+
+      expect(s.requests).toHaveLength(2)
+      expect(s.executions).toEqual(["side"])
+      expect((yield* handIns(s)).map((call) => call.status)).toEqual(["completed"])
+    })
+
+    scenario("does not cancel a sibling when a hand-in is rejected", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(
+        TestLLM.toolCalls(
+          LLMEvent.toolCall({ id: "sib-out", name: SessionOutput.NAME, input: bad }),
+          LLMEvent.toolCall({ id: "sib-echo", name: "echo", input: { text: "sibling" } }),
+        ),
+        handIn(good),
+        TestLLM.stop(),
+      )
+
+      yield* s.resume
+
+      expect(s.executions).toEqual(["sibling"])
+    })
+
+    scenario("offers the tool last, and unchanged, on every request, whatever hides other tools", function* (s) {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          for (const name of Object.keys(event.tools)) delete event.tools[name]
+        }),
+      )
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
+          agent.permissions.push({ action: SessionOutput.NAME, resource: "*", effect: "deny" })
+          agent.permissions.push({ action: "*", resource: "*", effect: "deny" })
+        }),
+      )
+      yield* admitOutput(s)
+      yield* s.llm.push(handIn(bad), handIn(good), TestLLM.stop())
+
+      yield* s.resume
+
+      expect(toolNames(s, 0)).toEqual([SessionOutput.NAME])
+      expect(s.requests[1]?.tools).toEqual(s.requests[0]?.tools)
+      expect(s.requests[2]?.tools).toEqual(s.requests[0]?.tools)
+      expect(s.requests[0]?.tools[0]).toMatchObject({ inputSchema: answer })
+      expect((yield* handIns(s)).map((call) => call.status)).toEqual(["error", "completed"])
+    })
+
+    scenario("puts the tool after the registry's tools, and replaces a tool of the same name", function* (s) {
+      const registry = yield* Tool.Service
+      yield* transformTools(
+        registry,
+        {
+          [SessionOutput.NAME]: {
+            name: SessionOutput.NAME,
+            description: "A look-alike that a plugin registered",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () => Effect.succeed({ output: {} }),
+          },
+        },
+        { codemode: false },
+      )
+      yield* admitOutput(s)
+      yield* s.llm.push(handIn(good), TestLLM.stop())
+
+      yield* s.resume
+
+      const names = toolNames(s, 0) ?? []
+      expect(names.at(-1)).toBe(SessionOutput.NAME)
+      expect(names.filter((name) => name === SessionOutput.NAME)).toHaveLength(1)
+      expect(names).toContain("echo")
+      expect(s.requests[0]?.tools.at(-1)?.description).toBe(SessionOutput.DESCRIPTION)
+      expect((yield* handIns(s)).map((call) => call.status)).toEqual(["completed"])
+    })
+
+    scenario("never offers the tool to a session whose prompt did not ask for it", function* (s) {
+      yield* s.admit("Plain")
+      yield* s.llm.push(TestLLM.text("Done", "plain-done"))
+
+      yield* s.resume
+
+      expect(toolNames(s, 0)).not.toContain(SessionOutput.NAME)
+    })
+
+    scenario("does not offer the tool to a child session, which carries no turn options", function* (s) {
+      yield* admitOutput(s)
+      yield* insertSession(otherSessionID)
+      yield* s.db
+        .update(SessionTable)
+        .set({ parent_id: sessionID })
+        .where(eq(SessionTable.id, otherSessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* s.session.prompt({ sessionID: otherSessionID, text: "Subtask", resume: false })
+      yield* s.llm.push(TestLLM.text("Child done", "child-done"))
+
+      yield* s.session.resume(otherSessionID)
+
+      expect(toolNames(s, 0)).not.toContain(SessionOutput.NAME)
+    })
+
+    scenario("restores the attempt count after a restart", function* (s) {
+      yield* admitOutput(s)
+      yield* s.llm.push(handIn(bad), handIn(bad), handIn(bad), Stream.never)
+      const runner = yield* SessionRunner.Service
+      const first = yield* runner.drain({ sessionID, force: true }).pipe(Effect.forkChild)
+      yield* s.llm.wait(4)
+      yield* Fiber.interrupt(first)
+
+      // A new drain reads the count from the stored rows: two more rejected responses fail the turn.
+      yield* s.llm.push(handIn(bad), handIn(bad), handIn(bad))
+
+      expect(yield* failure(s)).toMatchObject({ type: "limit.structured-output" })
+      expect(s.requests).toHaveLength(6)
+    })
+
+    scenario("restarts the count from a steer that carries new output options", function* (s) {
+      yield* admitOutput(s, { schema: answer, attempts: 2 })
+      yield* s.llm.push(handIn(bad), handIn(bad), handIn(bad), handIn(bad))
+      const first = yield* s.llm.gate
+      const run = yield* s.resume.pipe(Effect.forkChild)
+      yield* first.started
+      yield* s.session.prompt({
+        sessionID,
+        text: "Different shape",
+        turn: { output: { schema: answer, attempts: 2 } },
+        resume: false,
+      })
+      yield* first.release
+      const exit = yield* Fiber.await(run)
+
+      // The first rejected response is before the steer. Counted from the start, the turn would have failed on the second.
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(s.requests).toHaveLength(3)
+    })
+
+    scenario("does not count a hand-in that the output limit cut off", function* (s) {
+      yield* admitOutput(s, { schema: answer, attempts: 1 })
+      yield* s.llm.push(
+        TestLLM.complete(
+          { reason: { normalized: "length", raw: "max_tokens" } },
+          LLMEvent.toolInputStart({ id: "cut-out", name: SessionOutput.NAME }),
+          LLMEvent.toolInputDelta({ id: "cut-out", name: SessionOutput.NAME, text: '{"name":"Ad' }),
+        ),
+        handIn(good),
+        TestLLM.stop(),
+      )
+
+      yield* s.resume
+
+      expect((yield* handIns(s)).map((call) => call.status)).toEqual(["error", "completed"])
+      expect((yield* handIns(s))[0]?.error?.type).toBe("tool.input-truncated")
+    })
+
+    scenario("lets the turn's step limit win over a missing hand-in", function* (s) {
+      yield* admitOutput(s, { schema: answer }, { maxSteps: 2 })
+      yield* s.llm.push(...Array.from({ length: 6 }, (_, index) => TestLLM.text(`Prose ${index}`, `steps-${index}`)))
+
+      expect(yield* failure(s)).toMatchObject({ type: "limit.steps" })
+
+      expect(s.requests).toHaveLength(2)
+    })
+
+    scenario("stops the step when a stored schema no longer compiles, instead of running unchecked", function* (s) {
+      yield* admitOutput(s)
+      // A row written around admission, as an old or edited database could hold.
+      yield* s.db
+        .run(sql`UPDATE session_inbox SET payload = json_set(payload, '$.turn.output.schema.type', 'array')`)
+        .pipe(Effect.orDie)
+      yield* s.llm.push(handIn(good), TestLLM.stop())
+
+      expect(yield* failure(s)).toMatchObject({ type: "output.schema-invalid" })
+
+      expect(s.requests).toHaveLength(0)
+    })
+
+    scenario("on the agent's last step offers the hand-in alone and still accepts it", function* (s) {
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        editor.update(Agent.ID.make("build"), (agent) => {
+          agent.steps = 1
+        }),
+      )
+      yield* admitOutput(s)
+      yield* s.llm.push(handIn(good), TestLLM.stop())
+
+      yield* s.resume
+
+      expect(toolNames(s, 0)).toEqual([SessionOutput.NAME])
+      expect(s.requests[0]?.toolChoice).toMatchObject({ type: "tool", name: SessionOutput.NAME })
+      expect((yield* handIns(s)).map((call) => call.status)).toEqual(["completed"])
+      // Once an answer is accepted, the final step is the ordinary text-only one.
+      expect(s.requests[1]?.toolChoice).toMatchObject({ type: "none" })
+    })
+
+    scenario("fails closed when the model cannot call tools", function* (s) {
+      yield* admitOutput(s)
+      s.toolsEnabled = false
+      yield* s.llm.push(handIn(good))
+
+      expect(yield* failure(s)).toMatchObject({ type: "output.unsupported-model" })
+
+      expect(s.requests).toHaveLength(0)
     })
   })
 

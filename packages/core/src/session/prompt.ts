@@ -16,7 +16,8 @@ import { Mime } from "../mime.js"
 import { Plugin } from "../plugin/service.js"
 import { PluginHooks } from "../plugin/hooks.js"
 import { Skill } from "../skill.js"
-import { AttachmentError, SkillNotFoundError } from "./error.js"
+import { AttachmentError, OutputSchemaError, SkillNotFoundError } from "./error.js"
+import { SessionOutput } from "./output.js"
 
 export type Input = {
   text: string
@@ -36,6 +37,13 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
 }) {
   const fs = yield* FSUtil.Service
   const instances = yield* Instance.Service
+
+  // Refused before anything is written, so a schema that cannot be enforced leaves no inbox row and no request.
+  const output = request.input.turn?.output
+  if (output) {
+    const compiled = SessionOutput.compile(output.schema)
+    if (!compiled.ok) return yield* new OutputSchemaError({ message: compiled.message })
+  }
 
   return yield* Effect.gen(function* () {
     yield* Plugin.awaitActivation

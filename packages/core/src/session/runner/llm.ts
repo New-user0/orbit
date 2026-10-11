@@ -2,6 +2,7 @@ export * as SessionRunnerLLM from "./llm.js"
 
 import { Message } from "@orbit/ai"
 import { Model } from "@orbit/schema/model"
+import { DEFAULT_OUTPUT_ATTEMPTS } from "@orbit/schema/session-turn"
 import { plain } from "@orbit/util/plain"
 import { and, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
@@ -18,6 +19,7 @@ import { SessionHistory } from "../history.js"
 import { SessionProviderContext } from "../provider-context.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
+import { SessionOutput } from "../output.js"
 import { SessionMessage } from "../message.js"
 import { SessionSchema } from "../schema.js"
 import { SessionStore } from "../store.js"
@@ -251,6 +253,8 @@ const layer = Layer.effect(
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
         const stopped = yield* runStep(next.context, step)
+        // A turn that stops at the agent's step allowance never reaches the turn-end checks, so it is checked here.
+        if (stopped === "limited") yield* requireOutput(next.context, yield* SessionTurn.current(db, sessionID))
         continuing = stopped === "continue" || (stopped === "ended" && (yield* endTurn(next.context)))
         step++
         force = false
@@ -270,10 +274,18 @@ const layer = Layer.effect(
       )
         return false
       const current = yield* SessionTurn.current(db, sessionID)
-      // No step can follow a spent turn limit, and a notice left behind would reach the next prompt's request.
-      if (yield* turnLimit(loaded, current.options)) return false
+      // No step can follow a spent turn limit, and a notice left behind would reach the next prompt's request. A turn
+      // that still owes its structured answer fails with the limit instead of ending as if it had finished.
+      const limit = yield* turnLimit(loaded, current.options)
+      if (limit) {
+        yield* requireOutput(loaded, current, limit)
+        return false
+      }
       const continuation = yield* turnEnd.run({ sessionID, turn: current })
-      if (!continuation) return false
+      if (!continuation) {
+        yield* requireOutput(loaded, current)
+        return false
+      }
       yield* bus.publish(SessionEvent.Synthetic, {
         sessionID,
         text: continuation.text,
@@ -281,6 +293,58 @@ const layer = Layer.effect(
         metadata: { notice: SessionTurnEnd.NOTICE, check: continuation.check },
       })
       return true
+    })
+
+    /**
+     * Fails a turn that asked for a structured answer and ends without an accepted one: with the limit that ended it, or
+     * `output.missing` when it ended on its own. The failure is recorded, so every client reads the same terminal.
+     */
+    const requireOutput = Effect.fnUntraced(function* (
+      loaded: SessionContext.Loaded,
+      current: SessionTurn.Current,
+      limit?: { readonly type: string; readonly message: string },
+    ) {
+      if (!current.options?.output) return
+      if ((yield* SessionOutput.progress(db, loaded.session.id, current.options.seq)).latest === "accepted") return
+      return yield* new StepFailedError({
+        error: limit ?? {
+          type: "output.missing",
+          message: `The turn ended without handing in an answer that follows the schema through ${SessionOutput.NAME}.`,
+        },
+      })
+    })
+
+    /**
+     * The validator for the turn's structured answer, or undefined when it asked for none. The schema was checked at
+     * admission, but a stored row may be older or edited, so it is compiled again and never run unchecked.
+     */
+    const outputFor = Effect.fnUntraced(function* (loaded: SessionContext.Loaded, current: SessionTurn.Current) {
+      const output = current.options?.output
+      if (!output) return undefined
+      const failed = (type: string, message: string) => new StepFailedError({ error: { type, message } })
+      if (!loaded.model.capabilities.tools)
+        return yield* failed(
+          "output.unsupported-model",
+          "The model cannot call tools, so it cannot hand in a structured answer.",
+        )
+      const compiled = SessionOutput.compile(output.schema)
+      if (!compiled.ok) {
+        yield* Effect.logWarning("The stored output schema no longer compiles, so the turn is stopped").pipe(
+          Effect.annotateLogs({ sessionID: loaded.session.id, problem: compiled.message }),
+        )
+        return yield* failed(
+          "output.schema-invalid",
+          `The turn's output schema cannot be enforced: ${compiled.message}`,
+        )
+      }
+      const attempts = output.attempts ?? DEFAULT_OUTPUT_ATTEMPTS
+      const progress = yield* SessionOutput.progress(db, loaded.session.id, current.options.seq)
+      if (progress.latest === "rejected" && progress.rejected >= attempts)
+        return yield* failed(
+          "limit.structured-output",
+          `The model did not hand in an answer that follows the schema within ${attempts} ${attempts === 1 ? "attempt" : "attempts"}.`,
+        )
+      return { validator: compiled.validator, accepted: progress.latest === "accepted" }
     })
 
     const prepareContext = Effect.fn("SessionRunner.prepareContext")(function* (sessionID: SessionSchema.ID) {
@@ -350,6 +414,7 @@ const layer = Layer.effect(
         // Before compaction, so no compaction or request starts once the turn is over a limit it set.
         const limit = yield* turnLimit(loaded, current.options)
         if (limit) return yield* new StepFailedError({ error: limit })
+        const output = yield* outputFor(loaded, current)
         const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
         if (compacted.status === "completed") {
@@ -358,6 +423,9 @@ const layer = Layer.effect(
         }
         const recovery = yield* outputRecovery(db, sessionID)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
+        // The allowance turns tools off for the last step, which would make an answer impossible: until one is accepted,
+        // that step offers the hand-in alone and asks for it by name.
+        const handInOnly = stepLimitReached && output !== undefined && !output.accepted
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
           model: loaded.model,
@@ -371,11 +439,13 @@ const layer = Layer.effect(
           model: loaded.model,
           tools: loaded.tools,
           system: transcript.system,
-          messages: stepLimitReached
-            ? [...transcript.messages, Message.assistant(MAX_STEPS_PROMPT)]
-            : transcript.messages,
+          messages:
+            stepLimitReached && !handInOnly
+              ? [...transcript.messages, Message.assistant(MAX_STEPS_PROMPT)]
+              : transcript.messages,
           // Keep tool definitions on the final Step to preserve the provider's cached prefix.
-          toolChoice: stepLimitReached ? "none" : undefined,
+          toolChoice: handInOnly ? { type: "tool", name: SessionOutput.NAME } : stepLimitReached ? "none" : undefined,
+          output: output && { validator: output.validator, only: handInOnly },
           webSocket: "session",
           inputTokens: SessionCompaction.estimatePrompt(loaded),
           outputTokenCap: loaded.outputTokenCap,

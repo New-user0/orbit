@@ -98,6 +98,8 @@ export type PromptFileSource = { type: "inline" } | { type: "uri"; uri: string }
 
 export type PromptMention = { start: number; end: number; text: string }
 
+export type SessionTurnOutput = { schema: { [x: string]: JsonValue }; attempts?: number }
+
 export type SessionInboxDelivery = "steer" | "queue"
 
 export type SessionMessageSystem = {
@@ -537,8 +539,6 @@ export type V2EventServerConnected = {
   data: {}
 }
 
-export type SessionTurnOptions = { maxSteps?: number; maxCost?: number; maxTokens?: number; fallbackModel?: ModelRef }
-
 export type ModelSettings = { compaction?: ProviderCompaction } & { [x: string]: any }
 
 export type ConfigModelSettings = { compaction?: ProviderCompaction } & { [x: string]: JsonValue | null }
@@ -593,6 +593,14 @@ export type PromptFileAttachment = {
 export type PromptAgentAttachment = { name: string; mention?: PromptMention }
 
 export type PromptSkillAttachment = { id: string; name: string; text?: string; mention?: PromptMention }
+
+export type SessionTurnOptions = {
+  maxSteps?: number
+  maxCost?: number
+  maxTokens?: number
+  fallbackModel?: ModelRef
+  output?: SessionTurnOutput
+}
 
 export type SessionMessageSynthetic = {
   id: string
@@ -3322,6 +3330,7 @@ export type SessionImportInput = {
             readonly maxCost?: number
             readonly maxTokens?: number
             readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
           }
           readonly delivery?: "steer" | "queue"
           readonly type: "user"
@@ -3668,6 +3677,7 @@ export type SessionImportInput = {
             readonly maxCost?: number
             readonly maxTokens?: number
             readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
           }
           readonly delivery?: "steer" | "queue"
           readonly type: "user"
@@ -4014,6 +4024,7 @@ export type SessionImportInput = {
             readonly maxCost?: number
             readonly maxTokens?: number
             readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+            readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
           }
           readonly delivery?: "steer" | "queue"
           readonly type: "user"
@@ -4355,6 +4366,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4382,6 +4394,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4409,6 +4422,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4436,6 +4450,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4463,6 +4478,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4490,6 +4506,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4517,6 +4534,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4544,6 +4562,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null
@@ -4571,6 +4590,7 @@ export type SessionPromptInput = {
       readonly maxCost?: number
       readonly maxTokens?: number
       readonly fallbackModel?: { readonly id: string; readonly providerID: string; readonly variant?: string }
+      readonly output?: { readonly schema: { readonly [x: string]: JsonValue }; readonly attempts?: number }
     }
     readonly delivery?: ("steer" | "queue") | null
     readonly resume?: boolean | null

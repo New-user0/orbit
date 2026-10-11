@@ -1,7 +1,8 @@
-import type { LocationRef, SessionStructuredError, SessionTurnOptions } from "@orbit/client/promise"
+import type { LocationRef, SessionMessageInfo, SessionStructuredError, SessionTurnOptions } from "@orbit/client/promise"
 import { jsonLine } from "@orbit/flow/plain"
 import { SessionMessage } from "@orbit/schema/session-message"
-import { Option, Schema } from "effect"
+import { OUTPUT_TOOL } from "@orbit/schema/session-turn"
+import { Schema } from "effect"
 import { readFile } from "node:fs/promises"
 
 // Helpers that the one-prompt driver (noninteractive.ts) and the stream driver (stream.ts) both use: ids, the form
@@ -72,17 +73,6 @@ export async function prepareFile(file: File) {
   return { text: `<file name="${file.filename}">\n${content}\n</file>` }
 }
 
-export function schemaInstruction(schema: unknown) {
-  return [
-    "Reply with only a JSON value that follows this JSON Schema, with no other text and no code fence:",
-    JSON.stringify(schema, null, 2),
-  ].join("\n")
-}
-
-export function unfence(text: string) {
-  return text.replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1")
-}
-
 // The notice that the runner publishes when it raises the output limit and answers again, with the message it replaces.
 export const decodeEscalation = Schema.decodeUnknownOption(
   Schema.Struct({ notice: Schema.Literal("output-escalation"), replaces: SessionMessage.ID }),
@@ -103,10 +93,12 @@ export function subtype(input: { failed: boolean; interrupted: boolean; limit: S
   if (type === "limit.steps") return "error_max_steps"
   if (type === "limit.tokens") return "error_max_tokens"
   if (type === "limit.cost") return "error_max_cost"
+  if (type === "limit.structured-output") return "error_max_structured_output_retries"
   return input.failed ? "error" : "success"
 }
 
-// Whether the prompt the server admitted carries what was asked for.
+// Whether the prompt the server admitted carries what was asked for. An older server drops the fields it does not know
+// (or refuses them); either way the run must not go on without the answer shape that was asked for.
 export function echoes(sent: SessionTurnOptions, admitted: SessionTurnOptions | undefined) {
   if (!admitted) return false
   const model = (value: SessionTurnOptions["fallbackModel"]) =>
@@ -115,12 +107,41 @@ export function echoes(sent: SessionTurnOptions, admitted: SessionTurnOptions | 
     sent.maxSteps === admitted.maxSteps &&
     sent.maxCost === admitted.maxCost &&
     sent.maxTokens === admitted.maxTokens &&
-    model(sent.fallbackModel) === model(admitted.fallbackModel)
+    model(sent.fallbackModel) === model(admitted.fallbackModel) &&
+    (sent.output === undefined
+      ? admitted.output === undefined
+      : admitted.output !== undefined &&
+        sent.output.attempts === admitted.output.attempts &&
+        canonical(sent.output.schema) === canonical(admitted.output.schema))
   )
 }
 
-export function parseJson(text: string): { value: unknown } | undefined {
-  return Option.match(decodeJson(text), { onNone: () => undefined, onSome: (value) => ({ value }) })
+// Keys sorted, so a schema that the server stored in another order is still the schema that was sent.
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (typeof value !== "object" || value === null) return JSON.stringify(value) ?? "null"
+  return `{${Object.entries(value)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
+    .join(",")}}`
+}
+
+/**
+ * The structured answer of a run: the input of its latest hand-in when the server accepted that hand-in. It is read from
+ * the history, where the call and its outcome are recorded, and never parsed out of the model's text. A later hand-in
+ * that was rejected leaves no answer, because a turn only ends successfully on an accepted one.
+ */
+export function structuredAnswer(messages: ReadonlyArray<SessionMessageInfo>): { value: unknown } | undefined {
+  const latest = messages
+    .flatMap((message) => (message.type === "assistant" ? message.content : []))
+    .findLast((part) => part.type === "tool" && part.name === OUTPUT_TOOL)
+  if (latest?.type !== "tool" || latest.state.status !== "completed") return undefined
+  return { value: latest.state.input }
+}
+
+// The reason a failed run gives besides "error": the turn ended without the answer that was asked for.
+export function failureReason(type: string | undefined) {
+  return type === "output.missing" ? "invalid_output" : undefined
 }
 
 let resultWritten = false
@@ -138,7 +159,10 @@ export type EnvelopeResult = {
   sessionID: string
   text: string
   failed: boolean
+  /** Whether the run asked for a structured answer. */
   schema: unknown
+  /** The accepted answer, from `structuredAnswer`. */
+  structured: { value: unknown } | undefined
   subtype: string
   truncated: boolean
   outcome: "succeeded" | "failed" | "interrupted"
@@ -154,9 +178,8 @@ export type EnvelopeResult = {
 // The result line of the envelope: what `writeResult` prints, plus how the run ended and what it used. `failed` says
 // whether the run counts as failed, which includes an answer that does not follow the schema.
 export function envelopeResultLine(run: EnvelopeResult) {
-  const parsed = run.schema === undefined ? undefined : parseJson(unfence(run.text))
-  // The run's own failure is what happened; an answer that is not JSON matters only when the run itself succeeded.
-  const invalid = !run.failed && run.schema !== undefined && parsed === undefined
+  // The run's own failure is what happened; a missing answer matters only when the run itself succeeded.
+  const invalid = !run.failed && run.schema !== undefined && run.structured === undefined
   return {
     failed: run.failed || invalid,
     line: jsonLine({
@@ -167,8 +190,12 @@ export function envelopeResultLine(run: EnvelopeResult) {
       outcome: run.outcome === "succeeded" && invalid ? "failed" : run.outcome,
       ...(run.reason === undefined && !invalid ? {} : { reason: run.reason ?? "invalid_output" }),
       result: run.text,
-      ...(parsed === undefined ? {} : { structured_output: parsed.value }),
-      ...(run.error !== undefined ? { error: run.error } : invalid ? { error: "The answer was not valid JSON." } : {}),
+      ...(run.structured === undefined || run.failed ? {} : { structured_output: run.structured.value }),
+      ...(run.error !== undefined
+        ? { error: run.error }
+        : invalid
+          ? { error: "The run ended without an accepted structured answer." }
+          : {}),
       steps: run.steps,
       duration_ms: run.duration,
       cost: run.cost,

@@ -19783,10 +19783,30 @@
           },
           "fallbackModel": {
             "$ref": "#/components/schemas/Model.Ref"
+          },
+          "output": {
+            "$ref": "#/components/schemas/Session.Turn.Output"
           }
         },
         "additionalProperties": false,
         "description": "Limits and a fallback model that a prompt asks for on the turn it belongs to. They are recorded with the prompt, and a field left out asks for nothing."
+      },
+      "Session.Turn.Output": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "object",
+            "description": "A JSON Schema whose root declares type object. The server checks it when the prompt is admitted and refuses a schema it cannot enforce."
+          },
+          "attempts": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 20
+          }
+        },
+        "required": ["schema"],
+        "additionalProperties": false,
+        "description": "Asks that the turn end with an answer shaped by a JSON Schema, handed in through a tool. `attempts` is how many responses may hand in a non-matching answer before the turn fails; it defaults to 5 and is at most 20."
       },
       "SessionActive": {
         "type": "object",
