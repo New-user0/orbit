@@ -164,7 +164,7 @@ describe("ShellTool.concurrent with a workdir that names a share or a device", (
   test.each(spellings)("%p is answered false and no disk call names it", async (cwd) => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-share-"))
     try {
-      for (const name of ["ls", "ls.exe"]) fs.writeFileSync(path.join(bin, name), "")
+      for (const name of ["ls", "ls.exe"]) fs.writeFileSync(path.join(bin, name), "", { mode: 0o755 })
       const watched: string[] = []
       const record = (name: "existsSync" | "realpathSync" | "statSync" | "lstatSync") => {
         const original = fs[name] as (...args: unknown[]) => unknown
@@ -190,4 +190,92 @@ describe("ShellTool.concurrent with a workdir that names a share or a device", (
       fs.rmSync(bin, { recursive: true, force: true })
     }
   })
+})
+
+// The same question when the share is not typed but named by a link of the repository: the workdir is the link, or a
+// path below it. Only `readlink` may run on the way; a call that opens the link or anything below it would connect to the
+// host (class 4 and 6). The links need Developer Mode on Windows and fail visibly without it. Other hosts have no such
+// links to read, so the rows are Windows only. Trust does not enter: the check takes no trust, so one run covers both.
+describe("ShellTool.concurrent with a workdir that reaches a share through a link", () => {
+  const targets = [
+    "\\\\example.invalid\\share\\",
+    "//example.invalid/share",
+    "\\\\?\\UNC\\example.invalid\\share",
+    "\\\\.\\UNC\\example.invalid\\share",
+    "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\",
+    "\\\\.\\pipe\\probe",
+    "\\\\localhost\\C$\\Windows",
+    "\\\\127.0.0.1\\C$\\Windows",
+    "\\\\example.invalid@8765\\x\\",
+  ]
+  const places = ["the link itself", "a path below the link"] as const
+
+  const watch = (watched: string[]) => {
+    const wrap = (name: "existsSync" | "statSync" | "lstatSync" | "realpathSync") => {
+      const original = fs[name] as (...args: unknown[]) => unknown
+      return spyOn(fs, name).mockImplementation(((...args: unknown[]) => {
+        watched.push(String(args[0]))
+        return original(...args)
+      }) as never)
+    }
+    // A spy on `realpathSync` hides its `native` member, which the code under test calls, so it is put back.
+    const native = fs.realpathSync.native
+    const spies = [wrap("existsSync"), wrap("statSync"), wrap("lstatSync"), wrap("realpathSync")]
+    Object.assign(fs.realpathSync, {
+      native: (...args: [string]) => {
+        watched.push(String(args[0]))
+        return native(...args)
+      },
+    })
+    return spies
+  }
+
+  const run = async (target: string | undefined, place: (typeof places)[number]) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orbit-share-link-")))
+    try {
+      const bin = path.join(root, "bin")
+      fs.mkdirSync(bin)
+      for (const name of ["ls", "ls.exe"]) fs.writeFileSync(path.join(bin, name), "", { mode: 0o755 })
+      const link = path.join(root, "linked")
+      const destination = path.join(root, "real")
+      fs.mkdirSync(path.join(destination, "sub"), { recursive: true })
+      // No target: the control link, to a folder on this disk.
+      fs.symlinkSync(target ?? destination, link, "dir")
+      const cwd = place === "the link itself" ? link : path.join(link, "sub")
+      const watched: string[] = []
+      const spies = watch(watched)
+      try {
+        const ctx = { ...windows, cwd, env: { Path: bin }, local: undefined } satisfies Ctx
+        const scheduled = await answer("ls", ctx)
+        const inspected = await Effect.runPromise(
+          ShellAnalysis.inspect("ls", ctx).pipe(Effect.provideService(PowerShellParse.Service, parser)),
+        )
+        return { scheduled, readOnly: inspected.readOnly, opened: watched.filter((file) => file.startsWith(link)) }
+      } finally {
+        spies.forEach((spy) => spy.mockRestore())
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  const rows = targets.flatMap((target) => places.map((place) => [target, place] as const))
+  ;(process.platform === "win32" ? test.each(rows) : test.skip.each(rows))(
+    "a link to %p, workdir %p: false, and nothing opens the link",
+    async (target, place) => {
+      const result = await run(target, place)
+      expect(result.scheduled).toBe(false)
+      expect(result.readOnly).toBe(false)
+      expect(result.opened).toEqual([])
+    },
+  )
+
+  ;(process.platform === "win32" ? test.each(places) : test.skip.each(places))(
+    "a link to a local folder, workdir %p, still schedules a read-only command",
+    async (place) => {
+      const result = await run(undefined, place)
+      expect(result.scheduled).toBe(true)
+      expect(result.opened).not.toEqual([])
+    },
+  )
 })
