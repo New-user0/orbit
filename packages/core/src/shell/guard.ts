@@ -13,6 +13,7 @@ import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command
 import { ShellParse } from "./parse.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
+import { ShellReadOnly } from "./readonly.js"
 import { ShellSafety } from "./safety.js"
 import { ShellWrappers } from "./wrappers.js"
 
@@ -112,6 +113,19 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   const resolveCandidate = Effect.fnUntraced(function* (candidate: string, spec: Spec) {
     const opened = access.resolve({ path: candidate, kind: spec.kind })
     const lexical = spec.change ? yield* opened : Option.getOrUndefined(yield* opened.pipe(Effect.option))
+    // A share is never asked the disk: following a link or reading its trust would connect to the host before anyone
+    // has been asked. A spelling FileAccess refused is not looked up either, and is reported as unresolved.
+    const share =
+      input.ctx.platform === "win32" && (/^[\\/]{2}/.test(candidate) || ShellReadOnly.windowsShare(candidate))
+    if (share || lexical === undefined)
+      return {
+        real: candidate,
+        internal: false,
+        external: undefined,
+        unresolved: true,
+        why: share ? ("share" as const) : ("refused" as const),
+        targets: lexical ? [lexical.resource] : [],
+      }
     const leads = spec.removal
       ? path.join(yield* trust.leads(path.dirname(candidate)), path.basename(candidate))
       : yield* trust.leads(candidate)
@@ -128,6 +142,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
       internal,
       external: internal ? undefined : reached,
       unresolved: !internal && reached === undefined,
+      why: "refused" as const,
       targets: [lexical, actual].flatMap((target) => (target ? [target.resource] : [])),
     }
   })
@@ -155,7 +170,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
       level: spec.level,
       role: spec.role,
       status: refused ? "unresolved" : external.length > 0 ? "external" : "internal",
-      ...(refused ? { why: "refused" as const } : {}),
+      ...(refused ? { why: found.find((item) => item.unresolved)?.why ?? ("refused" as const) } : {}),
       real: found.map((item) => item.real),
       resources: actions.flatMap((action) =>
         [...new Set(found.flatMap((item) => item.targets))].map((resource) => ({ action, resource })),

@@ -5,7 +5,8 @@ import { FSUtil } from "@orbit/util/fs-util"
 import fs from "node:fs"
 import type path from "node:path"
 import type { Node } from "web-tree-sitter"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
+import { LinkShare } from "../config/link-share.js"
 import { ShellLaunch } from "./launch.js"
 import { ShellParse } from "./parse.js"
 import { ShellPaths } from "./paths.js"
@@ -1389,13 +1390,22 @@ export function sharePlace(ctx: Pick<Context, "platform" | "cwd">) {
   return ctx.platform === "win32" && (/^[\\/]{2}/.test(ctx.cwd) || ShellReadOnly.windowsShare(ctx.cwd))
 }
 
+/**
+ * True when the working folder is a share or device spelling, or a link on the way to it names one. The links are read
+ * one part at a time (`readlink` only), so nothing is opened to find out.
+ */
+export function opensShare(ctx: Pick<Context, "platform" | "cwd">) {
+  return sharePlace(ctx) || LinkShare.ofSync(ctx.cwd) !== undefined
+}
+
 // Whether the program that `head` names on the shell's PATH sits inside the working folder. Both are made real first, as
-// FSUtil.contains requires, so a link into the folder counts. A working folder that names a share or a device is never
-// opened: the head then counts as local, so the command is not read-only (class 4, task permissions-23).
+// FSUtil.contains requires, so a link into the folder counts. A working folder that names a share or a device, or
+// reaches one through a link, is never opened: the head then counts as local, so the command is not read-only (class 4
+// and 6, task permissions-23).
 function locate(head: string, ctx: Context) {
   const found = which(head, ctx.env as NodeJS.ProcessEnv)
   if (!found) return false
-  if (sharePlace(ctx)) return true
+  if (opensShare(ctx)) return true
   if (!fs.existsSync(ctx.cwd)) return false
   return FSUtil.contains(fs.realpathSync.native(ctx.cwd), fs.realpathSync.native(found))
 }

@@ -1,6 +1,6 @@
 import os from "node:os"
 import path from "node:path"
-import { which } from "@orbit/core/util/which"
+import { which } from "@orbit/util/which"
 import { AppProcess } from "@orbit/util/process"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect, Logger } from "effect"

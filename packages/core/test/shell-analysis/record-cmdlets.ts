@@ -3,7 +3,7 @@
 // positions in the parameter sets. The tests compare the table in src/shell/paths.ts with the stored answers. The script
 // reads command metadata only; it runs nothing from a project.
 import path from "node:path"
-import { which } from "../../src/util/which"
+import { which } from "@orbit/util/which"
 
 const names =
   "Set-Content Add-Content Clear-Content Remove-Item Out-File Tee-Object Export-Csv Export-Clixml New-Item Copy-Item Move-Item Rename-Item Set-Item Clear-Item Set-ItemProperty New-ItemProperty Remove-ItemProperty Export-Alias Expand-Archive Compress-Archive Invoke-WebRequest Invoke-RestMethod Set-Location Push-Location Pop-Location New-PSDrive"

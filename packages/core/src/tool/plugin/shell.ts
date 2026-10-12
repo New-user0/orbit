@@ -169,7 +169,7 @@ const backgroundResult = (shellID: string, file: string, deadline?: number) => (
 export const concurrent = Effect.fn("ShellTool.concurrent")(function* (command: string, ctx: ShellAnalysis.Context) {
   if (ShellAnalysis.dialect(ctx.shell, ctx) !== "bash") return false
   // The working folder is the model's own text and nobody has been asked about it yet: a share is not opened to judge.
-  if (ShellAnalysis.sharePlace(ctx)) return false
+  if (ShellAnalysis.opensShare(ctx)) return false
   return (yield* ShellAnalysis.inspect(command, ctx)).readOnly
 })
 

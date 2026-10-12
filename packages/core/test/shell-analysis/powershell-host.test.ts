@@ -5,7 +5,7 @@ import { Effect, Layer } from "effect"
 import { ShellAnalysis } from "../../src/shell/analysis"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { ShellSafety } from "../../src/shell/safety"
-import { which } from "../../src/util/which"
+import { which } from "@orbit/util/which"
 import { powershell, pwsh, windows } from "./helper"
 
 // A small subset against a real PowerShell, so the recorded answers cannot drift from what the parser says now.
