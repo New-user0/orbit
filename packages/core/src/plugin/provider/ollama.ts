@@ -187,6 +187,9 @@ export function make(
         yield* ctx.provider.reload()
       })
 
+      // The first run is awaited, so a session that starts right after the location resolves its default model from
+      // the discovered catalog instead of finding it empty. Each request has its own 1 second limit.
+      yield* refresh().pipe(Effect.ignore)
       // Keep the last successful inventory through transient outages instead of flickering model availability.
       yield* refresh().pipe(Effect.ignore, Effect.repeat(Schedule.spaced(interval)), Effect.forkScoped)
       const reload = Effect.fn("OllamaPlugin.reload")(function* () {
