@@ -16,6 +16,21 @@ afterAll(async () => {
 test.each([
   ["orb run", (model: string) => ["run", "--standalone", "--yolo", "--format", "json", "--model", model, "go"]],
   ["orb -p", (model: string) => ["-p", "--standalone", "--yolo", "--model", model, "go"]],
+  // The stdin of these is ignored, so the input ends at once, as the stream driver's settled() sees it.
+  [
+    "orb run (stream-json input)",
+    (model: string) => [
+      ...["run", "--standalone", "--yolo", "--input-format", "stream-json", "--format", "stream-json"],
+      ...["--model", model, "go"],
+    ],
+  ],
+  [
+    "orb -p (stream-json input)",
+    (model: string) => [
+      ...["-p", "--standalone", "--yolo", "--input-format", "stream-json", "--output-format", "stream-json"],
+      ...["--model", model, "go"],
+    ],
+  ],
 ])(
   "%s waits for a command moved to the background and for the step its notice starts",
   async (_name, args) => {
