@@ -716,7 +716,7 @@ function powershell(analysis: Analysis, whole: string, findings: ShellSafety.Fin
   const aliases: Record<string, string[]> = {}
 
   summary.commands
-    .filter((command) => !MOVES.has(command.name))
+    .filter((command) => !relocation(command))
     .forEach((command) => {
       const resource = command.text.trim()
       resources.push(resource)
@@ -775,8 +775,27 @@ function inertPowerShell(summary: PowerShellParse.Summary) {
           statement.text.trim(),
         ) ||
           (statement.kind === "PipelineAst" &&
-            statement.elements.every((element) => element.kind === "command" && MOVES.has(element.command.name)))),
+            statement.elements.every((element) => element.kind === "command" && relocation(element.command)))),
     )
+}
+
+const PLAIN_ARGUMENTS = new Set(["StringConstantExpressionAst", "ConstantExpressionAst", "VariableExpressionAst"])
+
+// A location cmdlet whose arguments are constants, variables or parameters. A path spelling such as scripts\Set-Location is
+// an application (a script or program of the repository), and a script block, parenthesis or subexpression argument runs
+// code, so neither may drop out of the request.
+function relocation(command: PowerShellParse.Command) {
+  return (
+    command.class === "cmdlet" &&
+    !command.dynamic &&
+    MOVES.has(command.name) &&
+    command.arguments.every(
+      (argument) =>
+        PLAIN_ARGUMENTS.has(argument.kind) ||
+        (argument.kind === "CommandParameterAst" &&
+          (argument.bound === undefined || PLAIN_ARGUMENTS.has(argument.bound.kind))),
+    )
+  )
 }
 
 function strip(name: string) {

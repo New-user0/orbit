@@ -4166,3 +4166,51 @@ describe("ShellTool guard (PowerShell)", () => {
       options,
     )
 })
+
+// A path spelling of a location cmdlet is a program of the repository, not the cmdlet. Under the default ask every such
+// call is asked about and, with each question rejected, the decoy never runs. The control is an ordinary command.
+describe("ShellTool: a location cmdlet spelled as a path", () => {
+  const pwsh = Bun.which("pwsh") ?? Bun.which("powershell")
+  const test = pwsh && isWindows ? permissionIt.live : permissionIt.live.skip
+  for (const row of [
+    { command: String.raw`scripts\Set-Location .`, decoy: "Set-Location.bat" },
+    { command: String.raw`scripts\Pop-Location`, decoy: "Pop-Location.cmd" },
+    { command: String.raw`& 'scripts\Set-Location' .`, decoy: "Set-Location.bat" },
+    { command: String.raw`scripts\Push-Location .`, decoy: "Push-Location.ps1" },
+  ])
+    test(
+      `asks before running ${row.command}`,
+      () =>
+        withScanner(
+          false,
+          (registry, fixture) =>
+            Effect.gen(function* () {
+              const marker = path.join(fixture.active, "marker.txt")
+              yield* Effect.promise(() => fs.mkdir(path.join(fixture.active, "scripts")))
+              const body = row.decoy.endsWith(".ps1")
+                ? "Set-Content -Path (Join-Path $PSScriptRoot '..\\marker.txt') -Value ran\r\n"
+                : '@echo off\r\necho ran> "%~dp0..\\marker.txt"\r\n'
+              yield* Effect.promise(() => Bun.write(path.join(fixture.active, "scripts", row.decoy), body))
+              const permission = yield* Permission.Service
+              const bus = yield* Bus.Service
+              const asked: Permission.Request[] = []
+              yield* bus.subscribe(Permission.Event.Asked).pipe(
+                Stream.runForEach((event) =>
+                  Effect.gen(function* () {
+                    asked.push(event.data)
+                    yield* permission.reply({ requestID: event.data.id, reply: "reject" })
+                  }),
+                ),
+                Effect.forkScoped({ startImmediately: true }),
+              )
+              yield* executeTool(registry, call({ command: "Write-Output hi" }, "call-control")).pipe(Effect.exit)
+              expect(asked).toHaveLength(1)
+              yield* executeTool(registry, call({ command: row.command }, "call-decoy")).pipe(Effect.exit)
+              expect(asked).toHaveLength(2)
+              expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+            }).pipe(Effect.scoped),
+          pwsh ?? "powershell",
+        ),
+      { timeout: 120_000 },
+    )
+})

@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
-import { Duration, Effect, Layer } from "effect"
+import { Duration, Effect, Exit, Layer } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { FileAccess } from "@orbit/core/file-access"
 import { Location } from "@orbit/core/location"
@@ -588,6 +588,58 @@ describe("ShellGuard.authorize", () => {
         Effect.exit,
       )
     })
+
+  // A path or module spelling of a location cmdlet names a program or script of the folder, and code in a location
+  // cmdlet's arguments runs, so neither drops out of the shell request (a person's or an organization's `Bash * deny` sees
+  // it). The plain cmdlet and its aliases are the control: they run no program and make no request.
+  const anyBash = (input: Permission.AssertInput) => input.action === "Bash"
+  for (const command of [
+    String.raw`scripts\Set-Location .`,
+    String.raw`scripts\Push-Location .`,
+    String.raw`scripts\Pop-Location`,
+    String.raw`& 'scripts\Set-Location' .`,
+    String.raw`. 'scripts\Push-Location'`,
+    String.raw`Some.Module\Set-Location .`,
+  ])
+    real(`a location spelling that runs code is denied by a Bash deny: ${command}`, () =>
+      Effect.gen(function* () {
+        const exit = yield* run(command, anyBash, { shell: host!, real: true })
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(asked).toEqual([])
+      }),
+    )
+  // Code in a location cmdlet's own arguments: the other command of the input (`Get-Item .`) is harmless and could be
+  // covered by a saved grant, so a deny that names only the location command must still meet it.
+  const namesLocation = (input: Permission.AssertInput) =>
+    input.action === "Bash" && input.resources.some((resource) => /location/i.test(resource))
+  for (const command of [
+    String.raw`Get-Item . | Set-Location -Path { [System.IO.File]::WriteAllText('m.txt', 'x'); '.' }`,
+    String.raw`Get-Item .; Set-Location ([System.IO.File]::WriteAllText('m.txt', 'y'))`,
+    String.raw`Get-Item .; Push-Location (& .\evil.bat)`,
+    "Get-Item .; Set-Location $(Get-Date)",
+    "Get-Item .; Set-Location -Path:(Get-Date)",
+  ])
+    real(`code in a location cmdlet's arguments stays in the request: ${command}`, () =>
+      Effect.gen(function* () {
+        const exit = yield* run(command, namesLocation, { shell: host!, real: true })
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(asked).toEqual([])
+      }),
+    )
+  real("the harmless command of that input alone is not denied by that rule", () =>
+    Effect.gen(function* () {
+      const exit = yield* run("Get-Item .", namesLocation, { shell: host!, real: true })
+      expect(Exit.isFailure(exit)).toBe(false)
+    }),
+  )
+  for (const command of ["Set-Location .", "cd ..", "Push-Location sub", "Pop-Location", "Set-Location -Path:sub", "sl sub"])
+    real(`a plain location change makes no shell request: ${command}`, () =>
+      Effect.gen(function* () {
+        const exit = yield* run(command, anyBash, { shell: host!, real: true })
+        expect(Exit.isFailure(exit)).toBe(false)
+        expect(asked.filter(anyBash)).toEqual([])
+      }),
+    )
 
   it.live("checks every request for a deny before the first question", () =>
     Effect.gen(function* () {

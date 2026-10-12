@@ -1679,6 +1679,21 @@ mean, such as `Bash printf *`. Until the follow-up that makes these asks unlifta
 (the default `* *` allow included) still lifts a statement with no command and input Orbit cannot read, because it matches
 every resource of the request.
 
+### A PowerShell command spelled as a path to a location cmdlet is asked about
+
+`scripts\Set-Location .`, `& 'scripts\Push-Location'` and `Some.Module\Pop-Location` name a program or script of the
+folder, not the cmdlet, yet the shell guard used to treat them as the location cmdlet and made no request, so a
+`Bash * deny` rule (yours, a managed one or the Plan agent's ask) never saw them. The same happened to a location
+cmdlet whose argument runs code, such as `Set-Location ([IO.File]::WriteAllText(...))` or `Set-Location -Path { ... }`
+next to another command. Now only a plain `Set-Location`, `Push-Location` or `Pop-Location` (or an alias) with
+constant, variable or parameter arguments is left out of the request; every other spelling is asked about as written
+and is covered by deny rules, and a saved grant for another command does not lift it.
+
+**Affects:** people on Windows PowerShell or PowerShell 7 whose rules deny or ask for `Bash`, and repositories that ship
+scripts named like a location cmdlet.
+
+**What to do:** Nothing. Ordinary `cd`, `Set-Location` and `Push-Location` calls still run without a question.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
