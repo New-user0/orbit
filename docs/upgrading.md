@@ -1694,6 +1694,18 @@ scripts named like a location cmdlet.
 
 **What to do:** Nothing. Ordinary `cd`, `Set-Location` and `Push-Location` calls still run without a question.
 
+### An `external_directory` deny or ask also meets the folder a link or junction leads to
+
+A file tool that reached a folder outside the project through a link, a Windows system junction (`Local Settings`,
+`Documents and Settings`) or `/proc/self/root` was judged by the spelled folder only, so a deny or ask you or your
+organization wrote for the real folder (for example `external_directory ~/.ssh/*`) did not apply. Read, Grep, Glob, the
+language-server tool, Edit, Write, Patch and NotebookEdit now also check the folder behind the spelling, as they already
+did for `Read` and `Edit` rules. An allow written for the real folder still does not lift a spelled path.
+
+**Affects:** people with `external_directory` deny or ask rules, and managed settings that carry them.
+
+**What to do:** Nothing. A path that is blocked by its plain spelling is now blocked by every spelling.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

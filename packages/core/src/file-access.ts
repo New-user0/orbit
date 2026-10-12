@@ -328,10 +328,34 @@ const layer = Layer.effect(
       const escaped = Array.dedupe(
         targets.flatMap((target) => (target.externalDirectory?.escaped ? [target.externalDirectory.resource] : [])),
       )
+      // A link outside the project, or a system junction, can lead into a folder that a deny or an ask is written for. The
+      // spelled folder is what the tool acts on, but the rules also meet the real one, as they do for Read and Edit.
+      const led = targets.flatMap((target) =>
+        target.externalDirectory === undefined || target.leads === undefined
+          ? []
+          : [
+              [
+                target.externalDirectory.resource,
+                slash(
+                  path.join(
+                    target.externalDirectory.directory === target.place ? target.leads : path.dirname(target.leads),
+                    "*",
+                  ),
+                ),
+              ] as const,
+            ],
+      )
+      const leads = Object.fromEntries(
+        Array.dedupe(led.map((item) => item[0])).map((resource) => [
+          resource,
+          Array.dedupe(led.filter((item) => item[0] === resource).map((item) => item[1])),
+        ]),
+      )
       return {
         action: "external_directory",
         resources: external.map((item) => item.resource),
         save: external.map((item) => item.save),
+        ...(led.length === 0 ? {} : { leads }),
         ...(escaped.length === 0 ? {} : { escaped }),
         ...(metadata === undefined ? {} : { metadata }),
         ...base,
