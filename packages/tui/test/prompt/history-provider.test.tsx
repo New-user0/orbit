@@ -67,7 +67,7 @@ test("files a sent prompt under its directory and time, and keeps only history_l
     expect(setup.history.search("t", "/work/a").map((item) => item.text)).toEqual(["three", "two"])
 
     // The file is rewritten when the limit trims it, and holds the same two entries.
-    const lines = (await savedHistory(tmp.path, (text) => text.endsWith("\n") && text.split("\n").length === 3))
+    const lines = (await savedHistory(tmp.path, (text) => texts(text).join() === "two,three"))
       .trim()
       .split("\n")
     expect(lines.map((item) => JSON.parse(item).text)).toEqual(["two", "three"])
@@ -122,8 +122,21 @@ async function renderHistory(root: string, persisted?: string, historyLimit?: nu
   return { app, history: history! }
 }
 
-// The provider saves in the background, and an append and a rewrite can overlap, so the file is read until it holds the
-// finished content instead of after a fixed pause (which a loaded machine outlasts).
+function texts(content: string) {
+  return content
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line).text as string]
+      } catch {
+        return []
+      }
+    })
+}
+
+// The provider saves in the background, one write after another, so the file is read until it holds the finished content
+// instead of after a fixed pause (which a loaded machine outlasts).
 async function savedHistory(root: string, finished: (text: string) => boolean) {
   const file = Bun.file(path.join(root, "state", "prompt-history.jsonl"))
   const deadline = Date.now() + 10_000

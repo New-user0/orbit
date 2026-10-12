@@ -68,7 +68,8 @@ const ollama = Bun.serve({
     const want = gather
     const giveUp = Date.now() + 20_000
     while (want > 0 && inflight < want && Date.now() < giveUp) await Bun.sleep(10)
-    if (inflight >= want) gather = 0
+    // Reset on either outcome, so a barrier that never fills does not slow every later write request by 20 s.
+    gather = 0
     await Bun.sleep(400)
     inflight--
     return stream([

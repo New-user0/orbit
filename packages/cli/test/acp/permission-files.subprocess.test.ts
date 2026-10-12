@@ -1,7 +1,7 @@
 // Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule, an approval shows the place the
 // call acts on: a model-added key changes nothing it shows, and a `~` path is the person's home folder, not a folder
 // named `~` in the project.
-import { expect, test as sequential } from "bun:test"
+import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -11,13 +11,12 @@ import { isolatedEnv } from "../fixture/environment"
 // Every row has its own folder, its own scripted model on port 0 and its own `orb acp` child, so the rows run at the
 // same time, as many as `--max-concurrency` allows (packages/cli/package.json). The file is one unit to `--parallel`,
 // so this is what makes the matrix fast. To run the rows one by one, pass `--max-concurrency=1`.
-const test = sequential.concurrent
 
 const patch = (name: string) =>
   `Index: ${name}\n===\n--- ${name}\n+++ ${name}\n@@ -1,1 +1,1 @@\n-# Title\n+# Title (typo fixed)\n`
 const url = "https://exfil.example/collect?d=1"
 
-test(
+test.concurrent(
   "an untrusted WebFetch with a model-added files array is titled by its URL and has no diffs",
   () =>
     approval(
@@ -42,7 +41,7 @@ test(
 )
 
 // Bash declares `workdir`, not `cwd`: the command runs in the workspace whatever folder a `cwd` key names.
-test(
+test.concurrent(
   "an untrusted Bash call with a model-added cwd is shown in the folder it runs in",
   () =>
     approval(
@@ -104,7 +103,7 @@ const home = [
 ]
 for (const row of home)
   for (const trusted of [false, true])
-    test(
+    test.concurrent(
       `${trusted ? "a trusted" : "an untrusted"} ${row.tool} call on ~/config is shown in the person's config folder`,
       () =>
         approval(
@@ -307,7 +306,7 @@ const linkCheck =
   }
 for (const row of linkRows)
   for (const mode of linkModes)
-    test(
+    test.concurrent(
       `${mode.trusted ? "a trusted" : "an untrusted"} ${row.name} through a ${mode.link} into the global config folder, answered ${mode.reply}`,
       () =>
         approval(
@@ -360,7 +359,7 @@ const defaultRows = [
 ]
 for (const row of defaultRows)
   for (const trusted of [false, true])
-    test(
+    test.concurrent(
       `${trusted ? "a trusted" : "an untrusted"} ${row.name} through a junction under the default rules names the place in every update`,
       () =>
         approval(
@@ -518,7 +517,7 @@ const spellingRows = [
 ]
 if (process.platform === "win32")
   for (const row of spellingRows)
-    test(
+    test.concurrent(
       `an untrusted ${row.name}`,
       () =>
         approval(
@@ -541,7 +540,7 @@ if (Bun.which("rg"))
     { path: ".env", sent: false },
     { path: "README.md", sent: true },
   ])
-    test(
+    test.concurrent(
       `an untrusted Grep of ${row.path} under a Read deny of *.env ${row.sent ? "searches it (control)" : "is denied"}`,
       () =>
         approval(
@@ -564,7 +563,7 @@ if (Bun.which("rg"))
 // seen and the command ran in the person's config folder with no folder question.
 if (process.platform === "win32")
   for (const workdir of ["cfg.", "cfg "])
-    test(
+    test.concurrent(
       `an untrusted Bash workdir ${JSON.stringify(workdir)} through a junction into the global config folder is asked about`,
       () =>
         approval(
@@ -668,7 +667,7 @@ const spellingLinks = async (root: string) => {
 const denyMarkerSent = (run: Run) => run.bodies.some((body) => body.includes("DENY-MARKER"))
 for (const spelling of realSpellings) {
   const through = (root: string) => path.join(spelling.spelled(root), "cfg", "orbit.json")
-  test(
+  test.concurrent(
     `an untrusted Read through ${spelling.name} and the repository's link into the config folder is asked about as the plain spelling is`,
     () =>
       approval(
@@ -682,7 +681,7 @@ for (const spelling of realSpellings) {
       ),
     90_000,
   )
-  test(
+  test.concurrent(
     `an untrusted Read through ${spelling.name} and the repository's link, after the folder is allowed, names the folder it reads`,
     () =>
       approval(
@@ -694,7 +693,7 @@ for (const spelling of realSpellings) {
       ),
     90_000,
   )
-  test(
+  test.concurrent(
     `an untrusted Read of secret/key.txt through ${spelling.name} under the person's deny of secret/* is denied`,
     () =>
       approval(
@@ -716,7 +715,7 @@ for (const spelling of realSpellings) {
       ),
     90_000,
   )
-  test(
+  test.concurrent(
     `an untrusted Read of secret/key.txt through ${spelling.name} under the person's ask of secret/* asks about secret/key.txt`,
     () =>
       approval(
@@ -737,7 +736,7 @@ for (const spelling of realSpellings) {
       ),
     90_000,
   )
-  test(
+  test.concurrent(
     `a trusted Read through ${spelling.name} and the repository's link is the project's own, with no folder question (control)`,
     () =>
       approval(
@@ -760,7 +759,7 @@ for (const spelling of realSpellings) {
 }
 for (const spelling of refusedSpellings)
   for (const trusted of [false, true])
-    test(
+    test.concurrent(
       `${trusted ? "a trusted" : "an untrusted"} Read through ${spelling.name} is refused before any question`,
       () =>
         approval(
@@ -803,7 +802,7 @@ const spellingModes = [
 for (const row of linkRows)
   for (const spelling of realSpellings) {
     for (const mode of spellingModes)
-      test(
+      test.concurrent(
         `${mode.trusted ? "a trusted" : "an untrusted"} ${row.name} through ${spelling.name} and the repository's link into the config folder, answered ${mode.reply}`,
         () =>
           approval(
@@ -820,7 +819,7 @@ for (const row of linkRows)
           ),
         90_000,
       )
-    test(
+    test.concurrent(
       `an untrusted ${row.name} through ${spelling.name} and the repository's link under the person's deny of the config folder is denied with no question`,
       () =>
         approval(
@@ -853,7 +852,7 @@ const refusedRows = linkRows.filter((row) => ["Bash workdir", "Grep path", "Writ
 for (const row of refusedRows)
   for (const spelling of refusedSpellings)
     for (const trusted of [false, true])
-      test(
+      test.concurrent(
         `${trusted ? "a trusted" : "an untrusted"} ${row.name} through ${spelling.name} is refused before any question`,
         () =>
           approval(
@@ -919,7 +918,7 @@ const refusedAsShare = async (run: Run, row: (typeof linkRows)[number]) => {
 }
 for (const row of linkRows)
   for (const share of shareTargets) {
-    test(
+    test.concurrent(
       `an untrusted ${row.name} through a repository link to ${share.name} is refused as a share, with no question, answered once`,
       () =>
         approval(
@@ -936,7 +935,7 @@ for (const row of linkRows)
       90_000,
     )
     if (share !== shareTargets[0]) continue
-    test(
+    test.concurrent(
       `an untrusted ${row.name} through a repository link to ${share.name} under the person's deny of the config folder is refused as a share, not asked about`,
       () =>
         approval(
@@ -961,7 +960,7 @@ for (const row of linkRows)
       90_000,
     )
     // The owner trusted the folder: its links are its own, so no spelling refuses the call and no folder is asked about.
-    test(
+    test.concurrent(
       `a trusted ${row.name} through a repository link to ${share.name} is not refused and asks no folder question (control)`,
       () =>
         approval(
@@ -1003,7 +1002,7 @@ const notebook = JSON.stringify({
   nbformat_minor: 5,
 })
 for (const trusted of [false, true])
-  test(
+  test.concurrent(
     `${trusted ? "a trusted" : "an untrusted"} NotebookEdit is shown at the notebook its request resolved, whatever keys the model adds`,
     () =>
       approval(
