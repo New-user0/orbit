@@ -2666,3 +2666,11 @@ The check above also applies to a path outside the project that goes through a l
 **Affects:** projects with links to folders, and `\\?\` or `\\.\` paths on Windows.
 
 **What to do:** Nothing for most setups. To allow a link that leads out of the project under a broad ask, write the allow for the folder it leads to.
+
+### The shell guard asks about more places for PowerShell, and reports a refused place as unresolved
+
+PowerShell 7 goes to the home folder when a location change names nothing, so a bare `Set-Location` or `cd`, `Set-Location $null`, and a variable that is unset or empty (`${env:NAME}`) are now asked about as the home folder on every host; Windows PowerShell 5.1 fails there, and the home folder is the stricter reading. On Linux and macOS a backslash in a PowerShell word is read as a separator, as `pwsh` reads it there, so `Set-Location ..\outside` is asked about as `../outside`. A place that the file layer refuses (a link of the project that leads to a share, or a share spelling) is now reported as unresolved even when it lies in the sandbox's writable roots, where it used to count as inside them, and so is any `\`-led place when the project itself is on a network share. The effect is one more question for these unusual spellings, never fewer.
+
+**Affects:** `pwsh` users who run `cd` or `Set-Location` with no folder or with an unset variable, `pwsh` on Linux or macOS with backslash paths, and projects that hold links to shares or sit on a network share.
+
+**What to do:** Nothing; answer the extra question, or write the folder out.
