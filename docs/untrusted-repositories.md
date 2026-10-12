@@ -223,9 +223,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
-  Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
+  Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
-  `test/util/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+  `test/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
 - The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
   command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
   `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
@@ -1260,7 +1260,7 @@ next hole was js-yaml's lazy `var _require = require; _require('esprima')`, whic
 `node_modules/esprima/index.js`. A dynamic probe found it, and a scan for names would not have, because the require is
 aliased. The same probe closed Babel's browserslist lookup and fff's native-library lookup (on Windows the embedded path
 says `~BUN`, not `$bunfs`). Then the review of that fix found one more kind of name: `which` in
-`packages/core/src/util/which.ts` wrapped the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
+`packages/util/src/which.ts` wrapped the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
 gathered version control info (`orb session list --standalone` ran it seven times) and a committed `rg.exe` ran during a
 file search, before any trust. That was the second blocker, and its fix made the lookup read `PATH` only. Closing it
 turned up two more members of the class, both in `CrossSpawnSpawner`. Cross-spawn handed a bare `hg` to `cmd.exe`, so a
@@ -1300,7 +1300,7 @@ kind in turn.
 - `Provider.loadPackage` (`packages/core/src/provider.ts`) fails with `LoadError` inside a compiled binary
   (`Bun.isStandaloneExecutable`) for a package that is not built in. Otherwise it installs with `npm.add` and resolves
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
-- Find an executable with `which` in `packages/core/src/util/which.ts` and with nothing else. It feeds `gitExecutable`,
+- Find an executable with `which` in `packages/util/src/which.ts` and with nothing else. It feeds `gitExecutable`,
   `RipgrepBinary`, `ShellSelect`, the built-in formatters and language servers, the sandbox tool and the Azure CLI
   check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder, unless `PATH` itself names it,
   for example with a relative entry such as `.`, which resolves against it (Known gaps). It looks at each `PATH` entry
@@ -1378,7 +1378,7 @@ kind in turn.
   its pager starts `cmd /c more`, a file search starts ripgrep, `Project.resolve` on a folder with `.hg` starts `hg`, an
   MCP server starts its command, `orb flow clean` starts git outside the spawner, the npm launcher starts `powershell`,
   and stopping a running child runs `taskkill`. Assert no marker, with the real program still found on `PATH`, and a
-  `.cmd` that `PATH` holds still starting by name (`packages/core/test/util/which.test.ts`,
+  `.cmd` that `PATH` holds still starting by name (`packages/util/test/which.test.ts`,
   `packages/core/test/ripgrep-binary.test.ts`, `packages/core/test/util/git-executable.test.ts`,
   `packages/core/test/effect/cross-spawn-spawner.test.ts`, `packages/core/test/project.test.ts`,
   `packages/core/test/mcp.test.ts` and `packages/cli/test/program-lookup.test.ts`). The ones that run a decoy return
@@ -1786,7 +1786,7 @@ fixes it or asks.
   `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
-  a program in the working folder that way (`util.which` in `core/test/util/which.test.ts`). A child that is handed a
+  a program in the working folder that way (`util.which` in `core/test/which.test.ts`). A child that is handed a
   `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
   project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).

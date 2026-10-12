@@ -3,7 +3,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Npm } from "@orbit/util/npm"
 import { AppProcess } from "@orbit/util/process"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
 
 export interface Info {
   readonly name: string

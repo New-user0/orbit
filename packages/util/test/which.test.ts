@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { which } from "@orbit/core/util/which"
-import { tmpdir } from "../fixture/tmpdir"
+import { which } from "@orbit/util/which"
+import os from "os"
+
+async function tmpdir() {
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-which-test-")))
+  return { path: dir, [Symbol.asyncDispose]: () => fs.rm(dir, { recursive: true, force: true }) }
+}
 
 async function cmd(dir: string, name: string, exec = true) {
   const ext = process.platform === "win32" ? ".cmd" : ""

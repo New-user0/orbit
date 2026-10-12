@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { which } from "../../src/util/which"
+import { which } from "@orbit/util/which"
 import { bash, pwsh, powershell } from "./helper"
 
 // Each attack plants a marker outside a temporary project and a control run shows that the attack really reads it. The

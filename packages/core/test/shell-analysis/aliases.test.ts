@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { ShellAnalysis } from "../../src/shell/analysis"
-import { which } from "../../src/util/which"
+import { which } from "@orbit/util/which"
 import win51 from "./aliases-win51.json"
 import linux7 from "./aliases-linux7.json"
 

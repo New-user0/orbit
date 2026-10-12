@@ -4,7 +4,7 @@ import type { ConfigSandbox } from "@orbit/schema/config/sandbox"
 import { SandboxPlatform } from "@orbit/util/sandbox-platform"
 import { existsSync } from "node:fs"
 import { release } from "node:os"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
 
 /**
  * Wraps a shell command in the operating system's sandbox so it can read the whole filesystem but write only where it

@@ -8,7 +8,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { State } from "../state.js"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
 
 const META: Record<string, { deny?: boolean; login?: boolean; ps?: boolean }> = {
   bash: { login: true },

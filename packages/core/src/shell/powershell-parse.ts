@@ -7,7 +7,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import fs from "node:fs"
 import os from "node:os"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
 
 // Orbit never tokenizes PowerShell itself to learn what a command does. It asks PowerShell's own parser, reads back a
 // summary of the syntax tree and decides everything in TypeScript from that summary. The parser resolves comments,
