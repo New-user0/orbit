@@ -77,7 +77,7 @@ const onPath = <A, E, R>(bin: string, body: Effect.Effect<A, E, R>) =>
  * One row: `start` runs the surface in `directory` with the program's name as its command. First with the real program
  * nowhere on PATH, where only a decoy could start; then with it on PATH, where only the real one may.
  */
-const row = <E, R>(directory: Effect.Effect<string, never, R>, start: (directory: string) => Effect.Effect<unknown, E, R>) =>
+const row = <E, R, S>(directory: Effect.Effect<string, unknown, R>, start: (directory: string) => Effect.Effect<unknown, E, S>) =>
   Effect.gen(function* () {
     const project = yield* directory
     const bin = (yield* tmpdirScoped()).path
