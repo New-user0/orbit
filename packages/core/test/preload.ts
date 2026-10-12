@@ -9,8 +9,11 @@ if (root) {
   const home = path.join(root, `worker-${process.pid}`)
   const temporary = path.join(home, "tmp")
   mkdirSync(temporary, { recursive: true })
+  // Bun reads HOME once at startup on Linux and macOS, so os.homedir() keeps naming the shared root there; HOME stays the
+  // root as well, so a child shell's `~` agrees with it. Everything the tests derive from ORBIT_TEST_HOME, XDG and TMPDIR
+  // is per worker. On Windows os.homedir() follows USERPROFILE, so all of them move.
   Object.assign(process.env, {
-    HOME: home,
+    ...(process.platform === "win32" ? { HOME: home } : {}),
     ORBIT_TEST_HOME: home,
     XDG_CONFIG_HOME: path.join(home, ".config"),
     XDG_DATA_HOME: path.join(home, ".local", "share"),

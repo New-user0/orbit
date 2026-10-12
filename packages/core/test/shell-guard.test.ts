@@ -620,6 +620,8 @@ describe("ShellGuard.authorize", () => {
       expect(asked[1]?.save).toBeUndefined()
       expect(Date.now() - started).toBeLessThan(15_000)
     }),
+    // The test's own bound above is 15 s; the runner's default of 5 s would cut the scan short on a busy machine.
+    20_000,
   )
 
   // Input over the length limit, or that the shell's parser gives up on, still names its folders and files. Each row asks
