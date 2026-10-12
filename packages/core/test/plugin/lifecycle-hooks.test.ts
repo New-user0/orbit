@@ -31,6 +31,7 @@ import { location, tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
+import { ProjectTrust } from "@orbit/core/project-trust"
 
 // The shared plugin fixture has no shell selection; hooks need it to pick the shell their commands run in.
 const it = testEffect(
@@ -402,7 +403,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
       Location.Service.of(location({ directory: AbsolutePath.make(project) })),
     )
     return Layer.mergeAll(
-      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node]), [
+      AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]), [
         Config.node.replace(Config.configured()),
         WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
         Location.node.replace(place),
@@ -430,7 +431,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
       ),
   )
 
-  it.live("runs the user's hooks, and the project's and its other-product settings hooks only once trusted", () =>
+  it.live("runs no hook until the folder is trusted: not the user's, the project's nor another product's", () =>
     Effect.gen(function* () {
       const home = (yield* tmpdirScoped()).path
       const project = path.join(home, "work", "repo")
@@ -455,8 +456,8 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
             .pipe(Effect.exit, Effect.map(Exit.isFailure))
         const everything = Effect.all({ read: blocked("read"), shell: blocked("shell"), grep: blocked("grep") })
 
-        // Untrusted, only what the user wrote runs.
-        expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
+        // Untrusted, nothing runs: a hook starts in the project's folder, whoever wrote it.
+        expect(yield* everything).toEqual({ read: false, shell: false, grep: false })
 
         const granted = yield* nextUpdate
         yield* grantWithRecords(project, { persist: false, via: "test" })
@@ -466,7 +467,48 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         const revoked = yield* nextUpdate
         yield* trust.revoke(project)
         yield* Fiber.join(revoked)
-        expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
+        expect(yield* everything).toEqual({ read: false, shell: false, grep: false })
+      }).pipe(Effect.provide(projectConfig(home, project)))
+    }),
+  )
+
+  // The attack as a marker file: the person's own hook runs a program in the clone's folder, and the clone's file is
+  // what the program would read first. Here the hook only writes a file into its working folder, which is where a bunfig
+  // preload, a local .bin or a repository config would be picked up. The control is the same hook once trusted.
+  it.live("starts no hook of the user's in an untrusted folder, and starts it once granted", () =>
+    Effect.gen(function* () {
+      const home = (yield* tmpdirScoped()).path
+      const project = path.join(home, "work", "repo")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(home, ".config", "orbit"), { recursive: true })
+        await fs.mkdir(project, { recursive: true })
+        await fs.writeFile(
+          path.join(home, ".config", "orbit", "orbit.json"),
+          JSON.stringify({
+            hooks: {
+              PreToolUse: [{ matcher: "read", hooks: [{ type: "command", command: "bun -e \"require('fs').writeFileSync('marker.txt','ran')\"" }] }],
+              UserPromptSubmit: [{ hooks: [{ type: "command", command: "bun -e \"require('fs').writeFileSync('prompt-marker.txt','ran')\"" }] }],
+            },
+          }),
+        )
+      })
+      const ran = (file: string) => Effect.promise(() => Bun.file(path.join(project, file)).exists())
+      yield* Effect.gen(function* () {
+        const registry = yield* PluginHooks.Service
+        yield* LifecycleHooksPlugin.Plugin.effect(yield* PluginHost.make(yield* Plugin.Service))
+        const fire = Effect.gen(function* () {
+          yield* registry.trigger("tool", "execute.before", { ...base, tool: "read", input: {} }).pipe(Effect.ignore)
+          yield* registry
+            .trigger("session", "prompt", { sessionID: base.sessionID, messageID: base.messageID, prompt: { text: "go" }, delivery: "steer" as const })
+            .pipe(Effect.ignore)
+        })
+        yield* fire
+        expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([false, false])
+
+        // Nothing in the folder is held back, so the grant moves no config: the gate reads the trust when a hook fires.
+        yield* grantWithRecords(project, { persist: false, via: "test" })
+        yield* fire
+        expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([true, true])
       }).pipe(Effect.provide(projectConfig(home, project)))
     }),
   )

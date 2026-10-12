@@ -14,6 +14,7 @@ import { ConfigEnv } from "../env.js"
 import { HookSources } from "../hook-sources.js"
 import { Location } from "../../location.js"
 import { ManagedPolicy } from "../../managed-policy.js"
+import { ProjectTrust } from "../../project-trust.js"
 import { isRecord } from "@orbit/ai/utils/record"
 import { Mcp } from "../../mcp/index.js"
 import { ToolNames } from "../../tool/names.js"
@@ -27,6 +28,9 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * `{"decision":"block","reason":...}` on stdout blocks a tool call, and other stdout becomes context for the model.
  * When several hooks block, the reason of the one in the highest-ranked document is reported. A hook that fails to
  * run is logged and skipped, so a broken script never stops the session.
+ *
+ * No hook runs while the project's folder is not trusted, the user's and the organization's included, because a hook
+ * starts in that folder and the programs it runs read the clone's own files there.
  *
  * A matcher accepts every spelling of a built-in tool's name (`ToolNames`), so a hook written for `shell` still fires
  * for `Bash`. A native hook is told the old name as `tool_name` whenever its matcher accepts it (an absent, `*` or
@@ -88,6 +92,7 @@ export const Plugin = define({
     const shells = yield* ShellSelect.Service
     const location = yield* Location.Service
     const managed = yield* ManagedPolicy.Service
+    const trust = yield* ProjectTrust.Service
 
     // Each warning is logged once, not on every event: hooks are matched every time an event fires.
     const warned = new Set<string>()
@@ -192,6 +197,13 @@ export const Plugin = define({
       payload: Record<string, unknown>,
       target?: string,
     ) {
+      // A hook starts with the project's folder as its working folder, where bun, npx, git and the like read the
+      // repository's own files (a bunfig preload, a package registry, a repository config) before the hook's script
+      // runs. Until the person trusts the folder, no hook runs, the user's own and the organization's included.
+      if (!(yield* trust.trusted()))
+        return yield* warnOnce("untrusted", "hooks wait for the project folder to be trusted and did not run", {
+          event,
+        }).pipe(Effect.as(NOTHING))
       const aliases = yield* foreignNames(target)
       const configured = yield* commands(event, target, aliases)
       if (configured.length === 0) return NOTHING
