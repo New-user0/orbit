@@ -205,6 +205,34 @@ test("an --agents payload over 40 KB arrives intact", async () => {
   expect(run.requests.map((request) => request.system).join("")).toContain(system)
 }, 180_000)
 
+// A 40 KB --settings value is a file. Inline, it is bounded by the operating system's command line, not by Orbit: Windows
+// caps a whole command line at 32,767 characters (CreateProcess), so a 40 KB inline value fails to spawn there before
+// Orbit runs, as it does for the tool this one mirrors. The overlay itself reaches the server by file, so these two rows
+// cover both sides of that limit.
+test("a 40 KB --settings file arrives intact", async () => {
+  const system = `START-${"alpha ".repeat(7_000)}-END`
+  await Bun.write(path.join(root, "settings-big.json"), JSON.stringify({ agents: { big: { system, mode: "primary" } } }))
+
+  const run = await sent(["--settings", path.join(root, "settings-big.json"), "--agent", "big"])
+
+  expect(system.length).toBeGreaterThan(40_000)
+  expect(run.requests.map((request) => request.system).join("")).toContain(system)
+  expect(await leftovers()).toEqual([])
+}, 180_000)
+
+test("a near-limit inline --settings (about 28 KB) arrives intact", async () => {
+  const system = `START-${"alpha ".repeat(4_600)}-END`
+  const settings = JSON.stringify({ agents: { big: { system, mode: "primary" } } })
+
+  const run = await sent(["--settings", settings, "--agent", "big"])
+
+  // Under the Windows cap with the rest of the command line, and far over what a small value would exercise.
+  expect(settings.length).toBeGreaterThan(27_000)
+  expect(settings.length).toBeLessThan(30_000)
+  expect(run.requests.map((request) => request.system).join("")).toContain(system)
+  expect(await leftovers()).toEqual([])
+}, 180_000)
+
 test("a value that does not fit stops the run before any server starts, naming the flag and the path", async () => {
   const before = model.requests.length
 
