@@ -1,5 +1,5 @@
 import path from "path"
-import { which } from "./which.js"
+import { which } from "@orbit/util/which"
 
 export function resolveGitExecutable(platform: NodeJS.Platform, resolved: string | null) {
   if (platform !== "win32" || !resolved) return "git"

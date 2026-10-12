@@ -219,7 +219,6 @@
         "venice-ai-sdk-provider": "2.1.1",
         "vscode-jsonrpc": "8.2.1",
         "web-tree-sitter": "0.25.10",
-        "which": "6.0.1",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -240,7 +239,6 @@
         "@types/bun": "catalog:",
         "@types/cross-spawn": "catalog:",
         "@types/node": "catalog:",
-        "@types/which": "3.0.4",
         "drizzle-kit": "catalog:",
       },
     },
@@ -552,6 +550,7 @@
         "npm-package-arg": "13.0.2",
         "open": "11.0.4",
         "pacote": "21.5.1",
+        "which": "6.0.1",
       },
       "devDependencies": {
         "@tsconfig/bun": "catalog:",
@@ -561,6 +560,7 @@
         "@types/npm-package-arg": "6.1.4",
         "@types/npmcli__arborist": "6.3.3",
         "@types/pacote": "11.1.8",
+        "@types/which": "3.0.4",
         "@typescript/native-preview": "catalog:",
       },
     },

@@ -9,7 +9,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner, ExitCode, make, makeHandle, ProcessId } from "effect/unstable/process/ChildProcessSpawner"
 import { PowerShellInspect } from "../../src/shell/powershell-inspect"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
-import { which } from "../../src/util/which"
+import { which } from "@orbit/util/which"
 import { currentDirectoryOnPath, plant } from "../fixture/decoy"
 import { tmpdir } from "../fixture/tmpdir"
 

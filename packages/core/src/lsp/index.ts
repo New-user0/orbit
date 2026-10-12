@@ -14,7 +14,7 @@ import { Git } from "../git.js"
 import { Location } from "../location.js"
 import { ProjectTrust } from "../project-trust.js"
 import { RelativePath } from "../schema.js"
-import { which } from "../util/which.js"
+import { which } from "@orbit/util/which"
 import { LspClient } from "./client.js"
 
 /**

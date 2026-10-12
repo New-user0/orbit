@@ -223,9 +223,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   is untrusted, with no server started). The git ignore check of `Lsp.ignored` runs only after the request has passed
   this gate and checks the folder's trust itself (`test/lsp-ignored.test.ts`, the untrusted row), in the trusted Location's repository, through `Git.Service`'s resolved executable, with the paths on stdin.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
-  Azure CLI check): `which` in `packages/core/src/util/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
+  Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
-  `test/util/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+  `test/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
 - The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
   command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
   `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
@@ -274,7 +274,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   folder with `.hg` and an `hg.exe`) and `test/mcp.test.ts`, and the `test/program-lookup.test.ts` of `packages/cli`,
   `packages/sdk` and `packages/server`. They delete the variable from `process.env` first, and those that run a decoy
   plant real `.exe` files. The language server client starts its server through the spawner, and `test/lsp-spawn.test.ts`
-  runs it against `.exe`, `.bat` and `.cmd` decoys with a copy on `PATH` as the control. The bare `git` fallback has no
+  runs it against `.exe`, `.bat` and `.cmd` decoys with a copy on `PATH` as the control. `test/program-decoys.test.ts`
+  does the same, on Windows only, for a configured formatter's command head, for a hook command run by each of
+  PowerShell, Git Bash and `cmd` that is installed on the machine (the user's own hook, with the project's decoys in the
+  Location's folder), and for the shell tool in each of those shells. It also pins that `ShellSelect.resolve` gives each
+  shell as a path outside a working folder that holds decoys of it. Its mutation: with `ProgramLookup` no longer setting
+  the variable, the formatter row and the `cmd` rows fail; the PowerShell and Git Bash rows pass either way, since
+  neither shell searches the working folder. `pwsh` is skipped where it is not installed, and a built-in formatter is not
+  covered. The bare `git` fallback has no
   test of its own (see Known gaps).
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
@@ -1265,7 +1272,7 @@ next hole was js-yaml's lazy `var _require = require; _require('esprima')`, whic
 `node_modules/esprima/index.js`. A dynamic probe found it, and a scan for names would not have, because the require is
 aliased. The same probe closed Babel's browserslist lookup and fff's native-library lookup (on Windows the embedded path
 says `~BUN`, not `$bunfs`). Then the review of that fix found one more kind of name: `which` in
-`packages/core/src/util/which.ts` wrapped the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
+`packages/util/src/which.ts` wrapped the npm `which` package, so on Windows a committed `git.exe` ran while Orbit
 gathered version control info (`orb session list --standalone` ran it seven times) and a committed `rg.exe` ran during a
 file search, before any trust. That was the second blocker, and its fix made the lookup read `PATH` only. Closing it
 turned up two more members of the class, both in `CrossSpawnSpawner`. Cross-spawn handed a bare `hg` to `cmd.exe`, so a
@@ -1305,7 +1312,7 @@ kind in turn.
 - `Provider.loadPackage` (`packages/core/src/provider.ts`) fails with `LoadError` inside a compiled binary
   (`Bun.isStandaloneExecutable`) for a package that is not built in. Otherwise it installs with `npm.add` and resolves
   from the npm cache with `resolveModule`. A plain file path no longer loads: write a `file:` URL.
-- Find an executable with `which` in `packages/core/src/util/which.ts` and with nothing else. It feeds `gitExecutable`,
+- Find an executable with `which` in `packages/util/src/which.ts` and with nothing else. It feeds `gitExecutable`,
   `RipgrepBinary`, `ShellSelect`, the built-in formatters and language servers, the sandbox tool and the Azure CLI
   check. It reads `PATH`, then Orbit's own `bin` folder, and never the working folder, unless `PATH` itself names it,
   for example with a relative entry such as `.`, which resolves against it (Known gaps). It looks at each `PATH` entry
@@ -1383,7 +1390,7 @@ kind in turn.
   its pager starts `cmd /c more`, a file search starts ripgrep, `Project.resolve` on a folder with `.hg` starts `hg`, an
   MCP server starts its command, `orb flow clean` starts git outside the spawner, the npm launcher starts `powershell`,
   and stopping a running child runs `taskkill`. Assert no marker, with the real program still found on `PATH`, and a
-  `.cmd` that `PATH` holds still starting by name (`packages/core/test/util/which.test.ts`,
+  `.cmd` that `PATH` holds still starting by name (`packages/util/test/which.test.ts`,
   `packages/core/test/ripgrep-binary.test.ts`, `packages/core/test/util/git-executable.test.ts`,
   `packages/core/test/effect/cross-spawn-spawner.test.ts`, `packages/core/test/project.test.ts`,
   `packages/core/test/mcp.test.ts` and `packages/cli/test/program-lookup.test.ts`). The ones that run a decoy return
@@ -1791,7 +1798,7 @@ fixes it or asks.
   `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
-  a program in the working folder that way (`util.which` in `core/test/util/which.test.ts`). A child that is handed a
+  a program in the working folder that way (`util.which` in `core/test/which.test.ts`). A child that is handed a
   `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
   project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).
@@ -1877,7 +1884,7 @@ fixes it or asks.
   says without opening it, and `FileAccess` refuses a place that a repository link leads to when it is a share, in any
   spelling (`\\localhost\C$\…` included, which names a local folder that the person's rules write as a drive path, so a
   question about it would have turned their deny into an ask), with the same `file.spelling` failure, before any
-  question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir` when the call runs; the scheduling check on the same text, `ShellTool.concurrent`, answers false for a share workdir and never opens it, pinned in `tool-shell-concurrency.test.ts`) and for the plain
+  question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir` when the call runs; the scheduling check on the same text, `ShellTool.concurrent`, answers false for a share workdir, or one reached through a link of the project, and never opens it: the links are read one part at a time with `readlink` only (`LinkShare.ofSync`), pinned in `tool-shell-concurrency.test.ts`; the shell gate leaves a share that only a comment or an unreadable input names unresolved and asks the disk nothing about it, pinned in `shell-guard.test.ts` and `link-share.test.ts`) and for the plain
   words of a shell command (`escaped`). A part with `~` below such a link is refused the same way, because looking up
   its long name would read the folder the link leads to. A link to a device path (`\\?\Volume{…}`, `\\.\…`) reads
   back in the NT form `\??\…`, which `ProjectTrust.escapes` names as the device path it is (the `orb acp` rows found

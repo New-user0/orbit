@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { FSUtil } from "@orbit/util/fs-util"
-import { which } from "@orbit/core/util/which"
+import { which } from "@orbit/util/which"
 import fs from "node:fs/promises"
 import { tmpdir } from "./fixture/tmpdir"
 

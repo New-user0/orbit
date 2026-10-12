@@ -4,7 +4,7 @@
 // The tests feed the stored output to PowerShellParse.interpret, so they need no PowerShell.
 import path from "node:path"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
-import { which } from "../../src/util/which"
+import { which } from "@orbit/util/which"
 import { pathCases } from "./path-cases"
 import { arrayAndNetwork, arrayAndNetworkOk, chain, notReadOnly, platform, readOnly, safety, toolNotReadOnly, toolPlatform, toolReadOnly } from "./powershell-cases"
 

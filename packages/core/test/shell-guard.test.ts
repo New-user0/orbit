@@ -18,6 +18,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
+import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -1057,4 +1058,81 @@ console.log("done")`,
       ])
     }),
   )
+})
+
+// Input the analysis cannot read is searched as raw text for folders a command might change to, comments included. A
+// share named there is asked about and never opened: no file system call may name it before the question (class 6, task
+// permissions-23). The FSUtil is the recording one, so the rows pin the calls, not how fast the answer came. Share
+// spellings are shares on Windows only.
+describe("ShellGuard.authorize: a share named in input the analysis cannot read", () => {
+  const host = Bun.which("pwsh") ?? Bun.which("powershell") ?? undefined
+  const rows: { name: string; command: string; shell: string; needsHost: boolean }[] = [
+    ...["//example.invalid/share", "\\\\example.invalid\\share"].flatMap((share) => [
+      { name: "bash opaque input", command: `echo $UNSET_R2 #; cd ${share}`, shell: "sh", needsHost: false },
+      { name: "bash command substitution", command: `echo \`true\` #; cd ${share}`, shell: "sh", needsHost: false },
+      {
+        name: "PowerShell parse error",
+        command: `Write-Output (1 #; Set-Location ${share}`,
+        shell: "pwsh",
+        needsHost: true,
+      },
+    ]),
+  ]
+
+  for (const trusted of [true, false])
+    for (const row of rows) {
+      const test = win && (!row.needsHost || host) ? it.live : it.live.skip
+      test(
+        `${row.name} ${JSON.stringify(row.command)} touches no share and still asks (${trusted ? "trusted" : "untrusted"})`,
+        () =>
+          Effect.gen(function* () {
+            const { project } = yield* layout
+            const recorded = recordedFileSystem()
+            const asked: Permission.AssertInput[] = []
+            const result = yield* Effect.gen(function* () {
+              const access = yield* FileAccess.Service
+              return yield* ShellGuard.authorize({
+                command: row.command,
+                shell: row.shell,
+                cwd: yield* access.resolve({ path: project, kind: "directory" }),
+                env: {},
+                portable: true,
+                base: { sessionID },
+              })
+            }).pipe(
+              Effect.provide(
+                AppNodeBuilder.build(
+                  LayerNode.group([
+                    FileAccess.node,
+                    Permission.node,
+                    ProjectTrust.node,
+                    FSUtil.node,
+                    Location.node,
+                    PowerShellParse.node,
+                  ]),
+                  [
+                    Location.node.replace(
+                      Layer.succeed(
+                        Location.Service,
+                        Location.Service.of(location({ directory: AbsolutePath.make(project) })),
+                      ),
+                    ),
+                    Permission.node.replace(
+                      permissionLayer({ assert: (input) => Effect.sync(() => void asked.push(input)) }),
+                    ),
+                    FSUtil.node.replace(recorded.layer),
+                    ...(trusted ? [] : untrustedProjectNodes),
+                  ],
+                ),
+              ),
+              Effect.exit,
+            )
+            expect(result._tag).toBe("Success")
+            
+            expect(sharesTouched(recorded.touched)).toEqual([])
+            // The input is still asked about, as the whole text.
+            expect(asked.some((input) => input.action === "Bash")).toBe(true)
+          }),
+      )
+    }
 })

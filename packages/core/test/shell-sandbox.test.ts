@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import os from "node:os"
 import { describe, expect, test } from "bun:test"
 import { ShellSandbox } from "@orbit/core/shell/sandbox"
-import { which } from "@orbit/core/util/which"
+import { which } from "@orbit/util/which"
 
 const base = {
   shell: "/bin/sh",
