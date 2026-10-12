@@ -3,6 +3,7 @@ export * as ReadTool from "./read.js"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { basename, dirname, join } from "path"
 import { ToolFailure } from "@orbit/ai"
+import { Tool } from "../../tool.js"
 import { CompatInstructions } from "@orbit/compat/instructions"
 import { createHash } from "crypto"
 import { Effect, Schema } from "effect"
@@ -180,8 +181,9 @@ export const Plugin = {
               ),
               Effect.mapError((error) => {
                 if (error instanceof ToolFailure) return error
+                if (error instanceof FileAccess.DeviceError)
+                  return new ToolFailure({ message: error.message, code: Tool.ErrorCode.FileDevice, error })
                 const message =
-                  error instanceof FileAccess.DeviceError ||
                   error instanceof ReadToolFileSystem.BinaryFileError ||
                   error instanceof ReadToolFileSystem.MediaIngestLimitError ||
                   error instanceof ReadToolFileSystem.OffsetOutOfRangeError ||

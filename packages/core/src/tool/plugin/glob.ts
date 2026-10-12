@@ -1,6 +1,7 @@
 export * as GlobTool from "./glob.js"
 
 import { ToolFailure } from "@orbit/ai"
+import { Tool } from "../../tool.js"
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
 import path from "path"
@@ -135,7 +136,7 @@ export const Plugin = {
                 error instanceof ToolFailure
                   ? error
                   : error instanceof FileAccess.DeviceError
-                    ? new ToolFailure({ message: error.message })
+                    ? new ToolFailure({ message: error.message, code: Tool.ErrorCode.FileDevice })
                     : new ToolFailure({ message: `Unable to find files matching ${input.pattern}`, error }),
               ),
             ),
