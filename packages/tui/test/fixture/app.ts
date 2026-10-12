@@ -3,6 +3,7 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import type { TuiInput } from "../../src/app"
 import type { Config } from "../../src/config"
+import { clearDrafts } from "../../src/component/prompt/draft-stash"
 import { tmpdir } from "./fixture"
 import { createEventStream, createFetch, type FetchHandler } from "./tui-client"
 
@@ -62,6 +63,8 @@ export async function createAppFixture(
         if (!setup.renderer.isDestroyed) setup.renderer.destroy()
         await task
       } finally {
+        // Drafts live in a module-level stash, so they would reach the next app of the same process.
+        clearDrafts()
         await server.stop()
         await state?.[Symbol.asyncDispose]()
       }
