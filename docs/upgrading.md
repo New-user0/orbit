@@ -331,6 +331,10 @@ command Orbit cannot read, and a sleep followed by other work.
 A command that exits before the call has seen it move is returned inline, as if nothing had happened, with no
 notification.
 
+Agent, verify, team and eval nodes of `orb flow run` and `orb eval` wait for such a command too: a node reports its
+reply only after the session's background commands have ended and their notices have been answered, within the node's
+own timeout.
+
 A foreground `timeout` of `0` no longer means "never time out": it means the default, like leaving it out. A timeout
 above the maximum is lowered to the maximum in every shell, and for a background command too, whose kill deadline is
 still only set when a timeout is given.
@@ -2666,3 +2670,9 @@ The check above also applies to a path outside the project that goes through a l
 **Affects:** projects with links to folders, and `\\?\` or `\\.\` paths on Windows.
 
 **What to do:** Nothing for most setups. To allow a link that leads out of the project under a broad ask, write the allow for the folder it leads to.
+
+### The Ollama model list is read before the first session starts
+
+Starting a location now waits for the first read of the Ollama server's model list (each request is limited to 1 second),
+so a run that relies on the default model finds the Ollama models instead of failing with "No model was set" when the
+list arrives a moment late. With an Ollama address that does not answer, the start takes up to 1 second longer.

@@ -18,6 +18,7 @@ function client(queuedReads: number) {
         list: async () => (reads++ < queuedReads ? [{ id: "msg_prompt" }] : []),
       },
     },
+    shell: { list: async () => ({ data: [] }) },
     message: {
       list: async () => ({
         data:

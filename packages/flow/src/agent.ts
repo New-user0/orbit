@@ -1,4 +1,5 @@
 import type { OrbitClient } from "@orbit/client"
+import { waitForBackground } from "./background.js"
 import type { ErrorClass, Usage } from "./workflow.js"
 
 // One attempt of one agent node: a fresh Orbit session in the node's directory, one prompt, then the final reply,
@@ -60,8 +61,22 @@ export async function attempt(
   const recent = () => client.message.list({ sessionID: session.id, limit: 200, order: "desc" })
   const before = new Set(input.session ? (await recent()).data.map((message) => message.id) : [])
   const admitted = await client.session.prompt({ sessionID: session.id, text: input.prompt, delivery: "steer" })
-  const finished = await waitFor(delivered(client, session.id, admitted?.id), input.timeout)
+  // A command the model moved to the background outlives its step, and its notice starts another one, so the reply
+  // is read only once those have ended too. The timeout covers both waits.
+  let abandoned = false
+  const finished = await waitFor(
+    delivered(client, session.id, admitted?.id).then(() =>
+      waitForBackground({
+        client,
+        sessionID: session.id,
+        location: { directory: input.directory },
+        abandoned: () => abandoned,
+      }),
+    ),
+    input.timeout,
+  )
   if (!finished) {
+    abandoned = true
     await client.session.interrupt({ sessionID: session.id }).catch(() => undefined)
     return {
       session: session.id,

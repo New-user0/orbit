@@ -11,7 +11,7 @@ import type {
 } from "@orbit/client/promise"
 import { jsonLine, progress } from "@orbit/flow/plain"
 import { errorMessage } from "../util/error"
-import { waitForBackground } from "./background"
+import { waitForBackground } from "@orbit/flow/background"
 import { Event } from "@orbit/schema/event"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { EOL } from "node:os"

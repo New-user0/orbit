@@ -43,6 +43,8 @@ export function harness(
     // Whether the server echoes the limits it was sent, as a current one does.
     echo: true,
     prompts: [] as Array<{ id: string; turn?: SessionTurnOptions }>,
+    // Commands the server lists as running, as the shell list reports them.
+    shells: [] as Array<{ id: string; status: string; metadata: { sessionID: string } }>,
   }
   let push: (event: Event | "end") => void = () => {}
   let idle = Promise.withResolvers<void>()
@@ -93,6 +95,7 @@ export function harness(
         state.permissions = state.permissions.filter((request) => request.id !== input.requestID)
       },
     },
+    shell: { list: async () => ({ data: [...state.shells] }) },
     message: { list: async () => ({ data: [...state.messages], cursor: { next: null } }) },
     form: { list: async () => ({ location, data: [] }) },
   } as unknown as OrbitClient
