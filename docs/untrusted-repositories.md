@@ -274,7 +274,14 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   folder with `.hg` and an `hg.exe`) and `test/mcp.test.ts`, and the `test/program-lookup.test.ts` of `packages/cli`,
   `packages/sdk` and `packages/server`. They delete the variable from `process.env` first, and those that run a decoy
   plant real `.exe` files. The language server client starts its server through the spawner, and `test/lsp-spawn.test.ts`
-  runs it against `.exe`, `.bat` and `.cmd` decoys with a copy on `PATH` as the control. The bare `git` fallback has no
+  runs it against `.exe`, `.bat` and `.cmd` decoys with a copy on `PATH` as the control. `test/program-decoys.test.ts`
+  does the same, on Windows only, for a configured formatter's command head, for a hook command run by each of
+  PowerShell, Git Bash and `cmd` that is installed on the machine (the user's own hook, with the project's decoys in the
+  Location's folder), and for the shell tool in each of those shells. It also pins that `ShellSelect.resolve` gives each
+  shell as a path outside a working folder that holds decoys of it. Its mutation: with `ProgramLookup` no longer setting
+  the variable, the formatter row and the `cmd` rows fail; the PowerShell and Git Bash rows pass either way, since
+  neither shell searches the working folder. `pwsh` is skipped where it is not installed, and a built-in formatter is not
+  covered. The bare `git` fallback has no
   test of its own (see Known gaps).
 - Provider packages: inside the compiled binary `Provider.loadPackage` loads a built-in provider or one from the npm
   cache, and never resolves a name from the folder. Proof: `test/provider-compiled.test.ts`.
