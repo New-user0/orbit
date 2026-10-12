@@ -329,3 +329,129 @@ describe("a link outside the project, and rules written relative to the project"
     }),
   )
 })
+
+// The session folder reached through a link (a junction or symlink to the project, as `process.cwd()` is when the person
+// starts Orbit in one): every lead is then a real path, and rules written for the project must still decide it
+// (class 3 and 4).
+const linked = Effect.gen(function* () {
+  const base = yield* more
+  const tmp = path.dirname(base.project)
+  const projlink = path.join(tmp, "projlink")
+  yield* Effect.promise(async () => {
+    await fs.mkdir(path.join(base.project, "src"), { recursive: true })
+    await fs.writeFile(path.join(base.project, "src", "a.ts"), "")
+    await fs.symlink(base.project, projlink, "junction")
+  })
+  return { ...base, projlink }
+})
+
+const decideAt = (
+  directory: string,
+  rules: Permission.Ruleset,
+  layer: "managed" | "configured",
+  action: "Read" | "Edit",
+  file: string,
+) =>
+  Effect.gen(function* () {
+    yield* prepare(directory, layer === "configured" ? rules : [{ action: "*", resource: "*", effect: "allow" }])
+    if (layer === "managed") yield* (yield* ManagedPolicy.Service).set("file", { statements: [], rules })
+    const target = yield* (yield* FileAccess.Service).resolve({ path: file })
+    return (yield* (yield* Permission.Service).ask({
+      id: Permission.ID.create(),
+      sessionID,
+      action,
+      resources: [target.resource],
+      ...FileAccess.leadsOf([target]),
+    })).effect
+  }).pipe(provide(directory))
+
+describe("the session folder spelled directly or through a link", () => {
+  const forms = ["relative", "absolute as spelled", "absolute through the real path"] as const
+  const written = (form: (typeof forms)[number], session: string, real: string, rest: string) =>
+    form === "relative" ? rest : slash(path.join(form === "absolute as spelled" ? session : real, rest))
+
+  for (const spelling of ["direct", "link"] as const)
+    for (const layer of ["managed", "configured"] as const)
+      for (const effect of ["deny", "ask"] as const)
+        for (const form of forms)
+          it.live(`${layer} ${effect} written ${form}, session ${spelling}: a link to a project folder, a plain file`, () =>
+            Effect.gen(function* () {
+              const { project, projlink } = yield* linked
+              const session = spelling === "direct" ? project : projlink
+              const rules = [
+                { action: "*", resource: "*", effect: "allow" },
+                { action: "Edit", resource: written(form, session, project, "secrets/*"), effect },
+              ] satisfies Permission.Ruleset
+              for (const file of ["secrets/key", "alias/key"])
+                expect([file, yield* decideAt(session, rules, layer, "Edit", file)]).toEqual([file, effect])
+              expect(yield* decideAt(session, rules, layer, "Edit", "src/a.ts")).toBe("allow")
+            }),
+          )
+
+  for (const spelling of ["direct", "link"] as const)
+    for (const form of ["relative", "absolute as spelled"] as const)
+      it.live(`an allow written ${form} covers an in-project link under a broad ask, session ${spelling}`, () =>
+        Effect.gen(function* () {
+          const { project, projlink } = yield* linked
+          const session = spelling === "direct" ? project : projlink
+          const rules = [
+            { action: "*", resource: "*", effect: "allow" },
+            { action: "Edit", resource: "*", effect: "ask" },
+            { action: "Edit", resource: written(form, session, project, "src/*"), effect: "allow" },
+          ] satisfies Permission.Ruleset
+          for (const file of ["src/a.ts", "src/real-gen/x.ts", "src/gen/x.ts"])
+            expect([file, yield* decideAt(session, rules, "configured", "Edit", file)]).toEqual([file, "allow"])
+          // The controls: a link whose lead is not under src/, and a link out of the project, still ask.
+          expect(yield* decideAt(session, rules, "configured", "Edit", "alias/key")).toBe("ask")
+          expect(yield* decideAt(session, rules, "configured", "Edit", "vendor/x.ts")).toBe("ask")
+        }),
+      )
+
+  it.live("a deny for the folder a link outside the project leads to holds with the session folder linked", () =>
+    Effect.gen(function* () {
+      const { projlink, ssh } = yield* linked
+      const rules = [
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "Read", resource: `${slash(ssh)}/*`, effect: "deny" },
+      ] satisfies Permission.Ruleset
+      expect(yield* decideAt(projlink, rules, "configured", "Read", "keys/id_rsa")).toBe("deny")
+      expect(yield* decideAt(projlink, rules, "configured", "Read", "src/a.ts")).toBe("allow")
+    }),
+  )
+})
+
+// The Plan agent's rules (`Edit *` denied as a mode rule, then an allow for the plan folder, as `PlanPlugin` pushes them)
+// with the home folder, or ~/.orbit, reached through a link.
+describe("the Plan agent writes its plan file when the plan folder's path goes through a link", () => {
+  for (const [name, linkAt] of [
+    ["home linked", "home"],
+    ["~/.orbit linked", "orbit"],
+    ["no link (control)", "none"],
+  ] as const)
+    it.live(name, () =>
+      Effect.gen(function* () {
+        const { project } = yield* linked
+        const tmp = path.dirname(project)
+        const real = path.join(tmp, `real-${linkAt}`)
+        const home = linkAt === "home" ? path.join(tmp, `home-${linkAt}`) : real
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(real, ".orbit", "plan"), { recursive: true })
+          if (linkAt === "home") await fs.symlink(real, home, "junction")
+          if (linkAt === "orbit") {
+            await fs.mkdir(path.join(tmp, "dotfiles", "plan"), { recursive: true })
+            await fs.rm(path.join(real, ".orbit"), { recursive: true })
+            await fs.symlink(path.join(tmp, "dotfiles"), path.join(real, ".orbit"), "junction")
+          }
+        })
+        const planDir = path.join(home, ".orbit", "plan")
+        const rules = [
+          { action: "*", resource: "*", effect: "allow" },
+          Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }),
+          { action: "Edit", resource: slash(path.join(planDir, "*")), effect: "allow" },
+        ] satisfies Permission.Ruleset
+        expect(yield* decideAt(project, rules, "configured", "Edit", path.join(planDir, "ses.md"))).toBe("allow")
+        // Only the plan folder: another file of the home folder stays denied.
+        expect(yield* decideAt(project, rules, "configured", "Edit", path.join(home, "other.md"))).toBe("deny")
+      }),
+    )
+})

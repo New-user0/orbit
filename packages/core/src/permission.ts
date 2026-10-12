@@ -1,6 +1,7 @@
 export * as Permission from "./permission.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import path from "path"
 import { Context, Deferred, Effect, Exit, Layer, Schema } from "effect"
@@ -179,12 +180,30 @@ const layer = Layer.effect(
     const saved = yield* PermissionSaved.Service
     const hooks = yield* PluginHooks.Service
     const managed = yield* ManagedPolicy.Service
+    const fs = yield* FSUtil.Service
+    // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
+    // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
+    const spelled = [location.directory, path.resolve(location.project.directory)]
+    const real = yield* Effect.forEach(spelled, (folder) =>
+      fs.resolve(folder).pipe(
+        Effect.map(FSUtil.normalizePath),
+        Effect.orElseSucceed(() => folder),
+      ),
+    )
     const pending = new Map<ID, Pending>()
     // Orbit's own allows are marked where `Agent.folders` makes them, not recognised by value: a copy that an agent took
     // of them, as Explore does, keeps the mark, and a rule of the person's with the same value does not have it.
     const own = (rules: Permission.Ruleset) => rules.filter((rule) => !Agent.isOwnFolder(rule))
     // Saved approvals are the person's own answers, so they join after Orbit's allows are taken out: one that has the
     // same value as an allow of Orbit's (an "always" for the global config folder) still decides a place a link leads to.
+    // FileAccess asks inside the project with a path relative to the session folder, while a rule written with `~`,
+    // `$HOME` or a drive path is absolute. A file tool's place is therefore also tried by where it is.
+    const resolved = (action: string, resource: string) => {
+      const canonical = ToolNames.canonical(action)
+      return (canonical === "Read" || canonical === "Edit") && !path.isAbsolute(resource)
+        ? [path.resolve(location.directory, resource)]
+        : []
+    }
     const decide = (
       input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
       resource: string,
@@ -192,9 +211,12 @@ const layer = Layer.effect(
       approvals: Permission.Ruleset = [],
     ) => {
       const all = [...(input.escaped?.includes(resource) ? own(rules) : rules), ...approvals]
-      const decided = evaluate(input.action, resource, all, input.aliases?.[resource])
+      const decided = evaluate(input.action, resource, all, [
+        ...(input.aliases?.[resource] ?? []),
+        ...resolved(input.action, resource),
+      ])
       if (decided.effect === "deny") return decided
-      const led = stricter(input.action, input.leads?.[resource], all)
+      const led = stricter(input.action, resource, input.leads?.[resource], all)
       return led === "deny" || (led === "ask" && decided.effect === "allow")
         ? ({ action: input.action, resource: "*", effect: led } satisfies Permission.Rule)
         : decided
@@ -250,36 +272,44 @@ const layer = Layer.effect(
       resource: string,
       rules: Permission.Ruleset,
     ): Permission.Effect | undefined {
-      // FileAccess asks inside the project with a path relative to the session folder, while a rule written with `~`,
-      // `$HOME` or a drive path is absolute. A file tool's place is therefore also tried by where it really is.
-      const action = ToolNames.canonical(input.action)
-      const absolute = (action === "Read" || action === "Edit") && !path.isAbsolute(resource)
-      const subjects = [
-        resource,
-        ...(absolute ? [path.resolve(location.directory, resource)] : []),
-        ...(input.aliases?.[resource] ?? []),
-      ]
+      const subjects = [resource, ...resolved(input.action, resource), ...(input.aliases?.[resource] ?? [])]
       const own = rules.findLast(
         (rule) =>
           actionMatches(input.action, rule.action) &&
           subjects.some((subject) => Wildcard.match(subject, rule.resource)),
       )?.effect
       if (own === "deny") return own
-      const led = stricter(input.action, input.leads?.[resource], rules)
+      const led = stricter(input.action, resource, input.leads?.[resource], rules)
       return led === "deny" || (led === "ask" && own !== "ask") ? led : own
     }
 
     // What the rules say about the real places a resource leads to, when it is a deny or an ask. An allow written for such a
     // place never lifts the resource, since the person wrote it for the place and not for the link's spelling.
-    function stricter(action: string, leads: ReadonlyArray<string> | undefined, rules: Permission.Ruleset) {
+    // Rules are written as the project names its files, so one lead is tried in every spelling a rule can be written in: the
+    // real path, the same place under the project's folders as they are spelled (a session folder reached through a link has
+    // real-path leads), and each of those relative to the session folder. For a resource outside the project, which is
+    // absolute, the spelling given is a subject too, so a rule written for a folder reached through a link (a linked home
+    // for the Plan folder) still decides it. The last rule that matches any of them decides, as for aliases.
+    function stricter(
+      action: string,
+      resource: string,
+      leads: ReadonlyArray<string> | undefined,
+      rules: Permission.Ruleset,
+    ) {
       const effects = (leads ?? []).flatMap((lead) => {
-        // Rules are written as the project names its files, so a lead inside the project is also tried relative to it. The
-        // last rule that matches either spelling decides, as for aliases.
-        const relative = path.relative(location.directory, lead)
-        const subjects =
-          relative === "" || relative.startsWith("..") || path.isAbsolute(relative)
-            ? [lead]
-            : [lead, relative.replaceAll("\\", "/")]
+        const places = [
+          lead,
+          ...real.flatMap((folder, index) =>
+            FSUtil.contains(folder, lead) ? [path.join(spelled[index]!, path.relative(folder, lead))] : [],
+          ),
+        ]
+        const relatives = places.flatMap((place) => {
+          const relative = path.relative(location.directory, place)
+          return relative === "" || relative.startsWith("..") || path.isAbsolute(relative)
+            ? []
+            : [relative.replaceAll("\\", "/")]
+        })
+        const subjects = [...places, ...relatives, ...(path.isAbsolute(resource) ? [resource] : [])]
         const effect = rules.findLast(
           (rule) => actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
         )?.effect
@@ -569,5 +599,6 @@ export const node = makeLocationNode({
     PluginHooks.node,
     ManagedPolicy.node,
     Global.node,
+    FSUtil.node,
   ],
 })
