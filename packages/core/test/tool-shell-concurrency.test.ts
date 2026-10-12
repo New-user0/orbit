@@ -208,7 +208,7 @@ describe("ShellTool.concurrent with a workdir that reaches a share through a lin
     "\\\\127.0.0.1\\C$\\Windows",
     "\\\\example.invalid@8765\\x\\",
   ]
-  const places = ["the link itself", "a path below the link"] as const
+  const places: ("the link itself" | "a path below the link")[] = ["the link itself", "a path below the link"]
 
   const watch = (watched: string[]) => {
     const wrap = (name: "existsSync" | "statSync" | "lstatSync" | "realpathSync") => {

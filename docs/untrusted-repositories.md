@@ -1872,7 +1872,7 @@ fixes it or asks.
   says without opening it, and `FileAccess` refuses a place that a repository link leads to when it is a share, in any
   spelling (`\\localhost\C$\…` included, which names a local folder that the person's rules write as a drive path, so a
   question about it would have turned their deny into an ask), with the same `file.spelling` failure, before any
-  question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir` when the call runs; the scheduling check on the same text, `ShellTool.concurrent`, answers false for a share workdir and never opens it, pinned in `tool-shell-concurrency.test.ts`) and for the plain
+  question: for a tool's path (`resolve`, so Read, Write, Edit, Grep, Glob and a shell `workdir` when the call runs; the scheduling check on the same text, `ShellTool.concurrent`, answers false for a share workdir, or one reached through a link of the project, and never opens it: the links are read one part at a time with `readlink` only (`LinkShare.ofSync`), pinned in `tool-shell-concurrency.test.ts`; the shell gate leaves a share that only a comment or an unreadable input names unresolved and asks the disk nothing about it, pinned in `shell-guard.test.ts` and `link-share.test.ts`) and for the plain
   words of a shell command (`escaped`). A part with `~` below such a link is refused the same way, because looking up
   its long name would read the folder the link leads to. A link to a device path (`\\?\Volume{…}`, `\\.\…`) reads
   back in the NT form `\??\…`, which `ProjectTrust.escapes` names as the device path it is (the `orb acp` rows found
