@@ -2650,3 +2650,11 @@ A link in a trusted project (a symlink or a junction) was followed, but the rule
 **Affects:** projects that hold links to folders outside them, under deny or ask rules written for those folders.
 
 **What to do:** Nothing. Write the rule for the real folder as before; it now covers the links to it.
+
+### A deny on the place a link leads to now holds for links outside the project, and for rules written relative to it
+
+The check above also applies to a path outside the project that goes through a link (`~/elsewhere/k` leading to `~/.ssh`), and a lead inside the project is also matched in the form rules are written for the project (`secrets/*`, `.env`), so a link to another folder of the project no longer passes a relative deny. For a lead inside the project the last rule that matches either spelling decides, so a relative allow such as `src/*` covers a link to `src/real-gen` again, as it did before links were checked. A link that leads out of the project is decided by the folder it leads to: under a broad `Edit * ask`, an allow written for the link's own name (`vendor/*`) does not lift the ask for the folder behind it. Read now refuses a `\\?\Volume{...}` or `\\.\Volume{...}` path as a share or device spelling (`file.spelling`), and a device such as `NUL` with the new `file.device` code instead of `unknown`.
+
+**Affects:** projects with links to folders, and `\\?\` or `\\.\` paths on Windows.
+
+**What to do:** Nothing for most setups. To allow a link that leads out of the project under a broad ask, write the allow for the folder it leads to.

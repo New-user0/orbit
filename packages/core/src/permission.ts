@@ -273,8 +273,15 @@ const layer = Layer.effect(
     // place never lifts the resource, since the person wrote it for the place and not for the link's spelling.
     function stricter(action: string, leads: ReadonlyArray<string> | undefined, rules: Permission.Ruleset) {
       const effects = (leads ?? []).flatMap((lead) => {
+        // Rules are written as the project names its files, so a lead inside the project is also tried relative to it. The
+        // last rule that matches either spelling decides, as for aliases.
+        const relative = path.relative(location.directory, lead)
+        const subjects =
+          relative === "" || relative.startsWith("..") || path.isAbsolute(relative)
+            ? [lead]
+            : [lead, relative.replaceAll("\\", "/")]
         const effect = rules.findLast(
-          (rule) => actionMatches(action, rule.action) && Wildcard.match(lead, rule.resource),
+          (rule) => actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
         )?.effect
         return effect === "deny" || effect === "ask" ? [effect] : []
       })

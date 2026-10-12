@@ -217,3 +217,115 @@ describe("a link in a trusted project and the rules written for the place it lea
     }),
   )
 })
+
+// More places for the rows below: a link outside the project, links to project folders and a file, and a folder shared by
+// two projects.
+const more = Effect.gen(function* () {
+  const base = yield* layout
+  const tmp = path.dirname(base.project)
+  const elsewhere = path.join(tmp, "elsewhere")
+  const shared = path.join(tmp, "shared")
+  const symlinks = yield* Effect.promise(async () => {
+    await fs.mkdir(elsewhere, { recursive: true })
+    await fs.mkdir(shared, { recursive: true })
+    await fs.mkdir(path.join(base.project, "secrets"), { recursive: true })
+    await fs.mkdir(path.join(base.project, "src", "real-gen"), { recursive: true })
+    await fs.writeFile(path.join(base.project, "secrets", "key"), "SECRET")
+    await fs.writeFile(path.join(base.project, ".env"), "SECRET")
+    await fs.symlink(base.ssh, path.join(elsewhere, "k"), "junction")
+    await fs.symlink(shared, path.join(base.project, "vendor"), "junction")
+    await fs.symlink(path.join(base.project, "secrets"), path.join(base.project, "alias"), "junction")
+    await fs.symlink(path.join(base.project, "src", "real-gen"), path.join(base.project, "src", "gen"), "junction")
+    // A link to a file needs a right that Windows does not always give; the Linux run has it.
+    return await fs
+      .symlink(path.join(base.project, ".env"), path.join(base.project, "envlink"), "file")
+      .then(() => true)
+      .catch(() => false)
+  })
+  return { ...base, elsewhere, shared, symlinks }
+})
+
+// The decision of the permission service for a file tool's request, as the tool sends it.
+const decide = (
+  project: string,
+  rules: Permission.Ruleset,
+  layer: "managed" | "configured",
+  action: "Read" | "Edit",
+  file: string,
+) =>
+  Effect.gen(function* () {
+    yield* prepare(project, layer === "configured" ? rules : [{ action: "*", resource: "*", effect: "allow" }])
+    if (layer === "managed") yield* (yield* ManagedPolicy.Service).set("file", { statements: [], rules })
+    const target = yield* (yield* FileAccess.Service).resolve({ path: file })
+    const permission = yield* Permission.Service
+    return (yield* permission.ask({
+      id: Permission.ID.create(),
+      sessionID,
+      action,
+      resources: [target.resource],
+      ...FileAccess.leadsOf([target]),
+    })).effect
+  }).pipe(provide(project))
+
+describe("a link outside the project, and rules written relative to the project", () => {
+  for (const layer of ["managed", "configured"] as const)
+    for (const action of ["Read", "Edit"] as const) {
+      it.live(`${layer} ${action} deny of the folder an external link leads to`, () =>
+        Effect.gen(function* () {
+          const { project, ssh, elsewhere } = yield* more
+          const rules = [
+            { action: "*", resource: "*", effect: "allow" },
+            { action, resource: `${slash(ssh)}/*`, effect: "deny" },
+          ] satisfies Permission.Ruleset
+          // The control: the folder itself, and the link outside the project that leads to it.
+          expect(yield* decide(project, rules, layer, action, path.join(ssh, "id_rsa"))).toBe("deny")
+          expect(yield* decide(project, rules, layer, action, path.join(elsewhere, "k", "id_rsa"))).toBe("deny")
+          expect(yield* decide(project, rules, layer, action, path.join(elsewhere, "k", "new.txt"))).toBe("deny")
+          expect(yield* decide(project, rules, layer, action, path.join(elsewhere, "other.txt"))).toBe("allow")
+        }),
+      )
+
+      it.live(`${layer} ${action} deny written relative to the project holds through a link inside it`, () =>
+        Effect.gen(function* () {
+          const { project, symlinks } = yield* more
+          const rules = [
+            { action: "*", resource: "*", effect: "allow" },
+            { action, resource: "secrets/*", effect: "deny" },
+            { action, resource: ".env", effect: "deny" },
+          ] satisfies Permission.Ruleset
+          expect(yield* decide(project, rules, layer, action, "secrets/key")).toBe("deny")
+          expect(yield* decide(project, rules, layer, action, "alias/key")).toBe("deny")
+          expect(yield* decide(project, rules, layer, action, "src/a.ts")).toBe("allow")
+          if (symlinks) expect(yield* decide(project, rules, layer, action, "envlink")).toBe("deny")
+        }),
+      )
+    }
+
+  it.live("an allow written relative to the project still covers a link to another folder of it", () =>
+    Effect.gen(function* () {
+      const { project } = yield* more
+      const rules = [
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "Edit", resource: "*", effect: "ask" },
+        { action: "Edit", resource: "src/*", effect: "allow" },
+      ] satisfies Permission.Ruleset
+      expect(yield* decide(project, rules, "configured", "Edit", "src/real-gen/x.ts")).toBe("allow")
+      expect(yield* decide(project, rules, "configured", "Edit", "src/gen/x.ts")).toBe("allow")
+      // The control: a link whose lead is not under `src/` is asked about, since the broad ask is the last rule for it.
+      expect(yield* decide(project, rules, "configured", "Edit", "alias/key")).toBe("ask")
+    }),
+  )
+
+  it.live("a link that leads out of the project under a broad ask is asked about, whatever allow names the link", () =>
+    Effect.gen(function* () {
+      const { project } = yield* more
+      const rules = [
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "Edit", resource: "*", effect: "ask" },
+        { action: "Edit", resource: "vendor/*", effect: "allow" },
+      ] satisfies Permission.Ruleset
+      // Documented in docs/upgrading.md: the ask is for the folder the link leads to, which `vendor/*` does not name.
+      expect(yield* decide(project, rules, "configured", "Edit", "vendor/x.ts")).toBe("ask")
+    }),
+  )
+})
