@@ -352,6 +352,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 - Plugins that the terminal UI imports in its own process: `trustedPluginDirectories` with `trust.startup`. Proof:
   `test/plugin-trust.test.ts`, `test/plugin-discovery.test.ts`.
+- The status line command (`status_line.command`, user config): it runs with the terminal UI's own working folder, the
+  folder it was started in, and programs such as `bun` or `git` read a `bunfig.toml` preload or a `core.fsmonitor` from
+  there. `Prompt` hands it to `StatusLine` only while `trust.startup.trusted()`, so no command runs and no line is drawn
+  in an untrusted start folder, and it runs again when trust is granted. Proof: `test/status-line-trust.test.tsx` (the
+  command itself and a `bunfig.toml` preload, each with a trusted control run).
 - The trust dialog, bound to the folder in view when it opened: `TrustProvider` and `useTrustPrompt` in
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:

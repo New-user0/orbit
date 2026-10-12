@@ -54,7 +54,7 @@ export function StatusLine(props: {
     ),
   )
   return (
-    <Show when={statusLine.spans()}>
+    <Show when={props.command() ? statusLine.spans() : undefined}>
       {(spans) => (
         <box paddingLeft={1} flexShrink={0}>
           <text fg={props.fg} wrapMode="none" truncate>

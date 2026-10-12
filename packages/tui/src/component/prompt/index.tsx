@@ -56,6 +56,7 @@ import { useToast } from "../../ui/toast"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
+import { useTrust } from "../../context/trust"
 import { Vim } from "./vim-state"
 import { StatusLine } from "./status-line"
 import { configuredOutputStyle } from "../dialog-output-style"
@@ -222,6 +223,7 @@ export function Prompt(props: PromptProps) {
   const currentLocation = useLocation()
   const args = useArgs()
   const config = useConfig().data
+  const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
   const [vim, setVim] = createSignal<Vim.State>({ mode: "insert" })
   const vimNormal = () => config.prompt?.vim === true && vim().mode === "normal"
@@ -1702,12 +1704,15 @@ export function Prompt(props: PromptProps) {
   const statusLine = (
     <StatusLine
       sessionID={props.sessionID}
-      command={() => config.status_line?.command}
+      // The command runs in the folder the terminal UI was started in, which a clone chooses the contents of, so no line
+      // runs or shows until that folder is trusted.
+      command={() => (trust.startup.trusted() ? config.status_line?.command : undefined)}
       interval={() => config.status_line?.interval}
       colors={() => config.status_line?.colors}
       fg={theme.text.muted}
       on={(type, handler) => data.on(type, handler)}
       watch={() => [
+        trust.startup.trusted(),
         local.agent.current()?.id,
         statusLineModel()?.providerID,
         statusLineModel()?.id,

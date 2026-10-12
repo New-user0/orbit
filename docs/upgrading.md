@@ -1344,6 +1344,14 @@ or cmd would expand) gets no command, only its escaped name and the way to type 
 now ends a folder that is a stored grant by its own name, wherever it is a location: after `orb trust M --for I`, the
 revoke it prints removes M and leaves the grant of the repository around it.
 
+### The status line stays blank until the folder is trusted
+
+The status line command used to run as soon as the terminal UI opened, in the folder it was started in, which for a clone can make the command's own programs (`bun`, `git`, `npx`) run code the clone chose. It now runs no command and draws no line while that folder is untrusted, and starts as soon as it is trusted (`/trust` in the terminal UI, or `orb trust`).
+
+**Affects:** people with a `status_line` command who open `orb` in a folder they have not trusted.
+
+**What to do:** Trust the folder; nothing changes in folders that are already trusted.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
