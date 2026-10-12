@@ -94,7 +94,15 @@ bun run dev              # start the TUI from source
 bun run check            # lint + typecheck
 ```
 
-Tests run per package, never from the root (for example `cd packages/core && bun test`).
+Tests run per package, never from the root: `cd packages/core && bun run test`.
+
+`bun run test` runs the big packages (core, cli, tui, server, vscode) in parallel, in worker processes: half the logical cores, at
+least two. `ORBIT_TEST_WORKERS=<n>` sets the count, and `ORBIT_TEST_WORKERS=1` gives a serial run for debugging. The other packages
+run serially because their files are small, and a worker costs about a second per file on Windows; setting `ORBIT_TEST_WORKERS`
+runs them in parallel too. Each package keeps a `test/timings.json` that starts the slowest files first, and
+`bun run test:timings` refreshes it (ordinary runs never write it). Each core worker gets its own home, XDG and temp folders. The
+ACP approval matrix in cli (`permission-files.subprocess.test.ts`) runs its rows 8 at a time inside its one file; pass
+`--max-concurrency=1` to run them one by one.
 
 ## Brand gate
 

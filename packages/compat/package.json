@@ -29,7 +29,7 @@
   "scripts": {
     "build": "bun run script/build.ts",
     "typecheck": "tsgo --noEmit",
-    "test": "bun test"
+    "test": "bun ../../tools/test/run.ts --serial"
   },
   "dependencies": {
     "@orbit/schema": "workspace:*",

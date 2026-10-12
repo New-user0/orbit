@@ -13,6 +13,17 @@ describe("Core test environment", () => {
     expect(process.env.ORBIT_TRUST_PROJECT).toBe("1")
   })
 
+  test("gives each worker process a home of its own below the shared root", () => {
+    // Without this, files that run side by side write to one config, data and temp folder.
+    const root = process.env.ORBIT_TEST_ROOT
+    expect(root).toBeDefined()
+    if (!root) return
+    expect(process.env.ORBIT_TEST_HOME).toBe(path.join(root, `worker-${process.pid}`))
+    expect(os.homedir()).toBe(process.env.ORBIT_TEST_HOME!)
+    expect(os.homedir()).not.toBe(root)
+    expect(os.tmpdir().startsWith(process.env.ORBIT_TEST_HOME!)).toBe(true)
+  })
+
   test("isolates global home and XDG roots", () => {
     const home = process.env.ORBIT_TEST_HOME
     expect(home).toBeDefined()

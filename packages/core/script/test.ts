@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../test/fixture/tmpdir"
+import { testArgs } from "../../../tools/test/args"
 
 await using directory = await tmpdir("oc-")
 const home = directory.path
@@ -23,6 +24,8 @@ const environment = {
   ),
   HOME: home,
   ORBIT_TEST_HOME: home,
+  // Each test worker process moves into its own folder below this one (test/preload.ts).
+  ORBIT_TEST_ROOT: home,
   XDG_CONFIG_HOME: path.join(home, ".config"),
   XDG_DATA_HOME: path.join(home, ".local", "share"),
   XDG_CACHE_HOME: path.join(home, ".cache"),
@@ -35,7 +38,7 @@ const environment = {
 }
 
 const child = Bun.spawn({
-  cmd: [process.execPath, "test", "--only-failures", ...process.argv.slice(2)],
+  cmd: [process.execPath, ...testArgs(["--only-failures", ...process.argv.slice(2)])],
   env: environment,
   stdin: "inherit",
   stdout: "inherit",

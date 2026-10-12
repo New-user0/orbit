@@ -1,12 +1,17 @@
 // Over a real `orb acp` process in an untrusted folder with the person's own `ask` rule, an approval shows the place the
 // call acts on: a model-added key changes nothing it shows, and a `~` path is the person's home folder, not a folder
 // named `~` in the project.
-import { expect, test } from "bun:test"
+import { expect, test as sequential } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isolatedEnv } from "../fixture/environment"
+
+// Every row has its own folder, its own scripted model on port 0 and its own `orb acp` child, so the rows run at the
+// same time, as many as `--max-concurrency` allows (packages/cli/package.json). The file is one unit to `--parallel`,
+// so this is what makes the matrix fast. To run the rows one by one, pass `--max-concurrency=1`.
+const test = sequential.concurrent
 
 const patch = (name: string) =>
   `Index: ${name}\n===\n--- ${name}\n+++ ${name}\n@@ -1,1 +1,1 @@\n-# Title\n+# Title (typo fixed)\n`

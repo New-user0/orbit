@@ -67,8 +67,9 @@ test("files a sent prompt under its directory and time, and keeps only history_l
     expect(setup.history.search("t", "/work/a").map((item) => item.text)).toEqual(["three", "two"])
 
     // The file is rewritten when the limit trims it, and holds the same two entries.
-    await Bun.sleep(50)
-    const lines = (await Bun.file(path.join(tmp.path, "state", "prompt-history.jsonl")).text()).trim().split("\n")
+    const lines = (await savedHistory(tmp.path, (text) => text.endsWith("\n") && text.split("\n").length === 3))
+      .trim()
+      .split("\n")
     expect(lines.map((item) => JSON.parse(item).text)).toEqual(["two", "three"])
   } finally {
     setup.app.renderer.destroy()
@@ -89,8 +90,7 @@ test("keeps an image and a large paste in memory but saves neither", async () =>
 
     expect(setup.history.entries()[0]?.files).toHaveLength(1)
     expect(setup.history.entries()[0]?.pasted[0]?.text).toBe(big)
-    await Bun.sleep(50)
-    const saved = await Bun.file(path.join(tmp.path, "state", "prompt-history.jsonl")).text()
+    const saved = await savedHistory(tmp.path, (text) => text.endsWith("\n"))
     expect(saved).not.toContain("data:")
     expect(saved).not.toContain(big)
   } finally {
@@ -120,6 +120,19 @@ async function renderHistory(root: string, persisted?: string, historyLimit?: nu
   ))
   await app.renderOnce()
   return { app, history: history! }
+}
+
+// The provider saves in the background, and an append and a rewrite can overlap, so the file is read until it holds the
+// finished content instead of after a fixed pause (which a loaded machine outlasts).
+async function savedHistory(root: string, finished: (text: string) => boolean) {
+  const file = Bun.file(path.join(root, "state", "prompt-history.jsonl"))
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const text = await file.text().catch(() => "")
+    if (finished(text)) return text
+    await Bun.sleep(10)
+  }
+  return file.text()
 }
 
 async function waitForHistory(history: ReturnType<typeof usePromptHistory>) {

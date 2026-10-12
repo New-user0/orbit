@@ -24,7 +24,7 @@
     "generate": "bun run script/generate-openapi.ts",
     "check:generated": "bun run script/generate-openapi.ts --check",
     "typecheck": "tsgo --noEmit",
-    "test": "bun test"
+    "test": "bun ../../tools/test/run.ts --serial"
   },
   "dependencies": {
     "@orbit/schema": "workspace:*",

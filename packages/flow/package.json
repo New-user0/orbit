@@ -11,7 +11,7 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "bun test"
+    "test": "bun ../../tools/test/run.ts --serial"
   },
   "dependencies": {
     "@orbit/client": "workspace:*",
