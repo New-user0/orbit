@@ -20,6 +20,7 @@ test(
         tool: "WebFetch",
         args: () => ({
           url,
+          prompt: "summarize",
           files: [
             { file: "README.md", patch: patch("README.md") },
             { file: "docs.md", patch: patch("docs.md") },
