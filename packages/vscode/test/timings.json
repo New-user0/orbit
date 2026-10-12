@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "files": {
+    "test/trust.test.ts": 21319,
+    "test/program.test.ts": 6718,
+    "test/controller.test.ts": 4051,
+    "test/recovery.test.ts": 2164,
+    "test/runs.test.ts": 175,
+    "test/approval-matrix.test.ts": 27,
+    "test/stall-notice.test.ts": 13,
+    "test/trust-text.test.ts": 13,
+    "test/endpoint.test.ts": 11,
+    "test/permission-save.test.ts": 10,
+    "test/context.test.ts": 6,
+    "test/manifest.test.ts": 6,
+    "test/present.test.ts": 5,
+    "test/notify.test.ts": 2,
+    "test/tool-name.test.ts": 2
+  }
+}

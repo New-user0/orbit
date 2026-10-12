@@ -27,7 +27,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "bun test --timeout 30000 --only-failures",
+    "test": "bun ../../tools/test/run.ts --serial --timeout 30000 --only-failures",
     "typecheck": "tsgo --noEmit && tsgo -p test/tsconfig.json --noEmit",
     "build": "bun ./script/build.ts",
     "verify:package": "bun ./script/verify-package.ts"

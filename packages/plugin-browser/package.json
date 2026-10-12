@@ -24,7 +24,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsgo --noEmit -p tsconfig.test.json",
-    "test": "bun test"
+    "test": "bun ../../tools/test/run.ts --serial"
   },
   "dependencies": {
     "@orbit/plugin": "workspace:*",

@@ -11,6 +11,9 @@ const requests: Array<{ node: string; step: "write" | "reply"; model: string; pr
 const failing = new Set<string>()
 let inflight = 0
 let concurrent = 0
+// A test that expects nodes to run side by side sets this to how many; the first write requests then wait until that
+// many are in flight, so a slow process start on a loaded machine cannot let one finish before the next begins.
+let gather = 0
 
 const ollama = Bun.serve({
   hostname: "127.0.0.1",
@@ -62,6 +65,11 @@ const ollama = Bun.serve({
       return stream([{ delta: { role: "assistant", content: `Wrote ${node}.txt` }, finish: "stop" }])
     inflight++
     concurrent = Math.max(concurrent, inflight)
+    const want = gather
+    const giveUp = Date.now() + 20_000
+    while (want > 0 && inflight < want && Date.now() < giveUp) await Bun.sleep(10)
+    // Reset on either outcome, so a barrier that never fills does not slow every later write request by 20 s.
+    gather = 0
     await Bun.sleep(400)
     inflight--
     return stream([
@@ -141,6 +149,7 @@ test("parallel agents run in separate worktrees and merge into the checkout", as
   const repository = await repo("parallel")
   requests.length = 0
   concurrent = 0
+  gather = 2
 
   const result = await orb(repository, ["flow", "run", "--standalone", workflow])
 
@@ -506,6 +515,7 @@ output: merge
   )
   requests.length = 0
   concurrent = 0
+  gather = 2
 
   const paused = await orb(repository, [
     "flow",

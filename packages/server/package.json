@@ -20,7 +20,8 @@
   },
   "scripts": {
     "build": "bun run script/build.ts",
-    "test": "bun test --only-failures",
+    "test": "bun ../../tools/test/run.ts --only-failures",
+    "test:timings": "bun ../../tools/test/run.ts --only-failures --update-timings",
     "typecheck": "tsgo -b",
     "probe:workerd": "bun run script/workerd-probe.ts"
   },

@@ -315,7 +315,8 @@
     "build": "bun run script/build.ts",
     "package": "bun run script/build.ts --package",
     "typecheck": "tsgo --noEmit",
-    "test": "bun test"
+    "test": "bun ../../tools/test/run.ts",
+    "test:timings": "bun ../../tools/test/run.ts --update-timings"
   },
   "dependencies": {
     "@orbit/client": "workspace:*",
