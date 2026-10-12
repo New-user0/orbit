@@ -7,6 +7,7 @@ import type { Session } from "@orbit/schema/session"
 import { createHash } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { Cause, Context, Effect, Exit, FiberSet, Latch, Layer, Schema, Scope, Semaphore, Stream, Types } from "effect"
+import { Trust } from "@orbit/schema/trust"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Credential } from "../credential.js"
 import { Bus } from "../bus.js"
@@ -18,6 +19,7 @@ import { Config } from "../config.js"
 import { ConfigEnv } from "../config/env.js"
 import { Location } from "../location.js"
 import { ManagedPolicy } from "../managed-policy.js"
+import { ProjectTrust } from "../project-trust.js"
 import { McpRestriction } from "./restriction.js"
 import { waitForAbort } from "@orbit/util/process"
 import { State } from "../state.js"
@@ -181,6 +183,7 @@ export const layer = (options?: Options) =>
       const integration = yield* Integration.Service
       const credentials = yield* Credential.Service
       const policy = yield* ManagedPolicy.Service
+      const trust = yield* ProjectTrust.Service
       const root = yield* Effect.scope
       const fork = yield* FiberSet.makeRuntime<never, void, never>()
 
@@ -445,8 +448,21 @@ export const layer = (options?: Options) =>
         connection.onResourcesChanged(() => live(bus.publish(McpEvent.ResourcesChanged, { server: name })))
       }
 
+      // Stdio servers that did not start because the project folder is not trusted.
+      const waiting = new Set<ServerName>()
       const startServer = (name: ServerName, entry: ServerEntry) =>
         Effect.gen(function* () {
+          // A stdio server starts with the project's folder as its working folder unless its config says otherwise, and the
+          // programs it runs (bun, npx, uvx, git) read that folder's own files first. Until the person trusts the folder none
+          // starts, the user's and the organization's included; a grant starts them (`resumeTrusted`).
+          if (entry.config.type === "local" && !(yield* trust.trusted())) {
+            waiting.add(name)
+            entry.status = { status: "failed", error: "Waiting for this project folder to be trusted before it starts." }
+            yield* Effect.logWarning("mcp server waits for the project folder to be trusted", { server: name })
+            yield* bus.publish(McpEvent.StatusChanged, { server: name })
+            return
+          }
+          waiting.delete(name)
           // Announce the handshake so connect() and credential reconnects don't show a stale
           // disabled/failed status for the duration of the connection attempt.
           entry.status = { status: "pending" }
@@ -517,6 +533,7 @@ export const layer = (options?: Options) =>
       })
 
       const disposeServer = Effect.fnUntraced(function* (name: ServerName, entry: ServerEntry) {
+        waiting.delete(name)
         yield* stopServer(name, entry)
         if (entry.integrationID) owned.delete(entry.integrationID)
         if (entry.registration) yield* entry.registration.dispose
@@ -654,6 +671,24 @@ export const layer = (options?: Options) =>
         bus.subscribe(Credential.Event.Switched).pipe(
           Stream.filter((event) => owned.has(event.data.integrationID)),
           Stream.runForEach((event) => Effect.sync(() => fork(reconnect(event.data.integrationID)))),
+        ),
+      )
+      // A trust grant starts the servers that waited for it. A revoke leaves running servers to the next reload.
+      const resumeTrusted = Effect.fnUntraced(function* () {
+        yield* Effect.forEach(
+          Array.from(waiting),
+          (name) =>
+            Effect.gen(function* () {
+              const entry = entries.get(name)
+              if (!entry || !waiting.has(name) || !(yield* trust.trusted())) return
+              yield* startServer(name, entry)
+            }).pipe(locks.withLock(name)),
+          { discard: true },
+        )
+      })
+      fork(
+        bus.subscribe(Trust.Event.Updated).pipe(
+          Stream.runForEach(() => Effect.sync(() => fork(resumeTrusted()))),
         ),
       )
       const state: State.Interface<Data, Editor> = State.create<Data, Editor>({
@@ -844,7 +879,7 @@ export function configured(options?: Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [Config.node, Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, ManagedPolicy.node],
+    deps: [Config.node, Location.node, Environment.node, Bus.node, Form.node, Integration.node, Credential.node, ManagedPolicy.node, ProjectTrust.node],
   })
 }
 

@@ -79,6 +79,8 @@ import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
+import { trustedProject, untrustedProject } from "./fixture/project-trust"
+import { ProjectTrust } from "@orbit/core/project-trust"
 import { grantWithRecords } from "./fixture/grant"
 import { location } from "./fixture/location"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -298,6 +300,7 @@ function resourceMcpLayer(
     subscribe?: Bus.Interface["subscribe"]
     environment?: Layer.Layer<Environment.Service>
     managed?: Layer.Layer<ManagedPolicy.Service>
+    trust?: Layer.Layer<ProjectTrust.Service>
     published?: string[]
   },
 ) {
@@ -380,6 +383,7 @@ function resourceMcpLayer(
         Layer.mock(Credential.Service, {}),
         overrides?.environment ?? hostEnvironmentLayer,
         overrides?.managed ?? ManagedPolicy.layer,
+        overrides?.trust ?? trustedProject,
       ),
     ),
   )
@@ -819,6 +823,62 @@ test.skipIf(process.platform !== "win32")("starts a local MCP server with one sp
   )
 })
 
+
+// A stdio server starts with the project's folder as its working folder, where the programs it runs read the clone's own
+// files. While the folder is not trusted none starts, whoever wrote the server; a grant starts it. The recording spawner
+// sees every command that would have crossed the seam, and the trusted control shows the same config does spawn.
+describe("a local MCP server waits for the project folder to be trusted", () => {
+  const script = path.join(import.meta.dir, "fixture/mcp-output-schema.ts")
+  for (const cwd of [undefined, ".", os.tmpdir()])
+    for (const trusted of [false, true])
+      test(`cwd ${cwd ?? "unset"}, ${trusted ? "trusted from the start" : "untrusted, then granted"}`, async () => {
+        const spawns: Array<ChildProcess.Command> = []
+        const state = { trusted }
+        const updates = Effect.runSync(PubSub.unbounded<unknown>())
+        const config = new ConfigMCP.Local({
+          type: "local",
+          command: [process.execPath, script],
+          ...(cwd === undefined ? {} : { cwd }),
+        })
+        const entries = [
+          new Document({
+            type: "document",
+            info: new Info({ mcp: new ConfigMCP.Info({ servers: { resources: config } }) }),
+          }),
+        ]
+        const connected = Effect.gen(function* () {
+          const service = yield* Mcp.Service
+          const status = (yield* service.servers()).find((server) => server.name === "resources")?.status
+          if (status?.status !== "connected") return yield* Effect.fail(status)
+        }).pipe(Effect.retry({ times: 300, schedule: Schedule.spaced("10 millis") }))
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const service = yield* Mcp.Service
+            if (trusted) {
+              yield* connected
+              expect(spawns).toHaveLength(1)
+              return
+            }
+            expect((yield* settled(service))?.status).toBe("failed")
+            expect(JSON.stringify((yield* service.servers())[0]?.status)).toContain("trusted")
+            expect(spawns).toEqual([])
+            state.trusted = true
+            yield* PubSub.publish(updates, {})
+            yield* connected
+            expect(spawns).toHaveLength(1)
+          }).pipe(
+            Effect.provide(
+              resourceMcpLayer(config, undefined, undefined, {
+                entries: () => Effect.succeed(entries),
+                environment: recordingEnvironmentLayer(spawns),
+                trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.sync(() => state.trusted) }),
+                subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+              }),
+            ),
+          ),
+        )
+      })
+})
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
   const config = new ConfigMCP.Local({ type: "local", command: ["example-mcp"] })
   const driver = Environment.makeMemoryDriver()
@@ -2271,6 +2331,7 @@ const shutdownIt = testEffect(
       Location.node,
       ManagedPolicy.node,
       Config.node,
+      ProjectTrust.node,
     ]),
     [
       Config.node.replace(Config.testLayer()),

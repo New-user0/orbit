@@ -130,7 +130,7 @@ describe("external_directory rules meet the real folder behind another spelling"
             if (managed) yield* (yield* ManagedPolicy.Service).set("file", { statements: [], rules: [rule] })
             const access = yield* FileAccess.Service
             const permission = yield* Permission.Service
-            const context = { sessionID, agent: Agent.ID.make("test"), messageID: "msg_leads", id: "call_leads" }
+            const context = { sessionID, agent: Agent.ID.make("test"), messageID: "msg_leads", id: "call_leads" } as never
             const outcome = (effect: Effect.Effect<unknown, unknown>) =>
               effect.pipe(
                 Effect.map(() => "allowed"),

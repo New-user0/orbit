@@ -94,6 +94,16 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   language servers in `test/lsp-spawn.test.ts`, formatters in `test/formatter.test.ts`; decoy programs cannot pin this,
   because Windows stops the working-folder lookup for any value of the variable). Proof: `test/config/env.test.ts`,
   `test/config/config-trust.test.ts`.
+- Hooks and stdio MCP servers that the person or the organization wrote: they start with the project's folder as their
+  working folder, where `bun` reads a `bunfig.toml` preload, `npx` an `.npmrc`, `uvx` a `uv.toml` and `git` the
+  repository's config, so the program the person chose loads code the clone chose. Until `ProjectTrust.trusted()` holds,
+  `LifecycleHooksPlugin` runs no hook (one warning per process) and `Mcp` starts no `local` server whatever its `cwd`
+  (status `failed`, saying it waits for trust); a `trust.updated` event starts the waiting servers, and hooks read the
+  trust each time one fires. A remote server is not a spawn and is not held. Proof: `test/plugin/lifecycle-hooks.test.ts`
+  (a hook that writes a marker in its working folder, untrusted then granted, and the project and other-product hooks
+  held as before) and `test/mcp.test.ts` ("a local MCP server waits for the project folder to be trusted": spawn
+  recorder, three `cwd` spellings, trusted control). The interactive clients show no trust dialog for this, since no
+  config file of the clone is withheld (Known gaps).
 - `{env:}` and `{file:}` references in those documents: `ConfigVariable.substitute` with `within`. Proof:
   `config-trust.test.ts`. The folders it may reach come from `standing()` in `packages/core/src/config.ts`, which for
   config above the project asks `ConfigTrust.reach`: a holder that is the home directory or a filesystem root
@@ -1937,6 +1947,13 @@ fixes it or asks.
   for a call recorded without them. The live pending call is sent with an empty input and names no place; a replayed one carries the recorded input. The finished call's
   own diff is still built from the input's `old_string` and `new_string` (not an approval), at the recorded place, and
   not drawn at all when the call has no place.
+- **Hooks and stdio MCP servers waiting for trust are not offered a grant.** `Trust.Status` lists what a clone's files
+  hold back, and the person's own hooks and servers are not in a clone's files, so a folder with nothing else withheld
+  shows no trust dialog in the TUI or VS Code. The hooks log one warning and a waiting server shows as `failed` with the
+  reason; `/trust` or `orb trust` grants the folder. A prompt needs a new kind on the public `Trust.Kind` list and an
+  owner call on how a user-scope document shows as withheld. `orb -p` already refuses an untrusted folder; `orb run`
+  without `--trust` now runs no hook and starts no stdio server. The owner has not yet said whether headless runs keep
+  the reference's implicit trust for hooks.
 
 ## Review checklist
 

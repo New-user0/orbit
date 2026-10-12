@@ -1694,6 +1694,22 @@ scripts named like a location cmdlet.
 
 **What to do:** Nothing. Ordinary `cd`, `Set-Location` and `Push-Location` calls still run without a question.
 
+### Hooks and stdio MCP servers wait for the project folder to be trusted
+
+A hook, and a stdio (`local`) MCP server, starts with the project's folder as its working folder, so `bun`, `npx`,
+`uvx` and `git` read that folder's own files (a `bunfig.toml` preload, an `.npmrc`, a repository config) before your
+script runs. Until the folder is trusted no hook runs, yours and your organization's included (one warning is logged),
+and no stdio MCP server starts: it shows as failed with the reason, whatever its `cwd`. Granting the folder starts the
+waiting servers at once, and hooks run from the next event. Remote MCP servers are not held. Before, only the project's
+own hooks waited.
+
+**Affects:** people who run `orb run` without `--trust`, the TUI, ACP editors and SDK hosts in a folder they have not
+trusted, with hooks or stdio MCP servers in their user or managed config. A folder that holds nothing back shows no
+trust dialog, so the hooks and servers wait without a prompt.
+
+**What to do:** Trust the folder (`/trust` in the TUI, `orb trust`, or `--trust` on `orb run`) when you want your hooks
+and servers there.
+
 ### An `external_directory` deny or ask also meets the folder a link or junction leads to
 
 A file tool that reached a folder outside the project through a link, a Windows system junction (`Local Settings`,
