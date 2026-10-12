@@ -1,4 +1,4 @@
-import type { LocationRef, OrbitClient } from "@orbit/client/promise"
+import type { OrbitClient } from "@orbit/client"
 
 // A command that was moved to the background outlives the step that started it, and its completion notice starts
 // another step. A headless run is not over until each of the session's commands has ended and its notice has been
@@ -8,7 +8,7 @@ const GRACE_MS = 10_000
 export async function waitForBackground(input: {
   client: OrbitClient
   sessionID: string
-  location: LocationRef
+  location: { readonly directory: string }
   /** True once the run is being ended for another reason (an interrupt, a rejected ask), so waiting is pointless. */
   abandoned: () => boolean
 }) {

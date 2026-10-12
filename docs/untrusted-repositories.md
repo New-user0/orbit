@@ -235,7 +235,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder, unless `PATH` itself names it, for example with a relative entry such as `.` (see Known gaps). Proof:
-  `test/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
+  `packages/util/test/which.test.ts`, `test/ripgrep-binary.test.ts`, `test/util/git-executable.test.ts`.
 - The PowerShell parser host (`packages/core/src/shell/powershell-parse.ts`): Orbit asks PowerShell's own parser what a
   command does and reads a summary of the syntax tree. The host is `pwsh`, then `powershell` on Windows, found with
   `which` (never the working folder; nothing on `PATH` is no host) and started by its full path through
@@ -1419,7 +1419,7 @@ kind in turn.
   decoy cannot run. When you touch a test of a lookup, plant the kinds it does not: the tests that run a decoy plant
   `.exe` files (`cross-spawn-spawner.test.ts`, `project.test.ts`, `mcp.test.ts`, the CLI's `program-lookup.test.ts`) and
   `.bat` files (`cross-spawn-spawner.test.ts`, `project.test.ts`), and the lookup tests plant `.cmd` and `.exe` files and
-  check which file is returned (`which.test.ts`, `git-executable.test.ts`, `ripgrep-binary.test.ts`).
+  check which file is returned (`packages/util/test/which.test.ts`, `git-executable.test.ts`, `ripgrep-binary.test.ts`).
 - Mutation: go back to the npm package's own lookup in `which`, take `ProgramLookup.install()` out of an entry or the
   spawner, take the variable out of the spawner's child environment, or run `taskkill` by name through `exec` again, and
   watch the tests fail on Windows.
@@ -1808,7 +1808,7 @@ fixes it or asks.
   `git.exe` and starts the fallback under each host is still missing (task `prompts-context-4`).
 - **A relative `PATH` entry in a child's environment.** `which` now skips every `PATH` entry that is not absolute (`.`,
   `bin`, `node_modules/.bin`, and on Windows a drive-relative or root-relative entry), so Orbit's own lookups never find
-  a program in the working folder that way (`util.which` in `core/test/which.test.ts`). A child that is handed a
+  a program in the working folder that way (`util.which` in `packages/util/test/which.test.ts`). A child that is handed a
   `PATH` with an explicit relative entry still searches it: a hand probe with Bun 1.4.2 on Windows had `cmd.exe` run a
   project `.cmd` through a `.` entry even with `NoDefaultCurrentDirectoryInExePath` set (no test pins this). That needs the person's own `PATH` or the person's own config to name
   the entry, because an untrusted project's `env` is withheld whole (the `env` rows in `core/test/config/env.test.ts`).

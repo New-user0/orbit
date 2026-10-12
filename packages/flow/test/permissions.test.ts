@@ -59,6 +59,7 @@ function server(effective: () => Promise<unknown>) {
       wait: () => answer,
       async interrupt() {},
     },
+    shell: { list: async () => ({ data: [] }) },
     message: {
       async list() {
         return { data: [{ id: "msg_1", type: "assistant", content: [{ type: "text", text: "done" }], tokens: {} }] }

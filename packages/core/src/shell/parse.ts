@@ -391,16 +391,18 @@ export function directoryArgument(value: string, powershell: boolean, cwd: strin
 
   // PowerShell exposes environment variables through $env:NAME and provides these
   // automatic directory variables. Expand only values we can determine without executing code.
-  return expandKnownDirectory(
-    text
-      .replace(/\$\{env:([^}]+)\}/gi, (_, key: string) => environment(key) ?? "")
-      .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (_, key: string) => environment(key) ?? "")
-      .replace(/\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi, (_, key: string) => {
-        if (key.toUpperCase() === "HOME") return os.homedir()
-        if (key.toUpperCase() === "PWD") return cwd
-        return path.dirname(shell)
-      }),
-  )
+  // PowerShell 7 goes home for a location change to nothing: `$null`, or a variable that is unset or empty. Windows
+  // PowerShell 5.1 fails there, so the home folder is the stricter answer on every host.
+  if (/^\$null$/i.test(text)) return os.homedir()
+  const expanded = text
+    .replace(/\$\{env:([^}]+)\}/gi, (_, key: string) => environment(key) ?? "")
+    .replace(/\$env:([A-Za-z_][A-Za-z0-9_]*)/gi, (_, key: string) => environment(key) ?? "")
+    .replace(/\$(HOME|PWD|PSHOME)(?=$|[\\/])/gi, (_, key: string) => {
+      if (key.toUpperCase() === "HOME") return os.homedir()
+      if (key.toUpperCase() === "PWD") return cwd
+      return path.dirname(shell)
+    })
+  return expanded === "" && text !== "" ? os.homedir() : expandKnownDirectory(expanded)
 }
 
 function expandKnownDirectory(value: string) {

@@ -277,6 +277,37 @@ describe("ShellGuard.facts: places", () => {
   )
 })
 
+// A place FileAccess refuses is reported as unresolved, not looked up and not counted inside the sandbox's writable roots
+// (class 6): a link of the project that leads to a share is refused by name, and the writable root must not make it
+// internal. Only such a link reaches the guard's check, so the row needs a privileged account on Windows.
+describe("ShellGuard.facts: a place FileAccess refuses", () => {
+  for (const trusted of [true, false])
+    for (const command of ["touch lnk/x", "cat lnk/x", "rm lnk/x", "printf x > lnk/x"])
+      it.live(
+        `${command} through a link to a share stays unresolved inside a writable root (${trusted ? "trusted" : "untrusted"})`,
+        () =>
+          Effect.gen(function* () {
+            if (!win) return
+            const { project } = yield* layout
+            const made = yield* Effect.promise(() =>
+              fs.symlink("\\\\localhost\\C$\\orbit-no-such-folder", path.join(project, "lnk"), "dir").then(
+                () => true,
+                () => false,
+              ),
+            )
+            if (!made) return
+            yield* Effect.gen(function* () {
+              const found = yield* facts(command, { cwd: project, writable: [project] })
+              expect(found.places.map((place) => place.status)).toEqual(["unresolved"])
+              // Reported as written: the early return skips the lookup that would name the share the link leads to.
+              // (A trusted project follows its own links, so only the untrusted rows are refused before the lookup.)
+              if (!trusted) expect(found.places[0]?.real).toEqual([path.join(project, "lnk", "x")])
+              expect(found.external).toEqual([])
+            }).pipe(provide(project, trusted))
+          }),
+      )
+})
+
 const repository = async (folder: string) => {
   await fs.mkdir(path.join(folder, ".git"), { recursive: true })
   await fs.writeFile(path.join(folder, ".git", "HEAD"), "ref: refs/heads/main\n")
@@ -808,6 +839,30 @@ describe("ShellGuard.authorize", () => {
       asked.length = 0
       yield* run(`Set-Location ../outside # see HKLM:\\Software; Remove-Item s #${pad}`, () => false, { shell: "pwsh" })
       expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
+    }),
+  )
+  // PowerShell 7 goes home for a location change to nothing, on every host; Windows PowerShell 5.1 fails there, so home is
+  // the stricter reading. Each spelling is read in the raw reading and the plain one, on both host kinds.
+  it.live("asks for the home folder when a location change names nothing", () =>
+    Effect.sync(() => {
+      for (const platform of ["win32", "linux"] as const)
+        for (const raw of [false, true])
+          for (const text of [
+            ...(raw ? [] : ["Set-Location", "cd"]),
+            "Set-Location $null",
+            // The raw reading does not unbrace a name; the plain one is always read as well.
+            ...(raw ? [] : ["Set-Location ${env:ORBIT_NO_SUCH_VARIABLE}"]),
+            "Set-Location $env:ORBIT_NO_SUCH_VARIABLE",
+            "Set-Location -Path:$null",
+          ])
+            expect([platform, raw, text, ShellGuard.locations(text, "pwsh", platform, "", "", raw)]).toEqual([
+              platform,
+              raw,
+              text,
+              [os.homedir()],
+            ])
+      // A name that is set, and a folder that is written out, are not home.
+      expect(ShellGuard.locations("Set-Location ../a", "pwsh", "linux")).toEqual(["../a"])
     }),
   )
   it.live("keeps text that only looks like an opener out of the split", () =>

@@ -399,7 +399,10 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
   ]
   // The raw text is read as well as the text with its comments and strings taken out: a misreading of the second can
   // only add a folder here, never drop one.
-  const read = (folders: string[]) => folders.map((directory) => FileAccess.resolvePath(input.cwd.absolute, directory))
+  // pwsh on Linux and macOS takes a backslash as a separator too, so a word of PowerShell is read that way on every host.
+  const native = (word: string) => (ps && process.platform !== "win32" ? word.replaceAll("\\", "/") : word)
+  const read = (folders: string[]) =>
+    folders.map((directory) => FileAccess.resolvePath(input.cwd.absolute, native(directory)))
   const loose = fragmentary
     ? locations(input.command, analysis.dialect, process.platform, input.cwd.absolute, input.shell, true)
     : []
@@ -418,7 +421,7 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
     ...(ps ? words(analysis) : yield* ShellParse.operands(input.command, input.shell)),
     ...(fragmentary ? [...fragmentWords(input.command, ps), ...fragmentWords(input.command, ps, true)] : []),
   ]
-  const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, operand)))
+  const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, native(operand))))
   const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
   const requested = request(analysis, input.command, scanned, gathered.findings)
   const shell: Permission.AssertInput | undefined = requested && {
@@ -852,7 +855,8 @@ export function expansions(analysis: Analysis, cwd: string, shell: string) {
       (command) => LOCATION.has(command.name) && command.name !== "new-psdrive" && command.name !== "pop-location",
     )
     .flatMap((command) =>
-      command.arguments.flatMap((argument) => {
+      // PowerShell 7 goes home for a bare Set-Location.
+      command.name === "set-location" && command.arguments.length === 0 ? [os.homedir()] : command.arguments.flatMap((argument) => {
         // A word with a variable is read as written; any other word is the constant the parser folded, with its quotes
         // joined (`../out"side"` is `../outside`), so the folder shown never holds a quote character.
         const word =
@@ -922,6 +926,9 @@ export function locations(
     // A comment ends the words; bash takes only the first operand of cd and pushd.
     const comment = words.findIndex((word, index) => index > 0 && /^(#|<#)/.test(word.raw))
     const operands = words.slice(1, comment === -1 ? undefined : comment)
+    // PowerShell 7 goes home for a bare Set-Location (and its aliases cd, chdir, sl).
+    // The raw reading stops a fragment at the first comment opener, so it cannot tell an empty target from a hidden one.
+    if (ps && !raw && target === "set-location" && operands.length === 0) return [os.homedir()]
     return (ps ? operands : bashOperands(operands).slice(0, 1)).flatMap((item, index, rest) => {
       const bound = ps ? colonBound(item, rest[index + 1]) : undefined
       if (bound !== undefined && !pathParameter(bound.name)) return []

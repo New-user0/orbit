@@ -14,7 +14,7 @@ import { Option, Result } from "effect"
 import { toolOutputText, type MiniToolPart } from "@orbit/tui/mini/tool"
 import { parseSessionTargetModel } from "../session-target"
 import { errorMessage } from "../util/error"
-import { waitForBackground } from "./background"
+import { waitForBackground } from "@orbit/flow/background"
 import {
   GLOBAL_FORM_SESSION_ID,
   contentKey,

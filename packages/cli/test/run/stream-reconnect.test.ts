@@ -242,3 +242,29 @@ describe("what a failure says reaches the controller as a line that holds no con
     await h.settle()
   }, 30_000)
 })
+
+describe("a command moved to the background", () => {
+  test("keeps the run open until it has ended and its notice has been answered", async () => {
+    const h = harness()
+    h.send({ type: "user", text: "go" })
+    await Bun.sleep(100)
+    h.emit(delivered(h.state.admitted[0]))
+    h.state.messages = finished(h.state.admitted[0], "done")
+    h.state.shells = [{ id: "shl_bg", status: "running", metadata: { sessionID } }]
+    h.close()
+    await Bun.sleep(100)
+    h.emit(succeeded)
+    h.idle()
+    let over = false
+    void h.run.then(() => (over = true))
+    await Bun.sleep(1200)
+    expect(over).toBe(false)
+
+    h.state.shells = []
+    h.state.messages = [
+      { id: "msg_notice", type: "synthetic", metadata: { source: "shell", shellID: "shl_bg", state: "completed" } },
+      ...h.state.messages,
+    ]
+    expect(await h.settle()).toBe(0)
+  }, 30_000)
+})
