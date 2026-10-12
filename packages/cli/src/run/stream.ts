@@ -14,6 +14,7 @@ import { Option, Result } from "effect"
 import { toolOutputText, type MiniToolPart } from "@orbit/tui/mini/tool"
 import { parseSessionTargetModel } from "../session-target"
 import { errorMessage } from "../util/error"
+import { waitForBackground } from "./background"
 import {
   GLOBAL_FORM_SESSION_ID,
   contentKey,
@@ -1028,6 +1029,8 @@ export async function runStream(input: StreamInput) {
         continue
       }
       idleSince = undefined
+      // A command moved to the background keeps the run open until its notice has been answered.
+      await waitForBackground({ client: input.client, sessionID, location: input.location, abandoned: () => signalled })
       // The events can trail the history: an admitted message has no result until its busy period ends.
       const deadline = Date.now() + 5_000
       while ((unaccounted.size > 0 || period) && Date.now() < deadline) {

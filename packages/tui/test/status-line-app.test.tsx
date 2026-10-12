@@ -189,11 +189,10 @@ console.log("n=" + n + " " + JSON.stringify({
     setup.mockInput.pressKey("F8")
     await setup.waitForFrame((frame) => frame.includes("Select model"))
     await setup.mockInput.typeText("second")
-    await Bun.sleep(400)
-    await setup.renderOnce()
+    // The filter has been applied once the list shows the model, so Enter picks it.
+    await setup.waitForFrame((frame) => frame.includes("second model"))
     setup.mockInput.pressEnter()
-    await Bun.sleep(600)
-    await setup.renderOnce()
+    await setup.waitForFrame((frame) => !frame.includes("Select model"))
   }
   await pick()
   if (!setup.captureCharFrame().includes('"model":"second"')) await pick()

@@ -16,3 +16,8 @@ export function takeDraft(sessionID: string | undefined) {
 export function saveDraft(sessionID: string | undefined, entry: DraftEntry) {
   byTab.set(sessionID, entry)
 }
+
+/** Drops every stashed draft; a test that disposes an app calls it so a draft does not outlive its app in the process. */
+export function clearDrafts() {
+  byTab.clear()
+}
