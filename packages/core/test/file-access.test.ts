@@ -93,6 +93,22 @@ describe("FileAccess.authorizeRead", () => {
       }).pipe(provide(requests))
     })
 
+  // A device-namespace spelling of a volume is refused as a share spelling is, with its code, not as a device: the list of
+  // devices answers for the names it holds, and this is checked before it.
+  for (const spelled of [
+    "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\x\\f.txt",
+    "\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\x\\f.txt",
+  ])
+    it.live(`refuses ${spelled} as a share or device spelling without asking`, () => {
+      if (process.platform !== "win32") return Effect.void
+      const requests: Permission.AssertInput[] = []
+      return Effect.gen(function* () {
+        const error = yield* (yield* FileAccess.Service).authorizeRead(spelled, invocation).pipe(Effect.flip)
+        expect(error).toMatchObject({ code: "file.spelling" })
+        expect(requests).toEqual([])
+      }).pipe(provide(requests))
+    })
+
   it.live("still authorizes a file whose name only starts like a device", () => {
     const requests: Permission.AssertInput[] = []
     return Effect.gen(function* () {

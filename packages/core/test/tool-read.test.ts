@@ -257,7 +257,7 @@ describe("ReadTool", () => {
 
       expect(result).toMatchObject({
         status: "error",
-        error: { message: expect.stringContaining("is a device or stream, not a file") },
+        error: { type: "file.device", message: expect.stringContaining("is a device or stream, not a file") },
       })
       expect(assertions).toEqual([])
       expect(readCalls).toEqual([])

@@ -214,6 +214,8 @@ export const ErrorCode = {
    * cannot be found: spellings that a rule written for the file would not see.
    */
   FileSpelling: "file.spelling",
+  /** The path names a device or stream (`NUL`, `/dev/zero`) rather than a file, so nothing was asked or opened. */
+  FileDevice: "file.device",
   /** An edit that replaces a text with itself. */
   EditNoChange: "edit.no-change",
   /** An edit that looks for nothing. */

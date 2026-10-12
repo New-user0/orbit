@@ -2,6 +2,7 @@ export * as GrepTool from "./grep.js"
 
 import type { Context } from "@orbit/plugin/effect/plugin"
 import { ToolFailure } from "@orbit/ai"
+import { Tool } from "../../tool.js"
 import { Effect, Schema } from "effect"
 import path from "path"
 import { Environment } from "../../environment/index.js"
@@ -273,7 +274,7 @@ export const Plugin = {
                 error instanceof ToolFailure
                   ? error
                   : error instanceof FileAccess.DeviceError
-                    ? new ToolFailure({ message: error.message })
+                    ? new ToolFailure({ message: error.message, code: Tool.ErrorCode.FileDevice })
                     : error instanceof Ripgrep.InvalidPatternError
                       ? new ToolFailure({ message: `Invalid regex pattern: ${error.message}` })
                       : new ToolFailure({ message: `Unable to grep for ${input.pattern}`, error }),

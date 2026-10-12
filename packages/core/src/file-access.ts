@@ -221,9 +221,15 @@ const layer = Layer.effect(
             : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
                 ?.type
       const directory = AbsolutePath.make(type === "Directory" ? place : path.dirname(place))
+      // A link outside the project leads somewhere too, and a deny or ask written for that folder decides it. A share
+      // spelling is never followed (`resolve` refuses one before this), and an escaped place is already the real one.
+      const leads = escapes === undefined && !isShare(absolute) ? yield* trust.leads(absolute) : absolute
       return {
         absolute,
         place: AbsolutePath.make(place),
+        ...(FSUtil.contains(leads, absolute) && FSUtil.contains(absolute, leads)
+          ? {}
+          : { leads: AbsolutePath.make(leads) }),
         resource: slash(place),
         externalDirectory: {
           action: "external_directory",
@@ -354,7 +360,11 @@ const layer = Layer.effect(
       options?: ReadOptions,
     ) {
       // Before any disk is read: resolving a path stats every part of it, and a stat of a device can block.
-      if (DevicePath.blocked(resolvePath(location.directory, file))) return yield* new DeviceError({ resource: file })
+      // A share or device-namespace spelling (`\?\Volume{...}`) outside the project is refused as one first, with the
+      // same code at every door, since the device list would otherwise answer for it with another message.
+      const lexical = resolvePath(location.directory, file)
+      if (isShare(lexical) && !folders.some((folder) => FSUtil.contains(folder, lexical))) return yield* shareFailure(file)
+      if (DevicePath.blocked(lexical)) return yield* new DeviceError({ resource: file })
       const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
       // Before anything is asked or opened: a device is no place for a question. The listed names are the Windows rule;
       // elsewhere what the place really is decides, so a spelling the list lacks, a link to a device or a pipe is

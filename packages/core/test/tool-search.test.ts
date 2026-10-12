@@ -594,7 +594,7 @@ describe("search tools", () => {
               )
               expect(result).toMatchObject({
                 status: "error",
-                error: { type: "tool.execution", message: expect.stringContaining("is a device or stream") },
+                error: { type: "file.device", message: expect.stringContaining("is a device or stream") },
               })
             }),
           ),
