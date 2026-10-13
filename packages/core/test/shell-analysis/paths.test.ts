@@ -163,6 +163,12 @@ describe("bash output files of read-class commands", () => {
     ["git -C '' diff --output=o", ["write /work/o"]],
     ["git -C d -C '' diff --output=o", ["write /work/d/o"]],
     ["git -C '' -C '' diff --output=o", ["write /work/o"]],
+    // A `~` the shell expanded in an earlier `-C` stays expanded when a later relative `-C` joins it.
+    ["git -C ~ -C x diff --output=o", ["write /home/u/x/o"]],
+    ["git -C ~/a -C b diff --output=o", ["write /home/u/a/b/o"]],
+    ["git -C d -C ~ -C x diff --output=o", ["write /home/u/x/o"]],
+    ["git -C ~ -C '' -C x diff --output=o", ["write /home/u/x/o"]],
+    ["git -C '~' -C x diff --output=o", ["write /work/~/x/o"]],
     ["git -c a=b diff --output=o", ["write /work/o"]],
     // `-o` inside a cluster of short options.
     ["git format-patch -1 -ko ../x", ["write /x"]],
