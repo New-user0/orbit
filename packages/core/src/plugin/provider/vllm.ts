@@ -16,7 +16,8 @@ const RemoteModel = Schema.Struct({
 })
 
 const Response = Schema.Struct({ data: Schema.Array(RemoteModel) })
-const discovery = new Map<string, { checked: number; apiKey?: string; models?: (typeof RemoteModel.Type)[] }>()
+type Checked = { checked: number; apiKey?: string; models?: (typeof RemoteModel.Type)[] }
+const discovery = new Map<string, Checked>()
 const discoveryLock = Semaphore.makeUnsafe(1)
 
 export function make(origin = "http://127.0.0.1:8000", interval: Duration.Input = "30 seconds") {
@@ -64,17 +65,22 @@ export function make(origin = "http://127.0.0.1:8000", interval: Duration.Input 
       const discover = Effect.fn("VLLMPlugin.discover")(function* () {
         const current = source.current
         if (!current.healthEndpoint || !current.modelsEndpoint) return undefined
+        const endpoint = `${current.healthEndpoint}
+${current.modelsEndpoint}`
+        const marks: { prior?: Checked; written?: Checked } = {}
         return yield* discoveryLock.withPermit(
           Effect.gen(function* () {
             const endpoint = `${current.healthEndpoint}\n${current.modelsEndpoint}`
             const cached = discovery.get(endpoint)
             if (cached && cached.apiKey === current.apiKey && Date.now() - cached.checked < Duration.toMillis(interval))
               return { source: current, models: cached.models }
-            discovery.set(endpoint, {
+            marks.prior = cached
+            marks.written = {
               checked: Date.now(),
               apiKey: current.apiKey,
               models: cached && cached.apiKey === current.apiKey ? cached.models : undefined,
-            })
+            }
+            discovery.set(endpoint, marks.written)
             const request = (endpoint: string) =>
               current.apiKey
                 ? HttpClientRequest.get(endpoint).pipe(
@@ -91,7 +97,17 @@ export function make(origin = "http://127.0.0.1:8000", interval: Duration.Input 
               .toSorted((a, b) => a.id.localeCompare(b.id))
             discovery.set(endpoint, { checked: Date.now(), apiKey: current.apiKey, models })
             return { source: current, models }
-          }),
+          }).pipe(
+            // An interrupted fetch must not leave a fresh "checked" entry without models behind: the next
+            // activation would trust it and find no catalog until the interval passes.
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                if (!marks.written || discovery.get(endpoint) !== marks.written) return
+                if (marks.prior) discovery.set(endpoint, marks.prior)
+                else discovery.delete(endpoint)
+              }),
+            ),
+          ),
         )
       })
 

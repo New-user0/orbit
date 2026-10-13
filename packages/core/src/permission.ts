@@ -216,7 +216,7 @@ const layer = Layer.effect(
         ...resolved(input.action, resource),
       ])
       if (decided.effect === "deny") return decided
-      const led = stricter(input.action, resource, input.leads?.[resource], all)
+      const led = stricter(input.action, input.leads?.[resource], all)
       return led === "deny" || (led === "ask" && decided.effect === "allow")
         ? ({ action: input.action, resource: "*", effect: led } satisfies Permission.Rule)
         : decided
@@ -279,7 +279,7 @@ const layer = Layer.effect(
           subjects.some((subject) => Wildcard.match(subject, rule.resource)),
       )?.effect
       if (own === "deny") return own
-      const led = stricter(input.action, resource, input.leads?.[resource], rules)
+      const led = stricter(input.action, input.leads?.[resource], rules)
       return led === "deny" || (led === "ask" && own !== "ask") ? led : own
     }
 
@@ -287,12 +287,12 @@ const layer = Layer.effect(
     // place never lifts the resource, since the person wrote it for the place and not for the link's spelling.
     // Rules are written as the project names its files, so one lead is tried in every spelling a rule can be written in: the
     // real path, the same place under the project's folders as they are spelled (a session folder reached through a link has
-    // real-path leads), and each of those relative to the session folder. For a resource outside the project, which is
-    // absolute, the spelling given is a subject too, so a rule written for a folder reached through a link (a linked home
-    // for the Plan folder) still decides it. The last rule that matches any of them decides, as for aliases.
+    // real-path leads), and each of those relative to the session folder. The spelling of the resource itself is not a
+    // subject: a rule that names only the link must not decide the place it leads to, so the Plan agent's allow for its
+    // folder is also written for the folder's real path (`PlanPlugin`). The last rule that matches any of them decides, as
+    // for aliases.
     function stricter(
       action: string,
-      resource: string,
       leads: ReadonlyArray<string> | undefined,
       rules: Permission.Ruleset,
     ) {
@@ -309,7 +309,7 @@ const layer = Layer.effect(
             ? []
             : [relative.replaceAll("\\", "/")]
         })
-        const subjects = [...places, ...relatives, ...(path.isAbsolute(resource) ? [resource] : [])]
+        const subjects = [...places, ...relatives]
         const effect = rules.findLast(
           (rule) => actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
         )?.effect
