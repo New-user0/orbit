@@ -870,6 +870,18 @@ describe("ShellGuard.authorize", () => {
                   "cd -PassThru",
                   "sl -ErrorAction:Stop",
                   "cd -Verbose -PassThru",
+                  // The end-of-parameters marker names nothing, alone or after parameters, and a block comment pad or a
+                  // quoted opener before the command does not hide it (class 3/4/8).
+                  ...["cd --", "cd -PassThru --", "cd -Verbose --", "Set-Location -ErrorAction:Stop --"].flatMap((spelling) => [
+                    spelling,
+                    `${spelling} <#xxx#>`,
+                    `${spelling} #xxx`,
+                    `Write-Output '<#'; ${spelling} #xxx`,
+                  ]),
+                  ...["cd -PassThru", "sl -ea:Stop", "cd -Verbose", "cd -ErrorAction:Stop"].flatMap((spelling) => [
+                    `${spelling} <#xxx#>`,
+                    `Write-Output '<#'; ${spelling} #xxx`,
+                  ]),
                 ]),
           ])
             expect([platform, raw, text, ShellGuard.locations(text, "pwsh", platform, "", "", raw)]).toEqual([

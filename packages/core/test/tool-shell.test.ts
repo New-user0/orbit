@@ -4102,7 +4102,7 @@ describe("ShellTool guard (PowerShell)", () => {
       )
 
   // PowerShell 7 goes home for a location change with no path: an empty one, or only parameters that take none (class 8).
-  for (const spelling of ["Set-Location", "cd", "Set-Location ''", 'cd ""', "sl -Path ''", "cd -Path:''", "cd -PassThru", "cd -ErrorAction Stop"])
+  for (const spelling of ["Set-Location", "cd", "Set-Location ''", 'cd ""', "sl -Path ''", "cd -Path:''", "cd -PassThru", "cd -ErrorAction Stop", "cd --", "cd -PassThru --", "cd -Verbose --", "cd -ea Stop <#p#>", "Write-Output '<#'; cd -PassThru"])
     for (const padded of [false, true])
       test(
         `a removal after ${spelling} asks for the home folder first${padded ? ", in input over the length limit" : ""}`,
