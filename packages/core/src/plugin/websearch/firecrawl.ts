@@ -2,6 +2,7 @@ export * as WebSearchFirecrawl from "./firecrawl.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { Effect, Option, Schema, Scope } from "effect"
+import { untraced } from "./untraced.js"
 import { HttpClient } from "effect/unstable/http"
 import { App } from "../../app.js"
 import { WebSearchMcp } from "./mcp.js"
@@ -36,7 +37,7 @@ const decodeSearchResponse = Schema.decodeUnknownOption(SearchResponse)
 export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
   id: "orbit.websearch.firecrawl",
   effect: Effect.fn("WebSearchFirecrawl.Plugin")(function* (ctx) {
-    const http = yield* HttpClient.HttpClient
+    const http = untraced(yield* HttpClient.HttpClient)
     yield* ctx.integration.transform((editor) => {
       editor.update("firecrawl", (integration) => (integration.name = "Firecrawl"))
       editor.method.update({

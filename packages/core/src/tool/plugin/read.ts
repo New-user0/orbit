@@ -290,7 +290,7 @@ const parsePages = (value: string | undefined) => {
 
 /** The model text for a repeat read of a range whose text is the same as the one the model already holds. */
 export const unchangedStub = (path: string) =>
-  `Read file ${path}: unchanged since your last read of this range. The text you were given then is still current, so use it instead of reading again.`
+  `Read file ${path}: this range has not changed since you last read it, so rely on the earlier result in this conversation.`
 
 export const toModelContent = (path: string, offset: number | undefined, output: typeof Output.Type) => {
   if (output.type === "file" && output.encoding === "base64")

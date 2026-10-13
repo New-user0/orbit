@@ -2,6 +2,7 @@ export * as WebSearchParallel from "./parallel.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { Effect, Schema, Scope } from "effect"
+import { untraced } from "./untraced.js"
 import { HttpClient } from "effect/unstable/http"
 import { App } from "../../app.js"
 import { WebSearchMcp } from "./mcp.js"
@@ -51,7 +52,7 @@ const McpOutput = Schema.Struct({
 export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
   id: "orbit.websearch.parallel",
   effect: Effect.fn("WebSearchParallel.Plugin")(function* (ctx) {
-    const http = yield* HttpClient.HttpClient
+    const http = untraced(yield* HttpClient.HttpClient)
     yield* ctx.integration.transform((editor) => {
       editor.update("parallel", (integration) => (integration.name = "Parallel"))
       editor.method.update({

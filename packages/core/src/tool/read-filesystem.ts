@@ -22,6 +22,11 @@ export const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024
 export const MAX_PDF_SOURCE_BYTES = 32 * 1024 * 1024
 const FIRST_CHUNK = 256 * 1024
 const MAX_LINE_LENGTH = 2_000
+/**
+ * A line is cut at MAX_LINE_LENGTH characters, which is at most 6,000 bytes. Once the line being read has this many bytes
+ * in memory, the rest of it is not kept: a file of one huge line then costs a bounded amount of memory and time.
+ */
+const LINE_KEEP_BYTES = 64 * 1024
 const TREE_BASE = 6
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 
@@ -174,7 +179,7 @@ export const read = Effect.fn("ReadTool.read")(function* (
       if (error.actual !== "directory")
         return Effect.fail(new PathKindError({ resource, expected: "a file or directory" }))
       return files.list(input).pipe(
-        Effect.map((entries) => list(entries, page)),
+        Effect.map((entries) => list(entries, page, resource)),
         Effect.catchTag("Environment.WrongKind", () =>
           Effect.fail(new PathKindError({ resource, expected: "a file or directory" })),
         ),
@@ -309,10 +314,14 @@ const readText = Effect.fn("ReadTool.readText")(function* (
   const leaves = [textLeaf(first.bytes)]
   let bytes = first.bytes.length
   let lines = leaves[0].summary.lines
+  // Bytes after the last line break that is held, so a line that has outgrown LINE_KEEP_BYTES is noticed.
+  let tail = bytes - (first.bytes.lastIndexOf(10) + 1)
   let ended = false
+  // A page can only change when a line break arrives or the file ends, so a chunk without one is not tried again.
+  let due = true
   while (true) {
     const eof = ended || bytes >= first.info.size
-    if (lines >= offset - 1 || eof) {
+    if ((due || eof) && (lines >= offset - 1 || eof)) {
       const tree = textTree(leaves)
       const start = textOffset(tree, offset - 1)
       let position = 0
@@ -347,10 +356,18 @@ const readText = Effect.fn("ReadTool.readText")(function* (
       ended = true
       continue
     }
-    const leaf = textLeaf(next.bytes)
+    bytes += next.bytes.length
+    const newline = next.bytes.lastIndexOf(10)
+    // The middle of an over-long line is dropped. A chunk that held a NUL leaves one behind, so that a page which
+    // reaches the line is still refused as binary.
+    const leaf =
+      newline === -1 && tail >= LINE_KEEP_BYTES
+        ? textLeaf(next.bytes.includes(0) ? Uint8Array.of(0) : new Uint8Array())
+        : textLeaf(next.bytes)
+    tail = newline === -1 ? tail + next.bytes.length : next.bytes.length - newline - 1
     leaves.push(leaf)
-    bytes += leaf.summary.bytes
     lines += leaf.summary.lines
+    due = leaf.summary.lines > 0
   }
 })
 
@@ -396,7 +413,7 @@ const makeTextPage = Effect.fnUntraced(function* (
   })
 })
 
-const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
+const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput, resource: string) => {
   const offset = page.offset || 1
   const limit = Math.min(page.limit || MAX_READ_LINES, MAX_READ_LINES)
   const visible = items
@@ -419,7 +436,15 @@ const list = (items: ReadonlyArray<Environment.DirEntry>, page: PageInput) => {
           ? 1
           : a.path.localeCompare(b.path),
     )
-  const selected = visible.slice(offset - 1, offset - 1 + limit)
+  // The model text is the header (it names the path), one line per entry and a note that says where to continue. A page
+  // stops before the entry that would pass the budget and always holds one.
+  let size = resource.length + 160
+  const window = visible.slice(offset - 1, offset - 1 + limit)
+  const fits = window.findIndex((entry, index) => {
+    size += entry.path.length + 1
+    return index > 0 && !withinBudget(size)
+  })
+  const selected = fits === -1 ? window : window.slice(0, fits)
   const truncated = offset - 1 + selected.length < visible.length
   return new ListPage({
     type: "list-page",
