@@ -2817,7 +2817,7 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone,
+In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone,
 before anything is asked, by the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts`
 pin: the commands, agents, skill folders and plugin source folders of a config folder, the compatibility roots, the
 settings file, the MCP file, `{file:}` references, instruction markers found by walking up, the custom themes of the
@@ -2923,3 +2923,16 @@ wording of those notes, and models that sent a one-character query or both domai
 **Affects:** people who saved grants for those programs or answered "always" on wrapped commands.
 
 **What to do:** Nothing.
+
+## A project ID file shipped in a folder is ignored unless the folder is trusted
+
+- Orbit reads `.git/orbit` and `.hg/orbit` only in a trusted folder, and only when the file holds a hash of the shape Orbit
+  makes (40 or 64 hexadecimal characters). Anything else (`global`, a short value, a path) is dropped with one log line.
+  Orbit never writes these files, so a folder that ships one could pick its own project ID, and with it the saved "always
+  allow" answers and the data folders of another project. An untrusted Mercurial folder is its own project, as before.
+- A link that the file system cannot resolve (a loop, a path through a file, no access) in a commands, agents or skills
+  folder is now skipped with one log line on Linux and macOS. It used to stop the loaders.
+
+**Affects:** people who edited `.git/orbit` or `.hg/orbit` by hand, and repositories that ship such a file or link.
+
+**What to do:** Nothing; trust the folder, or use a 40-character hash, to keep a hand-written ID.
