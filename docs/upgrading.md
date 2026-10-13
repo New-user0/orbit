@@ -2798,3 +2798,30 @@ A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network 
 **Affects:** anyone who runs `export -p`, `declare -p` or similar from the shell tool under a rule that allowed them silently, and Windows users who open a folder that holds such links.
 
 **What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.
+
+### Web tools refuse bad searches with a type, send no trace headers, and Read keeps folders and long lines in bounds
+
+- `WebSearch` refuses a query shorter than 2 characters (type `tool.input-invalid`) and a call that gives both
+  `allowedDomains` and `blockedDomains` (type `websearch.invalid`). Both are refused before the permission request, the
+  consent form or any provider call, so nothing is asked or sent. Before, a one-character query was sent to the provider
+  and the blocked list silently won over the allowed one.
+- `WebFetch` refusals now carry a type: `webfetch.refused` for a URL that cannot be fetched (not http or https,
+  credentials, longer than 2,000 characters, a host with `*`) and for an address the address guard blocks, and
+  `webfetch.redirect-limit` for more than 10 same-site redirects. Code Mode `fetch` uses `webfetch.refused` for the same
+  refusals. Before, they arrived as `unknown` or `tool.execution`. Failures that are not refusals (a status error, a
+  timeout, an unsupported content type) keep their old type.
+- `WebFetch` and the web search providers no longer send `traceparent`, `tracestate` or `b3` headers to the sites and
+  providers they contact, on the first request or on a redirect hop. Requests to model providers are not affected.
+- `Read` of a folder now stays within about 25,000 tokens, like a file: a long listing is cut before the entry that
+  would pass the budget, with the usual `Continue reading with offset:` note.
+- `Read` of a file with very long lines, or none, no longer slows down with the file's size or holds the whole file in
+  memory. The part of a line past what a page can show is skipped as it is read; a null byte in it still makes the file
+  binary.
+- The note for a repeat read of an unchanged range and the note after a resized image are worded differently
+  ("this range has not changed since you last read it ..." and "[Shown at W x H px; the file itself is ...]"), and the
+  extraction instruction for a host in `webfetch.verbatim_hosts` is reworded. The meaning is the same.
+
+**Affects:** clients and hooks that match on the error type of a failed `WebSearch` or `WebFetch` call or on the exact
+wording of those notes, and models that sent a one-character query or both domain lists.
+
+**What to do:** Nothing. Send one domain list per search.

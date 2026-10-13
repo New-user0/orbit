@@ -1359,7 +1359,7 @@ describe("Tool", () => {
       )
 
       const note =
-        "[Image resized: the original is 1000×7 px and it is shown at 300×2 px. Multiply coordinates read from the shown image by 3.33 to get coordinates in the original.]"
+        "[Shown at 300×2 px; the file itself is 1000×7 px. Scale positions on the shown image by 3.33 to map them onto the file.]"
       const shown = (name?: string) => ({
         type: "file" as const,
         uri: "data:image/jpeg;base64,aW1hZ2Ugbm9ybWFsaXplZA==",
@@ -1402,7 +1402,7 @@ describe("Tool", () => {
         ...call("Execute"),
         call: { type: "tool-call", id: "call-codemode-image", name: "Execute", input: { code: "return (await tools.shot({})).text" } },
       })
-      expect(result.content?.some((item) => item.type === "text" && item.text.startsWith("[Image resized"))).toBe(false)
+      expect(result.content?.some((item) => item.type === "text" && item.text.startsWith("[Shown at"))).toBe(false)
       expect(result.content?.filter((item) => item.type === "file")).toHaveLength(1)
     }),
   )
