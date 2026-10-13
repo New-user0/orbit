@@ -1707,12 +1707,17 @@ and no stdio MCP server starts: it shows as failed with the reason, whatever its
 waiting servers at once, and hooks run from the next event. Remote MCP servers are not held. Before, only the project's
 own hooks waited.
 
+A `PreToolUse` hook is a guard, so it does not just stand aside: while the folder is not trusted, a tool call that one of
+your or your organization's `PreToolUse` hooks applies to is refused, with a reason that names `/trust`, `orb trust` and
+`--trust`, instead of going through as if no hook existed. Calls that no hook applies to run as before, and the other
+events (which cannot stop a call) wait without refusing anything.
+
 **Affects:** people who run `orb run` without `--trust`, the TUI, ACP editors and SDK hosts in a folder they have not
 trusted, with hooks or stdio MCP servers in their user or managed config. A folder that holds nothing back shows no
 trust dialog, so the hooks and servers wait without a prompt.
 
 **What to do:** Trust the folder (`/trust` in the TUI, `orb trust`, or `--trust` on `orb run`) when you want your hooks
-and servers there.
+and servers there, and so that calls your guard hooks cover are judged by them again.
 
 ### An `external_directory` deny or ask also meets the folder a link or junction leads to
 
