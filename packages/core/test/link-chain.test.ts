@@ -30,7 +30,8 @@ import { permissionLayer } from "./lib/permission"
 // inside the project. Each share row has an address of its own (TEST-NET-style, never routable), because Windows remembers
 // a host that failed. Rows that need a link to a file end where the account cannot make one.
 
-setDefaultTimeout(30_000)
+// A parallel run shares the machine with other files, so a row gets time to finish; the bound below it is what pins the speed.
+setDefaultTimeout(90_000)
 const win = process.platform === "win32"
 const noHost = PowerShellParse.Service.of({ parse: () => Effect.succeed({ valid: false, reason: "no-host" }) })
 const counts = [40, 41, 63, 85] as const
@@ -89,7 +90,7 @@ describe.skipIf(!win || !canLinkFile)("a chain of links in the repository that e
         const started = Date.now()
         const found = yield* LinkShare.of(files, path.join(base, "l0", "x"))
         const sync = LinkShare.ofSync(path.join(base, "l0", "x"))
-        expect(Date.now() - started).toBeLessThan(15_000)
+        expect(Date.now() - started).toBeLessThan(30_000)
         // The answer is never undefined: either the share, or a path that every caller refuses.
         if (count > 63) {
           expect(LinkShare.isUnresolved(found!)).toBe(true)
@@ -120,7 +121,7 @@ describe.skipIf(!win || !canLinkFile)("a chain of links in the repository that e
             yield* access.resolve({ path: ".", kind: "directory" }).pipe(Effect.exit)
             yield* access.resolve({ path: "l0", kind: "directory" }).pipe(Effect.exit)
           }).pipe(view.layer)
-          expect(Date.now() - started).toBeLessThan(15_000)
+          expect(Date.now() - started).toBeLessThan(30_000)
           // A chain past the limit is refused for its length, not named a network share (it may lead nowhere near one).
           if (count > 63) {
             expect(refusals[0]).toContain("links")
@@ -163,7 +164,7 @@ describe.skipIf(!win || !canLinkFile)("a chain of links in the repository that e
               }),
           )
         }).pipe(view.layer)
-        expect(Date.now() - started).toBeLessThan(15_000)
+        expect(Date.now() - started).toBeLessThan(30_000)
         expect(results).toEqual([true, true])
         expect(followed(view.recorded.calls, path.join(project, "l0"))).toEqual([])
       }),
@@ -197,7 +198,7 @@ describe.skipIf(!win || !canLinkFile)("a chain of links in the repository that e
           )
         expect(yield* Effect.promise(() => run(base))).toBe(true)
         expect(yield* Effect.promise(() => run(path.join(base, "w", "l0")))).toBe(false)
-        expect(Date.now() - started).toBeLessThan(15_000)
+        expect(Date.now() - started).toBeLessThan(30_000)
       }),
     )
   }

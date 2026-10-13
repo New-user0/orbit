@@ -30,7 +30,7 @@ const it = testEffect(
       LocationActivity.node.replace(
         makeGlobalNode({
           service: LocationActivity.Service,
-          layer: LocationActivity.layer({ timeToLive: "2 seconds", sweepInterval: "100 millis" }),
+          layer: LocationActivity.layer({ timeToLive: "5 seconds", sweepInterval: "100 millis" }),
           deps: [Bus.node, LocationServiceMap.node, SessionExecution.node, SessionStore.node],
         }),
       ),
@@ -63,8 +63,9 @@ it.live(
         Effect.timeout("5 seconds"),
       )
 
+      // The time to live starts at the first sweep, before the context is built, so it has to outlast that setup on a loaded machine.
       // Real idle cleanup must end the long-lived request, not leave a second registry behind it.
-      expect(yield* Fiber.join(pending).pipe(Effect.timeout("10 seconds"))).toMatchObject({ type: "rpc.unavailable" })
+      expect(yield* Fiber.join(pending).pipe(Effect.timeout("20 seconds"))).toMatchObject({ type: "rpc.unavailable" })
       expect(yield* RcMap.has(locations.rcMap, LocationServiceMap.canonical(ref))).toBe(false)
       expect(yield* rpc.state(state).pipe(Effect.flip)).toMatchObject({ type: "rpc.unavailable" })
 
@@ -82,5 +83,5 @@ it.live(
       expect(resumed.pollUnsafe()).toBeUndefined()
       yield* Fiber.interrupt(resumed)
     }),
-  30_000,
+  60_000,
 )

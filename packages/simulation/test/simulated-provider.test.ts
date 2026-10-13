@@ -11,6 +11,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Bus } from "@orbit/core/bus"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-services"
+import { Permission } from "@orbit/core/permission"
 import { Plugin } from "@orbit/core/plugin"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { AbsolutePath } from "@orbit/core/schema"
@@ -696,7 +697,14 @@ const toolLifecycleLayer = (endpoint: string) => {
   })
   return AppNodeBuilder.build(
     LayerNode.group([Database.node, Bus.node, SdkPlugins.node, LocationServiceMap.node, provider]),
-    [Config.node.replace(Config.testLayer())],
+    [
+      Config.node.replace(Config.testLayer()),
+      // The registry asks Permission before it runs the overlay tool, and nobody answers in this test. The rule check that
+      // hides a denied tool is separate (`registry.snapshot` with a deny rule) and is still asserted.
+      Permission.node.replace(
+        Layer.mock(Permission.Service, { close: Effect.void, denied: () => Effect.succeed(false), assert: () => Effect.void }),
+      ),
+    ],
   )
 }
 
