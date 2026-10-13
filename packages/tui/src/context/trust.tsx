@@ -177,6 +177,15 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
       held: createMemo(() => holdsBack(current.status())),
       pending,
       open,
+      /**
+       * Whether the folder at `directory()` is trusted, read again as that folder changes. For whatever hands a program a
+       * folder other than the one in view or the one the terminal UI started in, such as the status line: the answer for
+       * one folder says nothing about another, and it is false until the server has said otherwise.
+       */
+      folder: (directory: () => string) => {
+        const read = createTrustStatus({ client, log, directory })
+        return createMemo(() => read.status()?.trusted === true)
+      },
       startup: {
         /** Whether the plugins in the project the terminal UI started in may load. */
         trusted: createMemo(() => startup.status()?.trusted === true),

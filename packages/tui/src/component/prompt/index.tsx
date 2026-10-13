@@ -1700,19 +1700,23 @@ export function Prompt(props: PromptProps) {
     if (selection) return { providerID: selection.providerID, id: selection.modelID, variant: selection.variant }
     return props.sessionID ? data.session.get(props.sessionID)?.model : undefined
   }
+  // The command is handed this folder as `cwd` and `project_dir`, and programs it starts there (git, bun) read what the
+  // folder chose, so it is a folder the person has to trust as well. It is not always the one the terminal UI started in.
+  const statusLineTrusted = trust.folder(() => statusLineLocation().directory)
   // A user-configured status line command, shown under the prompt footer.
   const statusLine = (
     <StatusLine
       sessionID={props.sessionID}
-      // The command runs in the folder the terminal UI was started in, which a clone chooses the contents of, so no line
-      // runs or shows until that folder is trusted.
-      command={() => (trust.startup.trusted() ? config.status_line?.command : undefined)}
+      // The command runs in the folder the terminal UI was started in, which a clone chooses the contents of, and is told
+      // about the folder in view, so no line runs or shows until both are trusted.
+      command={() => (trust.startup.trusted() && statusLineTrusted() ? config.status_line?.command : undefined)}
       interval={() => config.status_line?.interval}
       colors={() => config.status_line?.colors}
       fg={theme.text.muted}
       on={(type, handler) => data.on(type, handler)}
       watch={() => [
         trust.startup.trusted(),
+        statusLineTrusted(),
         local.agent.current()?.id,
         statusLineModel()?.providerID,
         statusLineModel()?.id,
