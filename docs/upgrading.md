@@ -2798,3 +2798,13 @@ A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network 
 **Affects:** anyone who runs `export -p`, `declare -p` or similar from the shell tool under a rule that allowed them silently, and Windows users who open a folder that holds such links.
 
 **What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.
+
+### Shell commands that write through an output option, and wildcards in reads, meet your Edit and Read rules
+
+The shell guard now records the file that an output option names as a write: `sort -o`, `-oFILE`, `--output` (and any prefix of it that `sort` accepts), the second operand of `uniq IN OUT`, `find -fprint`, `-fprint0`, `-fprintf` and `-fls`, `tree -o` and `--output`, `git diff`, `log` and `show` `--output`, `git format-patch -o` and `git archive -o`, and the file of a `w`, `W` or `s///w` command (and the file of an `r`) in a sed script given on the command line. An `Edit` rule on that file applies, a file outside the project asks the folder question, and the sandbox treats it as a write. Before, these files were recorded as reads or not at all. `rg --pre` and `--hostname-bin` name a program, so such a command is asked about as a whole. Writers that the guard does not model (`curl -o`, `wget -O`, `awk` redirects, `tar -x`, interpreter one-liners) are unchanged.
+
+A read through a wildcard (`cat secr*.txt`, `head *`) is now checked against your `Read` deny rules and the managed ones for each file the wildcard matches in its folder, not only for the folder. Matches are found without following links, and a link among them is checked as the place it leads to. A wildcard that matches more than 500 files makes the command ask. A recursive folder search such as `grep -r x .` is still judged by its folder; per-file checks for searches belong to the later permissions work.
+
+**Affects:** anyone with `Edit` or `Read` deny rules who also lets the model run shell commands.
+
+**What to do:** Nothing; a command that your rules now stop is refused with the rule that matched.

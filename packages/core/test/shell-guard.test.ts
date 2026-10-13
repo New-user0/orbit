@@ -724,6 +724,35 @@ describe("ShellGuard.authorize", () => {
     }),
   )
 
+  // A read-class command that names an output file writes it: an Edit rule decides it, and a file outside the project is
+  // asked about as a folder, whichever spelling of the option the command uses (class 8, the shell-paths round).
+  for (const command of [
+    "sort -o OUT f",
+    "sort -oOUT f",
+    "sort --output=OUT f",
+    "sort --out OUT f",
+    "uniq f OUT",
+    "find . -fprint OUT",
+    "find . -fprintf OUT %p",
+    "tree -o OUT",
+    "git diff --output=OUT",
+    "git format-patch -o OUT",
+    "sed -n 'w OUT' f",
+    "sed -n 's/a/b/w OUT' f",
+  ])
+    it.live(`${command}: an Edit deny on the output file stops it, and an outside one asks`, () =>
+      Effect.gen(function* () {
+        const denied = yield* run(command.replaceAll("OUT", "out"), (input) => input.action === "Edit")
+        expect(Exit.isFailure(denied)).toBe(true)
+        expect(asked).toEqual([])
+        const control = yield* run(command.replaceAll("OUT", "out"), () => false)
+        expect(Exit.isSuccess(control)).toBe(true)
+        const outside = yield* run(command.replaceAll("OUT", "../outside/out"), () => false)
+        expect(Exit.isSuccess(outside)).toBe(true)
+        expect(asked.map((input) => input.action)).toContain("external_directory")
+      }),
+    )
+
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
   // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can
   // take seconds on this input, so the time bound is generous.
