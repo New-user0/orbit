@@ -366,6 +366,26 @@ describe("Permission", () => {
     }),
   )
 
+  // A saved grant lifts a command that changes which program runs only when it is that command's exact text (class 8),
+  // so an `env *` or `ls *` saved earlier no longer covers `env PATH=. ls`.
+  it.effect("lifts a program-steering shell command only by an exact saved approval", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const saved = yield* PermissionSaved.Service
+      yield* saved.add({ projectID: Project.ID.global, action: "bash", resources: ["env *", "ls *", "FOO=1 PATH=. ls"] })
+      const service = yield* Permission.Service
+      // Controls: the wildcard grants still lift commands that do not steer, and the exact text lifts itself.
+      expect((yield* service.ask(assertion({ action: "bash", resources: ["env A=1 ls"] }))).effect).toBe("allow")
+      expect((yield* service.ask(assertion({ action: "bash", resources: ["FOO=1 PATH=. ls"] }))).effect).toBe("allow")
+      for (const [index, resource] of ["env PATH=. ls", "env -i A=1 ls", "FOO=1 PATH=./b ls", "env LD_PRELOAD=./x.so ls"].entries()) {
+        const asked = yield* service.ask(
+          assertion({ id: Permission.ID.create(`per_steer${index}`), action: "bash", resources: [resource] }),
+        )
+        expect([resource, asked.effect]).toEqual([resource, "ask"])
+      }
+    }),
+  )
+
   it.effect("resolves an asked permission once", () =>
     Effect.gen(function* () {
       yield* setup()

@@ -264,7 +264,7 @@ function visit(level: Level, world: World, options: Options, add: Add) {
 const UNKNOWN = "\u0001"
 const KEYWORDS = new Set(["if", "then", "elif", "else", "fi", "while", "until", "for", "in", "do", "done", "case", "esac", "function", "select"])
 // Builtins that evaluate their arguments as shell code, or change how later names resolve (see `help` in bash).
-const EVAL_LIKE = new Set(["eval", "source", ".", "exec", "command", "builtin", "fc", "coproc", "noglob", "nocorrect", "trap", "enable", "mapfile", "readarray", "hash", "bind", "complete", "compgen", "alias", "let"])
+export const EVAL_LIKE = new Set(["eval", "source", ".", "exec", "command", "builtin", "fc", "coproc", "noglob", "nocorrect", "trap", "enable", "mapfile", "readarray", "hash", "bind", "complete", "compgen", "alias", "let"])
 // zsh modules that give raw file, socket and terminal access (see zshmodules(1)), plus the commands that load and reshape them.
 const ZSH = new Set(["sysopen", "sysread", "syswrite", "sysseek", "syserror", "zsystem", "zf_ln", "zf_mv", "zf_rm", "zf_mkdir", "zf_rmdir", "zf_chmod", "zf_chown", "zf_chgrp", "ztcp", "zsocket", "zpty", "zmodload", "emulate"])
 const ARITHMETIC = new Set(["-eq", "-ne", "-lt", "-le", "-gt", "-ge"])

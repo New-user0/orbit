@@ -11,6 +11,7 @@ import { Permission } from "../permission.js"
 import { ProjectTrust } from "../project-trust.js"
 import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
 import { LinkShare } from "@orbit/util/link-share"
+import { ShellLaunch } from "./launch.js"
 import { ShellParse } from "./parse.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
@@ -224,9 +225,9 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   // that failed, too many words or too much time for one command) is decided too: an `under` probe is denied when a deny
   // rule could match anything below its folders, so a walk that is not bounded never slips past a rule (class 8).
   // The word is expanded by `Wildcard` (linear matching, folders listed without following links, capped in entries and time).
-  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the parsed input
-  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. `**` is two stars unless the parsed input
-  // can switch globstar on, or the shell is zsh. Braces and extglobs are literal (class 7).
+  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the input (read
+  // parsed and as raw text, see `globOptions`) can switch dotglob on, or for PowerShell, whose wildcards include dotfiles.
+  // `**` is two stars unless the input can switch globstar on, or zsh runs at any level. Braces and extglobs are literal (class 7).
   const budget = { matches: 0, scans: 0, entries: GLOB_ENTRIES, until: Date.now() + GLOB_MILLIS }
   const seen = new Map<string, { targets: string[]; undecided: boolean }>()
   const options = globOptions(all, ps, input.ctx)
@@ -367,30 +368,59 @@ function globRemainder(operand: ShellPaths.Operand, win: boolean) {
   return trimmed === "" ? undefined : trimmed
 }
 
-// Commands that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
-// text the guard cannot see. Decided from the parsed commands after quote removal, never from the raw text, so a quoted or
-// escaped spelling cannot hide one (class 8).
+// Input that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
+// text the guard cannot see, decides the word as undecided: dot and `**` both on. Two readings are ORed (class 8):
+// the parsed commands, which see through quoting (`dot''glob`), and the raw text of every level, which sees what the parsed
+// commands do not name (`read GLOBIGNORE`, `printf -v`, a `trap`, `env BASHOPTS=...`).
 const OPTION_COMMANDS = new Set([
   "shopt", "set", "setopt", "unsetopt", "emulate", "declare", "typeset", "export", "local", "readonly", "eval", "source", ".",
   "builtin", "command",
 ])
 const OPTION_VARIABLES = /^(globignore|bashopts|shellopts|zsh_?opts)$/i
+const OPTION_WORDS = /^(globignore|bashopts|shellopts)(=|$)/i
+const OPTION_TEXT = /dotglob|nocaseglob|globdots|globignore|case_?glob|glob_?dots|globstar|bashopts|shellopts|setopt|trap/i
 
 function globOptions(all: Level[], ps: boolean, ctx: Context) {
-  if (ps) return { dot: true, globstar: false }
-  const zsh = /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell))
+  if (ps) return { dot: true, globstar: false, follow: false, powershell: true }
+  const heads = (command: Command) => [command.head, command.inner[0] ?? ""]
+  // zsh reads `***/` as a recursion that follows links: the login shell, or any program the input starts as zsh.
+  const zsh =
+    /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell)) ||
+    all.some((level) =>
+      level.analysis.commands.some((command) => heads(command).some((head) => ShellLaunch.programName(head, ctx.platform) === "zsh")),
+    )
   const undecided = all.some(
     (level) =>
-      level.analysis.opaque !== undefined || level.analysis.features.assignment ||
+      level.analysis.opaque !== undefined || level.analysis.features.assignment || OPTION_TEXT.test(level.text) ||
       level.analysis.commands.some(
         (command) =>
           command.dynamicHead ||
           command.wrapper === "unanalysable" ||
-          [command.head, command.inner[0] ?? ""].some((head) => OPTION_COMMANDS.has(head)) ||
-          command.env.some((item) => OPTION_VARIABLES.test(item.name)),
+          heads(command).some((head) => OPTION_COMMANDS.has(head) || ShellSafety.EVAL_LIKE.has(head)) ||
+          command.env.some((item) => OPTION_VARIABLES.test(item.name)) ||
+          command.argv.some((word) => OPTION_WORDS.test(word.value)) ||
+          setsVariable(command) ||
+          launchesWithOptions(command, ctx.platform),
       ),
   )
-  return { dot: undecided, globstar: undecided || zsh }
+  return { dot: undecided, globstar: undecided || zsh, follow: zsh, powershell: false }
+}
+
+// A wrapper that sets a variable for the program it starts (`env BASHOPTS=dotglob bash -c ...`): the assignment is an operand
+// of the wrapper, so `command.env` does not hold it.
+function setsVariable(command: Command) {
+  return command.argv
+    .slice(0, command.argv.length - command.inner.length)
+    .some((word) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value))
+}
+
+// A nested shell started with anything but a bare `-c` before its script (`-O dotglob`, `-o globdots`, `--rcfile`, zsh's `-4`,
+// a cluster such as `-lc`). The launch reader consumes those as known, so the nested level carries no trace of them.
+function launchesWithOptions(command: Command, platform: NodeJS.Platform) {
+  if (!ShellLaunch.BASH_SHELLS.includes(ShellLaunch.programName(command.inner[0] ?? "", platform))) return false
+  const rest = command.inner.slice(1)
+  const options = rest.findIndex((word) => !/^[-+]/.test(word))
+  return (options < 0 ? rest : rest.slice(0, options)).some((word) => word !== "-c")
 }
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
@@ -784,24 +814,26 @@ export function request(
     const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
       if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
       const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => ({
+      // Only the program at the end of the chain gets a save. When anything in the chain reshapes it (env, assignments),
+      // that save is the stripped text itself, not a pattern, so a repeat is covered and a later PATH=. is not (class 8).
+      const open = command.env.length === 0 && !reshapes(command, steps)
+      const stripped = !steersProgram(command, steps)
+      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv, index, rest) => ({
         resource: argv.join(" "),
-        // A command that can change which program runs or what it finds saves no program behind it: the stripped spelling
-        // is there for a deny or an ask only (class 8).
-        save: steersProgram(command, steps) ? undefined : innerSave(command, argv),
+        save: stripped && index === rest.length - 1 ? innerSave(command, argv, !open) : undefined,
       }))
     })
     const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
-    // A scanned save of a command that reshapes its program is that command's exact text: it repeats, and lifts no other.
-    const exact = new Set(
-      analysis.commands
-        .filter((command) => reshapes(command, ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps))
-        .map((command) => command.text.trim()),
-    )
-    const saves = (scan?.commands ?? []).map((command) => (exact.has(command.resource) ? command.resource : command.save))
+    // A scanned save of a command that reshapes its program (`env *`, `FOO=1 *`) is replaced by the scanned text, and by
+    // nothing when that text holds a wildcard: a saved pattern has no escape, so `FOO=* ls` would lift `FOO=1 PATH=. ls`.
+    // The test reads the scanner's own words, so a redirect, a pipe or a continuation does not hide it.
+    const saves = (scan?.commands ?? []).flatMap((command) => {
+      if (!ASSIGNED.test(command.resource) && !reshapes(undefined, ShellWrappers.unwrap(command.resource.split(/\s+/)).steps))
+        return [command.save]
+      return /[*?]/.test(command.resource) ? [] : [command.resource]
+    })
     // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`)
-    // when every word naming that program is plain, as typed. The wrapper's own save is the one scanned above, so
-    // `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
+    // when every word naming that program is plain, as typed. The extras come after the scanned saves.
     return {
       resources: distinct([...resources, ...added.map((item) => item.resource)]),
       save: [...saves, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !saves.includes(item))],
@@ -811,10 +843,12 @@ export function request(
   return { resources: [whole], save: [] }
 }
 
+const ASSIGNED = /^\s*[A-Za-z_][A-Za-z0-9_]*=/
+
 const RESHAPERS = new Set(["env", "sudo", "doas", "exec"])
 
-function reshapes(command: Command, steps: string[][]) {
-  return command.env.length > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
+function reshapes(command: Command | undefined, steps: string[][]) {
+  return (command?.env.length ?? 0) > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
 }
 
 const LOOKUP = /^(PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=/i
@@ -835,14 +869,15 @@ function steersProgram(command: Command, steps: string[][]) {
 
 // The save for the program a wrapper runs, or undefined unless the words that name it are plain: unquoted, unescaped, with
 // no whitespace or wildcard, so the pattern is the text as the person wrote it.
-function innerSave(command: Command, argv: string[]) {
-  const named = ShellParse.prefix(argv)
+function innerSave(command: Command, argv: string[], exact: boolean) {
+  const named = exact ? argv : ShellParse.prefix(argv)
+  if (ASSIGNED.test(named[0] ?? "") || RESHAPERS.has(named[0] ?? "")) return undefined
   const offset = command.argv.length - argv.length
   const plain = named.every((_, index) => {
     const word = command.argv[offset + index]
     return word !== undefined && word.literal && !word.quoted && !word.glob && !word.escaped && !/[\s*?[\\]/.test(word.value)
   })
-  return plain ? `${named.join(" ")} *` : undefined
+  return plain ? (exact ? named.join(" ") : `${named.join(" ")} *`) : undefined
 }
 
 function distinct<A>(list: readonly A[]) {

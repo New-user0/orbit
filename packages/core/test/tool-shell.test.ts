@@ -568,6 +568,17 @@ describe("ShellTool scanner permissions", () => {
       ['timeout 5 "rm -rf" x', "rm -rf x"],
       ["timeout 5 r\\* x", "rm -rf x"],
       ["FOO=1 'r*' x", "rm -rf x"],
+      ["nice env A=1 ls", "env PATH=. ls"],
+      ["timeout 5 env A=1 ls", "env PATH=. ls"],
+      ["env A=1 ls 2>/dev/null", "env PATH=. ls"],
+      ["env A=1 ls > out", "env PATH=. ls"],
+      ["env A=1 ls < in", "env PATH=. ls"],
+      ["env A=1 ls 2>&1 | head", "env PATH=. ls"],
+      ["env A=1 \\\nls", "env PATH=. ls"],
+      ["timeout 5 FOO=1 ls", "FOO=1 PATH=. ls"],
+      ["FOO=* ls", "FOO=1 PATH=. ls"],
+      ["FOO='*' ls", "FOO='1' PATH='.' B='' ls"],
+      ["env PATTERN='src/*' ls", "env PATTERN='src/x' PATH='.' B='' ls"],
     ] as const)
       test(`${scanner}: always on ${first} does not lift ${later}`, () =>
         withScanner(portable, (registry, fixture) =>
@@ -581,7 +592,9 @@ describe("ShellTool scanner permissions", () => {
             yield* Effect.promise(() =>
               Promise.all([
                 Bun.write(path.join(fixture.active, "x"), "keep"),
-                Bun.write(path.join(fixture.active, "ls"), "#!/bin/sh\necho pwned > pwned\n"),
+                Bun.write(path.join(fixture.active, "ls"), "#!/bin/sh\necho pwned > pwned\n").then(() =>
+                  fs.chmod(path.join(fixture.active, "ls"), 0o755),
+                ),
               ]),
             )
             const marker = path.join(fixture.active, "marker")
@@ -592,6 +605,26 @@ describe("ShellTool scanner permissions", () => {
             expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "pwned")).exists())).toBe(false)
           }),
         ))
+
+    // The control for the rows above: the decoy is executable and does run when the person says yes once.
+    test(`${scanner}: the ./ls decoy runs under env PATH=. ls when it is allowed once`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(path.join(fixture.active, "ls"), "#!/bin/sh\necho pwned > pwned\n").then(() =>
+              fs.chmod(path.join(fixture.active, "ls"), 0o755),
+            ),
+          )
+          const agents = yield* Agent.Service
+          yield* agents.transform((editor) =>
+            editor.update(toolIdentity.agent, (agent) => {
+              agent.permissions = [{ action: "Bash", resource: "*", effect: "ask" }]
+            }),
+          )
+          yield* runPermissionCommand(registry, "env PATH=. ls", path.join(fixture.active, "marker"), ["once"])
+          expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "pwned")).exists())).toBe(true)
+        }),
+      ))
 
     test(`${scanner}: always on env A=1 printf x repeats`, () =>
       withScanner(portable, (registry, fixture) =>
