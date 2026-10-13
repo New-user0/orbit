@@ -1,5 +1,5 @@
 import path from "path"
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Exit, Fiber, Layer, Scope, Stream, type Types } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
@@ -277,6 +277,57 @@ describe("Agent", () => {
           expect(Permission.evaluate("subagent", "*", info.permissions).effect).toBe("deny")
         }),
       )
+    }),
+  )
+})
+
+describe("Agent.folders", () => {
+  const spelled = Global.make({ data: "/data", config: "/config", tmp: "/tmp/orbit" })
+  const leads = Global.make({ data: "/real/data", config: "/real/config", tmp: "/real/tmp" })
+  const resources = (rules: ReturnType<typeof Agent.folders>) => rules.map((rule) => rule.resource)
+
+  // Each row is a root that may be reached through a link: the allow must also be written for where it leads.
+  for (const root of ["data", "config", "tmp"] as const) {
+    test(`also allows the real path of the ${root} folder`, () => {
+      const rules = Agent.folders(spelled, { ...spelled, [root]: leads[root] })
+      const wanted = resources(Agent.folders(leads)).filter((resource) => resource.startsWith(path.normalize(leads[root])))
+      expect(wanted.length).toBeGreaterThan(0)
+      expect(resources(rules)).toEqual(expect.arrayContaining(wanted))
+      expect(resources(rules)).toEqual(expect.arrayContaining(resources(Agent.folders(spelled))))
+      expect(rules.every((rule) => rule.effect === "allow" && Agent.isOwnFolder(rule))).toBe(true)
+    })
+  }
+
+  test("writes nothing twice when no folder is reached through a link", () => {
+    expect(Agent.folders(spelled, spelled)).toHaveLength(4)
+  })
+
+  it.effect("follows a config folder that is a link when the agent service starts", () =>
+    Effect.gen(function* () {
+      const fs = yield* Effect.promise(() => import("fs/promises"))
+      const os = yield* Effect.promise(() => import("os"))
+      const root = yield* Effect.promise(() => fs.realpath(os.tmpdir()))
+      const base = yield* Effect.promise(() => fs.mkdtemp(path.join(root, "orbit-own-")))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(base, { recursive: true, force: true })))
+      const target = path.join(base, "target")
+      const link = path.join(base, "link")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(target)
+        await fs.symlink(target, link, "junction")
+      })
+      const linked = Global.make({ data: "/data", config: link, tmp: "/tmp/orbit" })
+      const layer = AppNodeBuilder.build(LayerNode.group([Agent.node, Bus.node, Location.node]), [
+        Global.node.replace(Layer.succeed(Global.Service, Global.Service.of(linked))),
+        Location.node.replace(locationLayer),
+      ]) as unknown as Layer.Layer<Agent.Service, never>
+      const agent = yield* Effect.gen(function* () {
+        const service = yield* Agent.Service
+        yield* service.transform((editor) => editor.update(Agent.ID.make("reviewer"), () => {}))
+        return yield* service.get(Agent.ID.make("reviewer"))
+      }).pipe(Effect.provide(Layer.fresh(layer)))
+      const allowed = agent!.permissions.filter(Agent.isOwnFolder).map((rule) => rule.resource)
+      expect(allowed).toContain(path.join(link, "*"))
+      expect(allowed).toContain(path.join(target, "*"))
     }),
   )
 })

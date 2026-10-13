@@ -4,6 +4,7 @@ import path from "path"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { Array, Context, Effect, Layer, Types } from "effect"
 import { Agent } from "@orbit/schema/agent"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Bus } from "./bus.js"
 import { State } from "./state.js"
@@ -35,12 +36,17 @@ export { Event } from "@orbit/schema/agent"
  * keeps it, and a copy of the object, a stored rule or a decoded one does not carry it, so such a copy counts as the
  * person's.
  */
-export const folders = (global: Pick<Global.Interface, "data" | "tmp" | "config">): Info["permissions"] => {
+export const folders = (
+  global: Pick<Global.Interface, "data" | "tmp" | "config">,
+  real: Pick<Global.Interface, "data" | "tmp" | "config"> = global,
+): Info["permissions"] => {
+  // A folder reached through a link is decided by where it really leads, so each allow is also written for the real path.
+  const places = (spelled: string, leads: string) => (spelled === leads ? [spelled] : [spelled, leads])
+  const allow = (resource: string) => ({ action: "external_directory", resource, effect: "allow" as const })
   const rules = [
-    { action: "external_directory", resource: SHELL_OUTPUT_GLOB(global.data), effect: "allow" as const },
-    { action: "external_directory", resource: TOOL_OUTPUT_GLOB(global.data), effect: "allow" as const },
-    { action: "external_directory", resource: path.join(global.tmp, "*"), effect: "allow" as const },
-    { action: "external_directory", resource: path.join(global.config, "*"), effect: "allow" as const },
+    ...places(global.data, real.data).flatMap((data) => [allow(SHELL_OUTPUT_GLOB(data)), allow(TOOL_OUTPUT_GLOB(data))]),
+    ...places(global.tmp, real.tmp).map((tmp) => allow(path.join(tmp, "*"))),
+    ...places(global.config, real.config).map((config) => allow(path.join(config, "*"))),
   ]
   rules.forEach((rule) => orbitOwn.add(rule))
   return rules
@@ -94,7 +100,20 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const bus = yield* Bus.Service
     const global = yield* Global.Service
-    const permissions = folders(global)
+    const fs = yield* FSUtil.Service
+    const lead = (folder: string) =>
+      fs.resolve(folder).pipe(
+        // A folder that is not a link keeps its own spelling, so no second rule is written for it.
+        Effect.map((resolved) =>
+          resolved.toLowerCase() === path.resolve(folder).toLowerCase() ? folder : resolved,
+        ),
+        Effect.orElseSucceed(() => folder),
+      )
+    const permissions = folders(global, {
+      data: yield* lead(global.data),
+      tmp: yield* lead(global.tmp),
+      config: yield* lead(global.config),
+    })
     const state = State.create<Data, Editor>({
       name: "agent",
       initial: () => ({ agents: new Map() }),
@@ -164,4 +183,4 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Global.node] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Bus.node, Global.node, FSUtil.node] })
