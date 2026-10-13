@@ -43,6 +43,8 @@ const layout = Effect.gen(function* () {
     await fs.writeFile(path.join(project, "secret.txt"), "s")
     await fs.writeFile(path.join(project, "other.txt"), "o")
     await fs.writeFile(path.join(project, ".env"), "e")
+    await fs.writeFile(path.join(project, "Token.txt"), "t")
+    await fs.writeFile(path.join(project, "_key.txt"), "k")
     await fs.writeFile(path.join(project, "sub", "secret.txt"), "s")
     await fs.mkdir(path.join(project, "src", "a", "b"), { recursive: true })
     await fs.writeFile(path.join(project, "src", "a", "m.ts"), "m")
@@ -206,6 +208,18 @@ describe("a Read deny on a dotfile and a wildcard", () => {
     ["eval 'shopt -s dotglob'; cat *", true],
     ["bash -c 'shopt -s dotglob; cat *'", true],
     ["cat * | wc -l", false],
+    // Spellings that parsing alone does not name; real bash 5.2 prints .env for each.
+    ["bash -O dotglob -c 'cat *'", true],
+    ["bash +O extglob -c 'cat *'", true],
+    ["bash -o posix -c 'cat *'", true],
+    ["env BASHOPTS=dotglob bash -c 'cat *'", true],
+    ["read GLOBIGNORE <<< x; cat *", true],
+    ["printf -v GLOBIGNORE x; cat *", true],
+    ["for GLOBIGNORE in x; do cat *; done", true],
+    ["let GLOBIGNORE=1; cat *", true],
+    ["trap 'shopt -s dotglob' DEBUG; cat *", true],
+    ["zsh -o globdots -c 'cat *'", true],
+    ["bash -c 'cat *'", false],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, stopped, shell] of rows)
@@ -228,6 +242,11 @@ describe("a Read deny and a double star", () => {
     ["shopt -s globstar && grep -n foo src/**/*.ts", true],
     ["grep -n foo src/**/*.ts", true, "zsh"],
     ["grep -n foo src/*/*.ts", false],
+    ["bash -O globstar -c 'grep -n foo src/**/*.ts'", true],
+    ["env BASHOPTS=globstar bash -c 'grep -n foo src/**/*.ts'", true],
+    ["trap 'shopt -s globstar' DEBUG; grep -n foo src/**/*.ts", true],
+    ["zsh -c 'grep -n foo src/**/*.ts'", true],
+    ["bash -c 'grep -n foo src/**/*.ts'", false],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, stopped, shell] of rows)
@@ -316,6 +335,22 @@ describe("a Read deny and a wildcard that cannot be expanded", () => {
     // (5) a character class holds a `:` that is no stream name
     ["cat secre[[:alpha:]].txt", "<project>/secret.txt", true],
     ["cat oth[[:alpha:]]r.txt", "<project>/secret.txt", false],
+    // (6) classes the shell reads by case, by range or by a name the old library knew, each with a plain-name control
+    ["cat Token.txt", "<project>/Token.txt", true],
+    ["cat [[:upper:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:graph:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:print:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:upper:][:digit:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:digit:]]oken.txt", "<project>/Token.txt", false],
+    ["cat _key.txt", "<project>/_key.txt", true],
+    ["cat [A-z]key.txt", "<project>/_key.txt", true],
+    ["cat [0-9]key.txt", "<project>/_key.txt", false],
+    // (7) a negated class under case folding, and a class named after an Object.prototype key (no defect, decided)
+    ["cat [!x]ecret.txt", "<project>/secret.txt", true],
+    ["cat [^[:upper:]]ecret.txt", "<project>/secret.txt", true],
+    ["cat [[:constructor:]]ecret.txt", "<project>/secret.txt", true],
+    ["cat [[:__proto__:]]ecret.txt", "<project>/secret.txt", true],
+    ["cat [[:toString:]]ecret.txt", "<project>/secret.txt", true],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, resource, stopped] of rows)

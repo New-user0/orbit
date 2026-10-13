@@ -167,6 +167,9 @@ async function initRepo(dir: string, opts?: { commit?: boolean; remote?: string 
   if (opts?.remote) await $`git remote add origin ${opts.remote}`.cwd(dir).quiet()
 }
 
+// The shape of an ID Orbit makes: a commit hash or `Hash.fast` of a name. `cached()` drops anything else.
+const OLD_ID = "0123456789abcdef0123456789abcdef01234567"
+
 async function rootCommit(dir: string) {
   return (await $`git rev-list --max-parents=0 HEAD`.cwd(dir).text()).trim()
 }
@@ -455,15 +458,29 @@ describe("Project.resolve", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
       )
       yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
-      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), "old-id"))
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), OLD_ID))
       const project = yield* Project.Service
 
       const result = yield* project.resolve(abs(tmp.path))
 
-      expect(result.previous).toBe(Project.ID.make("old-id"))
+      expect(result.previous).toBe(Project.ID.make(OLD_ID))
       expect(result.id).toBe(remoteID("github.com/owner/repo"))
     }),
   )
+
+  for (const shipped of ["old-id", "global", "../../elsewhere"])
+    it.live(`drops a .git/orbit of an unknown shape (${shipped})`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+        )
+        yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
+        yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), shipped))
+
+        expect((yield* (yield* Project.Service).resolve(abs(tmp.path))).previous).toBeUndefined()
+      }),
+    )
 
   it.live("does not write the cache while resolving", () =>
     Effect.gen(function* () {
@@ -629,7 +646,7 @@ describe("Project.resolve", () => {
         Effect.promise(() => $`rm -rf ${worktree}`.quiet().nothrow()).pipe(Effect.ignore),
       )
       yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
-      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), "old-id"))
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), OLD_ID))
       yield* Effect.promise(() => $`git worktree add ${worktree} -b test-${Date.now()}`.cwd(tmp.path).quiet())
       const project = yield* Project.Service
       const db = (yield* Database.Service).db
@@ -654,7 +671,7 @@ describe("Project.resolve", () => {
 
       expect(result.directory).toBe(yield* real(worktree))
       expect(result.canonical).toBe(yield* real(tmp.path))
-      expect(result.previous).toBe(Project.ID.make("old-id"))
+      expect(result.previous).toBe(Project.ID.make(OLD_ID))
       expect(result.id).toBe(id)
       expect(result.vcs?.type).toBe("git")
       expect((yield* project.list()).find((item) => item.id === id)).toMatchObject({

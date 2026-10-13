@@ -13,10 +13,13 @@ export * as Wildcard from "./wildcard.js"
  *   caller asks about through the share helper, so nothing here opens a path that goes through a link;
  * - the work is capped, in entries visited and in time, and the caller treats a cap as undecided.
  * `**` is two stars unless `globstar` is set; a leading dot is matched by a wildcard only when `dot` is set.
+ * Names match in any case and a class bound keeps its written case (a superset of the shell, which `compile` explains).
  */
 export type Options = {
   dot: boolean
   globstar: boolean
+  /** PowerShell wildcards: a class has no negation and no named classes. */
+  powershell?: boolean
   /** Returns early once more than this many paths match. */
   limit: number
   /** What one command may still spend, shared by all its words: entries visited (counted down here) and a deadline. */
@@ -73,7 +76,7 @@ export async function expand(folder: string, pattern: string, options: Options):
       level = dirs
       continue
     }
-    const test = compile(segment, options.dot)
+    const test = compile(segment, options.dot, options.powershell)
     const next: string[] = []
     for (const dir of level) {
       const found = await entries(dir)
@@ -105,26 +108,37 @@ type Token =
   | { kind: "char"; value: string }
   | { kind: "class"; negate: boolean; test: ((char: string) => boolean)[] }
 
-const NAMED: Record<string, RegExp> = {
-  alpha: /\p{L}/u,
-  digit: /[0-9]/,
-  alnum: /[\p{L}0-9]/u,
-  upper: /\p{Lu}/u,
-  lower: /\p{Ll}/u,
-  space: /\s/,
-  punct: /[!-/:-@[-`{-~]/,
-  xdigit: /[0-9a-fA-F]/,
-}
+// Every class name bash accepts. A name that is not here matches any character, which keeps the match a superset.
+const NAMED = new Map<string, (char: string) => boolean>([
+  ["alpha", (char) => /\p{L}/u.test(char)],
+  ["digit", (char) => /[0-9]/.test(char)],
+  ["alnum", (char) => /[\p{L}0-9]/u.test(char)],
+  ["upper", (char) => /\p{Lu}/u.test(char)],
+  ["lower", (char) => /\p{Ll}/u.test(char)],
+  ["space", (char) => /\s/.test(char)],
+  ["blank", (char) => char === " " || char === "	"],
+  ["punct", (char) => /[!-/:-@[-`{-~]/.test(char)],
+  ["xdigit", (char) => /[0-9a-fA-F]/.test(char)],
+  ["ascii", (char) => char.charCodeAt(0) < 128],
+  ["cntrl", (char) => /\p{Cc}/u.test(char)],
+  ["graph", (char) => /[^\s\p{Cc}]/u.test(char)],
+  ["print", (char) => /[^\p{Cc}]/u.test(char)],
+  ["word", (char) => /[\p{L}0-9_]/u.test(char)],
+])
 
-/** A matcher for one path segment. Names match in any case, which is a superset of what the shell matches. */
-export function compile(segment: string, dot: boolean): (name: string) => boolean {
-  const tokens = tokenize(segment)
+/**
+ * A matcher for one path segment. It is a superset of what the shell matches: a name character is tried as written and in
+ * both case-folded forms, so a case-insensitive disk is covered, and a negated class matches when any of those forms is
+ * outside the set. PowerShell has no negation and no named classes: `[!x]` is `!` or `x`.
+ */
+export function compile(segment: string, dot: boolean, powershell = false): (name: string) => boolean {
+  const tokens = tokenize(segment, powershell)
   const first = tokens[0]
   const dotted = first?.kind === "char" && first.value === "."
-  return (name) => (name.startsWith(".") && !dot && !dotted ? false : matches(tokens, name.toLowerCase()))
+  return (name) => (name.startsWith(".") && !dot && !dotted ? false : matches(tokens, name))
 }
 
-function tokenize(segment: string): Token[] {
+function tokenize(segment: string, powershell: boolean): Token[] {
   const tokens: Token[] = []
   let at = 0
   while (at < segment.length) {
@@ -139,27 +153,27 @@ function tokenize(segment: string): Token[] {
       continue
     }
     if (char === "\\" && at < segment.length) {
-      tokens.push({ kind: "char", value: segment[at]!.toLowerCase() })
+      tokens.push({ kind: "char", value: segment[at]! })
       at++
       continue
     }
     if (char === "[") {
-      const parsed = parseClass(segment, at)
+      const parsed = parseClass(segment, at, powershell)
       if (parsed) {
         tokens.push(parsed.token)
         at = parsed.end
         continue
       }
     }
-    tokens.push({ kind: "char", value: char.toLowerCase() })
+    tokens.push({ kind: "char", value: char })
   }
   return tokens
 }
 
 // `start` is just after the `[`. Undefined when the class is never closed, which makes the `[` a plain character.
-function parseClass(segment: string, start: number): { token: Token; end: number } | undefined {
+function parseClass(segment: string, start: number, powershell: boolean): { token: Token; end: number } | undefined {
   let at = start
-  const negate = segment[at] === "!" || segment[at] === "^"
+  const negate = !powershell && (segment[at] === "!" || segment[at] === "^")
   if (negate) at++
   const test: ((char: string) => boolean)[] = []
   let first = true
@@ -167,19 +181,18 @@ function parseClass(segment: string, start: number): { token: Token; end: number
     const char = segment[at]!
     if (char === "]" && !first) return { token: { kind: "class", negate, test }, end: at + 1 }
     first = false
-    if (char === "[" && segment[at + 1] === ":") {
+    if (!powershell && char === "[" && segment[at + 1] === ":") {
       const close = segment.indexOf(":]", at + 2)
-      const named = close < 0 ? undefined : NAMED[segment.slice(at + 2, close)]
-      if (named) {
-        test.push((value) => named.test(value))
+      if (close >= 0) {
+        test.push(NAMED.get(segment.slice(at + 2, close)) ?? (() => true))
         at = close + 2
         continue
       }
     }
-    const low = (char === "\\" && at + 1 < segment.length ? segment[++at]! : char).toLowerCase()
+    const low = char === "\\" && !powershell && at + 1 < segment.length ? segment[++at]! : char
     at++
     if (segment[at] === "-" && at + 1 < segment.length && segment[at + 1] !== "]") {
-      const high = segment[at + 1]!.toLowerCase()
+      const high = segment[at + 1]!
       test.push((value) => value >= low && value <= high)
       at += 2
       continue
@@ -187,6 +200,10 @@ function parseClass(segment: string, start: number): { token: Token; end: number
     test.push((value) => value === low)
   }
   return undefined
+}
+
+function forms(char: string) {
+  return [...new Set([char, char.toLowerCase(), char.toUpperCase()])]
 }
 
 // One restart point (the last star) is enough for stars that match anything, so the work is at most the name length times
@@ -218,7 +235,7 @@ function matches(tokens: Token[], name: string) {
 
 function one(token: Token, char: string) {
   if (token.kind === "any") return true
-  if (token.kind === "char") return token.value === char
-  if (token.kind === "class") return token.test.some((test) => test(char)) !== token.negate
+  if (token.kind === "char") return forms(char).includes(token.value) || token.value.toLowerCase() === char.toLowerCase()
+  if (token.kind === "class") return forms(char).some((form) => token.test.some((test) => test(form)) !== token.negate)
   return false
 }
