@@ -1528,6 +1528,65 @@ describe("Permission under managed settings", () => {
     }
   }
 
+  // The same table for the person's own rules (an agent's, which is where config and project rules arrive), as the
+  // managed rows above have it, with the shell's deny-only probe (`denied`) as the Bash column: the shell guard asks about
+  // each file a command names with the path relative to the session folder (class 3 and 4).
+  for (const where of [
+    { name: "the home folder", home: sessionDirectory, resource: ".ssh/id_rsa" },
+    { name: "a folder under a repository at home", home: path.dirname(sessionDirectory), resource: "../.ssh/id_rsa" },
+    { name: "a folder outside home", home: path.join(sessionDirectory, "..", "elsewhere"), resource: undefined },
+  ]) {
+    const secret = path.join(where.home, ".ssh", "id_rsa")
+    for (const tool of ["Read", "Edit"]) {
+      for (const spelling of [
+        { name: "~", rule: "~/.ssh/*" },
+        { name: "$HOME", rule: "$HOME/.ssh/*" },
+        { name: "absolute", rule: `${path.join(where.home, ".ssh").replaceAll("\\", "/")}/*` },
+      ]) {
+        for (const effect of ["deny", "ask"] as const) {
+          it.effect(
+            `${effect === "deny" ? "denies" : "asks about"} a ${tool} of ${secret} under the person's ${spelling.name} rule in ${where.name}`,
+            () =>
+              Effect.gen(function* () {
+                yield* setup([
+                  { action: "*", resource: "*", effect: "allow" },
+                  ...ConfigPermissionExpand.expandPermissions(
+                    [{ action: tool, resource: spelling.rule, effect }],
+                    where.home,
+                  ),
+                ])
+                const service = yield* Permission.Service
+                const resources = [where.resource ?? secret]
+                expect(yield* service.ask(assertion({ ...next(), action: tool, resources }))).toMatchObject({ effect })
+                expect(yield* service.denied(assertion({ ...next(), action: tool, resources, probe: true }))).toBe(
+                  effect === "deny",
+                )
+              }),
+          )
+        }
+      }
+    }
+  }
+
+  // An allow written as an absolute path matches the relative resource the same way, which is the side effect for the Plan
+  // agent's absolute Edit allow in a session whose folder holds that folder; a neighbour stays denied.
+  for (const row of [
+    { name: "a file under the allowed folder", resource: ".orbit/plans/p.md", effect: "allow" },
+    { name: "a file beside it", resource: "src/p.md", effect: "deny" },
+  ] as const)
+    it.effect(`an absolute Edit allow decides ${row.name} in a session at home`, () =>
+      Effect.gen(function* () {
+        yield* setup([
+          { action: "Edit", resource: "*", effect: "deny" },
+          { action: "Edit", resource: `${sessionDirectory.replaceAll("\\", "/")}/.orbit/plans/*`, effect: "allow" },
+        ])
+        const service = yield* Permission.Service
+        expect(
+          yield* service.ask(assertion({ ...next(), action: "Edit", resources: [row.resource] })),
+        ).toMatchObject({ effect: row.effect })
+      }),
+    )
+
   // The kept literal still decides Bash text, and the expanded copy is limited to the path actions.
   const bashHome = path.join(path.parse(process.cwd()).root, "users", "tester")
   const bashAbsolute = `${bashHome.replaceAll("\\", "/")}/.ssh/run.sh`
