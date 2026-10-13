@@ -94,6 +94,24 @@ export function classify(address: string): Kind | undefined {
   return kind4(name.split(".").map(Number))
 }
 
+/**
+ * The IPv4 address an IPv6 literal is another spelling of, in dotted form, or undefined for anything else. Only the forms
+ * that deliver a request to that very host count: mapped (::ffff:a.b.c.d), compatible (::a.b.c.d), translated
+ * (::ffff:0:a.b.c.d) and the well-known NAT64 prefix (64:ff9b::a.b.c.d). `::` and `::1` are addresses of their own, and
+ * the tunnel forms (6to4, Teredo, ISATAP) name a relay as well, so a list that compares addresses leaves them alone.
+ */
+export function embeddedIPv4(address: string) {
+  const name = canonical(address)
+  if (name === undefined || !name.startsWith("[")) return undefined
+  const g = groups(name)
+  const compatible = zero(g, 0, 6) && g[6] !== 0
+  const mapped = zero(g, 0, 5) && g[5] === 0xffff
+  const translated = zero(g, 0, 4) && g[4] === 0xffff && g[5] === 0
+  const nat64 = g[0] === 0x64 && g[1] === 0xff9b && zero(g, 2, 6)
+  if (!compatible && !mapped && !translated && !nat64) return undefined
+  return [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255].join(".")
+}
+
 async function lookup(name: string) {
   const { lookup } = await import("node:dns/promises")
   return (await lookup(name, { all: true, verbatim: true })).map((entry) => entry.address)

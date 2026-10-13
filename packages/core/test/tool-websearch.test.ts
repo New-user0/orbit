@@ -233,8 +233,9 @@ describe("WebSearchTool registration", () => {
           Effect.map((result) => (result.output as { results: { url: string }[] }).results.map((item) => item.url)),
         )
 
-      expect(yield* search({ allowedDomains: ["python.org"], blockedDomains: ["blog.python.org"] })).toEqual([
+      expect(yield* search({ allowedDomains: ["python.org"] })).toEqual([
         "https://docs.python.org/3/",
+        "https://blog.python.org/x",
       ])
       expect(yield* search({ blockedDomains: ["example.com"] })).toEqual([
         "https://docs.python.org/3/",
@@ -255,7 +256,7 @@ describe("WebSearchTool registration", () => {
           type: "tool-call",
           id: "call-domains-content",
           name: "WebSearch",
-          input: { query: "python", allowedDomains: ["python.org"], blockedDomains: ["blog.python.org"] },
+          input: { query: "python", blockedDomains: ["blog.python.org", "example.com"] },
         },
       })
       const text = (filtered.content?.[0] as { text: string }).text
@@ -276,6 +277,42 @@ describe("WebSearchTool registration", () => {
       })
       expect(empty.content).toEqual([{ type: "text", text: WebSearchTool.NO_RESULTS }])
       expect((empty.output as { results: unknown[] }).results).toEqual([])
+    }),
+  )
+
+  // Refused before permission, a form or a provider: nothing about the call leaves the machine or reaches the person.
+  const refusals: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
+    ["an empty query", { query: "" }, "tool.input-invalid"],
+    ["a one-character query", { query: "x" }, "tool.input-invalid"],
+    ["both domain lists", { query: "python", allowedDomains: ["a.test"], blockedDomains: ["b.test"] }, "websearch.invalid"],
+  ]
+  for (const [label, input, type] of refusals)
+    it.effect(`refuses ${label} with ${type} before permission, a form or a provider`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* setup
+        yield* fixture.websearch.select(WebSearch.ID.make("parallel"))
+        const result = yield* executeTool(fixture.registry, {
+          sessionID,
+          ...toolIdentity,
+          call: { type: "tool-call", id: "call-refused", name: "WebSearch", input },
+        })
+        expect(result).toMatchObject({ status: "error", error: { type } })
+        expect(fixture.events).toEqual([])
+        expect(fixture.formRequests).toEqual([])
+        expect(fixture.websearch.queries).toEqual([])
+      }),
+    )
+
+  it.effect("accepts a query of 2 characters and one domain list", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      yield* fixture.websearch.select(WebSearch.ID.make("parallel"))
+      const result = yield* executeTool(fixture.registry, {
+        sessionID,
+        ...toolIdentity,
+        call: { type: "tool-call", id: "call-short", name: "WebSearch", input: { query: "go", allowedDomains: ["example.com"] } },
+      })
+      expect(result.status).toBe("completed")
     }),
   )
 
@@ -774,7 +811,7 @@ describe("WebSearchTool consent stays a user decision", () => {
       const fixture = yield* setupReal
       const tools = yield* fixture.registry.snapshot()
       const fibers = yield* Effect.forEach(["a", "b"], (id) =>
-        tools.execute(call(`call-${id}`, id)).pipe(Effect.flip, Effect.forkChild),
+        tools.execute(call(`call-${id}`, `query ${id}`)).pipe(Effect.flip, Effect.forkChild),
       )
       const first = yield* pending(fixture)
       yield* fixture.forms.cancel(first.id)

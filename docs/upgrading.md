@@ -300,7 +300,7 @@ no plugin can override it. In order of precedence: a configured deny (agent rule
 config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
 then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
 `managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
-upgrades an ask, but never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a managed `Read` or `Edit` rule also decides a file inside the session's folder by its absolute place, so a deny on `~/.ssh/*` holds when Orbit runs in the home folder. The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
+upgrades only the default ask that no rule spoke to, never an ask that your own rule, an agent's built-in `.env` ask or a plugin hook gave, and never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a `Read` or `Edit` rule, managed or your own (agent, user, project or session), also decides a file inside the session's folder by its absolute place, so a deny or an ask on `~/.ssh/*` holds when Orbit runs in the home folder (the rows "under the person's ... rule" in `permission.test.ts`). The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
 managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
 
 - `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
@@ -463,6 +463,14 @@ scripts that edit executable project config while Orbit runs.
 
 **What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
 in a folder you have not trusted.
+
+### Config `env` cannot set Orbit's own control variables
+
+`env` in any settings document now skips `ORBIT_MANAGED_DIR`, `ORBIT_TRUST_PROJECT`, `ORBIT_CONFIG`, `ORBIT_CONFIG_DIR`, `ORBIT_CONFIG_CONTENT`, `ORBIT_CONFIG_CONTENT_FILE` and `ORBIT_PASSWORD`, in any spelling, with one "unsupported" diagnostic at the entry's own path. Before, a trusted project's or your own `env` could hand them to every program Orbit starts, so an `orb` started from a hook or an approved command could read another managed folder or trust its folder implicitly. A nested `orb` now inherits these names exactly as the parent process has them.
+
+**Affects:** setups that set one of these names from `env` on purpose.
+
+**What to do:** Export the variable in the environment you start Orbit from instead.
 
 ## Clients
 
@@ -1762,6 +1770,30 @@ to a share is no longer listed when the trust status is read.
 
 **What to do:** Nothing. A chain that long is refused with the same message as a share.
 
+### Managed `denied_domains` match an IPv4 address in its IPv6 spellings
+
+An IPv4 address in the managed `denied_domains` list now also denies its mapped (`[::ffff:203.0.113.5]`), compatible, translated and well-known NAT64 (`[64:ff9b::203.0.113.5]`) IPv6 spellings, and an entry written in one of those spellings denies the dotted address. Before, such a URL missed the deny and fell through to the ordinary question or to your own allow rule.
+
+**Affects:** organizations whose managed settings list an IP address in `denied_domains`.
+
+**What to do:** Nothing.
+
+### One bad field no longer drops its agent entry or its settings object
+
+In any settings file, including the managed ones, a malformed field in an `agents.<name>` entry (`color`, `model`, `steps`, `mode`, or one rule in its `permissions`) now costs only itself, reported at its own path, and the entry's other fields and valid rules still apply. The same holds inside `sandbox`, `shell_tool`, `tool_execution`, `webfetch`, `websearch`, `worktree` and `warming`: a bad `sandbox.write` no longer takes `sandbox.enabled` with it. Before, the whole entry or object was dropped, so an organization's per-agent denies or `sandbox.enabled: true` could vanish because of one typo. An entry or object of which nothing is valid is still dropped.
+
+**Affects:** anyone with a typo in one of these entries, administrators most of all; `orb doctor` lists each skipped field.
+
+**What to do:** Nothing; fix the field that `orb doctor` names.
+
+### A deny for the linked spelling of Orbit's own folders covers its real path
+
+When the global config, data or temporary folder is reached through a link, Orbit allows it by both spellings. A deny or ask you wrote for the linked spelling (`external_directory ~/orbit-link/* deny`) now also decides a place named by the real path, and a deny written for the real path decides the linked spelling, as it did. Before, naming the real path directly fell through to Orbit's own allow. If a folder cannot be resolved at startup (a link loop), Orbit now keeps the spelled path and starts, instead of failing to build its agent and permission layers.
+
+**Affects:** people whose config, data or temporary folder is a link and who wrote rules about it.
+
+**What to do:** Nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -2774,11 +2806,15 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone by
-every loader before anything is asked: `.orbit`, the orbit files, the compatibility roots, the MCP file, settings files,
-the commands, agents, skills and plugin folders, `{file:}` references and instruction markers. Folders are listed
-without following links, and a link inside them is entered only after its target is known not to be a share (in a
-trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer.
+In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone by
+the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts` pin, before anything is asked:
+`.orbit`, the compatibility roots and the MCP file in config discovery, settings files, `{file:}` references, instruction
+markers, the commands, agents, skills and plugin source folders, the terminal UI's and Mini's custom themes
+(`.orbit/themes`), and the run store that every `orb flow` command that reads it opens (`.orbit/runs.db`). Folders are
+listed without following links, and a link inside them is entered only after its target is known not to be a share (in a
+trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer. A
+theme or a run store behind such a link is skipped, with one line in the log, and `orb flow` stops with a message that
+names the store. Not covered: the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
 
 A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
 for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
@@ -2788,6 +2824,17 @@ so it can no longer be taken for a path inside the working folder.
 **Affects:** projects that link to network shares, on Windows.
 
 **What to do:** Nothing; use the share's drive path, or copy the files into the project, if a loader should read them.
+
+### Mercurial is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and Mercurial loads the
+`[extensions]` and `[hooks]` of that folder's own `.hg/hgrc` into the command. It is now run only in a folder you trust.
+Until then such a project has the shared `global` ID, as it does when `hg` is not installed, and a trusted folder
+runs `hg log` as before.
+
+**Affects:** Mercurial users who open a clone before trusting it.
+
+**What to do:** Nothing; trust the folder.
 
 ### Declarations that print the environment ask like any command
 
@@ -2812,3 +2859,40 @@ Opaque PowerShell input that starts with a path to a program in the repository (
 **Affects:** people whose rules are written for a program and who run it behind a wrapper, and anyone who saved "always" for one of the cmdlets above.
 
 **What to do:** Nothing; answer the questions, or write a rule for the stripped spelling.
+
+### Shell commands that write through an output option, and wildcards in reads, meet your Edit and Read rules
+
+The shell guard now records the file that an output option names as a write: `sort -o`, `-oFILE`, `--output` (and any prefix of it that `sort` accepts), the second operand of `uniq IN OUT`, `find -fprint`, `-fprint0`, `-fprintf` and `-fls`, `tree -o` and `--output`, `git diff`, `log` and `show` `--output`, `git format-patch -o` and `git archive -o`, and the file of a `w`, `W` or `s///w` command (and the file of an `r`) in a sed script given on the command line. An `Edit` rule on that file applies, a file outside the project asks the folder question, and the sandbox treats it as a write. Before, these files were recorded as reads or not at all. `rg --pre` and `--hostname-bin` name a program, so such a command is asked about as a whole. Writers that the guard does not model (`curl -o`, `wget -O`, `awk` redirects, `tar -x`, interpreter one-liners) are unchanged.
+
+A read through a wildcard (`cat secr*.txt`, `head *`) is now checked against your `Read` deny rules and the managed ones for each file the wildcard matches in its folder, not only for the folder. Matches are found without following links, and a link among them is checked as the place it leads to. A wildcard that matches more than 500 files makes the command ask. A recursive folder search such as `grep -r x .` is still judged by its folder; per-file checks for searches belong to the later permissions work.
+
+**Affects:** anyone with `Edit` or `Read` deny rules who also lets the model run shell commands.
+
+**What to do:** Nothing; a command that your rules now stop is refused with the rule that matched.
+
+### Web tools refuse bad searches with a type, send no trace headers, and Read keeps folders and long lines in bounds
+
+- `WebSearch` refuses a query shorter than 2 characters (type `tool.input-invalid`) and a call that gives both
+  `allowedDomains` and `blockedDomains` (type `websearch.invalid`). Both are refused before the permission request, the
+  consent form or any provider call, so nothing is asked or sent. Before, a one-character query was sent to the provider
+  and the blocked list silently won over the allowed one.
+- `WebFetch` refusals now carry a type: `webfetch.refused` for a URL that cannot be fetched (not http or https,
+  credentials, longer than 2,000 characters, a host with `*`) and for an address the address guard blocks, and
+  `webfetch.redirect-limit` for more than 10 same-site redirects. Code Mode `fetch` uses `webfetch.refused` for the same
+  refusals. Before, they arrived as `unknown` or `tool.execution`. Failures that are not refusals (a status error, a
+  timeout, an unsupported content type) keep their old type.
+- `WebFetch` and the web search providers no longer send `traceparent`, `tracestate` or `b3` headers to the sites and
+  providers they contact, on the first request or on a redirect hop. Requests to model providers are not affected.
+- `Read` of a folder now stays within about 25,000 tokens, like a file: a long listing is cut before the entry that
+  would pass the budget, with the usual `Continue reading with offset:` note.
+- `Read` of a file with very long lines, or none, no longer slows down with the file's size or holds the whole file in
+  memory. The part of a line past what a page can show is skipped as it is read; a null byte in it still makes the file
+  binary.
+- The note for a repeat read of an unchanged range and the note after a resized image are worded differently
+  ("this range has not changed since you last read it ..." and "[Shown at W x H px; the file itself is ...]"), and the
+  extraction instruction for a host in `webfetch.verbatim_hosts` is reworded. The meaning is the same.
+
+**Affects:** clients and hooks that match on the error type of a failed `WebSearch` or `WebFetch` call or on the exact
+wording of those notes, and models that sent a one-character query or both domain lists.
+
+**What to do:** Nothing. Send one domain list per search.

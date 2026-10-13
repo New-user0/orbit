@@ -107,6 +107,87 @@ describe("bash extraction", () => {
   })
 })
 
+// A command that reads can also write a file through an output option or an operand position (class 8: the Edit rules,
+// the folder question and the sandbox are asked about what is written). Each cell is `role place`, reads included, so a
+// write that is also recorded as a read shows. The control rows are the same commands without the output.
+describe("bash output files of read-class commands", () => {
+  const rows: Case[] = [
+    ["sort -o out f", ["write /work/out", "read /work/f"]],
+    ["sort -oout f", ["write /work/out", "read /work/f"]],
+    ["sort --output=out f", ["write /work/out", "read /work/f"]],
+    ["sort --output out f", ["write /work/out", "read /work/f"]],
+    ["sort --out=out f", ["write /work/out", "read /work/f"]],
+    ["sort --o out f", ["write /work/out", "read /work/f"]],
+    ["sort -ro out f", ["write /work/out", "read /work/f"]],
+    ["sort -k 2 -o out f", ["write /work/out", "read /work/f"]],
+    ["sort -t , -o ../x f", ["write /x", "read /work/f"]],
+    ["sort -o ~/out f", ["write /home/u/out", "read /work/f"]],
+    ["sort -- -o", ["read /work/-o"]],
+    ["sort -r f", ["read /work/f"]],
+    ["uniq in out", ["write /work/out", "read /work/in"]],
+    ["uniq -f 1 in out", ["write /work/out", "read /work/in"]],
+    ["uniq -f1 in out", ["write /work/out", "read /work/in"]],
+    ["uniq --skip-fields 1 in out", ["write /work/out", "read /work/in"]],
+    ["uniq -c in ../out", ["write /out", "read /work/in"]],
+    ["uniq in", ["read /work/in"]],
+    ["uniq in -", ["read /work/in"]],
+    ["find . -fprint out", ["write /work/out", "read /work"]],
+    ["find . -fprint0 out", ["write /work/out", "read /work"]],
+    ["find . -fls ../out", ["write /out", "read /work"]],
+    ["find . -fprintf out %p", ["write /work/out", "read /work"]],
+    ["find . -name x", ["read /work"]],
+    ["tree -o out", ["write /work/out"]],
+    ["tree -ao out d", ["write /work/out", "read /work/d"]],
+    ["tree -oout", ["write /work/out"]],
+    ["tree --output out", ["write /work/out"]],
+    ["tree --output=out", ["write /work/out"]],
+    ["tree -L 2 d", ["read /work/d"]],
+    ["git diff --output=out", ["write /work/out"]],
+    ["git diff --output out", ["write /work/out"]],
+    ["git -C d log --output=out", ["write /work/out"]],
+    ["git show --output=out HEAD", ["write /work/out"]],
+    ["git format-patch -o out", ["write /work/out"]],
+    ["git format-patch -oout", ["write /work/out"]],
+    ["git format-patch --output-directory=out", ["write /work/out"]],
+    ["git archive -o out.tar HEAD", ["write /work/out.tar"]],
+    ["git archive --output=out.tar HEAD", ["write /work/out.tar"]],
+    ["git diff --stat", []],
+    ["sed -n 'w out' f", ["write /work/out"]],
+    ["sed -n 's/a/b/w out' f", ["write /work/out"]],
+    ["sed -n -e 's/a/b/gw out' f", ["write /work/out"]],
+    ["sed --expression='/x/w out' f", ["write /work/out"]],
+    ["sed -ne 'w out' f", ["write /work/out"]],
+    ["sed -n 'p;w out' f", ["write /work/out"]],
+    ["sed -n '1,3{w out\n}' f", ["write /work/out"]],
+    ["sed -n 'W out' f", ["write /work/out"]],
+    ["sed 'r in' f", ["source /work/in"]],
+    ["sed -n 'w /dev/stdout' f", []],
+    ["sed -n 's/w out/x/p' f", []],
+    ["sed -n 'y/w/x/' f", []],
+    ["sed -n '/w out/p' f", []],
+    ["sed 'a w out' f", []],
+  ]
+  const cells = (result: ReturnType<typeof bash>) => result.paths.files.map(cell)
+  test.each(rows)("%s", (text, expected) => {
+    const result = bash(text)
+    expect(cells(result)).toEqual(expected)
+    expect(reasons(result)).toEqual([])
+  })
+
+  test("the write is also found with Windows path rules", () => {
+    expect(cells(bash("sort -o out f", windows())).filter((item) => item.startsWith("write"))).toEqual(["write C:\\work\\out"])
+  })
+
+  test("rg --pre names a program, so the command cannot be judged", () => {
+    for (const text of ["rg --pre ./x pat f", "rg --pre=./x pat f", "rg --hostname-bin ./x pat"]) {
+      const result = bash(text)
+      expect(reasons(result)).toEqual(["option"])
+      expect(cells(result).some((item) => item.includes("/x"))).toBe(false)
+    }
+    expect(reasons(bash("rg pat f"))).toEqual([])
+  })
+})
+
 describe("bash redirects", () => {
   const rows: Case[] = [
     ["echo hi > out", ["write< /work/out"]],
@@ -307,7 +388,7 @@ describe("fileEdit in bash", () => {
 
   // A read-class command that fails the read-only check still reads what it names; no allow rule may hide that.
   test.each([
-    ["sort -o out /etc/shadow", ["read /work/out", "read /etc/shadow"]],
+    ["sort -o out /etc/shadow", ["read /etc/shadow"]],
     ["find /etc -delete", ["read /etc"]],
     ["find ~/.ssh -exec cat {} +", ["read /home/u/.ssh", "read /work/cat", "read /work/{}", "read /work/+"]],
     ["timeout 5 cat /etc/shadow > out", ["read /etc/shadow"]],

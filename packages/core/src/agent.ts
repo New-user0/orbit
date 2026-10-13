@@ -107,7 +107,8 @@ const layer = Layer.effect(
         Effect.map((resolved) =>
           resolved.toLowerCase() === path.resolve(folder).toLowerCase() ? folder : resolved,
         ),
-        Effect.orElseSucceed(() => folder),
+        // Any failure keeps the spelled path: `resolve` dies, not fails, on a link loop at the folder.
+        Effect.catchCause(() => Effect.succeed(folder)),
       )
     const permissions = folders(global, {
       data: yield* lead(global.data),

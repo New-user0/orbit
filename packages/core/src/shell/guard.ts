@@ -216,6 +216,36 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   )
   const everything = [...resolved, ...extra, ...guessed]
 
+  // A read through a wildcard reaches every file the wildcard matches, so the Read rules are asked about each match and
+  // not only about the folder it starts in (class 8). Matches are found on the real folder without following links; one
+  // that is a link is probed as the place it leads to as well. A walk that cannot be bounded or decided asks instead.
+  const matched = yield* Effect.forEach(operands, ({ operand }, index) => {
+    const place = resolved[index]!
+    if (operand.form !== "glob" || WRITES.has(operand.role) || place.status === "unresolved")
+      return Effect.succeed({ resources: [] as { action: "Read" | "Edit"; resource: string }[], undecided: false })
+    const pattern = globRemainder(operand, input.ctx.platform === "win32")
+    if (pattern === undefined) return Effect.succeed({ resources: [], undecided: true })
+    const actions: ("Read" | "Edit")[] = operand.role === "source" ? ["Read", "Edit"] : ["Read"]
+    return Effect.forEach(place.real, (folder) =>
+      fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot: true, symlink: false }).pipe(
+        Effect.map((found) => (found.length > GLOB_LIMIT ? undefined : found)),
+        Effect.catch(() => Effect.succeed(undefined)),
+        Effect.flatMap((found) =>
+          found === undefined
+            ? Effect.succeed({ targets: [] as string[], undecided: true })
+            : Effect.forEach(found, (file) =>
+                resolveCandidate(file, { candidates: [file], kind: "file", role: operand.role, removal: false, change: false, level: 0 }),
+              ).pipe(Effect.map((all) => ({ targets: all.flatMap((item) => item.targets), undecided: false }))),
+        ),
+      ),
+    ).pipe(
+      Effect.map((all) => ({
+        resources: actions.flatMap((action) => [...new Set(all.flatMap((item) => item.targets))].map((resource) => ({ action, resource }))),
+        undecided: all.some((item) => item.undecided),
+      })),
+    )
+  })
+
   const git = ShellSafety.runsGit(input.analysis, input.ctx.platform)
   const probed = git ? yield* probeGit(all, input.cwd.absolute) : { bare: [], dynamic: false }
   const bare = probed.bare
@@ -243,7 +273,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   return {
     places: everything.map(({ resources: _resources, external: _external, ...place }) => place),
     external: everything.flatMap((item) => item.external),
-    probes: everything.flatMap((item) => {
+    probes: [...everything, ...matched].flatMap((item) => {
       const actions = [...new Set(item.resources.map((entry) => entry.action))]
       return actions.map((action) => ({
         action,
@@ -253,7 +283,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     bare,
     findings: [
       ...found,
-      ...own(all, operands, resolved, ps),
+      ...own(all, operands, resolved, ps, matched.map((item) => item.undecided)),
       // A folder that only the raw reading found and FileAccess cannot name never fails the call, but it is said.
       ...guessed
         .filter((item) => item.status === "unresolved")
@@ -262,6 +292,20 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     ].filter(unique),
   } satisfies Facts
 })
+
+// The most matches of one wildcard that are checked one by one; a wildcard that reaches more is asked about.
+const GLOB_LIMIT = 500
+
+// The part of a wildcard operand after its folder, as a pattern relative to that folder. None when the folder part is the
+// whole operand (a `..` after the wildcard), which cannot be expanded from one folder.
+function globRemainder(operand: ShellPaths.Operand, win: boolean) {
+  const text = win ? operand.spelled.replaceAll("\\", "/") : operand.spelled
+  const prefix = win ? (operand.prefix ?? "").replaceAll("\\", "/") : (operand.prefix ?? "")
+  if (prefix === text) return undefined
+  const rest = prefix.endsWith("/") ? text.slice(prefix.length) : text.startsWith(`${prefix}/`) ? text.slice(prefix.length + 1) : text
+  const trimmed = rest.replace(/^\/+/, "")
+  return trimmed === "" ? undefined : trimmed
+}
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
   return (
@@ -281,9 +325,11 @@ function own(
   operands: { level: Level; operand: ShellPaths.Operand; file: number }[],
   resolved: { status: Place["status"]; why?: Place["why"] }[],
   ps: boolean,
+  undecided: boolean[],
 ) {
   const found: ShellSafety.Finding[] = []
   operands.forEach(({ level, operand }, index) => {
+    if (undecided[index]) found.push(ShellSafety.finding("too-complex", "glob-read", level.depth === 0 ? operand.command : undefined))
     const at = level.depth === 0 ? operand.command : undefined
     const place = resolved[index]!
     const unplaceable =

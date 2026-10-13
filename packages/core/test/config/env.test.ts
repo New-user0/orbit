@@ -132,3 +132,37 @@ describe("env decoding", () => {
     })
   }
 })
+
+// Class 8: Orbit's own control variables keep the value the parent process has, in every scope and spelling, so a
+// nested `orb` reads the same managed folder and trust decision. Without the reserved names each row resolves a value.
+describe("Orbit's own control variables", () => {
+  const names = [
+    "ORBIT_MANAGED_DIR",
+    "ORBIT_TRUST_PROJECT",
+    "ORBIT_CONFIG",
+    "ORBIT_CONFIG_DIR",
+    "ORBIT_CONFIG_CONTENT",
+    "ORBIT_CONFIG_CONTENT_FILE",
+    "ORBIT_PASSWORD",
+  ]
+  const spellings = names.flatMap((name) => [name, name.toLowerCase(), name.replace("ORBIT", "Orbit")])
+  const scopes: Document["scope"][] = ["remote", "user", "project", "local", "flag", "managed"]
+
+  scopes.forEach((scope) =>
+    test(`resolve drops every spelling from a ${scope} document, keeping its other variables`, () => {
+      const env = Object.fromEntries([...spellings.map((name) => [name, "/elsewhere"]), ["ORBIT_OTHER", "kept"]])
+      expect(ConfigEnv.resolve([document(scope, env)], "linux")).toEqual({ ORBIT_OTHER: "kept" })
+      expect(ConfigEnv.resolve([document(scope, env)], "win32")).toEqual({ ORBIT_OTHER: "kept" })
+    }),
+  )
+
+  test("decoding reports each one once, at its own path, and keeps the siblings", () => {
+    const result = ConfigNormalize.normalize({
+      env: { ...Object.fromEntries(spellings.map((name) => [name, "x"])), KEEP: "1" },
+    })
+    if (result.type !== "normalized") throw new Error("rejected")
+    expect(result.encoded.env).toEqual({ KEEP: "1" })
+    expect(result.diagnostics.map((item) => item.path.join("."))).toEqual(spellings.map((name) => `env.${name}`))
+    expect(new Set(result.diagnostics.map((item) => item.kind))).toEqual(new Set(["unsupported"]))
+  })
+})

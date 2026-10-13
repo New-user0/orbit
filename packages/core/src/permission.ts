@@ -122,8 +122,23 @@ export function evaluate(
     rules.findLast(
       (rule) =>
         actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
-    ) ?? { action, resource: "*", effect: "ask" }
+    ) ?? fallthrough(action)
   )
+}
+
+// The ask that stands for "no rule said anything", told apart from a rule that asks by identity, since a rule can be
+// written `* * ask` and look the same.
+const fallthroughs = new WeakSet<Permission.Rule>()
+
+function fallthrough(action: string): Permission.Rule {
+  const rule: Permission.Rule = { action, resource: "*", effect: "ask" }
+  fallthroughs.add(rule)
+  return rule
+}
+
+/** Whether `rule`, as `evaluate` returned it, is the default ask that no configured or saved rule matched. */
+export function isFallthrough(rule: Permission.Rule) {
+  return fallthroughs.has(rule)
 }
 
 // A rule names an action the way it was written: `edit` and `Edit` are one action, as `shell` and `Bash` are, so a rule
@@ -181,15 +196,32 @@ const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const managed = yield* ManagedPolicy.Service
     const fs = yield* FSUtil.Service
+    const global = yield* Global.Service
     // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
     // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
     const spelled = [location.directory, path.resolve(location.project.directory)]
-    const real = yield* Effect.forEach(spelled, (folder) =>
+    // Any failure keeps the spelled path, not only NotFound: `resolve` dies on a link loop, and a folder that cannot be
+    // resolved must not stop the permission layer from starting.
+    const realOf = (folder: string) =>
       fs.resolve(folder).pipe(
         Effect.map(FSUtil.normalizePath),
-        Effect.orElseSucceed(() => folder),
-      ),
-    )
+        Effect.catchCause(() => Effect.succeed(folder)),
+      )
+    const real = yield* Effect.forEach(spelled, realOf)
+    // Orbit's own folders as spelled and as the disk has them. An allow of Orbit's own is written for both, so a rule the
+    // person wrote for the spelling (a deny on the linked config folder) must also decide a place named by its real path.
+    const orbitSpelled = [global.data, global.tmp, global.config].map((folder) => path.resolve(folder))
+    const orbitReal = yield* Effect.forEach(orbitSpelled, realOf)
+    const respelled = (action: string, resource: string) => {
+      const canonical = ToolNames.canonical(action)
+      if (canonical !== "external_directory" && canonical !== "Read" && canonical !== "Edit") return []
+      return orbitReal.flatMap((folder, index) => {
+        const inside = path.relative(folder, resource)
+        return inside === "" || inside.startsWith("..") || path.isAbsolute(inside)
+          ? []
+          : [path.join(orbitSpelled[index]!, inside)]
+      })
+    }
     const pending = new Map<ID, Pending>()
     // Orbit's own allows are marked where `Agent.folders` makes them, not recognised by value: a copy that an agent took
     // of them, as Explore does, keeps the mark, and a rule of the person's with the same value does not have it.
@@ -214,6 +246,7 @@ const layer = Layer.effect(
       const decided = evaluate(input.action, resource, all, [
         ...(input.aliases?.[resource] ?? []),
         ...resolved(input.action, resource),
+        ...respelled(input.action, resource),
       ])
       if (decided.effect === "deny") return decided
       const led = stricter(input.action, input.leads?.[resource], all)
@@ -272,7 +305,12 @@ const layer = Layer.effect(
       resource: string,
       rules: Permission.Ruleset,
     ): Permission.Effect | undefined {
-      const subjects = [resource, ...resolved(input.action, resource), ...(input.aliases?.[resource] ?? [])]
+      const subjects = [
+        resource,
+        ...resolved(input.action, resource),
+        ...respelled(input.action, resource),
+        ...(input.aliases?.[resource] ?? []),
+      ]
       const own = rules.findLast(
         (rule) =>
           actionMatches(input.action, rule.action) &&
@@ -338,8 +376,10 @@ const layer = Layer.effect(
       // Saved approvals are grants; managed_permissions_only ignores every one of them.
       const approvals = only ? [] : yield* savedRules()
       const all = [...rules, ...approvals]
-      const effects = input.resources.map((resource) => decide(input, resource, rules, approvals).effect)
-      const effect: Permission.Effect = effects.includes("ask") ? "ask" : "allow"
+      const decisions = input.resources.map((resource) => decide(input, resource, rules, approvals))
+      const effect: Permission.Effect = decisions.some((rule) => rule.effect === "ask") ? "ask" : "allow"
+      // An ask that a rule wrote (yours, the project's, an agent's built-in `.env` ask, a grant's lead) is explicit.
+      const explicit = decisions.some((rule) => rule.effect === "ask" && !isFallthrough(rule))
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
         agent: input.agent,
@@ -376,10 +416,13 @@ const layer = Layer.effect(
           message: event.message,
           rules: all,
         }
-      // A managed allow only lifts an ask. It never undoes a hook's deny, and it does not decide a place that a link in
-      // an untrusted project leads out to.
+      // A managed allow lifts only the default ask that no rule spoke to. It never undoes an ask that a rule or a plugin
+      // hook gave (the hook left `effect` as it was handed it, or it is not lifted), nor a hook's deny, and it does not
+      // decide a place that a link in an untrusted project leads out to. Only a managed ask or deny overrides those.
       const lifted =
         event.effect === "ask" &&
+        effect === "ask" &&
+        !explicit &&
         decided.length > 0 &&
         decided.every((effect, index) => effect === "allow" && !input.escaped?.includes(input.resources[index]!))
       return { effect: lifted ? ("allow" as const) : event.effect, message: event.message, rules: all }

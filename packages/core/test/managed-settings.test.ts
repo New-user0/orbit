@@ -1170,6 +1170,96 @@ describe("ManagedSettings.read unknown keys at every depth", () => {
     }),
   )
 
+  // Class 7: a bad field in an agent entry costs only itself, and its valid denies keep applying.
+  const badRule = { action: "Bash", resource: "x", effect: "Deny" }
+  const agentRows = [
+    { name: "a bad rule", entry: { permissions: [rule("deny", "curl *"), badRule, rule("deny", "rm *")] }, at: "$.agents.reviewer.permissions.1" },
+    { name: "a bad color", entry: { color: "red" }, at: "$.agents.reviewer.color" },
+    { name: "a bad model", entry: { model: 5 }, at: "$.agents.reviewer.model" },
+    { name: "a bad steps", entry: { steps: 0 }, at: "$.agents.reviewer.steps" },
+    { name: "a bad mode", entry: { mode: "both" }, at: "$.agents.reviewer.mode" },
+  ]
+  agentRows.forEach((row) =>
+    it.live(`an agent entry with ${row.name} keeps its other fields and its denies`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const entry = { permissions: [rule("deny", "curl *")], disabled: true, description: "kept", ...row.entry }
+        yield* write(tmp.path, { "managed-settings.json": { agents: { reviewer: entry } } })
+
+        const snapshot = yield* read(tmp.path)
+
+        const agent = snapshot.info.agents?.reviewer
+        expect(agent?.permissions).toEqual(
+          row.name === "a bad rule" ? [rule("deny", "curl *"), rule("deny", "rm *")] : [rule("deny", "curl *")],
+        )
+        expect(agent?.disabled).toBe(true)
+        expect(agent?.description).toBe("kept")
+        expect(snapshot.diagnostics.filter((item) => item.path.startsWith("$.agents"))).toEqual([
+          expect.objectContaining({ path: row.at, kind: "invalid" }),
+        ])
+      }),
+    ),
+  )
+
+  it.live("an agent entry of which nothing is valid is dropped beside its sibling", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": { agents: { bad: { color: "red", steps: 0 }, good: { steps: 2 } } },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(Object.keys(snapshot.info.agents ?? {})).toEqual(["good"])
+      expect(snapshot.diagnostics.map((item) => item.path).toSorted()).toEqual(["$.agents.bad.color", "$.agents.bad.steps"])
+    }),
+  )
+
+  // The object-valued fields whose parts are independent settings: the part that decodes is kept, so a typo in
+  // `sandbox.write` never turns `sandbox.enabled` off.
+  const objectRows = [
+    { key: "sandbox", value: { enabled: true, network: false, write: ["/a", 7] }, kept: { enabled: true, network: false }, at: "$.sandbox.write" },
+    { key: "shell_tool", value: { timeout: "slow", max_timeout: 9000 }, kept: { max_timeout: 9000 }, at: "$.shell_tool.timeout" },
+    { key: "warming", value: { prompt: "hi", interval: 5 }, kept: { prompt: "hi" }, at: "$.warming.interval" },
+    { key: "tool_execution", value: { max_concurrency: "many" }, kept: undefined, at: "$.tool_execution.max_concurrency" },
+    { key: "webfetch", value: { verbatim_hosts: [1] }, kept: undefined, at: "$.webfetch.verbatim_hosts" },
+    { key: "worktree", value: { directory: "" }, kept: undefined, at: "$.worktree.directory" },
+    { key: "websearch", value: { provider: 5 }, kept: undefined, at: "$.websearch.provider" },
+  ]
+  objectRows.forEach((row) =>
+    it.live(`a bad field in ${row.key} costs only itself, and is reported once`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, { "managed-settings.json": { [row.key]: row.value, shell: "kept" } })
+
+        const snapshot = yield* read(tmp.path)
+
+        const decoded = field(snapshot.info, row.key)
+        if (row.kept === undefined) expect(decoded).toBeUndefined()
+        else expect(decoded).toMatchObject(row.kept)
+        expect(snapshot.info.shell).toBe("kept")
+        expect(snapshot.diagnostics.filter((item) => item.path.startsWith(`$.${row.key}`))).toEqual([
+          expect.objectContaining({ path: row.at, kind: "invalid" }),
+        ])
+      }),
+    ),
+  )
+
+  it.live("a bad permission rule in a managed agent still denies through the policy", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* write(tmp.path, {
+        "managed-settings.json": {
+          agents: { reviewer: { color: "red", permissions: [rule("deny", "curl *"), 7] } },
+        },
+      })
+
+      const snapshot = yield* read(tmp.path)
+
+      expect(snapshot.info.agents?.reviewer?.permissions).toEqual([rule("deny", "curl *")])
+    }),
+  )
+
   it.live("does not repeat a path the normalizer reported", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
