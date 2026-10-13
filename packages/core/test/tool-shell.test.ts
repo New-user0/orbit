@@ -547,6 +547,48 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
+    // "always" on a command that steers its program saves the scanner's prefix, which does not lift that command again
+    // and lifts only commands the prefix matches (class 8). An exact-text allow rule is what stops the question.
+    for (const [command, save, liftedOther, askedOther] of [
+      ["env -i printf x", "env *", "env A=1 printf y", "env -i printf y"],
+      ["PATH=/usr/bin printf x", "printf *", "printf z", "env A=1 printf z"],
+      ["env PATH=/usr/bin printf x", "env *", "env A=1 printf y", "env PATH=/usr/bin printf y"],
+      ["LD_LIBRARY_PATH=/usr/lib printf x", "printf *", "printf z", "env A=1 printf z"],
+    ] as const) {
+      test(`${scanner}: always on ${command} saves ${save}, asks again, lifts ${liftedOther}, asks ${askedOther}`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const saved = yield* PermissionSaved.Service
+            const marker = path.join(fixture.active, "marker")
+            yield* runPermissionCommand(registry, command, marker, ["always"])
+            expect((yield* saved.list()).map((item) => item.resource)).toEqual([save])
+            const again = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(again.requests).toHaveLength(1)
+            const lifted = yield* runPermissionCommand(registry, liftedOther, marker, [])
+            expect(lifted.requests).toEqual([])
+            const other = yield* runPermissionCommand(registry, askedOther, marker, ["reject"])
+            expect(other.requests).toHaveLength(1)
+          }),
+        ))
+      test(`${scanner}: an exact-text Bash allow rule lifts ${command}`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const agents = yield* Agent.Service
+            yield* agents.transform((editor) =>
+              editor.update(toolIdentity.agent, (agent) => {
+                agent.permissions = [
+                  { action: "Bash", resource: "*", effect: "ask" },
+                  { action: "Bash", resource: command, effect: "allow" },
+                ]
+              }),
+            )
+            const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), [])
+            expect(result.requests).toEqual([])
+            expect(result.exit).toMatchObject({ _tag: "Success", value: { status: "completed", metadata: { exit: 0 } } })
+          }),
+        ))
+    }
+
     // A declaration that prints the environment is a request beside any other command (class 8): a rule written for it
     // applies, and an allow for the other command does not lift it. The secret is what the model would be shown.
     for (const [command, declaration] of [

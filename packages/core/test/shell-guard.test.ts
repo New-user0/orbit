@@ -582,14 +582,14 @@ describe("ShellGuard.authorize", () => {
   const run = (
     command: string,
     denied: (input: Permission.AssertInput) => boolean,
-    options: { shell?: string; link?: boolean; real?: boolean } = {},
+    options: { shell?: string; link?: boolean; linkName?: string; real?: boolean } = {},
   ) =>
     Effect.gen(function* () {
       asked.length = 0
       const { project, outside } = yield* layout
       process.env.ORBIT_GUARD_OUT = outside
       if (options.link) {
-        yield* Effect.promise(() => link(outside, path.join(project, "cfg")))
+        yield* Effect.promise(() => link(outside, path.join(project, options.linkName ?? "cfg")))
         yield* Effect.promise(() => fs.writeFile(path.join(outside, "s"), "secret"))
       }
       return yield* Effect.gen(function* () {
@@ -750,6 +750,18 @@ describe("ShellGuard.authorize", () => {
     "find . -fprint OUT",
     "find . -fprintf OUT %p",
     "tree -o OUT",
+    "git diff --output=OUT",
+    "git format-patch -o OUT",
+    "git --git-dir .git diff --output=OUT",
+    "git --work-tree . diff --output=OUT",
+    "git --namespace x diff --output=OUT",
+    "git --attr-source HEAD diff --output=OUT",
+    "git --shallow-file x diff --output=OUT",
+    "git --super-prefix p diff --output=OUT",
+    "git -C '' diff --output=OUT",
+    "git -C '' -C '' diff --output=OUT",
+    "git -C . --attr-source HEAD diff --output=OUT",
+    "git format-patch -1 -ko OUT",
     "sed -n '/[/]/w OUT' f",
     "sed -n 'w OUT' f",
     "sed -n 's/a/b/w OUT' f",
@@ -766,6 +778,62 @@ describe("ShellGuard.authorize", () => {
         expect(asked.map((input) => input.action)).toContain("external_directory")
       }),
     )
+
+  // `git -C` moves the folder an output is written in, so one that leads out of the project asks the folder question.
+  it.live("git -C ../outside diff --output=x asks about the folder it writes in", () =>
+    Effect.gen(function* () {
+      expect(Exit.isSuccess(yield* run("git -C ../outside diff --output=x", () => false))).toBe(true)
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+      expect(Exit.isFailure(yield* run("git -C ../outside diff --output=x", (input) => input.action === "Edit"))).toBe(true)
+      const control = asked.length
+      expect(Exit.isSuccess(yield* run("git -C sub diff --output=x", () => false))).toBe(true)
+      expect(asked.slice(control).map((input) => input.action)).not.toContain("external_directory")
+    }),
+  )
+
+  // A `~` the shell leaves alone (and `C:` off Windows) is a relative name to git, so it lies under the `-C` folder.
+  it.live("a literal ~ or X: output under git -C ../outside asks the folder question and meets an Edit deny", () =>
+    Effect.gen(function* () {
+      for (const text of ["git -C ../outside diff --output='~x'", "git -C ../outside diff --output='~/x'", ...(win ? [] : ["git -C ../outside diff --output=C:x"])]) {
+        expect(Exit.isSuccess(yield* run(text, () => false))).toBe(true)
+        expect([text, asked.map((input) => input.action)]).toEqual([text, expect.arrayContaining(["external_directory"])])
+        expect([text, Exit.isFailure(yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).includes("/outside/"))))]).toEqual([text, true])
+      }
+    }),
+  )
+
+  // bash expands the `~` of an assignment-shaped word, so `x=~/a` is not the lexical path `x=~/a` that a link named `x=`
+  // would meet; the guard must not wave it through with only a Bash question (class 4). The quoted spellings are controls.
+  it.live("an assignment-shaped tilde word is not judged by its unexpanded text, with a planted `x=` link", () =>
+    Effect.gen(function* () {
+      const outcome = (text: string) =>
+        Effect.gen(function* () {
+          const exit = yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).includes("/outside/")), {
+            shell: "bash",
+            link: true,
+            linkName: "x=",
+          })
+          return Exit.isFailure(exit) || asked.some((input) => input.action === "external_directory")
+        })
+      for (const text of ["git -C x=~/a diff --output=o", "cat x=~/s"]) expect([text, yield* outcome(text)]).toEqual([text, true])
+      for (const text of ["git -C 'x='/a diff --output=o", "cat 'x='/s"]) expect([text, yield* outcome(text)]).toEqual([text, true])
+    }),
+  )
+
+  // A `~` the shell expanded in an earlier `-C` stays expanded under a later relative `-C` (class 4).
+  it.live("git -C ~ -C x diff --output=o asks the folder question and meets an Edit deny under the home folder", () =>
+    Effect.gen(function* () {
+      const home = slash(os.homedir()).toLowerCase()
+      const text = "git -C ~ -C x diff --output=o"
+      expect(Exit.isSuccess(yield* run(text, () => false))).toBe(true)
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+      expect(
+        Exit.isFailure(
+          yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).toLowerCase().startsWith(home))),
+        ),
+      ).toBe(true)
+    }),
+  )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
   // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can
