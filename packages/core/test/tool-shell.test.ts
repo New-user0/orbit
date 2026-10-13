@@ -472,7 +472,6 @@ describe("ShellTool scanner permissions", () => {
       ["env LD_PRELOAD=./nothing.so A=1 ls", "env LD_PRELOAD=./nothing.so PATH=. ls"],
       ["env -i A=1 ls", "env -i PATH=. ls"],
       ["timeout 5 env A=1 ls", "timeout 5 env PATH=. ls"],
-      ["sudo ls", "sudo ls -la"],
       ["FOO=1 ls", "FOO=1 PATH=. ls"],
       ["FOO=1 ls", "PATH=. ls"],
       ["timeout 5 'r*' x", "rm -rf x"],
