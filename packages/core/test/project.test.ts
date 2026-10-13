@@ -455,12 +455,12 @@ describe("Project.resolve", () => {
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
       )
       yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
-      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), "old-id"))
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), "c".repeat(40)))
       const project = yield* Project.Service
 
       const result = yield* project.resolve(abs(tmp.path))
 
-      expect(result.previous).toBe(Project.ID.make("old-id"))
+      expect(result.previous).toBe(Project.ID.make("c".repeat(40)))
       expect(result.id).toBe(remoteID("github.com/owner/repo"))
     }),
   )
@@ -629,7 +629,7 @@ describe("Project.resolve", () => {
         Effect.promise(() => $`rm -rf ${worktree}`.quiet().nothrow()).pipe(Effect.ignore),
       )
       yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
-      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), "old-id"))
+      yield* Effect.promise(() => Bun.write(path.join(tmp.path, ".git", "orbit"), "c".repeat(40)))
       yield* Effect.promise(() => $`git worktree add ${worktree} -b test-${Date.now()}`.cwd(tmp.path).quiet())
       const project = yield* Project.Service
       const db = (yield* Database.Service).db
@@ -654,7 +654,7 @@ describe("Project.resolve", () => {
 
       expect(result.directory).toBe(yield* real(worktree))
       expect(result.canonical).toBe(yield* real(tmp.path))
-      expect(result.previous).toBe(Project.ID.make("old-id"))
+      expect(result.previous).toBe(Project.ID.make("c".repeat(40)))
       expect(result.id).toBe(id)
       expect(result.vcs?.type).toBe("git")
       expect((yield* project.list()).find((item) => item.id === id)).toMatchObject({
