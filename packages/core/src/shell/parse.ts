@@ -402,7 +402,7 @@ export function directoryArgument(value: string, powershell: boolean, cwd: strin
       if (key.toUpperCase() === "PWD") return cwd
       return path.dirname(shell)
     })
-  return expanded === "" && text !== "" ? os.homedir() : expandKnownDirectory(expanded)
+  return expanded === "" ? os.homedir() : expandKnownDirectory(expanded)
 }
 
 function expandKnownDirectory(value: string) {

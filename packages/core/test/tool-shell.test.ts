@@ -4103,6 +4103,28 @@ describe("ShellTool guard (PowerShell)", () => {
         options,
       )
 
+  // PowerShell 7 goes home for a location change with no path: an empty one, or only parameters that take none (class 8).
+  for (const spelling of ["Set-Location", "cd", "Set-Location ''", 'cd ""', "sl -Path ''", "cd -Path:''", "cd -PassThru", "cd -ErrorAction Stop"])
+    for (const padded of [false, true])
+      test(
+        `a removal after ${spelling} asks for the home folder first${padded ? ", in input over the length limit" : ""}`,
+        () =>
+          ask((registry, fixture) =>
+            Effect.gen(function* () {
+              yield* permissions([{ action: "Bash", resource: "*", effect: "allow" }])
+              const command = `${spelling}; Remove-Item orbit-no-such-file${padded ? ` #${"x".repeat(10_050)}` : ""}`
+              const result = yield* runPermissionCommand(registry, command, path.join(fixture.active, "k"), ["reject"])
+              expect(result.requests).toHaveLength(1)
+              expect(result.requests[0]).toMatchObject({
+                action: "external_directory",
+                resources: [path.join(os.homedir(), "*").replaceAll("\\", "/")],
+              })
+              expectDeclined(result.exit)
+            }),
+          ),
+        options,
+      )
+
   // A misread that drops the folder must not drop the one after it (class 3/4/8): the raw reading is the text as written,
   // so a trailing backslash does not join the next line, and a block comment between the cmdlet and its folder is blanks.
   for (const opener of ["Write-Output x<#", "$h = @'\nit's <#\n'@"])

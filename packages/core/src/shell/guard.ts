@@ -855,8 +855,14 @@ export function expansions(analysis: Analysis, cwd: string, shell: string) {
       (command) => LOCATION.has(command.name) && command.name !== "new-psdrive" && command.name !== "pop-location",
     )
     .flatMap((command) =>
-      // PowerShell 7 goes home for a bare Set-Location.
-      command.name === "set-location" && command.arguments.length === 0 ? [os.homedir()] : command.arguments.flatMap((argument) => {
+      // PowerShell 7 goes home for a Set-Location with no target: nothing, only parameters that take no path, or an empty
+      // path (which the folder reading below turns into home).
+      [
+        ...(command.name === "set-location" &&
+        !namesTarget(command.arguments.map((argument) => ({ parameter: argument.parameter, bound: argument.bound !== undefined })))
+          ? [os.homedir()]
+          : []),
+        ...command.arguments.flatMap((argument) => {
         // A word with a variable is read as written; any other word is the constant the parser folded, with its quotes
         // joined (`../out"side"` is `../outside`), so the folder shown never holds a quote character.
         const word =
@@ -873,7 +879,24 @@ export function expansions(analysis: Analysis, cwd: string, shell: string) {
             : ShellParse.directoryArgument(word.value, true, cwd, shell)
         return folder === undefined ? [] : [folder]
       }),
+      ],
     )
+}
+
+// Whether the arguments of a Set-Location name a place: a positional word or a path parameter. Any other parameter that is
+// not bound with a colon is taken to read the word after it (`-ErrorAction Stop`) unless it is a switch. Wrongly taking a
+// switch for a parameter that reads a value only adds the home question.
+function namesTarget(items: { parameter?: string; bound: boolean }[]) {
+  const switches = ["passthru", "verbose", "debug"]
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index]!
+    if (item.parameter === undefined) return true
+    if (pathParameter(item.parameter)) return true
+    const lower = item.parameter.toLowerCase()
+    if (item.bound || lower === "vb" || lower === "db" || (lower.length >= 3 && switches.some((name) => name.startsWith(lower)))) continue
+    index++
+  }
+  return false
 }
 
 /**
@@ -928,13 +951,21 @@ export function locations(
     const operands = words.slice(1, comment === -1 ? undefined : comment)
     // PowerShell 7 goes home for a bare Set-Location (and its aliases cd, chdir, sl).
     // The raw reading stops a fragment at the first comment opener, so it cannot tell an empty target from a hidden one.
-    if (ps && !raw && target === "set-location" && operands.length === 0) return [os.homedir()]
-    return (ps ? operands : bashOperands(operands).slice(0, 1)).flatMap((item, index, rest) => {
+    // A comment opener beside parameters may hide the target a misread dropped, so only a bare command is home in input that holds one.
+    const home =
+      ps &&
+      !raw &&
+      target === "set-location" &&
+      !namesTarget(operands.map((item) => parameterOf(item))) &&
+      (operands.length === 0 || !text.includes("<#"))
+        ? [os.homedir()]
+        : []
+    return [...home, ...(ps ? operands : bashOperands(operands).slice(0, 1)).flatMap((item, index, rest) => {
       const bound = ps ? colonBound(item, rest[index + 1]) : undefined
       if (bound !== undefined && !pathParameter(bound.name)) return []
       const word = bound?.word ?? item
       if (bound === undefined && /^[-–—―]/.test(item.raw)) return []
-      if (ps && word.value.includes("$")) {
+      if (ps && (word.value === "" || word.value.includes("$"))) {
         const folder = ShellParse.directoryArgument(word.value, true, cwd, shell)
         if (folder !== undefined) return [folder]
       }
@@ -943,7 +974,7 @@ export function locations(
       const prefix = word.value.slice(0, dynamic)
       const slash = Math.max(prefix.lastIndexOf("/"), prefix.lastIndexOf("\\"))
       return slash === -1 ? [] : [prefix.slice(0, slash + 1)]
-    })
+    })]
   }))
   // A value that follows `-Name:` is read both as that value and as a word of its own.
   return distinct(found)
@@ -1180,11 +1211,17 @@ function fragmentTokens(fragment: string, ps: boolean): Token[] {
 }
 
 // -Name:value as one word, or `-Name:` followed by its value as the next word.
+function parameterOf(token: Token) {
+  const match = /^[-–—―](\w+)(:?)/.exec(token.value)
+  return match === null ? { parameter: undefined, bound: false } : { parameter: match[1]!, bound: match[2] === ":" }
+}
+
 function colonBound(token: Token, next: Token | undefined) {
   const match = /^[-–—―](\w+):(.*)$/s.exec(token.value)
   if (!match) return undefined
   if (match[2] !== "") return { name: match[1]!, word: { raw: token.raw.slice(token.raw.indexOf(":") + 1), value: match[2]! } }
-  return next === undefined ? undefined : { name: match[1]!, word: next }
+  // A quoted empty value (`-Path:''`) leaves no word after the colon.
+  return { name: match[1]!, word: next ?? { raw: "", value: "" } }
 }
 
 // -Path, -LiteralPath and -PSPath (-LP in PowerShell 7), with the abbreviations PowerShell accepts (`-p` also fits
