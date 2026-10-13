@@ -73,8 +73,8 @@ export function given(input: {
 }) {
   return [
     ...(input.settings?.length ? ["--settings"] : []),
-    ...(input.mcpConfig?.length ? ["--mcp-config"] : []),
-    ...(input.agents !== undefined ? ["--agents"] : []),
+    ...(present(input.mcpConfig).length ? ["--mcp-config"] : []),
+    ...(input.agents !== undefined && input.agents.trim() !== "" ? ["--agents"] : []),
   ]
 }
 
@@ -85,18 +85,20 @@ export function given(input: {
  * given. Every error names the flag and, for a value that does not fit the schema, the path inside it.
  */
 export async function build(input: Input) {
-  const mcpConfig = input.mcpConfig ?? []
-  if (given({ ...input, mcpConfig }).length === 0) return undefined
+  // An empty or blank --mcp-config or --agents value is skipped, as a script that passes an unset variable expects.
+  const mcpConfig = present(input.mcpConfig)
+  const agents = input.agents?.trim() === "" ? undefined : input.agents
+  if (given({ ...input, mcpConfig, agents }).length === 0) return undefined
   const settings = input.settings?.length
     ? await settingsSource(input.settings, input.cwd)
-    : { layer: undefined, file: undefined }
+    : { layer: undefined, file: undefined, servers: 0 }
   const mcpLayers = await Promise.all(mcpConfig.map((value) => mcpLayer(value, input.cwd)))
-  // Whether the --mcp-config values name a server, counted from the layers the server will read.
-  const named = mcpLayers.some((layer) => layer.count > 0)
+  // Whether the --mcp-config and --settings values name a server, counted from the documents the server will read.
+  const named = mcpLayers.some((layer) => layer.count > 0) || settings.servers > 0
   const layers = [
     ...(settings.layer ? [settings.layer] : []),
     ...mcpLayers.map((layer) => ({ mcp: layer.mcp })),
-    ...(input.agents === undefined ? [] : [await agentsLayer(input.agents, input.cwd)]),
+    ...(agents === undefined ? [] : [await agentsLayer(agents, input.cwd)]),
   ]
   // A file alone leaves the inherited content where it is: the server still reads it from the environment.
   if (layers.length === 0) return { file: settings.file, named }
@@ -104,7 +106,7 @@ export async function build(input: Input) {
     input.inherited === undefined
       ? {}
       : object("ORBIT_CONFIG_CONTENT", parseJsonc("ORBIT_CONFIG_CONTENT", input.inherited))
-  const content = JSON.stringify(layers.reduce(merge, inherited))
+  const content = JSON.stringify(layers.reduce((document, layer) => merge(document, layer), inherited))
   const size = Buffer.byteLength(content)
   if (size > MAX_BYTES)
     throw new Error(
@@ -404,9 +406,22 @@ async function settingsSource(values: ReadonlyArray<string>, cwd: string) {
   if (inline(value)) {
     // Windows PowerShell 5.1 removes the double quotes inside an argument it passes to a program.
     const hint = value.includes('"') ? "" : "; the shell may have removed the double quotes, a file avoids that"
-    return { layer: anchorFiles(flag, object(flag, parseJsonc(flag, value, hint)), cwd) }
+    const layer = anchorFiles(flag, object(flag, parseJsonc(flag, value, hint)), cwd)
+    return { layer, file: undefined, servers: serverCount(layer) }
   }
-  return { file: await settingsFile(value, cwd) }
+  const file = await settingsFile(value, cwd)
+  return { layer: undefined, file: file.path, servers: file.servers }
+}
+
+// How many MCP servers a settings document names, for the managed_only refusal. Core checks the shape when it loads.
+function serverCount(document: Json) {
+  const mcp = document.mcp
+  if (!isObject(mcp) || !isObject(mcp.servers)) return 0
+  return Object.keys(mcp.servers).length
+}
+
+function present(values: ReadonlyArray<string> | undefined) {
+  return (values ?? []).filter((value) => value.trim() !== "")
 }
 
 // The file is checked the way core reads it, so a file that passes here is one core loads: UTF-8 with or without a
@@ -444,9 +459,9 @@ async function settingsFile(value: string, cwd: string) {
     throw refuse("is UTF-16; save it as UTF-8")
   const text = new TextDecoder().decode(bytes)
   // An empty file is an empty document, as in any other config file, and there is nothing for the server to load.
-  if (text.trim() === "") return undefined
-  object(`${flag} ${shown(value)}`, parseJsonc(`${flag} ${shown(value)}`, text))
-  return file
+  if (text.trim() === "") return { path: undefined, servers: 0 }
+  const document = object(`${flag} ${shown(value)}`, parseJsonc(`${flag} ${shown(value)}`, text))
+  return { path: file, servers: serverCount(document) }
 }
 
 // What a value says about itself in an error: short, and without characters that act on a terminal.
@@ -477,13 +492,17 @@ function describe(flag: string, issue: SchemaIssue.Issue) {
     .join("\n")
 }
 
-function merge(base: Json, layer: Json): Json {
+// Maps whose entries a later layer replaces whole, as core does across documents: a later `url` must not keep an
+// earlier server's headers, nor a later command its environment. Agents and providers still merge by key.
+const WHOLE_ENTRIES = new Set(["mcp.servers", "lsp", "formatter", "references", "commands"])
+
+function merge(base: Json, layer: Json, at = ""): Json {
   return Object.fromEntries(
     [...new Set([...Object.keys(base), ...Object.keys(layer)])].map((key) => {
       const left = base[key]
       const right = layer[key]
       if (!(key in layer)) return [key, left]
-      if (isObject(left) && isObject(right)) return [key, merge(left, right)]
+      if (isObject(left) && isObject(right) && !WHOLE_ENTRIES.has(at)) return [key, merge(left, right, at ? `${at}.${key}` : key)]
       // Rules add up across documents, as the config layers do, so an agent's flag rules do not drop the inherited ones.
       if (key === "permissions" && Array.isArray(left) && Array.isArray(right)) return [key, [...left, ...right]]
       return [key, right]

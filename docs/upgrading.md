@@ -370,7 +370,7 @@ Set `managed.mcp.managed_only` to `true` in the managed settings (only managed f
 
 - A managed server runs as the managed files write it. Its `timeout` defaults come from the managed `mcp.timeout` alone, so a person's `mcp.timeout` and Orbit's Code Mode defaults do not shape it; write `codemode` in the managed definition if you want it.
 - `PUT /api/experimental/mcp/:server` (`Mcp.add`) answers 403 `ForbiddenError` for every server, including a replacement of a managed server's name, and stores nothing. The refusal is given before the deny and allow lists, so it names the real cause. `orb mcp add` refuses and writes no file, and an ACP session attaches without each server it names and adds it on a later attach once the flag is off.
-- `orb`, `orb -p` and `orb run` with `--mcp-config` that names at least one server stop with exit code 1 before the first request. An empty `{"servers":{}}` runs. A server that does not report `config.effective.mcp` (an older one) stops the run too.
+- `orb`, `orb -p` and `orb run` with `--mcp-config`, or `--settings` (inline or a file) with `mcp.servers`, that names at least one server stop with exit code 1 before the first request. An empty `{"servers":{}}` runs. A server that does not report `config.effective.mcp` (an older one) stops the run too.
 - `Mcp.remove` works on a managed server, and a removed one stays out until restart.
 - The change takes effect live: turning the flag on stops the other servers on the running server, a managed server whose definition did not change keeps its process, and turning it off starts the others again.
 - `GET /api/config/effective` reports `mcp.managed_only`; it is absent from a server that predates it, which clients read as unknown.
@@ -1235,7 +1235,7 @@ itself (comments and trailing commas are allowed). `--mcp-config` takes `{"serve
 the `agents` key. A relative program or `cwd` in a file means the folder of that file. Another product's `mcpServers` map
 is refused with a hint. The values are checked before anything starts, an error names the flag and the path inside the
 value, and the merged document may not pass 4 MiB. They layer over `ORBIT_CONFIG_CONTENT`, then `--mcp-config` in order,
-then `--agents`.
+then `--agents`. A later value that names a server another value already named replaces it whole (so a new `url` keeps no earlier `headers`, and a new `command` no earlier `environment`), as it does for `lsp`, `formatter`, `references` and `commands` entries; agents still merge by key. An empty or blank `--mcp-config` or `--agents` value is skipped, so a script that passes an unset variable runs.
 
 A run with either flag uses a private server, as `--bare` does, so it starts a little slower and does not run anything on the
 background service. The config reaches that server in a file in Orbit's state folder that only your user can open,
