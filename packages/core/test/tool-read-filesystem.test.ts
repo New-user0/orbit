@@ -276,6 +276,20 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 
+  it.effect("counts an unterminated last line that is longer than the kept length", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      const file = path.join(directory, "long-last.txt")
+      yield* files.writeFileString(file, `a
+${"x".repeat(300 * 1024)}`)
+
+      const error = yield* readContent(environment, absolute(file), "long-last.txt", { offset: 5 }).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(ReadToolFileSystem.OffsetOutOfRangeError)
+      expect(error.message).toBe("Offset 5 is out of range for this file (2 lines)")
+    }),
+  )
+
   it.effect("pages text with one-based offsets", () =>
     Effect.gen(function* () {
       const { environment, files, directory } = yield* fixture
