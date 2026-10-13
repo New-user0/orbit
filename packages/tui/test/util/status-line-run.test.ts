@@ -19,7 +19,7 @@ test.each([
     lines: Array.from({ length: 10 }, (_, index) => `row${index}`),
   },
 ])("outputLines keeps $name", (row) => {
-  expect(outputLines(row.output)).toEqual(row.lines)
+  expect(outputLines(row.output)).toEqual([...row.lines])
 })
 
 // The command runs through the real shell. Quotes must reach it as typed: on Windows the usual argument escaping writes a
