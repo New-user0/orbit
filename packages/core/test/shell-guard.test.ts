@@ -797,8 +797,23 @@ describe("ShellGuard.authorize", () => {
       for (const text of ["git -C ../outside diff --output='~x'", "git -C ../outside diff --output='~/x'", ...(win ? [] : ["git -C ../outside diff --output=C:x"])]) {
         expect(Exit.isSuccess(yield* run(text, () => false))).toBe(true)
         expect([text, asked.map((input) => input.action)]).toEqual([text, expect.arrayContaining(["external_directory"])])
-        expect([text, Exit.isFailure(yield* run(text, (input) => input.action === "Edit"))]).toEqual([text, true])
+        expect([text, Exit.isFailure(yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).includes("/outside/"))))]).toEqual([text, true])
       }
+    }),
+  )
+
+  // A `~` the shell expanded in an earlier `-C` stays expanded under a later relative `-C` (class 4).
+  it.live("git -C ~ -C x diff --output=o asks the folder question and meets an Edit deny under the home folder", () =>
+    Effect.gen(function* () {
+      const home = slash(os.homedir()).toLowerCase()
+      const text = "git -C ~ -C x diff --output=o"
+      expect(Exit.isSuccess(yield* run(text, () => false))).toBe(true)
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+      expect(
+        Exit.isFailure(
+          yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).toLowerCase().startsWith(home))),
+        ),
+      ).toBe(true)
     }),
   )
 

@@ -787,7 +787,7 @@ function outputs(name: string, words: Word[], platform: string): Outputs {
         folder =
           folder === undefined || rooted(next)
             ? next
-            : { ...next, value: `${folder.value}/${next.value}`, literal: folder.literal && next.literal, glob: folder.glob || next.glob }
+            : { ...next, value: `${folder.value}/${next.value}`, literal: folder.literal && next.literal, glob: folder.glob || next.glob, tilde: folder.tilde }
       } else if (["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source", "--shallow-file"].includes(text)) at++
       else if (!text.startsWith("-")) verb = at
     }
