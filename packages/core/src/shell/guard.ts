@@ -10,6 +10,7 @@ import { Location } from "../location.js"
 import { Permission } from "../permission.js"
 import { ProjectTrust } from "../project-trust.js"
 import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
+import { LinkShare } from "../config/link-share.js"
 import { ShellParse } from "./parse.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
@@ -477,13 +478,15 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
   const fs = yield* FSUtil.Service
   const found: NonNullable<ShellSafety.GuardFacts["bare"]> = []
   const share = (file: string) => process.platform === "win32" && /^[\\/]{2}/.test(file)
-  const type = (file: string) =>
-    share(file)
-      ? Effect.succeed(undefined)
-      : fs.stat(file).pipe(
-          Effect.map((info) => info.type),
-          Effect.orElseSucceed(() => undefined),
-        )
+  // What a part is. A part that is a share, or leads to one through a link the repository ships, is "Share": it is never
+  // stat-ed, because that connects to a host the repository chose (class 6).
+  const type = Effect.fnUntraced(function* (file: string) {
+    if (share(file) || (yield* LinkShare.of(fs, file)) !== undefined) return "Share" as const
+    return yield* fs.stat(file).pipe(
+      Effect.map((info) => info.type),
+      Effect.orElseSucceed(() => undefined),
+    )
+  })
   const same = (left: string, right: string) =>
     process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right
 
@@ -540,7 +543,12 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
     const leads = yield* trust.leads(target)
     if (share(leads)) return false
     if (path.basename(path.dirname(leads)) === "worktrees") {
-      const back = yield* fs.readFileString(path.join(leads, "gitdir")).pipe(Effect.orElseSucceed(() => ""))
+      const backFile = path.join(leads, "gitdir")
+      const back =
+        (yield* type(backFile)) === "File"
+          ? yield* fs.readFileString(backFile).pipe(Effect.orElseSucceed(() => ""))
+          : ""
+
       const wanted = yield* trust.leads(file)
       if (back.trim() !== "" && same(yield* trust.leads(path.resolve(leads, back.trim())), wanted)) return true
     }
@@ -558,6 +566,10 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
     Effect.fnUntraced(function* (base) {
       for (let folder = yield* trust.leads(base); ; folder = path.dirname(folder)) {
         const entry = yield* type(path.join(folder, ".git"))
+        if (entry === "Share") {
+          found.push({ base: folder, why: "unverified-gitdir" })
+          return
+        }
         if (entry === "File") {
           if (!(yield* verified(folder))) found.push({ base: folder, why: "unverified-gitdir" })
           if (base === workdir) own.set(folder, path.join(folder, ".git"))
@@ -569,7 +581,12 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
         }
         // No valid `.git` here: any one of these makes git take the folder itself for a repository.
         const indicators = yield* Effect.forEach(["HEAD", "objects", "refs"], (name) => type(path.join(folder, name)))
-        if (indicators[0] === "File" || indicators[1] === "Directory" || indicators[2] === "Directory")
+        if (
+          indicators.includes("Share") ||
+          indicators[0] === "File" ||
+          indicators[1] === "Directory" ||
+          indicators[2] === "Directory"
+        )
           found.push({ base: folder, why: "indicators" })
         if (path.dirname(folder) === folder) return
       }

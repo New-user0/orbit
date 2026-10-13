@@ -1297,3 +1297,63 @@ describe("ShellGuard.authorize: a share named in input the analysis cannot read"
       )
     }
 })
+
+// The bare-repository probe stats HEAD, objects, refs and `.git` of every folder git could start in. A repository can ship
+// any of them as a link to a share, and a stat through it connects to a host the repository chose, before anyone is asked
+// (class 6). The FSUtil is the recording one, so the rows pin which paths were stat-ed, not how long the answer took.
+describe("ShellGuard.facts: the bare-repository probe and links to shares", () => {
+  const rows = [
+    { name: "cwd in the folder", command: "git status", cwd: "sub" },
+    { name: "cd into the folder", command: "cd sub && git log", cwd: "" },
+    { name: "git -C the folder", command: "git -C sub status", cwd: "" },
+  ]
+  const shares = { HEAD: "file", objects: "dir", refs: "dir" } as const
+
+  for (const trusted of [true, false])
+    for (const row of rows)
+      for (const [name, kind] of Object.entries(shares))
+        (win ? it.live : it.live.skip)(
+          `${name} linked to a share is flagged and never stat-ed: ${row.name} (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.gen(function* () {
+              const { project } = yield* layout
+              const recorded = recordedFileSystem()
+              const made = yield* Effect.promise(async () => {
+                await repository(project)
+                return fs.symlink("\\\\192.0.2.201\\share\\x", path.join(project, "sub", name), kind).then(
+                  () => true,
+                  () => false,
+                )
+              })
+              // Without the right to make a link there is nothing to probe.
+              if (!made) return
+              const started = Date.now()
+              const found = yield* facts(row.command, { cwd: path.join(project, row.cwd) }).pipe(
+                Effect.provide(
+                  AppNodeBuilder.build(
+                    LayerNode.group([FileAccess.node, ProjectTrust.node, FSUtil.node, Location.node]),
+                    [
+                      Location.node.replace(
+                        Layer.succeed(
+                          Location.Service,
+                          Location.Service.of(location({ directory: AbsolutePath.make(project) })),
+                        ),
+                      ),
+                      Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
+                      FSUtil.node.replace(recorded.layer),
+                      ...(trusted ? [] : untrustedProjectNodes),
+                    ],
+                  ),
+                ),
+              )
+              expect(Date.now() - started).toBeLessThan(15_000)
+              expect(found.bare.map((item) => item.why)).toEqual(["indicators"])
+              expect(
+                recorded.calls.filter((call) => call.startsWith("stat ") && call.endsWith(path.join("sub", name))),
+              ).toEqual([])
+              // The control: other paths of the walk are stat-ed as before.
+              expect(recorded.calls.some((call) => call.startsWith("stat "))).toBe(true)
+            }),
+          60_000,
+        )
+})
