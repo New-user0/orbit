@@ -746,7 +746,6 @@ export function request(
   if (analysis.opaque) return opaque(analysis, whole, scan)
   if (isPowerShell(analysis)) return powershell(analysis, whole, findings)
   const resources = [...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? [])]
-  const save = scan?.commands.map((command) => command.save) ?? []
   // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
   if (resources.length > 0) {
     // Requests of their own beside the scanned commands (class 8):
@@ -758,21 +757,65 @@ export function request(
     const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
       if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
       const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      return steps
-        .slice(command.env.length > 0 ? 0 : 1)
-        .map((argv) => ({ resource: argv.join(" "), save: `${ShellParse.prefix(argv).join(" ")} *` }))
+      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => ({
+        resource: argv.join(" "),
+        // A command that can change which program runs or what it finds saves no program behind it: the stripped spelling
+        // is there for a deny or an ask only (class 8).
+        save: steersProgram(command, steps) ? undefined : innerSave(command, argv),
+      }))
     })
     const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
-    // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`),
-    // since both spellings were asked about and a repeat must be lifted. The wrapper's own save is the one scanned above,
-    // so `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
+    // A scanned save of a command that reshapes its program is that command's exact text: it repeats, and lifts no other.
+    const exact = new Set(
+      analysis.commands
+        .filter((command) => reshapes(command, ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps))
+        .map((command) => command.text.trim()),
+    )
+    const saves = (scan?.commands ?? []).map((command) => (exact.has(command.resource) ? command.resource : command.save))
+    // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`)
+    // when every word naming that program is plain, as typed. The wrapper's own save is the one scanned above, so
+    // `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
     return {
       resources: distinct([...resources, ...added.map((item) => item.resource)]),
-      save: [...save, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !save.includes(item))],
+      save: [...saves, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !saves.includes(item))],
     }
   }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
+}
+
+const RESHAPERS = new Set(["env", "sudo", "doas", "exec"])
+
+function reshapes(command: Command, steps: string[][]) {
+  return command.env.length > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
+}
+
+const LOOKUP = /^(PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=/i
+
+// Whether the command changes how its program is found or started: sudo, doas or exec, an `env` option (-i, -u), or an
+// assignment to a variable that picks the program or loads code into it.
+function steersProgram(command: Command, steps: string[][]) {
+  return (
+    command.env.some((item) => LOOKUP.test(item.name + "=")) ||
+    steps.some((argv, index) => {
+      if (argv[0] === "sudo" || argv[0] === "doas" || argv[0] === "exec") return true
+      if (argv[0] !== "env") return false
+      const next = steps[index + 1]
+      return argv.slice(1, argv.length - (next?.length ?? 0)).some((word) => word.startsWith("-") || LOOKUP.test(word))
+    })
+  )
+}
+
+// The save for the program a wrapper runs, or undefined unless the words that name it are plain: unquoted, unescaped, with
+// no whitespace or wildcard, so the pattern is the text as the person wrote it.
+function innerSave(command: Command, argv: string[]) {
+  const named = ShellParse.prefix(argv)
+  const offset = command.argv.length - argv.length
+  const plain = named.every((_, index) => {
+    const word = command.argv[offset + index]
+    return word !== undefined && word.literal && !word.quoted && !word.glob && !word.escaped && !/[\s*?[\\]/.test(word.value)
+  })
+  return plain ? `${named.join(" ")} *` : undefined
 }
 
 function distinct<A>(list: readonly A[]) {
