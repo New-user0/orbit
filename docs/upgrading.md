@@ -2720,6 +2720,10 @@ Starting a location now waits for the first read of the Ollama server's model li
 so a run that relies on the default model finds the Ollama models instead of failing with "No model was set" when the
 list arrives a moment late. With an Ollama address that does not answer, the start takes up to 1 second longer.
 
+A read that a location rebuild interrupts (as `--trust` does right after it grants) no longer leaves a "checked" mark
+without models behind, so the next start reads the list again instead of finding it empty until the refresh interval
+passes. The LM Studio and vLLM model lists follow the same rule.
+
 ### The shell guard asks about more places for PowerShell, and reports a refused place as unresolved
 
 PowerShell 7 goes to the home folder when a location change names nothing, so a bare `Set-Location` or `cd`, `Set-Location $null`, and a variable that is unset or empty (`${env:NAME}`) are now asked about as the home folder on every host; Windows PowerShell 5.1 fails there, and the home folder is the stricter reading. On Linux and macOS a backslash in a PowerShell word is read as a separator, as `pwsh` reads it there, so `Set-Location ..\outside` is asked about as `../outside`. A place that the file layer refuses (a link of the project that leads to a share, or a share spelling) is now reported as unresolved even when it lies in the sandbox's writable roots, where it used to count as inside them, and so is any `\`-led place when the project itself is on a network share. The effect is one more question for these unusual spellings, never fewer.
