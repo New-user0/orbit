@@ -784,24 +784,24 @@ export function request(
     const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
       if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
       const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => ({
+      // Only the program at the end of the chain gets a save, and none when anything in the chain reshapes it (class 8).
+      const open = command.env.length === 0 && !reshapes(command, steps) && !steersProgram(command, steps)
+      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv, index, rest) => ({
         resource: argv.join(" "),
-        // A command that can change which program runs or what it finds saves no program behind it: the stripped spelling
-        // is there for a deny or an ask only (class 8).
-        save: steersProgram(command, steps) ? undefined : innerSave(command, argv),
+        save: open && index === rest.length - 1 ? innerSave(command, argv) : undefined,
       }))
     })
     const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
-    // A scanned save of a command that reshapes its program is that command's exact text: it repeats, and lifts no other.
-    const exact = new Set(
-      analysis.commands
-        .filter((command) => reshapes(command, ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps))
-        .map((command) => command.text.trim()),
-    )
-    const saves = (scan?.commands ?? []).map((command) => (exact.has(command.resource) ? command.resource : command.save))
+    // A scanned save of a command that reshapes its program (`env *`, `FOO=1 *`) is replaced by the scanned text, and by
+    // nothing when that text holds a wildcard: a saved pattern has no escape, so `FOO=* ls` would lift `FOO=1 PATH=. ls`.
+    // The test reads the scanner's own words, so a redirect, a pipe or a continuation does not hide it.
+    const saves = (scan?.commands ?? []).flatMap((command) => {
+      if (!ASSIGNED.test(command.resource) && !reshapes(undefined, ShellWrappers.unwrap(command.resource.split(/\s+/)).steps))
+        return [command.save]
+      return /[*?]/.test(command.resource) ? [] : [command.resource]
+    })
     // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`)
-    // when every word naming that program is plain, as typed. The wrapper's own save is the one scanned above, so
-    // `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
+    // when every word naming that program is plain, as typed. The extras come after the scanned saves.
     return {
       resources: distinct([...resources, ...added.map((item) => item.resource)]),
       save: [...saves, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !saves.includes(item))],
@@ -811,10 +811,12 @@ export function request(
   return { resources: [whole], save: [] }
 }
 
+const ASSIGNED = /^\s*[A-Za-z_][A-Za-z0-9_]*=/
+
 const RESHAPERS = new Set(["env", "sudo", "doas", "exec"])
 
-function reshapes(command: Command, steps: string[][]) {
-  return command.env.length > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
+function reshapes(command: Command | undefined, steps: string[][]) {
+  return (command?.env.length ?? 0) > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
 }
 
 const LOOKUP = /^(PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=/i
@@ -837,6 +839,7 @@ function steersProgram(command: Command, steps: string[][]) {
 // no whitespace or wildcard, so the pattern is the text as the person wrote it.
 function innerSave(command: Command, argv: string[]) {
   const named = ShellParse.prefix(argv)
+  if (ASSIGNED.test(named[0] ?? "")) return undefined
   const offset = command.argv.length - argv.length
   const plain = named.every((_, index) => {
     const word = command.argv[offset + index]

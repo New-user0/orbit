@@ -145,6 +145,15 @@ export function reaches(folder: string, pattern: string) {
   return literal.startsWith(below) || below.startsWith(literal)
 }
 
+// A shell command that changes how its program is found or loaded (a PATH, LD_*, DYLD_*, BASH_ENV, ENV or IFS assignment,
+// or an `env` option) is lifted by a saved approval only when that approval is its exact text, so a grant saved for the
+// program, or an `env *` saved earlier, never lifts it (class 8).
+const STEERING = /(?:^|\s)(?:(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=|env\s+(?:\S+\s+)*?-)/i
+
+function steersProgram(action: string, resource: string) {
+  return ToolNames.spellings(action).some((name) => name.toLowerCase() === "bash") && STEERING.test(resource)
+}
+
 // The ask that stands for "no rule said anything", told apart from a rule that asks by identity, since a rule can be
 // written `* * ask` and look the same.
 const fallthroughs = new WeakSet<Permission.Rule>()
@@ -261,7 +270,12 @@ const layer = Layer.effect(
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
     ) => {
-      const all = [...(input.escaped?.includes(resource) ? own(rules) : rules), ...approvals]
+      const all = [
+        ...(input.escaped?.includes(resource) ? own(rules) : rules),
+        ...(steersProgram(input.action, resource)
+          ? approvals.filter((rule) => rule.resource === resource && !/[*?]/.test(rule.resource))
+          : approvals),
+      ]
       const decided = evaluate(input.action, resource, all, [
         ...(input.aliases?.[resource] ?? []),
         ...resolved(input.action, resource),

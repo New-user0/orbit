@@ -2928,9 +2928,10 @@ wording of those notes, and models that sent a one-character query or both domai
 
 - A saved grant for a command behind a wrapper (`timeout`, `nice`, `env` and the like) now names the program only when its words are plain: unquoted, without a wildcard or a space. `timeout 5 'r*' x` saves the wrapper and nothing for the program.
 - A command that starts with `sudo`, `doas`, `exec`, an `env` option such as `-i`, or an assignment to `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS` saves no grant for the program behind it.
-- A command with `env`, `sudo`, `doas`, `exec` or leading assignments saves its own text instead of `env *`, so `env A=1 ls` no longer lifts `env PATH=. ls`. Deny and ask rules still meet the program under its stripped spelling.
+- A command with `env`, `sudo`, `doas`, `exec` or leading assignments, however many wrappers, redirects or pipes surround it, saves its own text and nothing for the program behind it. That text is saved only when it holds no `*` or `?`; otherwise nothing is saved and the command asks again, because a saved pattern has no escape. Deny and ask rules still meet the program under its stripped spelling.
+- A saved grant lifts a command that sets `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS`, or gives `env` an option, only when it is that command's exact text. An `env *` or `ls *` saved earlier no longer lifts `env PATH=. ls`.
 
-**Affects:** people who answered "always" on such commands; an `env *` grant saved earlier keeps working until removed.
+**Affects:** people who answered "always" on such commands; an `env *` grant saved earlier still covers other `env` commands but not the ones above.
 
 **What to do:** Answer again; the new grant is narrower.
 

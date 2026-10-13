@@ -585,6 +585,48 @@ describe("ShellGuard.request", () => {
       }),
     )
 
+  // What an "always" reply saves (class 8). A command that reshapes its program saves its own text, or nothing when that
+  // text holds a wildcard (a saved pattern has no escape); a program behind a wrapper is saved only at the end of a chain
+  // that has no env, sudo, doas or exec in it and no assignment-shaped word.
+  for (const [command, save] of [
+    ["env A=1 ls", ["env A=1 ls"]],
+    ["timeout 5 env A=1 ls", ["timeout 5 env A=1 ls"]],
+    ["nice env A=1 ls", ["nice env A=1 ls"]],
+    ["nohup env A=1 ls", ["nohup env A=1 ls"]],
+    ["time env A=1 ls", ["time env A=1 ls"]],
+    ["stdbuf -o0 env A=1 ls", ["stdbuf -o0 env A=1 ls"]],
+    ["nice -n 5 env A=1 ls", ["nice -n 5 env A=1 ls"]],
+    ["timeout 5 env A=1 npm test", ["timeout 5 env A=1 npm test"]],
+    ["env A=1 ls 2>/dev/null", ["env A=1 ls 2>/dev/null"]],
+    ["env A=1 ls > out", ["env A=1 ls > out"]],
+    ["env A=1 ls < in", ["env A=1 ls < in"]],
+    ["timeout 5 FOO=1 ls", ["timeout *"]],
+    ["FOO=1 ls", ["FOO=1 ls"]],
+    ["FOO=* ls", []],
+    ["FOO='*' ls", []],
+    ["env PATTERN='src/*' ls", []],
+    ["FOO='*.ts' npm test", []],
+    ["timeout 60 npm test", ["timeout *", "npm test *"]],
+  ] as const)
+    it.live(`saves ${JSON.stringify(save)} for ${JSON.stringify(command)}`, () =>
+      Effect.gen(function* () {
+        const asked = (yield* request(command)).request
+        expect(asked?.save ?? []).toEqual([...save])
+        // The only wildcard in a saved pattern is the closing one that Orbit adds.
+        for (const item of asked?.save ?? []) expect(item.replace(/ \*$/, "")).not.toMatch(/[*?]/)
+      }),
+    )
+
+  // The scanner's own text decides, so a pipe or a line continuation does not bring back `env *` or `ls *`.
+  for (const command of ["env A=1 ls 2>&1 | head", "env A=1 \\\nls", "env A=1 ls >/dev/null 2>&1"])
+    it.live(`saves nothing for env or the program behind it for ${JSON.stringify(command)}`, () =>
+      Effect.gen(function* () {
+        const saved = (yield* request(command)).request?.save ?? []
+        expect(saved.length).toBeGreaterThan(0)
+        for (const item of saved) expect(item).not.toMatch(/^(env|ls) \*$/)
+      }),
+    )
+
   it.live("skips only input that does nothing", () =>
     Effect.gen(function* () {
       for (const command of ["export A=1; cd sub", "# note", "", "A=1", "unset A", "declare -x B=2"])
