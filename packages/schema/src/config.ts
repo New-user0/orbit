@@ -189,6 +189,21 @@ export const Effective = Schema.Struct({
         "Which plugins organization-managed settings allow or block, as selectors that match a package name, an absolute path or a plugin ID. An empty object means no restriction. Absent from a server that predates it, which clients read as no external plugin may load.",
     }),
   ),
+  hooks: Schema.optionalKey(
+    Schema.Struct({
+      disabled: Schema.Boolean.annotate({
+        description:
+          "Whether organization-managed settings turn hooks off (disable_hooks, or hooks.disabled in the managed file). A client that runs a command in a hook's place, such as the status line, does not run it.",
+      }),
+      managed_only: Schema.Boolean.annotate({
+        description:
+          "Whether organization-managed settings allow only managed hooks (managed_hooks_only, or hooks.managed_only in the managed file). Orbit has no managed status line, so a client does not run its own command either.",
+      }),
+    }).annotate({
+      description:
+        "What organization-managed settings say about hooks. Absent from a server that predates it, which clients read as unknown: a client does not run a command in a hook's place until it knows.",
+    }),
+  ),
   mcp: Schema.optionalKey(
     Schema.Struct({
       managed_only: Schema.Boolean.annotate({

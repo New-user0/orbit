@@ -503,6 +503,7 @@ export type ConfigEffective = {
   compatibility: boolean
   permissions?: { bypass: boolean; always: boolean }
   plugins?: { allow?: Array<string>; block?: Array<string>; organization?: string }
+  hooks?: { disabled: boolean; managed_only: boolean }
   mcp?: { managed_only: boolean }
 }
 

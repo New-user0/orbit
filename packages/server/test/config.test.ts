@@ -240,7 +240,7 @@ const effective = (
       const response = yield* Effect.promise(() => fetch(url, { headers: server.headers }))
       expect(response.status).toBe(200)
       const body: unknown = yield* Effect.promise(() => response.json())
-      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility", "permissions", "plugins", "mcp"])
+      expect(Object.keys(isRecord(body) ? body : {})).toEqual(["compatibility", "permissions", "plugins", "hooks", "mcp"])
       return Schema.decodeUnknownSync(Config.Effective)(body)
     }),
   )
@@ -328,6 +328,35 @@ it.live("reports whether managed settings run only the MCP servers they define",
     expect((yield* effective({ project: { managed: { mcp: { managed_only: true } } } })).mcp).toEqual({
       managed_only: false,
     })
+  }),
+)
+
+// A client that runs a command in a hook's place (the status line) asks here, so it follows the same two restrictions
+// the hook runners do, in both spellings. A project's own file cannot set either one.
+it.live("reports whether managed settings turn hooks off or allow only managed hooks", () =>
+  Effect.gen(function* () {
+    const open = { disabled: false, managed_only: false }
+    expect((yield* effective()).hooks).toEqual(open)
+    expect((yield* effective({ managed: { managed: {} } })).hooks).toEqual(open)
+    expect((yield* effective({ managed: { managed: { disable_hooks: true } } })).hooks).toEqual({
+      disabled: true,
+      managed_only: false,
+    })
+    expect((yield* effective({ managed: { managed: { managed_hooks_only: true } } })).hooks).toEqual({
+      disabled: false,
+      managed_only: true,
+    })
+    expect((yield* effective({ managed: { hooks: { disabled: true } } })).hooks).toEqual({
+      disabled: true,
+      managed_only: false,
+    })
+    expect((yield* effective({ managed: { hooks: { managed_only: true } } })).hooks).toEqual({
+      disabled: false,
+      managed_only: true,
+    })
+    expect((yield* effective({ managed: { hooks: { disabled: false } } })).hooks).toEqual(open)
+    expect((yield* effective({ project: { managed: { disable_hooks: true } } })).hooks).toEqual(open)
+    expect((yield* effective({ project: { hooks: { disabled: true } } })).hooks).toEqual(open)
   }),
 )
 

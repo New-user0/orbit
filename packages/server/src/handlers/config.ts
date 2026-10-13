@@ -1,4 +1,5 @@
 import { Config } from "@orbit/core/config"
+import { HookSources } from "@orbit/core/config/hook-sources"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Effect } from "effect"
@@ -21,6 +22,7 @@ export const ConfigHandler = HttpApiBuilder.group(Api, "server.config", (handler
             bypass: restrictions.disable_bypass_permissions !== true,
             always: restrictions.managed_permissions_only !== true,
           },
+          hooks: HookSources.limit(yield* config.entries(), restrictions),
           mcp: { managed_only: restrictions.mcp?.managed_only === true },
           // The marketplaces list stays in ManagedPolicy for the extensibility work.
           plugins: {
