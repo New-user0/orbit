@@ -316,6 +316,8 @@ const readText = Effect.fn("ReadTool.readText")(function* (
   let lines = leaves[0].summary.lines
   // Bytes after the last line break that is held, so a line that has outgrown LINE_KEEP_BYTES is noticed.
   let tail = bytes - (first.bytes.lastIndexOf(10) + 1)
+  // The file's real last byte so far; a dropped chunk leaves an empty leaf, which would hide an unterminated last line.
+  let last = first.bytes.at(-1)
   let ended = false
   // A page can only change when a line break arrives or the file ends, so a chunk without one is not tried again.
   let due = true
@@ -347,7 +349,7 @@ const readText = Effect.fn("ReadTool.readText")(function* (
           checked += leaf.summary.bytes
           return length > 0 && leaf.bytes.subarray(0, length).includes(0)
         })
-        return yield* makeTextPage(input, resource, translated, binary, lineCount(lines, leaves.at(-1)?.bytes.at(-1)))
+        return yield* makeTextPage(input, resource, translated, binary, lineCount(lines, last))
       }
     }
 
@@ -357,6 +359,7 @@ const readText = Effect.fn("ReadTool.readText")(function* (
       continue
     }
     bytes += next.bytes.length
+    last = next.bytes.at(-1)
     const newline = next.bytes.lastIndexOf(10)
     // The middle of an over-long line is dropped. A chunk that held a NUL leaves one behind, so that a page which
     // reaches the line is still refused as binary.

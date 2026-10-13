@@ -14,6 +14,7 @@ import { VcsHgPlugin } from "@orbit/core/plugin/vcs/hg"
 import { FileSystem } from "@orbit/schema/filesystem"
 import { VcsEvent } from "@orbit/schema/vcs-event"
 import { location } from "./fixture/location"
+import { trustedProject } from "./fixture/project-trust"
 import { tmpdir } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { host } from "./plugin/host"
@@ -22,7 +23,7 @@ const describeHg = Bun.which("hg") ? describe : describe.skip
 
 const provide = (directory: string) =>
   Effect.provide(
-    LayerNode.compile(LayerNode.group([Vcs.node, Bus.node, Location.node, AppProcess.node, FSUtil.node]), {
+    Layer.merge(trustedProject, LayerNode.compile(LayerNode.group([Vcs.node, Bus.node, Location.node, AppProcess.node, FSUtil.node]), {
       replacements: [
         Location.node.replace(
           Layer.succeed(
@@ -36,7 +37,7 @@ const provide = (directory: string) =>
           ),
         ),
       ],
-    }),
+    })),
   )
 
 const withTmp = <A, E, R>(f: (directory: string) => Effect.Effect<A, E, R>) =>

@@ -1,14 +1,17 @@
 export * as VcsHgPlugin from "./hg.js"
 
 import path from "path"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { define } from "@orbit/plugin/effect/plugin"
+import { Trust } from "@orbit/schema/trust"
 import { FileDiff } from "@orbit/schema/file-diff"
 import { FileStatus, Info, Mode } from "@orbit/schema/vcs"
 import { FSUtil } from "@orbit/util/fs-util"
 import { AppProcess } from "@orbit/util/process"
+import { Bus } from "../../bus.js"
 import { Location } from "../../location.js"
+import { ProjectTrust } from "../../project-trust.js"
 import type { Adapter, DiffOptions } from "../../vcs.js"
 import { DiffError } from "../../vcs.js"
 import {
@@ -30,10 +33,23 @@ export const Plugin = define({
 
     const processes = yield* AppProcess.Service
     const fs = yield* FSUtil.Service
-    const adapter = make(processes, fs, {
-      directory: location.directory,
-      worktree: location.project.directory,
-    })
+    const bus = yield* Bus.Service
+    const trust = yield* ProjectTrust.Service
+    // Mercurial loads the `[extensions]` (Python) and `[hooks]` of the folder's own `.hg/hgrc` into every command it runs
+    // there, and the terminal UI asks for the branch of the folder it opens before anyone has been asked about it
+    // (class 1). Until the folder is trusted no `hg` is started: the branch is unknown, nothing has changed, and there is
+    // no diff. The answer is asked at each call, so a grant or revoke takes effect on the next one.
+    const adapter = guard(
+      make(processes, fs, {
+        directory: location.directory,
+        worktree: location.project.directory,
+      }),
+      trust.trusted,
+    )
+    yield* bus.subscribe(Trust.Event.Updated).pipe(
+      Stream.runForEach(() => ctx.vcs.reload()),
+      Effect.forkScoped({ startImmediately: true }),
+    )
 
     yield* ctx.vcs.transform((editor) => {
       editor.add({
@@ -47,6 +63,16 @@ export const Plugin = define({
     })
   }),
 })
+
+function guard(adapter: Adapter, trusted: () => Effect.Effect<boolean>): Adapter {
+  return {
+    info: () => trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.info() : Effect.succeed({ branch: {} })))),
+    branches: (input) => trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.branches(input) : Effect.succeed([])))),
+    status: () => trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.status() : Effect.succeed([])))),
+    diff: (mode, options) =>
+      trusted().pipe(Effect.flatMap((yes) => (yes ? adapter.diff(mode, options) : Effect.succeed([])))),
+  }
+}
 
 /**
  * Mercurial adapter for the Vcs service. `hg diff --git` emits git-format

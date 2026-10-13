@@ -379,7 +379,10 @@ const layer = Layer.effect(
       const decisions = input.resources.map((resource) => decide(input, resource, rules, approvals))
       const effect: Permission.Effect = decisions.some((rule) => rule.effect === "ask") ? "ask" : "allow"
       // An ask that a rule wrote (yours, the project's, an agent's built-in `.env` ask, a grant's lead) is explicit.
-      const explicit = decisions.some((rule) => rule.effect === "ask" && !isFallthrough(rule))
+      // The built-in `external_directory * ask` of every agent is the default question, so it counts like the fallthrough.
+      const explicit = decisions.some(
+        (rule) => rule.effect === "ask" && !isFallthrough(rule) && !Agent.isDefaultAsk(rule),
+      )
       const event = yield* hooks.trigger("permission", "evaluate", {
         sessionID: input.sessionID,
         agent: input.agent,

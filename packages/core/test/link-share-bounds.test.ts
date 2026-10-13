@@ -82,6 +82,27 @@ describe("the share checks do bounded work", () => {
     }),
   )
 
+
+  // The listing asks the file system about the end of a chain once, not about each of the 63 links that lead to it: a stat
+  // or a realpath of a link follows it hop by hop, which took seconds for a skills folder of links to one folder.
+  it.live("a listing of 63 links to one folder never stats or resolves a link itself", () =>
+    Effect.gen(function* () {
+      if (!win || !canLinkFile) return
+      const project = path.join((yield* tmpdirScoped()).path, "project")
+      yield* Effect.promise(() => build(project, 0, 63))
+      const recorded = recordedFileSystem()
+      const files = yield* FSUtil.Service.pipe(Effect.provide(recorded.layer))
+      const skills = path.join(project, ".orbit/skills")
+      const found = yield* LinkShare.scan(files, skills, ["{*.md,**/SKILL.md}"])
+      expect(found.length).toBeGreaterThan(0)
+      const links = new Set(Array.from({ length: 63 }, (_, index) => path.join(skills, `l${index}`)))
+      const followed = recorded.calls.filter((call) => {
+        const [method, ...rest] = call.split(" ")
+        return ["isDir", "isFile", "resolve", "stat", "exists"].includes(method!) && links.has(rest.join(" "))
+      })
+      expect(followed).toEqual([])
+    }),
+  )
 })
 
 describe.skipIf(!canLinkFile)("the real loaders on a large config folder", () => {
