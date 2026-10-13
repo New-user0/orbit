@@ -8,7 +8,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Hash } from "@orbit/util/hash"
 import { PluginSourceDirectory } from "../plugin/source-directory.js"
 import { WorkspaceTrust } from "../workspace-trust.js"
-import { LinkShare } from "./link-share.js"
+import { LinkShare } from "@orbit/util/link-share"
 import { ConfigMarkdown } from "./markdown.js"
 
 // What a repository can change after a person trusted it, and so what is asked about again: the parts of project and

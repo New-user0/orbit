@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import path from "path"
 import { Effect } from "effect"
-import { LinkShare } from "@orbit/core/config/link-share"
+import { LinkShare } from "@orbit/util/link-share"
 import { FSUtil } from "@orbit/util/fs-util"
 import { recordedFileSystem } from "./fixture/recorded-fs"
 import { it } from "./lib/effect"

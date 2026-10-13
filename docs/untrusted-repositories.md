@@ -253,7 +253,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - The shell guard (`packages/core/src/shell/guard.ts`) and its bare-repository probe: for a command that runs git at any
   level (by name, by path, through `xargs` or `find -exec`), the guard walks from the working folder, each folder the
   command changes to, each `git -C` and each literal `--git-dir` or `GIT_DIR` value up to the root, as git's discovery does. It
-  only stats and reads small `.git` files and never runs git. A folder with no valid `.git` (a directory holding a regular
+  only stats and reads small `.git` files and never runs git. Before it stats any of `.git`, `HEAD`, `objects`, `refs` or a
+  worktree's `gitdir` file, it asks `LinkShare.of` about that path: a part that is a share, or leads to one through a link the
+  repository ships, is never stat-ed and counts as `indicators` (or `unverified-gitdir` for `.git`), so it asks. A folder with no valid `.git` (a directory holding a regular
   file `HEAD`) that holds any one of a `HEAD` file, an `objects` folder or a `refs` folder is a finding `indicators`. A `.git`
   file is trusted only when it is one line `gitdir: <path>` of at most 4 KB that names a linked worktree whose `gitdir` file
   names this folder back, or a folder under an enclosing repository's `.git/modules`; any other is `unverified-gitdir`, and
@@ -261,7 +263,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   command line other than the repository's own is `git-dir`. The probe runs in an untrusted folder too, because it is the
   protection for one: its result only adds a finding to the shell request's metadata, which shell-safety-12 turns into an
   ask. Every path the guard resolves is judged on its real place (`ProjectTrust.leads`, then `FSUtil.contains` on two real
-  paths), and a share is named without being opened. Proof: `test/shell-guard.test.ts` (the link, dangling
+  paths), and a share is named without being opened (the rows "the bare-repository probe and links to shares" record the stat calls). Proof: `test/shell-guard.test.ts` (the link, dangling
   link, new-file-under-link and numeric-link rows run trusted and untrusted; the probe, share, Windows spelling and finding rows run trusted;
   the rows for input over the length limit run in a project with a link that leads out and nothing trusts). Input the
   analysis cannot read is split into fragments, whose `cd` targets and plain words go through the same containment and
@@ -590,6 +592,10 @@ its gate, before the first trust task. It names every surface that M1 found over
 - The terminal UI imports plugins itself, so the server's gate does not apply. Filter the directories with
   `trustedPluginDirectories(directories, trust.startup.trusted(), trust.startup.above())`
   (`packages/tui/src/plugin/discovery.ts`) and import nothing before the first answer.
+- The terminal UI's startup walk (`localPluginDirectories`) runs before any answer and stats `.git`, `.hg` and each
+  `.orbit` above the working folder. It asks `LinkShare.ofSync` (`@orbit/util/link-share`, shared with Core) first: a name
+  that is a link to a share is "share", present but never stat-ed, and any other failure is one log line and an absent
+  entry (class 6, 7). Proof: `packages/tui/test/plugin-discovery.test.ts`.
 - Look at what the libraries you call do by themselves: parsers, YAML tags, resolvers (classes 10 and 11).
 
 **How to test:** the recipe above. In M1 the marker tests are `packages/cli/test/trust.test.ts`,

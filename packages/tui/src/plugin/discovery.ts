@@ -1,7 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { localSource } from "@orbit/plugin/source"
-import { isMissingPath, localProjectDirectory, projectConfigDirectories } from "../util/config-directories"
+import { isMissingPath, localProjectDirectory, present, projectConfigDirectories } from "../util/config-directories"
 
 export { localSource }
 
@@ -25,10 +25,8 @@ export async function localPluginDirectories(
   const exists = await Promise.all(
     candidates.map(async (directory) => {
       if (directory === projectConfig) return true
-      return await stat(directory).then(
-        (info) => info.isDirectory(),
-        (error) => (isMissingPath(error) ? false : Promise.reject(error)),
-      )
+      // A folder that is a link to a share is not read.
+      return (await present(directory)) === "directory"
     }),
   )
   // Orbit files in the home directory are the user's own config even when a walk from the project passes through it,

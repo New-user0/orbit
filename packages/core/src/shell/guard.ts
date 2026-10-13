@@ -10,6 +10,7 @@ import { Location } from "../location.js"
 import { Permission } from "../permission.js"
 import { ProjectTrust } from "../project-trust.js"
 import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
+import { LinkShare } from "@orbit/util/link-share"
 import { ShellParse } from "./parse.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
@@ -477,13 +478,15 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
   const fs = yield* FSUtil.Service
   const found: NonNullable<ShellSafety.GuardFacts["bare"]> = []
   const share = (file: string) => process.platform === "win32" && /^[\\/]{2}/.test(file)
-  const type = (file: string) =>
-    share(file)
-      ? Effect.succeed(undefined)
-      : fs.stat(file).pipe(
-          Effect.map((info) => info.type),
-          Effect.orElseSucceed(() => undefined),
-        )
+  // What a part is. A part that is a share, or leads to one through a link the repository ships, is "Share": it is never
+  // stat-ed, because that connects to a host the repository chose (class 6).
+  const type = Effect.fnUntraced(function* (file: string) {
+    if (share(file) || (yield* LinkShare.of(fs, file)) !== undefined) return "Share" as const
+    return yield* fs.stat(file).pipe(
+      Effect.map((info) => info.type),
+      Effect.orElseSucceed(() => undefined),
+    )
+  })
   const same = (left: string, right: string) =>
     process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right
 
@@ -540,7 +543,12 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
     const leads = yield* trust.leads(target)
     if (share(leads)) return false
     if (path.basename(path.dirname(leads)) === "worktrees") {
-      const back = yield* fs.readFileString(path.join(leads, "gitdir")).pipe(Effect.orElseSucceed(() => ""))
+      const backFile = path.join(leads, "gitdir")
+      const back =
+        (yield* type(backFile)) === "File"
+          ? yield* fs.readFileString(backFile).pipe(Effect.orElseSucceed(() => ""))
+          : ""
+
       const wanted = yield* trust.leads(file)
       if (back.trim() !== "" && same(yield* trust.leads(path.resolve(leads, back.trim())), wanted)) return true
     }
@@ -558,6 +566,10 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
     Effect.fnUntraced(function* (base) {
       for (let folder = yield* trust.leads(base); ; folder = path.dirname(folder)) {
         const entry = yield* type(path.join(folder, ".git"))
+        if (entry === "Share") {
+          found.push({ base: folder, why: "unverified-gitdir" })
+          return
+        }
         if (entry === "File") {
           if (!(yield* verified(folder))) found.push({ base: folder, why: "unverified-gitdir" })
           if (base === workdir) own.set(folder, path.join(folder, ".git"))
@@ -569,7 +581,12 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
         }
         // No valid `.git` here: any one of these makes git take the folder itself for a repository.
         const indicators = yield* Effect.forEach(["HEAD", "objects", "refs"], (name) => type(path.join(folder, name)))
-        if (indicators[0] === "File" || indicators[1] === "Directory" || indicators[2] === "Directory")
+        if (
+          indicators.includes("Share") ||
+          indicators[0] === "File" ||
+          indicators[1] === "Directory" ||
+          indicators[2] === "Directory"
+        )
           found.push({ base: folder, why: "indicators" })
         if (path.dirname(folder) === folder) return
       }
@@ -641,15 +658,42 @@ function opaque(analysis: Analysis, whole: string, scan: ShellParse.Result | und
   const pieces = ps
     ? ShellSafety.fragments(whole).map((piece) => piece.replace(/^(["'])(.*?)\1(?=\s|$)/, "$2"))
     : bashFragments(whole)
+  const spelled = ps ? pieces.map((piece) => spellings(piece, analysis)) : []
+  const aliases = Object.fromEntries(
+    spelled.filter((item) => item.names.length > 0).map((item) => [item.piece, item.names]),
+  )
   return {
     resources: distinct([
       whole,
       ...(scan?.commands.map((command) => command.resource) ?? []),
       ...(scan?.bare ?? []),
       ...pieces,
+      // A module-qualified or path-like first word is also judged under its stripped name, as a parsed application is, so a
+      // deny written for the cmdlet meets it and an allow cannot lift it.
+      ...spelled.flatMap((item) => (item.stripped === undefined ? [] : [item.stripped])),
     ]).filter((item) => item !== ""),
     save: [],
+    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
   }
+}
+
+// The spellings a PowerShell rule may be written in for a fragment of unreadable input: its first word without quotes, call
+// operator or module qualifier, that word's cmdlet and every alias of it here, each followed by the rest of the fragment
+// after one space (so a tab does not hide it).
+function spellings(piece: string, analysis: Analysis) {
+  const match = /^[&.]?\s*(["']?)([^\s"']+)\1(?=\s|$)/.exec(piece)
+  if (!match) return { piece, names: [] as string[], stripped: undefined }
+  const bare = strip(match[2]!)
+  const target = aliasTarget(bare.toLowerCase(), analysis.dialect, process.platform) ?? bare.toLowerCase()
+  const rest = piece.slice(match[0].length).trim()
+  const names = [
+    ...new Map(
+      [bare, target, ...aliasNames().filter((alias) => aliasTarget(alias, analysis.dialect, process.platform) === target)].map(
+        (name) => [name.toLowerCase(), name] as const,
+      ),
+    ).values(),
+  ].map((name) => (rest === "" ? name : name + " " + rest))
+  return { piece, names, stripped: bare === match[2] ? undefined : names[0] }
 }
 
 function bashFragments(text: string) {
@@ -686,8 +730,26 @@ function inert(analysis: Analysis) {
     !analysis.features.herestring &&
     analysis.commands.every(
       (command) =>
-        DECLARATIONS.has(command.head) && command.redirects.length === 0 && command.argv.every((word) => word.literal),
+        DECLARATIONS.has(command.head) &&
+        command.redirects.length === 0 &&
+        command.argv.every((word) => word.literal) &&
+        (!PRINTERS.has(command.head) || assigns(command)),
     )
+  )
+}
+
+// These builtins list every variable (or function) with its value when they get no name or a print flag, which would carry
+// the environment's credentials to the model. They are inert only when they set named variables.
+const PRINTERS = new Set(["export", "declare", "typeset", "local", "readonly"])
+
+function assigns(command: Command) {
+  const words = command.argv.slice(1).map((word) => word.value)
+  const flags = words.filter((word) => word.startsWith("-"))
+  const names = words.filter((word) => !word.startsWith("-"))
+  return (
+    names.length > 0 &&
+    names.every((word) => /^[A-Za-z_][A-Za-z0-9_]*(?:=|$)/.test(word)) &&
+    !flags.some((flag) => /[pfF]/.test(flag))
   )
 }
 
@@ -859,7 +921,11 @@ export function expansions(analysis: Analysis, cwd: string, shell: string) {
       // path (which the folder reading below turns into home).
       [
         ...(command.name === "set-location" &&
-        !namesTarget(command.arguments.map((argument) => ({ parameter: argument.parameter, bound: argument.bound !== undefined })))
+        !namesTarget(
+          command.arguments
+            .filter((argument) => argument.text !== "--")
+            .map((argument) => ({ parameter: argument.parameter, bound: argument.bound !== undefined })),
+        )
           ? [os.homedir()]
           : []),
         ...command.arguments.flatMap((argument) => {
@@ -950,21 +1016,22 @@ export function locations(
     const comment = words.findIndex((word, index) => index > 0 && /^(#|<#)/.test(word.raw))
     const operands = words.slice(1, comment === -1 ? undefined : comment)
     // PowerShell 7 goes home for a bare Set-Location (and its aliases cd, chdir, sl).
-    // The raw reading stops a fragment at the first comment opener, so it cannot tell an empty target from a hidden one.
-    // A comment opener beside parameters may hide the target a misread dropped, so only a bare command is home in input that holds one.
+    // The end-of-parameters marker names nothing: later words are positional, and a command with none still goes home.
     const home =
       ps &&
       !raw &&
       target === "set-location" &&
-      !namesTarget(operands.map((item) => parameterOf(item))) &&
-      (operands.length === 0 || !text.includes("<#"))
+      !namesTarget(operands.filter((item) => item.value !== "--").map((item) => parameterOf(item)))
         ? [os.homedir()]
         : []
+    const ender = operands.findIndex((item) => item.value === "--")
     return [...home, ...(ps ? operands : bashOperands(operands).slice(0, 1)).flatMap((item, index, rest) => {
-      const bound = ps ? colonBound(item, rest[index + 1]) : undefined
+      if (ps && index === ender) return []
+      const positional = ps && ender !== -1 && index > ender
+      const bound = ps && !positional ? colonBound(item, rest[index + 1]) : undefined
       if (bound !== undefined && !pathParameter(bound.name)) return []
       const word = bound?.word ?? item
-      if (bound === undefined && /^[-–—―]/.test(item.raw)) return []
+      if (bound === undefined && !positional && /^[-–—―]/.test(item.raw)) return []
       if (ps && (word.value === "" || word.value.includes("$"))) {
         const folder = ShellParse.directoryArgument(word.value, true, cwd, shell)
         if (folder !== undefined) return [folder]
