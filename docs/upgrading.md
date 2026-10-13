@@ -1357,6 +1357,17 @@ The status line command used to run as soon as the terminal UI opened, in the fo
 
 **What to do:** Trust the folder; nothing changes in folders that are already trusted.
 
+### The status line follows managed hook settings, shows every line, runs quoted commands on Windows and stops with the terminal UI
+
+- Managed `disable_hooks` or `managed_hooks_only` (or the managed file's `hooks.disabled` or `hooks.managed_only`) now stop the status line command, because it stands in for a hook and Orbit has no managed status line. One muted line says why. `GET /api/config/effective` reports `hooks.disabled` and `hooks.managed_only`; a server that does not report them counts as unknown, and the terminal UI does not run the command until it knows.
+- The status line draws every non-empty line the command prints, up to ten, one row each. It used to draw the first line only, and nothing when the output began with a blank line.
+- On Windows a command that contains a double quote, such as a quoted script path or `echo "a b"`, now runs as typed. It used to fail without a message.
+- On Linux and macOS a command still running when the terminal UI exits is stopped with what it started; it used to be left running in its own session.
+
+**Affects:** people with a `status_line` command, in particular under organization-managed hook restrictions and on Windows.
+
+**What to do:** Nothing, unless your script printed several lines and relied on only the first showing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

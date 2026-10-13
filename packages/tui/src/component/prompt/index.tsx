@@ -1709,7 +1709,19 @@ export function Prompt(props: PromptProps) {
       sessionID={props.sessionID}
       // The command runs in the folder the terminal UI was started in, which a clone chooses the contents of, and is told
       // about the folder in view, so no line runs or shows until both are trusted.
-      command={() => (trust.startup.trusted() && statusLineTrusted() ? config.status_line?.command : undefined)}
+      command={() =>
+        trust.startup.trusted() && statusLineTrusted() && local.permission.hooks === "open"
+          ? config.status_line?.command
+          : undefined
+      }
+      // The command is the person's own and stands in for a hook, so managed settings that turn hooks off, or allow only
+      // managed ones (Orbit has no managed status line), stop it. A server that has not said does not run it either.
+      notice={() => {
+        if (!config.status_line?.command) return undefined
+        if (local.permission.hooks === "disabled") return "Status line off: managed settings turn hooks off"
+        if (local.permission.hooks === "managed_only") return "Status line off: managed settings allow only managed hooks"
+        return undefined
+      }}
       interval={() => config.status_line?.interval}
       colors={() => config.status_line?.colors}
       fg={theme.text.muted}
@@ -1717,6 +1729,7 @@ export function Prompt(props: PromptProps) {
       watch={() => [
         trust.startup.trusted(),
         statusLineTrusted(),
+        local.permission.hooks,
         local.agent.current()?.id,
         statusLineModel()?.providerID,
         statusLineModel()?.id,

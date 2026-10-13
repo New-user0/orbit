@@ -30,6 +30,8 @@ export function StatusLine(props: {
   readonly on: StatusLineBus
   /** What else the line shows, such as the selected agent and model: it runs again when any of them changes. */
   readonly watch: () => ReadonlyArray<unknown>
+  /** Why the command does not run, when it is configured and something other than trust keeps it from running. */
+  readonly notice?: () => string | undefined
   readonly fg: RGBA
   readonly run?: (command: string, stdin: string) => Promise<string | undefined>
 }) {
@@ -54,16 +56,34 @@ export function StatusLine(props: {
     ),
   )
   return (
-    <Show when={props.command() ? statusLine.spans() : undefined}>
-      {(spans) => (
+    <Show
+      when={props.notice?.() === undefined}
+      fallback={
+        // The person has a command, and managed settings keep it from running: one muted line says why.
         <box paddingLeft={1} flexShrink={0}>
           <text fg={props.fg} wrapMode="none" truncate>
-            <For each={spans()}>
-              {(span) => <span style={{ fg: span.fg, bg: span.bg, attributes: span.attributes }}>{span.text}</span>}
-            </For>
+            {props.notice?.()}
           </text>
         </box>
-      )}
+      }
+    >
+      <Show when={props.command() ? statusLine.spanLines() : undefined}>
+        {(lines) => (
+          <box paddingLeft={1} flexShrink={0} flexDirection="column">
+            <For each={lines()}>
+              {(spans) => (
+                <text fg={props.fg} wrapMode="none" truncate>
+                  <For each={spans}>
+                    {(span) => (
+                      <span style={{ fg: span.fg, bg: span.bg, attributes: span.attributes }}>{span.text}</span>
+                    )}
+                  </For>
+                </text>
+              )}
+            </For>
+          </box>
+        )}
+      </Show>
     </Show>
   )
 }

@@ -171,7 +171,7 @@ export const Info = Schema.Struct({
     Schema.Struct({
       command: Schema.String.annotate({
         description:
-          "Shell command whose first line of output is shown under the prompt. It receives the session as JSON on stdin.",
+          "Shell command whose output is shown under the prompt, one row per non-empty line (up to ten). It receives the session as JSON on stdin. It does not run while managed settings turn hooks off or allow only managed hooks.",
       }),
       interval: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1000))).annotate({
         description:

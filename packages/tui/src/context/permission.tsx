@@ -45,20 +45,60 @@ export function createPermissionMode(input: {
   return () => (input.requested() === "autoaccept" && answer() === "open" ? "autoaccept" : "prompt")
 }
 
+export type HookPolicy = "open" | "disabled" | "managed_only" | "unknown"
+
+/**
+ * Whether managed settings let a command that stands in for a hook (the status line) run. "unknown" until the server
+ * has answered, after a failed read (the last answer stays) and for a server that does not report it: a client does not
+ * run the command on a guess, which is the refusal class 7 asks for. Disabled wins over managed-only, as for hooks.
+ */
+export function createHookPolicy(input: {
+  client: Pick<ReturnType<typeof useClient>, "api" | "event">
+  directory: string
+}) {
+  const log = useLog({ component: "permission" })
+  const [policy, setPolicy] = createSignal<HookPolicy>("unknown")
+  const refresh = () =>
+    input.client.api.config
+      .effective({ location: { directory: input.directory } })
+      .then((effective) =>
+        setPolicy(
+          effective.hooks === undefined
+            ? "unknown"
+            : effective.hooks.disabled
+              ? "disabled"
+              : effective.hooks.managed_only
+                ? "managed_only"
+                : "open",
+        ),
+      )
+      .catch((error) => log.warn("failed to read the effective configuration", { error }))
+
+  void refresh()
+  onCleanup(input.client.event.on("server.connected", refresh))
+  onCleanup(input.client.event.on("config.updated", refresh))
+  return policy
+}
+
 export const { use: usePermission, provider: PermissionProvider } = createSimpleContext({
   name: "Permission",
   init: (props: { directory: string }) => {
     const args = useArgs()
     const config = useConfig()
+    const client = useClient()
     const mode = createPermissionMode({
-      client: useClient(),
+      client,
       directory: props.directory,
       requested: () => (args.auto ? "autoaccept" : config.data.session.permissions),
       toast: useToast(),
     })
+    const hooks = createHookPolicy({ client, directory: props.directory })
     return {
       get mode(): PermissionMode {
         return mode()
+      },
+      get hooks(): HookPolicy {
+        return hooks()
       },
     }
   },

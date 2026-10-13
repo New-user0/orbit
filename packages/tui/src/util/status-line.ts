@@ -1,14 +1,14 @@
 import { createMemo, createSignal, onCleanup } from "solid-js"
 import path from "node:path"
 import { ProgramLookup } from "@orbit/util/program-lookup"
-import { ansiSpans, ansiText } from "./ansi-spans"
+import { ansiSpans, ansiText, type AnsiSpan } from "./ansi-spans"
 
 const TIMEOUT_MS = 2_000
 const DEBOUNCE_MS = 300
 
 /**
- * Runs the user's status line command every `interval` milliseconds, and again after `trigger()`, and keeps the first
- * line it prints. The command gets the current session as JSON on stdin; a command that fails or hangs leaves the last
+ * Runs the user's status line command every `interval` milliseconds, and again after `trigger()`, and keeps the
+ * non-empty lines it prints (up to ten). The command gets the current session as JSON on stdin; a command that fails or hangs leaves the last
  * good line in place. A triggered run starts at least 300 ms after the previous run started: a trigger that arrives
  * during a run sets a flag and causes exactly one more run, 300 ms after the first one started or when it ends,
  * whichever is later.
@@ -29,9 +29,15 @@ export function createStatusLine(input: {
     dirty: false,
     disposed: false,
     lastStart: 0,
+    child: undefined as Child | undefined,
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   }
-  const run = input.run ?? ((command: string, stdin: string) => spawn(command, stdin, input.cwd))
+  const run =
+    input.run ??
+    ((command: string, stdin: string) =>
+      spawn(command, stdin, input.cwd, (child) => {
+        state.child = child
+      }))
   const refresh = async () => {
     if (state.disposed) return
     const command = input.command()
@@ -66,43 +72,59 @@ export function createStatusLine(input: {
   }
   void refresh()
   const timer = setInterval(() => void refresh(), Math.max(1_000, input.interval() ?? 5_000))
+  // A command still running when the terminal UI goes away is stopped with what it started: its group is detached, so
+  // nothing else would end it (class 10). The exit hook covers a quit that ends the process before cleanup runs.
+  const stop = () => {
+    if (state.child) killTree(state.child)
+  }
+  process.on("exit", stop)
   onCleanup(() => {
     state.disposed = true
     clearInterval(timer)
     clearTimeout(state.timer)
+    process.off("exit", stop)
+    stop()
   })
-  const spans = createMemo(() => {
+  const lines = createMemo(() => {
     const value = output()
-    if (value === undefined) return undefined
-    const line = firstLine(value, true)
-    return line === undefined ? undefined : ansiSpans(line)
+    return value === undefined ? undefined : outputLines(value, false)
   })
-  const line = createMemo(() => {
+  const colored = createMemo(() => {
     const value = output()
-    return value === undefined ? undefined : firstLine(value, false)
+    return value === undefined ? undefined : outputLines(value, true).map((line) => ansiSpans(line))
+  })
+  const spanLines = createMemo(() => {
+    const plain = lines()
+    if (plain === undefined || plain.length === 0) return undefined
+    return input.colors?.() === true ? colored() : plain.map((text): AnsiSpan[] => [{ text, attributes: 0 }])
   })
   return {
     /** The first line as plain text. */
-    line,
+    line: createMemo(() => lines()?.[0]),
     /** The first line as styled spans when `status_line.colors` is on, otherwise a single unstyled span. */
-    spans: createMemo(() => {
-      const value = line()
-      if (value === undefined) return undefined
-      return input.colors?.() === true ? spans() : [{ text: value, attributes: 0 }]
-    }),
+    spans: createMemo(() => spanLines()?.[0]),
+    /** Every non-empty line as plain text. */
+    lines,
+    /** Every non-empty line as styled spans when `status_line.colors` is on, otherwise one unstyled span each. */
+    spanLines,
     trigger,
   }
 }
 
+type Child = { readonly pid: number; readonly exitCode: number | null }
+
 const system32 = () => path.join(process.env.SystemRoot ?? "C:\\Windows", "System32")
 
-async function spawn(command: string, stdin: string, cwd: string | undefined) {
+async function spawn(command: string, stdin: string, cwd: string | undefined, track: (child?: Child) => void) {
   const windows = process.platform === "win32"
   const child = Bun.spawn(
     // By full path on Windows: a bare "cmd" is looked up in the working folder, which may be an untrusted repository.
-    windows ? [path.join(system32(), "cmd.exe"), "/c", command] : ["sh", "-c", command],
+    // The command goes to cmd.exe as one quoted string, passed verbatim: the usual argument escaping writes a double
+    // quote as \" and cmd.exe does not read that, so a quoted path or argument would fail.
+    windows ? [path.join(system32(), "cmd.exe"), "/d", "/s", "/c", `"${command}"`] : ["sh", "-c", command],
     {
       cwd,
+      windowsVerbatimArguments: windows,
       // cmd.exe looks for the head of the command in the working folder first, which may be an untrusted repository.
       env: ProgramLookup.environment(undefined),
       stdin: new TextEncoder().encode(stdin),
@@ -112,6 +134,7 @@ async function spawn(command: string, stdin: string, cwd: string | undefined) {
       detached: !windows,
     },
   )
+  track(child)
   const timeout = Symbol("timeout")
   const timer = { id: undefined as ReturnType<typeof setTimeout> | undefined }
   // Output and exit are both inside the limit: a command can close its stdout and keep running, and a grandchild can
@@ -126,11 +149,12 @@ async function spawn(command: string, stdin: string, cwd: string | undefined) {
     }),
   ])
   clearTimeout(timer.id)
+  track(undefined)
   if (result === timeout) return
   return result[1] === 0 ? result[0] : undefined
 }
 
-function killTree(child: { readonly pid: number; readonly exitCode: number | null }) {
+function killTree(child: Child) {
   if (process.platform !== "win32") {
     // Negative pid: the whole group. Already gone throws, which leaves nothing to kill.
     try {
@@ -148,13 +172,23 @@ function killTree(child: { readonly pid: number; readonly exitCode: number | nul
   })
 }
 
+const MAX_LINES = 10
+
 /**
- * The first line of the output. With `colors` the SGR sequences stay in it for `ansiSpans`; without, they go too.
- * Every other escape sequence and control character is dropped or written out; with `colors` the SGR sequences
- * are left to `ansiSpans`, which drops the rest.
+ * The non-empty lines of the output, trimmed, at most ten. With `colors` the SGR sequences stay in them for
+ * `ansiSpans`; without, they go too. Every other escape sequence and control character is dropped or written out; with
+ * `colors` the SGR sequences are left to `ansiSpans`, which drops the rest. A blank line is skipped wherever it is, so
+ * a script that starts with an empty line still shows its output.
  */
+export function outputLines(output: string, colors = false) {
+  return output
+    .split(/\r?\n/)
+    .map((line) => (colors ? line : ansiText(line)).trim())
+    .filter((line) => line !== "")
+    .slice(0, MAX_LINES)
+}
+
+/** The first non-empty line of the output. */
 export function firstLine(output: string, colors = false) {
-  const first = output.split(/\r?\n/)[0]
-  if (first === undefined) return
-  return (colors ? first : ansiText(first)).trim() || undefined
+  return outputLines(output, colors)[0]
 }
