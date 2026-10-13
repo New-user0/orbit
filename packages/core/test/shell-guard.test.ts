@@ -582,14 +582,14 @@ describe("ShellGuard.authorize", () => {
   const run = (
     command: string,
     denied: (input: Permission.AssertInput) => boolean,
-    options: { shell?: string; link?: boolean; real?: boolean } = {},
+    options: { shell?: string; link?: boolean; linkName?: string; real?: boolean } = {},
   ) =>
     Effect.gen(function* () {
       asked.length = 0
       const { project, outside } = yield* layout
       process.env.ORBIT_GUARD_OUT = outside
       if (options.link) {
-        yield* Effect.promise(() => link(outside, path.join(project, "cfg")))
+        yield* Effect.promise(() => link(outside, path.join(project, options.linkName ?? "cfg")))
         yield* Effect.promise(() => fs.writeFile(path.join(outside, "s"), "secret"))
       }
       return yield* Effect.gen(function* () {
@@ -799,6 +799,24 @@ describe("ShellGuard.authorize", () => {
         expect([text, asked.map((input) => input.action)]).toEqual([text, expect.arrayContaining(["external_directory"])])
         expect([text, Exit.isFailure(yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).includes("/outside/"))))]).toEqual([text, true])
       }
+    }),
+  )
+
+  // bash expands the `~` of an assignment-shaped word, so `x=~/a` is not the lexical path `x=~/a` that a link named `x=`
+  // would meet; the guard must not wave it through with only a Bash question (class 4). The quoted spellings are controls.
+  it.live("an assignment-shaped tilde word is not judged by its unexpanded text, with a planted `x=` link", () =>
+    Effect.gen(function* () {
+      const outcome = (text: string) =>
+        Effect.gen(function* () {
+          const exit = yield* run(text, (input) => input.action === "Edit" && input.resources.some((item) => slash(item).includes("/outside/")), {
+            shell: "bash",
+            link: true,
+            linkName: "x=",
+          })
+          return Exit.isFailure(exit) || asked.some((input) => input.action === "external_directory")
+        })
+      for (const text of ["git -C x=~/a diff --output=o", "cat x=~/s"]) expect([text, yield* outcome(text)]).toEqual([text, true])
+      for (const text of ["git -C 'x='/a diff --output=o", "cat 'x='/s"]) expect([text, yield* outcome(text)]).toEqual([text, true])
     }),
   )
 

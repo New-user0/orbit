@@ -814,6 +814,31 @@ describe("the cmdlet table against recorded hosts", () => {
   })
 })
 
+// bash expands `~` after the `=` of an assignment-shaped word (sh does not), so a repository `x=` link could hide where
+// `git -C x=~/a` really writes. Such a word is dynamic wherever it appears; a quoted one stays literal (class 4).
+describe("assignment-shaped tilde word", () => {
+  // bash expands the tilde into the word, which then names a path below a folder called `x=` (class 4).
+  const rows: [string, string, string][] = [
+    ["git -C x=~/a diff --output=o", "write /work/x=/home/u/a/o", "write C:\\work\\x=\\c\\Users\\u\\a\\o"],
+    ["git -C d -C x=~/a diff --output=o", "write /work/d/x=/home/u/a/o", "write C:\\work\\d\\x=\\c\\Users\\u\\a\\o"],
+    ["touch x=~/a", "create /work/x=/home/u/a", "create C:\\work\\x=\\c\\Users\\u\\a"],
+    ["cat x=~/a", "read /work/x=/home/u/a", "read C:\\work\\x=\\c\\Users\\u\\a"],
+  ]
+  test.each(rows)("%s", (text, onLinux, onWindows) => {
+    expect(bash(text, linux()).paths.files.map(cell)).toEqual([onLinux])
+    expect(bash(text, windows()).paths.files.map(cell)).toEqual([onWindows])
+  })
+  test("a user's home is not known, so the word is dynamic", () => {
+    expect(bash("touch x=~root/a").paths.files.map((item) => item.form)).toEqual(["dynamic"])
+  })
+  test("a word that is not shaped like an assignment is never expanded by bash", () => {
+    expect(files(bash("git diff --output=x=~/a"))).toEqual(["write /work/x=~/a"])
+  })
+  test("a quoted spelling stays literal", () => {
+    expect(files(bash("git -C 'x=~/a' diff --output=o"))).toEqual(["write /work/x=~/a/o"])
+  })
+})
+
 describe("the module is pure", () => {
   const texts = ["rm -rf a b", "cp ~/k ./k", "cd sub && rm x", "echo a > f", "rm '\\\\srv\\share\\x'", "rm 'f.txt:s'", "mv -t d a"]
   const snapshot = () => [
