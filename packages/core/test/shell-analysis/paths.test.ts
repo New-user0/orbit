@@ -216,6 +216,20 @@ describe("bash output files of read-class commands", () => {
     expect(writes("git -C sub diff --output='\\x'")).toEqual(["write /work/sub/\\x"])
   })
 
+  // Git treats a `~` the shell did not expand, and an `X:` prefix off Windows, as relative names (git 2.47, Git for Windows 2.52).
+  test("a literal ~ or an X: prefix stays under -C", () => {
+    const writes = (text: string, ctx?: ReturnType<typeof windows>) => cells(bash(text, ctx)).filter((item) => item.startsWith("write"))
+    for (const [text, want] of [
+      ["git -C d diff --output=C:x", "write /work/d/C:x"],
+      ["git -C d diff --output='~x'", "write /work/d/~x"],
+      ["git -C d diff --output='~/x'", "write /work/d/~/x"],
+      ["git -C d -C '~' diff --output=o", "write /work/d/~/o"],
+      ["git -C d -C C:y diff --output=o", "write /work/d/C:y/o"],
+    ] as const)
+      expect([text, writes(text)]).toEqual([text, [want]])
+    expect(writes("git -C d diff --output='~x'", windows())).toEqual(["write C:\\work\\d\\~x"])
+  })
+
   test("rg --pre names a program, so the command cannot be judged", () => {
     for (const text of ["rg --pre ./x pat f", "rg --pre=./x pat f", "rg --hostname-bin ./x pat"]) {
       const result = bash(text)

@@ -225,9 +225,9 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   // that failed, too many words or too much time for one command) is decided too: an `under` probe is denied when a deny
   // rule could match anything below its folders, so a walk that is not bounded never slips past a rule (class 8).
   // The word is expanded by `Wildcard` (linear matching, folders listed without following links, capped in entries and time).
-  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the parsed input
-  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. `**` is two stars unless the parsed input
-  // can switch globstar on, or the shell is zsh. Braces and extglobs are literal (class 7).
+  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the input (read
+  // parsed and as raw text, see `globOptions`) can switch dotglob on, or for PowerShell, whose wildcards include dotfiles.
+  // `**` is two stars unless the input can switch globstar on, or zsh runs at any level. Braces and extglobs are literal (class 7).
   const budget = { matches: 0, scans: 0, entries: GLOB_ENTRIES, until: Date.now() + GLOB_MILLIS }
   const seen = new Map<string, { targets: string[]; undecided: boolean }>()
   const options = globOptions(all, ps, input.ctx)
@@ -368,17 +368,20 @@ function globRemainder(operand: ShellPaths.Operand, win: boolean) {
   return trimmed === "" ? undefined : trimmed
 }
 
-// Commands that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
-// text the guard cannot see. Decided from the parsed commands after quote removal, never from the raw text, so a quoted or
-// escaped spelling cannot hide one (class 8).
+// Input that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
+// text the guard cannot see, decides the word as undecided: dot and `**` both on. Two readings are ORed (class 8):
+// the parsed commands, which see through quoting (`dot''glob`), and the raw text of every level, which sees what the parsed
+// commands do not name (`read GLOBIGNORE`, `printf -v`, a `trap`, `env BASHOPTS=...`).
 const OPTION_COMMANDS = new Set([
   "shopt", "set", "setopt", "unsetopt", "emulate", "declare", "typeset", "export", "local", "readonly", "eval", "source", ".",
   "builtin", "command",
 ])
 const OPTION_VARIABLES = /^(globignore|bashopts|shellopts|zsh_?opts)$/i
+const OPTION_WORDS = /^(globignore|bashopts|shellopts)(=|$)/i
+const OPTION_TEXT = /dotglob|nocaseglob|globdots|globignore|case_?glob|glob_?dots|globstar|bashopts|shellopts|setopt|trap/i
 
 function globOptions(all: Level[], ps: boolean, ctx: Context) {
-  if (ps) return { dot: true, globstar: false, follow: false }
+  if (ps) return { dot: true, globstar: false, follow: false, powershell: true }
   const heads = (command: Command) => [command.head, command.inner[0] ?? ""]
   // zsh reads `***/` as a recursion that follows links: the login shell, or any program the input starts as zsh.
   const zsh =
@@ -388,18 +391,19 @@ function globOptions(all: Level[], ps: boolean, ctx: Context) {
     )
   const undecided = all.some(
     (level) =>
-      level.analysis.opaque !== undefined || level.analysis.features.assignment ||
+      level.analysis.opaque !== undefined || level.analysis.features.assignment || OPTION_TEXT.test(level.text) ||
       level.analysis.commands.some(
         (command) =>
           command.dynamicHead ||
           command.wrapper === "unanalysable" ||
           heads(command).some((head) => OPTION_COMMANDS.has(head) || ShellSafety.EVAL_LIKE.has(head)) ||
           command.env.some((item) => OPTION_VARIABLES.test(item.name)) ||
+          command.argv.some((word) => OPTION_WORDS.test(word.value)) ||
           setsVariable(command) ||
           launchesWithOptions(command, ctx.platform),
       ),
   )
-  return { dot: undecided, globstar: undecided || zsh, follow: zsh }
+  return { dot: undecided, globstar: undecided || zsh, follow: zsh, powershell: false }
 }
 
 // A wrapper that sets a variable for the program it starts (`env BASHOPTS=dotglob bash -c ...`): the assignment is an operand
