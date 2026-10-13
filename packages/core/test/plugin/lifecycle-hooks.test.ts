@@ -457,7 +457,9 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         const everything = Effect.all({ read: blocked("read"), shell: blocked("shell"), grep: blocked("grep") })
 
         // Untrusted, nothing runs: a hook starts in the project's folder, whoever wrote it.
-        expect(yield* everything).toEqual({ read: false, shell: false, grep: false })
+        // The user's guard on `read` is not read as "no guard", so the call it applies to is refused. The project's and
+        // the other product's documents are withheld from an untrusted folder, so nothing applies to the others.
+        expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
 
         const granted = yield* nextUpdate
         yield* grantWithRecords(project, { persist: false, via: "test" })
@@ -467,7 +469,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         const revoked = yield* nextUpdate
         yield* trust.revoke(project)
         yield* Fiber.join(revoked)
-        expect(yield* everything).toEqual({ read: false, shell: false, grep: false })
+        expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
       }).pipe(Effect.provide(projectConfig(home, project)))
     }),
   )
