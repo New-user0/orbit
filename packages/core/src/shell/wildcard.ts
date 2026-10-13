@@ -11,12 +11,15 @@ export * as Wildcard from "./wildcard.js"
  * - folders are listed with `readdir` only and a link is never entered: a link that matches a segment with more segments
  *   after it leaves the word undecided, and a link that matches the last segment is a candidate path whose target the
  *   caller asks about through the share helper, so nothing here opens a path that goes through a link;
- * - the work is capped, in entries visited and in time, and the caller treats a cap as undecided.
+ * - the work is capped, in entries visited (every visit of a listing counts, cached or not) and in time, and the caller
+ *   treats a cap as undecided.
  * `**` is two stars unless `globstar` is set; a leading dot is matched by a wildcard only when `dot` is set.
  */
 export type Options = {
   dot: boolean
   globstar: boolean
+  // zsh: three stars before a separator recurse like two and also follow links, so a link met there leaves the word undecided.
+  follow?: boolean
   /** Returns early once more than this many paths match. */
   limit: number
   /** What one command may still spend, shared by all its words: entries visited (counted down here) and a deadline. */
@@ -37,16 +40,29 @@ export async function expand(folder: string, pattern: string, options: Options):
     .filter((part) => part !== "" && part !== ".")
   if (segments.some((part) => part.length > SEGMENT_MAX)) return undefined
 
-  const cache = new Map<string, Entry[] | undefined>()
-  const entries = async (dir: string) => {
-    if (cache.has(dir)) return cache.get(dir)
-    if (Date.now() > options.budget.until) return undefined
-    const found = await list(dir)
-    options.budget.entries -= found.length
-    const kept = options.budget.entries < 0 ? undefined : found
-    cache.set(dir, kept)
-    return kept
+  // `***` recurses only before a `/`; as the last segment it is one star.
+  const recursive = (segment: string, last: boolean) =>
+    (segment === "**" && options.globstar) || (options.follow === true && !last && /^\*{3,}$/.test(segment))
+  // `**/**` reaches what `**` does: a run of recursive segments is one, and a `***` in the run keeps links out of the walk.
+  for (let at = segments.length - 1; at > 0; at--) {
+    if (!recursive(segments[at]!, at === segments.length - 1) || !recursive(segments[at - 1]!, false)) continue
+    if (segments[at - 1] === "**") segments[at - 1] = segments[at]!
+    segments.splice(at, 1)
   }
+
+  const cache = new Map<string, Entry[]>()
+  let work = 0
+  // Every visit of a folder's listing is charged, cached or not, so a pattern that reaches the same folders again and
+  // again spends the budget and not the server's time (class 7).
+  const entries = async (dir: string) => {
+    if (Date.now() > options.budget.until) return undefined
+    const found = cache.get(dir) ?? (await list(dir))
+    cache.set(dir, found)
+    options.budget.entries -= found.length
+    return options.budget.entries < 0 ? undefined : found
+  }
+  // The deadline is also read inside the entry loops: one listing can be large and each name costs a match.
+  const expired = () => (++work & 255) === 0 && Date.now() > options.budget.until
 
   let level = [root]
   for (const [index, segment] of segments.entries()) {
@@ -55,37 +71,47 @@ export async function expand(folder: string, pattern: string, options: Options):
       level = [...new Set(level.map((dir) => path.dirname(dir)))]
       continue
     }
-    if (segment === "**" && options.globstar) {
-      // Recursion over real folders only; a link below is not entered.
-      const gathered: string[] = []
-      const dirs = [...level]
+    if (recursive(segment, last)) {
+      // Recursion over real folders only. Each folder is visited once however many segments lead to it.
+      const follows = segment !== "**"
+      const gathered = new Set<string>()
+      const seen = new Set(level)
+      const dirs = [...seen]
       for (let at = 0; at < dirs.length; at++) {
         const found = await entries(dirs[at]!)
         if (found === undefined) return undefined
         for (const entry of found) {
+          if (expired()) return undefined
           if (entry.name.startsWith(".") && !options.dot) continue
-          gathered.push(path.join(dirs[at]!, entry.name))
-          if (entry.directory) dirs.push(path.join(dirs[at]!, entry.name))
-          if (last && gathered.length > options.limit) return gathered
+          if (follows && entry.link) return undefined
+          const child = path.join(dirs[at]!, entry.name)
+          gathered.add(child)
+          if (entry.directory && !seen.has(child)) {
+            seen.add(child)
+            dirs.push(child)
+          }
+          if (last && gathered.size > options.limit) return [...gathered]
         }
       }
-      if (last) return gathered
+      if (last) return [...gathered]
       level = dirs
       continue
     }
     const test = compile(segment, options.dot)
-    const next: string[] = []
-    for (const dir of level) {
+    if (test === undefined) return undefined
+    const next = new Set<string>()
+    for (const dir of new Set(level)) {
       const found = await entries(dir)
       if (found === undefined) return undefined
       for (const entry of found) {
+        if (expired()) return undefined
         if (!test(entry.name)) continue
         if (!last && entry.link) return undefined
-        if (last || entry.directory) next.push(path.join(dir, entry.name))
-        if (last && next.length > options.limit) return next
+        if (last || entry.directory) next.add(path.join(dir, entry.name))
+        if (last && next.size > options.limit) return [...next]
       }
     }
-    level = next
+    level = [...next]
   }
   return segments.length === 0 ? [] : level
 }
@@ -105,26 +131,38 @@ type Token =
   | { kind: "char"; value: string }
   | { kind: "class"; negate: boolean; test: ((char: string) => boolean)[] }
 
+// The classes bash knows (glob(7), regex(7)). Unicode-aware where the shell is, and never narrower.
 const NAMED: Record<string, RegExp> = {
   alpha: /\p{L}/u,
   digit: /[0-9]/,
-  alnum: /[\p{L}0-9]/u,
+  alnum: /[\p{L}\p{N}]/u,
   upper: /\p{Lu}/u,
   lower: /\p{Ll}/u,
   space: /\s/,
-  punct: /[!-/:-@[-`{-~]/,
+  blank: /[ \t\p{Zs}]/u,
+  punct: /[\p{P}\p{S}]/u,
   xdigit: /[0-9a-fA-F]/,
+  cntrl: /\p{Cc}/u,
+  print: /[^\p{Cc}]/u,
+  graph: /[^\p{Cc}\s]/u,
+  word: /[\p{L}\p{N}_]/u,
+  ascii: /[\x00-\x7f]/,
 }
 
-/** A matcher for one path segment. Names match in any case, which is a superset of what the shell matches. */
-export function compile(segment: string, dot: boolean): (name: string) => boolean {
+/**
+ * A matcher for one path segment, or undefined when the segment holds a bracket form this matcher does not know (the
+ * caller then leaves the word undecided). Names keep their case; a token matches when any case of the character (as
+ * written, lower, upper) matches it, so the result is a superset of what the shell matches, negation included.
+ */
+export function compile(segment: string, dot: boolean): ((name: string) => boolean) | undefined {
   const tokens = tokenize(segment)
+  if (tokens === undefined) return undefined
   const first = tokens[0]
   const dotted = first?.kind === "char" && first.value === "."
-  return (name) => (name.startsWith(".") && !dot && !dotted ? false : matches(tokens, name.toLowerCase()))
+  return (name) => (name.startsWith(".") && !dot && !dotted ? false : matches(tokens, name))
 }
 
-function tokenize(segment: string): Token[] {
+function tokenize(segment: string): Token[] | undefined {
   const tokens: Token[] = []
   let at = 0
   while (at < segment.length) {
@@ -139,25 +177,27 @@ function tokenize(segment: string): Token[] {
       continue
     }
     if (char === "\\" && at < segment.length) {
-      tokens.push({ kind: "char", value: segment[at]!.toLowerCase() })
+      tokens.push({ kind: "char", value: segment[at]! })
       at++
       continue
     }
     if (char === "[") {
       const parsed = parseClass(segment, at)
+      if (parsed === null) return undefined
       if (parsed) {
         tokens.push(parsed.token)
         at = parsed.end
         continue
       }
     }
-    tokens.push({ kind: "char", value: char.toLowerCase() })
+    tokens.push({ kind: "char", value: char })
   }
   return tokens
 }
 
-// `start` is just after the `[`. Undefined when the class is never closed, which makes the `[` a plain character.
-function parseClass(segment: string, start: number): { token: Token; end: number } | undefined {
+// `start` is just after the `[`. Undefined when the class is never closed, which makes the `[` a plain character; null when
+// it holds a `[:x:]`, `[=x=]` or `[.x.]` this matcher does not know, which leaves the word undecided.
+function parseClass(segment: string, start: number): { token: Token; end: number } | undefined | null {
   let at = start
   const negate = segment[at] === "!" || segment[at] === "^"
   if (negate) at++
@@ -167,19 +207,28 @@ function parseClass(segment: string, start: number): { token: Token; end: number
     const char = segment[at]!
     if (char === "]" && !first) return { token: { kind: "class", negate, test }, end: at + 1 }
     first = false
-    if (char === "[" && segment[at + 1] === ":") {
-      const close = segment.indexOf(":]", at + 2)
-      const named = close < 0 ? undefined : NAMED[segment.slice(at + 2, close)]
-      if (named) {
-        test.push((value) => named.test(value))
+    const mark = segment[at + 1]
+    if (char === "[" && (mark === ":" || mark === "=" || mark === ".")) {
+      const close = segment.indexOf(`${mark}]`, at + 2)
+      if (close >= 0) {
+        const name = segment.slice(at + 2, close)
+        if (mark === ":") {
+          const named = NAMED[name]
+          if (!named) return null
+          test.push((value) => named.test(value))
+        } else {
+          // An equivalence class or collating element names one character here; anything longer is not understood.
+          if ([...name].length !== 1) return null
+          test.push((value) => value === name)
+        }
         at = close + 2
         continue
       }
     }
-    const low = (char === "\\" && at + 1 < segment.length ? segment[++at]! : char).toLowerCase()
+    const low = char === "\\" && at + 1 < segment.length ? segment[++at]! : char
     at++
     if (segment[at] === "-" && at + 1 < segment.length && segment[at + 1] !== "]") {
-      const high = segment[at + 1]!.toLowerCase()
+      const high = segment[at + 1]!
       test.push((value) => value >= low && value <= high)
       at += 2
       continue
@@ -216,9 +265,13 @@ function matches(tokens: Token[], name: string) {
   return t === tokens.length
 }
 
+function variants(char: string) {
+  return [char, char.toLowerCase(), char.toUpperCase()]
+}
+
 function one(token: Token, char: string) {
   if (token.kind === "any") return true
-  if (token.kind === "char") return token.value === char
-  if (token.kind === "class") return token.test.some((test) => test(char)) !== token.negate
+  if (token.kind === "char") return variants(char).some((item) => variants(token.value).includes(item))
+  if (token.kind === "class") return variants(char).some((item) => token.test.some((test) => test(item)) !== token.negate)
   return false
 }

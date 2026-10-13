@@ -42,6 +42,7 @@ const layout = Effect.gen(function* () {
     await fs.mkdir(path.join(project, "many"))
     await fs.writeFile(path.join(project, "secret.txt"), "s")
     await fs.writeFile(path.join(project, "other.txt"), "o")
+    await fs.writeFile(path.join(project, "Zeta.txt"), "z")
     await fs.writeFile(path.join(project, ".env"), "e")
     await fs.writeFile(path.join(project, "sub", "secret.txt"), "s")
     await fs.mkdir(path.join(project, "src", "a", "b"), { recursive: true })
@@ -205,6 +206,13 @@ describe("a Read deny on a dotfile and a wildcard", () => {
     ["setopt glob''dots; cat *", true, "zsh"],
     ["eval 'shopt -s dotglob'; cat *", true],
     ["bash -c 'shopt -s dotglob; cat *'", true],
+    // Options set where the launch reader consumes them (a nested shell, a wrapper, a trap); real bash 5.2 and zsh 5.9 print .env for each.
+    ["bash -O dotglob -c 'cat *'", true],
+    ["env BASHOPTS=dotglob bash -c 'cat *'", true],
+    ["zsh -o globdots -c 'cat *'", true],
+    ["zsh -4 -c 'cat *'", true],
+    ["trap 'shopt -s dotglob' DEBUG; cat *", true],
+    ["bash -c 'cat *'", false],
     ["cat * | wc -l", false],
   ]
   for (const layer of ["managed", "configured"] as const)
@@ -228,6 +236,11 @@ describe("a Read deny and a double star", () => {
     ["shopt -s globstar && grep -n foo src/**/*.ts", true],
     ["grep -n foo src/**/*.ts", true, "zsh"],
     ["grep -n foo src/*/*.ts", false],
+    ["bash -O globstar -c 'cat src/**/n.ts'", true],
+    // zsh reads three stars before a slash as a recursion that follows links; bash reads them as one star.
+    ["cat ***/n.ts", true, "zsh"],
+    ["cat src/***/n.ts", true, "zsh"],
+    ["shopt -s globstar; cat ***/n.ts", false],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, stopped, shell] of rows)
@@ -237,6 +250,58 @@ describe("a Read deny and a double star", () => {
           expect(Exit.isFailure(exit)).toBe(stopped)
         }),
       )
+})
+
+// Bracket classes that real bash 5.2 expands to the denied file (class 8). `Zeta.txt` is the case-folding row: a class or a
+// negation must not lose a capital because the name was lower-cased first.
+describe("a Read deny and a bracket class", () => {
+  // [command, denied file, whether the deny stops it]
+  const rows: [string, string, boolean][] = [
+    ["cat [[:graph:]]*", "secret.txt", true],
+    ["cat [[:word:]]*", "secret.txt", true],
+    ["cat [[:ascii:]]*", "secret.txt", true],
+    ["cat [[:print:]]*", "secret.txt", true],
+    ["cat [[=s=]]ecret.txt", "secret.txt", true],
+    ["cat [[.s.]]ecret.txt", "secret.txt", true],
+    ["cat [[:upper:]]*", "Zeta.txt", true],
+    ["cat [[:upper:]]eta.txt", "Zeta.txt", true],
+    ["cat [!z]*", "Zeta.txt", true],
+    ["cat [^z]*", "Zeta.txt", true],
+    ["cat [A-z]eta.txt", "Zeta.txt", true],
+    // A form the matcher does not know is undecided: the deny that could match below stops it.
+    ["cat [[:nope:]]*", "secret.txt", true],
+    ["cat Z*", "secret.txt", false],
+    ["cat Q*", "Zeta.txt", false],
+  ]
+  for (const layer of ["managed", "configured"] as const)
+    for (const [command, file, stopped] of rows)
+      it.live(`${layer}: ${command} ${stopped ? "is stopped" : "is not stopped"} under a deny of ${file}`, () =>
+        Effect.gen(function* () {
+          const { exit } = yield* run(command, layer, { action: "Read", resource: `<project>/${file}`, effect: "deny" })
+          expect(Exit.isFailure(exit)).toBe(stopped)
+        }),
+      )
+})
+
+// Repeated `**` over a deep chain used to multiply the work by about six per segment (zsh, or bash after an assignment). The
+// words are decided within a second whatever the shell; the test has its own deadline since the run is asynchronous.
+describe("a Read deny and a repeated double star", () => {
+  const deep = async (project: string) => {
+    await fs.mkdir(path.join(project, ...Array.from({ length: 30 }, () => "d")), { recursive: true })
+  }
+  const word = "**/**/**/**/**/**/**/**/zz"
+  for (const [command, shell] of [
+    [`cat ${word}`, "zsh"],
+    [`X=1; cat ${word}`, "sh"],
+  ] as const)
+    it.live(`${command.slice(0, 20)} is decided within a second (${shell})`, () =>
+      Effect.gen(function* () {
+        const started = Date.now()
+        const { exit } = yield* run(command, "configured", { action: "Read", resource: "<project>/secret.txt", effect: "deny" }, shell, deep)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        expect(Date.now() - started).toBeLessThan(1_000)
+      }),
+    )
 })
 
 // On Windows a path through a link to a share connects to the host. Each row listens on its own port (the WebDAV client

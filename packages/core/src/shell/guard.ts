@@ -11,6 +11,7 @@ import { Permission } from "../permission.js"
 import { ProjectTrust } from "../project-trust.js"
 import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
 import { LinkShare } from "@orbit/util/link-share"
+import { ShellLaunch } from "./launch.js"
 import { ShellParse } from "./parse.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
@@ -377,8 +378,14 @@ const OPTION_COMMANDS = new Set([
 const OPTION_VARIABLES = /^(globignore|bashopts|shellopts|zsh_?opts)$/i
 
 function globOptions(all: Level[], ps: boolean, ctx: Context) {
-  if (ps) return { dot: true, globstar: false }
-  const zsh = /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell))
+  if (ps) return { dot: true, globstar: false, follow: false }
+  const heads = (command: Command) => [command.head, command.inner[0] ?? ""]
+  // zsh reads `***/` as a recursion that follows links: the login shell, or any program the input starts as zsh.
+  const zsh =
+    /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell)) ||
+    all.some((level) =>
+      level.analysis.commands.some((command) => heads(command).some((head) => ShellLaunch.programName(head, ctx.platform) === "zsh")),
+    )
   const undecided = all.some(
     (level) =>
       level.analysis.opaque !== undefined || level.analysis.features.assignment ||
@@ -386,11 +393,30 @@ function globOptions(all: Level[], ps: boolean, ctx: Context) {
         (command) =>
           command.dynamicHead ||
           command.wrapper === "unanalysable" ||
-          [command.head, command.inner[0] ?? ""].some((head) => OPTION_COMMANDS.has(head)) ||
-          command.env.some((item) => OPTION_VARIABLES.test(item.name)),
+          heads(command).some((head) => OPTION_COMMANDS.has(head) || ShellSafety.EVAL_LIKE.has(head)) ||
+          command.env.some((item) => OPTION_VARIABLES.test(item.name)) ||
+          setsVariable(command) ||
+          launchesWithOptions(command, ctx.platform),
       ),
   )
-  return { dot: undecided, globstar: undecided || zsh }
+  return { dot: undecided, globstar: undecided || zsh, follow: zsh }
+}
+
+// A wrapper that sets a variable for the program it starts (`env BASHOPTS=dotglob bash -c ...`): the assignment is an operand
+// of the wrapper, so `command.env` does not hold it.
+function setsVariable(command: Command) {
+  return command.argv
+    .slice(0, command.argv.length - command.inner.length)
+    .some((word) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value))
+}
+
+// A nested shell started with anything but a bare `-c` before its script (`-O dotglob`, `-o globdots`, `--rcfile`, zsh's `-4`,
+// a cluster such as `-lc`). The launch reader consumes those as known, so the nested level carries no trace of them.
+function launchesWithOptions(command: Command, platform: NodeJS.Platform) {
+  if (!ShellLaunch.BASH_SHELLS.includes(ShellLaunch.programName(command.inner[0] ?? "", platform))) return false
+  const rest = command.inner.slice(1)
+  const options = rest.findIndex((word) => !/^[-+]/.test(word))
+  return (options < 0 ? rest : rest.slice(0, options)).some((word) => word !== "-c")
 }
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
