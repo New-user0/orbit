@@ -592,6 +592,10 @@ its gate, before the first trust task. It names every surface that M1 found over
 - The terminal UI imports plugins itself, so the server's gate does not apply. Filter the directories with
   `trustedPluginDirectories(directories, trust.startup.trusted(), trust.startup.above())`
   (`packages/tui/src/plugin/discovery.ts`) and import nothing before the first answer.
+- The terminal UI's startup walk (`localPluginDirectories`) runs before any answer and stats `.git`, `.hg` and each
+  `.orbit` above the working folder. It asks `LinkShare.ofSync` (`@orbit/util/link-share`, shared with Core) first: a name
+  that is a link to a share is "share", present but never stat-ed, and any other failure is one log line and an absent
+  entry (class 6, 7). Proof: `packages/tui/test/plugin-discovery.test.ts`.
 - Look at what the libraries you call do by themselves: parsers, YAML tags, resolvers (classes 10 and 11).
 
 **How to test:** the recipe above. In M1 the marker tests are `packages/cli/test/trust.test.ts`,

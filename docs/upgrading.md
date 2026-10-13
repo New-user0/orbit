@@ -1669,7 +1669,7 @@ scanner found, and the folder question held the folders the scanner found.
   by its text (it can map a network share), not a change of location.
 - Input Orbit cannot analyse, a syntax error or an unterminated quote included, is asked about as the whole text plus its
   fragments, with no "always allow", in both scanner modes. Before, the portable scanner refused it with an error and the
-  default scanner asked about the commands it could find. A deny rule still blocks it, on the whole text or on a fragment. Bash
+  default scanner asked about the commands it could find. A deny rule still blocks it, on the whole text or on a fragment, and a fragment answers to the cmdlet's aliases and its module-qualified spelling as parsed input does (`rm *` and `Remove-Item *` meet each other, however long the input is). Bash
   that uses an unknown variable, an unquoted heredoc, a function body or an array subscript is in this group, so it asks each time.
 - PowerShell approvals come from PowerShell's own parser: the "always allow" pattern is the cmdlet's name (a program's name
   plus its subcommand words, and nothing for a shell, an interpreter, `Invoke-Expression` or a name that is a path), and a
@@ -2771,3 +2771,13 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 **Affects:** `pwsh` users who run `cd` or `Set-Location` with no folder or with an unset variable, `pwsh` on Linux or macOS with backslash paths, and projects that hold links to shares or sit on a network share.
 
 **What to do:** Nothing; answer the extra question, or write the folder out.
+
+### Declarations that print the environment ask like any command
+
+`export -p`, a bare `export`, `declare` or `typeset` (with or without `-p`, `-f`, `-F`), a bare `local` or `readonly`, and any of them with a print or function flag list every variable with its value, which would send credentials in the environment to the model. They are now shell requests that a `Bash` rule (yours or your organization's) can allow, ask about or deny. Declarations that only set named variables (`export A=1`, `declare -x B=2`, `export A`) and `unset`, `cd`, `pushd` and `popd` still run without a question.
+
+A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network share are no longer opened by the shell guard's repository check, and the same holds for the `.git`, `.hg` and `.orbit` names the terminal UI looks for at startup. A link of this kind counts as a repository marker that is there but not followed, so the shell command asks and Orbit starts at once instead of waiting about 40 seconds for the share.
+
+**Affects:** anyone who runs `export -p`, `declare -p` or similar from the shell tool under a rule that allowed them silently, and Windows users who open a folder that holds such links.
+
+**What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.

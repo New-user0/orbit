@@ -3,7 +3,7 @@ export * as LinkShare from "./link-share.js"
 import fsSync from "fs"
 import path from "path"
 import { Effect } from "effect"
-import type { FSUtil } from "@orbit/util/fs-util"
+import type { FSUtil } from "./fs-util.js"
 
 /**
  * How many links a walk follows. Windows follows 63 in one path; the limit is above that so that a real chain is still
