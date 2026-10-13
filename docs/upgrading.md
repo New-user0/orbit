@@ -1770,6 +1770,14 @@ to a share is no longer listed when the trust status is read.
 
 **What to do:** Nothing. A chain that long is refused with the same message as a share.
 
+### Managed `denied_domains` match an IPv4 address in its IPv6 spellings
+
+An IPv4 address in the managed `denied_domains` list now also denies its mapped (`[::ffff:203.0.113.5]`), compatible, translated and well-known NAT64 (`[64:ff9b::203.0.113.5]`) IPv6 spellings, and an entry written in one of those spellings denies the dotted address. Before, such a URL missed the deny and fell through to the ordinary question or to your own allow rule.
+
+**Affects:** organizations whose managed settings list an IP address in `denied_domains`.
+
+**What to do:** Nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.

@@ -1702,6 +1702,18 @@ describe("Permission under managed network settings", () => {
     ["a single-number IPv4", "127.0.0.1", "http://2130706433/", true],
     ["an IPv6 literal", "[::1]", "http://[0:0:0:0:0:0:0:1]/", true],
     ["a single-label host", "intranet", "http://intranet/", true],
+    // Class 6: an IPv4 entry and every IPv6 spelling of that address are one entry, in both directions.
+    ["an IPv4 entry and its mapped spelling", "203.0.113.5", "http://[::ffff:203.0.113.5]/", true],
+    ["an IPv4 entry and its hex mapped spelling", "203.0.113.5", "http://[::ffff:cb00:7105]/", true],
+    ["an IPv4 entry and its compatible spelling", "203.0.113.5", "http://[::203.0.113.5]/", true],
+    ["an IPv4 entry and its translated spelling", "203.0.113.5", "http://[::ffff:0:203.0.113.5]/", true],
+    ["an IPv4 entry and its NAT64 spelling", "203.0.113.5", "http://[64:ff9b::203.0.113.5]/", true],
+    ["an IPv4 entry and the shorthand of its mapped spelling", "203.0.113.5", "http://[0:0:0:0:0:ffff:cb00:7105]/", true],
+    ["a mapped entry and the dotted URL", ManagedNetwork.pattern("[::ffff:203.0.113.5]")!, "http://203.0.113.5/", true],
+    ["a NAT64 entry and the mapped URL", ManagedNetwork.pattern("[64:ff9b::203.0.113.5]")!, "http://[::ffff:203.0.113.5]/", true],
+    ["an IPv4 entry does not cover another address mapped", "203.0.113.5", "http://[::ffff:203.0.113.6]/", false],
+    ["an IPv4 entry does not cover the address in a 6to4 prefix", "203.0.113.5", "http://[2002:cb00:7105::]/", false],
+    ["the IPv6 loopback is no IPv4 address", "0.0.0.1", "http://[::1]/", false],
   ]
   for (const [name, pattern, url, denied] of cases) {
     it.effect(`${denied ? "denies" : "allows"} ${name}`, () =>
