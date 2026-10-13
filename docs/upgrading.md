@@ -300,7 +300,7 @@ no plugin can override it. In order of precedence: a configured deny (agent rule
 config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
 then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
 `managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
-upgrades only the default ask that no rule spoke to, never an ask that your own rule, an agent's built-in `.env` ask or a plugin hook gave, and never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a `Read` or `Edit` rule, managed or your own (agent, user, project or session), also decides a file inside the session's folder by its absolute place, so a deny or an ask on `~/.ssh/*` holds when Orbit runs in the home folder (the rows "under the person's ... rule" in `permission.test.ts`). The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
+upgrades only the default asks: the one no rule spoke to and every agent's built-in `external_directory` ask for a place outside the project. It never lifts an ask that your own rule (an `external_directory` one included), an agent's built-in `.env` ask, Plan's `Bash` ask or a plugin hook gave, and never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a `Read` or `Edit` rule, managed or your own (agent, user, project or session), also decides a file inside the session's folder by its absolute place, so a deny or an ask on `~/.ssh/*` holds when Orbit runs in the home folder (the rows "under the person's ... rule" in `permission.test.ts`). The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
 managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
 
 - `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
@@ -2817,15 +2817,18 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone by
-the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts` pin, before anything is asked:
-`.orbit`, the compatibility roots and the MCP file in config discovery, settings files, `{file:}` references, instruction
-markers, the commands, agents, skills and plugin source folders, the terminal UI's and Mini's custom themes
-(`.orbit/themes`), and the run store that every `orb flow` command that reads it opens (`.orbit/runs.db`). Folders are
-listed without following links, and a link inside them is entered only after its target is known not to be a share (in a
-trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer. A
-theme or a run store behind such a link is skipped, with one line in the log, and `orb flow` stops with a message that
-names the store. Not covered: the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
+In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone,
+before anything is asked, by the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts`
+pin: the commands, agents, skill folders and plugin source folders of a config folder, the compatibility roots, the
+settings file, the MCP file, `{file:}` references, instruction markers found by walking up, the custom themes of the
+terminal UI and Mini (`.orbit/themes`), the run store (`.orbit/runs.db` and its `-wal`, `-shm` and `-journal` files)
+that `orb flow` opens, and the workflow and suite files that `orb flow` reads before it asks about trust, which
+includes the file name that `orb flow resume` takes from the run store. Folders are listed without following links,
+and a link inside them is entered only after its target is known not to be a share (in a trusted project too). Before,
+one such link made the start, the trust status or a reload wait for the share to answer. A theme behind such a link is
+skipped, with one line in the log, and `orb flow` stops with a message that names the store or the file. Not covered:
+config discovery's own `.orbit` folder, the loading of config files by `Config`, the compatibility plugin's real-path
+lookup, the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
 
 A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
 for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
@@ -2838,10 +2841,12 @@ so it can no longer be taken for a path inside the working folder.
 
 ### Mercurial is not run in a folder that is not trusted
 
-When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and Mercurial loads the
-`[extensions]` and `[hooks]` of that folder's own `.hg/hgrc` into the command. It is now run only in a folder you trust.
-Until then such a project has the shared `global` ID, as it does when `hg` is not installed, and a trusted folder
-runs `hg log` as before.
+When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and then `hg branch`,
+`hg status` and `hg diff` for the branch and the changes, and Mercurial loads the `[extensions]` and `[hooks]` of that
+folder's own `.hg/hgrc` into each command. None of them is run now until you trust the folder: the branch is unknown
+and there are no changes or diffs, and they appear once you trust it. An untrusted Mercurial folder is its own project
+(identified by its path), not the shared `global` project, so its saved "always allow" answers are not shared with other
+folders; a trusted folder with no `hg` or no changeset is `global`, as before.
 
 **Affects:** Mercurial users who open a clone before trusting it.
 
@@ -2859,7 +2864,7 @@ A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network 
 
 ### Shell rules see through assignments, wrappers and printing declarations
 
-A `Bash` deny or ask rule for a program (`rm *`) now also meets that program when a command puts leading assignments or a wrapper in front of it: `FOO=1 rm x`, `timeout 5 rm x`, `nice`, `nohup`, `time`, `stdbuf`, `env`, `sudo`, `doas` and `exec`, alone or stacked. The request lists the command as written and, as requests of their own, each stripped spelling (`rm x`). An allow for `rm *` lifts only the stripped spelling, so the command as written still needs an allow of its own. Under a broad allow, a deny or ask for the program now applies.
+A `Bash` deny or ask rule for a program (`rm *`) now also meets that program when a command puts leading assignments or a wrapper in front of it: `FOO=1 rm x`, `timeout 5 rm x`, `nice`, `nohup`, `time`, `stdbuf`, `env`, `sudo`, `doas` and `exec`, alone or stacked. The request lists the command as written and, as requests of their own, each stripped spelling (`rm x`). An allow for `rm *` lifts only the stripped spelling, so the command as written still needs an allow of its own. An "always" reply to such a command saves both the wrapper (`timeout *`) and the program it runs (`touch *`), so the same command is not asked again; `timeout 5 rm x` after that still asks for `rm`. Under a broad allow, a deny or ask for the program now applies.
 
 A declaration that prints the environment (`export -p`, `declare -p`) next to other commands (`export -p; ls`, `declare -p && git status`, `export -p | cat`) is a request of its own, so a `Bash` ask or deny for it applies and an allow for the other command does not lift it.
 
@@ -2873,9 +2878,9 @@ Opaque PowerShell input that starts with a path to a program in the repository (
 
 ### Shell commands that write through an output option, and wildcards in reads, meet your Edit and Read rules
 
-The shell guard now records the file that an output option names as a write: `sort -o`, `-oFILE`, `--output` (and any prefix of it that `sort` accepts), the second operand of `uniq IN OUT`, `find -fprint`, `-fprint0`, `-fprintf` and `-fls`, `tree -o` and `--output`, `git diff`, `log` and `show` `--output`, `git format-patch -o` and `git archive -o`, and the file of a `w`, `W` or `s///w` command (and the file of an `r`) in a sed script given on the command line. An `Edit` rule on that file applies, a file outside the project asks the folder question, and the sandbox treats it as a write. Before, these files were recorded as reads or not at all. `rg --pre` and `--hostname-bin` name a program, so such a command is asked about as a whole. Writers that the guard does not model (`curl -o`, `wget -O`, `awk` redirects, `tar -x`, interpreter one-liners) are unchanged.
+The shell guard now records the file that an output option names as a write: `sort -o`, `-oFILE`, `--output` (and any prefix of it that `sort` accepts), the second operand of `uniq IN OUT`, `find -fprint`, `-fprint0`, `-fprintf` and `-fls`, `tree -o` and `--output`, `git diff`, `log` and `show` `--output`, `git format-patch -o` and `git archive -o`, and the file of a `w`, `W` or `s///w` command (and the file of an `r`) in a sed script given on the command line. An `Edit` rule on that file applies, a file outside the project asks the folder question, and the sandbox treats it as a write. Before, these files were recorded as reads or not at all. `rg --pre` and `--hostname-bin` name a program, so such a command is asked about as a whole. A relative output is placed in the folder that `git -C` names (each `-C` relative to the one before), a global option's separate value (`--git-dir X`, `--work-tree X`, `--namespace X`) is no longer taken for the subcommand, `-o` is found inside a cluster of short options (`format-patch -ko out`), and sed reads `[/]` as a bracket that holds the delimiter, so `sed -n '/[/]/w out'` records `out`. Writers that the guard does not model (`curl -o`, `wget -O`, `awk` redirects, `tar -x`, interpreter one-liners) are unchanged.
 
-A read through a wildcard (`cat secr*.txt`, `head *`) is now checked against your `Read` deny rules and the managed ones for each file the wildcard matches in its folder, not only for the folder. Matches are found without following links, and a link among them is checked as the place it leads to. A wildcard that matches more than 500 files makes the command ask. A recursive folder search such as `grep -r x .` is still judged by its folder; per-file checks for searches belong to the later permissions work.
+A read through a wildcard (`cat secr*.txt`, `head *`) is now checked against your `Read` deny rules and the managed ones for each file the wildcard matches in its folder, not only for the folder. Matches are found without following links, and a link among them is checked as the place it leads to. A wildcard whose own folder is a share, or a link to one, is not listed at all (that would connect to the host the link names): the command asks instead. Like bash, the check does not let `*` or `?` match a name that starts with a dot, so a `Read` deny on `.env` does not refuse `grep -n foo *` or `cat *`; `cat .e*`, `cat .*` and any input that can switch on `dotglob` or set `GLOBIGNORE` are checked against dotfiles too, as is every PowerShell wildcard. Names are compared in any case, braces and extglobs are taken literally, and one command may spend at most 500 matches, 32 distinct wildcards and about three seconds on them. A wildcard that cannot be expanded within that (more matches, more words or more time, a scan that fails, or a `..` after a wildcard whose folder cannot be named) is refused when any `Read` deny rule, yours or the managed one, could match a file below its folder; with no such rule it runs. An allow rule written later does not lift that refusal. A recursive folder search such as `grep -r x .` is still judged by its folder; per-file checks for searches belong to the later permissions work.
 
 **Affects:** anyone with `Edit` or `Read` deny rules who also lets the model run shell commands.
 

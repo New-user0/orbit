@@ -1,7 +1,7 @@
 // A shell read that names its files through a wildcard reaches every file the wildcard matches, so a Read deny written for
 // one of them (the person's or the managed one) must stop `cat secr*.txt` as it stops `cat secret.txt` (class 8, the
 // shell-paths round). The real Permission service decides; ShellGuard asks it about each match.
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Exit, Layer } from "effect"
@@ -42,6 +42,7 @@ const layout = Effect.gen(function* () {
     await fs.mkdir(path.join(project, "many"))
     await fs.writeFile(path.join(project, "secret.txt"), "s")
     await fs.writeFile(path.join(project, "other.txt"), "o")
+    await fs.writeFile(path.join(project, ".env"), "e")
     await fs.writeFile(path.join(project, "sub", "secret.txt"), "s")
     await Promise.all(Array.from({ length: 520 }, (_, index) => fs.writeFile(path.join(project, "many", `f${index}`), "x")))
   })
@@ -151,11 +152,111 @@ describe("a Read deny and a wildcard in a shell read", () => {
     }),
   )
 
-  // More matches than are checked one by one: the command carries a finding that makes it a question, never a silent read.
-  it.live("a wildcard with too many matches is a Bash question, not a silent read", () =>
+  // More matches than are checked one by one: the command is decided anyway. It carries a finding, and a deny rule that could
+  // match below the folder stops it, since the files it reaches are not known (class 8).
+  it.live("a wildcard with too many matches is decided, not read silently", () =>
     Effect.gen(function* () {
       expect((yield* run("cat many/f1*", "configured", undefined)).findings).toEqual([])
-      expect((yield* run("cat many/*", "configured", undefined)).findings).toEqual(["glob-read"])
+      const many = yield* run("cat many/*", "configured", undefined)
+      expect(many.findings).toEqual(["glob-read"])
+      expect(Exit.isSuccess(many.exit)).toBe(true)
+      const denied = yield* run("cat many/*", "configured", { action: "Read", resource: "<project>/many/f5", effect: "deny" })
+      expect(denied.findings).toEqual(["glob-read"])
+      expect(Exit.isFailure(denied.exit)).toBe(true)
     }),
   )
+})
+
+// A leading dot is not matched by bash's `*` unless dotglob is on, so a `.env` deny does not refuse `grep -n foo *`; a
+// wildcard that names the dot does, and so does input that can switch dotglob on.
+describe("a Read deny on a dotfile and a wildcard", () => {
+  const rows: [string, boolean][] = [
+    ["grep -n foo *", false],
+    ["ls *", false],
+    ["ls -la *", false],
+    ["wc -l *", false],
+    ["cat *", false],
+    ["cat *.txt", false],
+    ["cat .env", true],
+    ["cat .e*", true],
+    ["cat .*", true],
+    ["cat ./.e*", true],
+    ["shopt -s dotglob; cat *", true],
+    ["shopt -s dotglob && grep -n foo *", true],
+    ["GLOBIGNORE=x; cat *", true],
+  ]
+  for (const layer of ["managed", "configured"] as const)
+    for (const [command, stopped] of rows)
+      it.live(`${layer}: ${command} ${stopped ? "is stopped" : "is not stopped"} under a .env deny`, () =>
+        Effect.gen(function* () {
+          const { exit } = yield* run(command, layer, { action: "Read", resource: "<project>/.env", effect: "deny" })
+          expect(Exit.isFailure(exit)).toBe(stopped)
+        }),
+      )
+})
+
+// A wildcard that cannot be expanded to the files it reaches is still decided: a deny rule that could match below its
+// folder stops it, and without such a rule it runs (class 8). The rule is `<project>/secret.txt` unless the row says so.
+describe("a Read deny and a wildcard that cannot be expanded", () => {
+  const many = Array.from({ length: 40 }, (_, index) => `s${index}*`).join(" ")
+  // [command, rule resource, whether the deny stops it]
+  const rows: [string, string, boolean][] = [
+    // (1) a `..` after a wildcard
+    ["cat su*/../secr*.txt", "<project>/secret.txt", true],
+    ["cat ./su*/../secr*.txt", "<project>/secret.txt", true],
+    ["cat su*/../oth*.txt", "<project>/secret.txt", false],
+    // (2) more matches than are checked one by one
+    ["cat many/*", "<project>/many/f5", true],
+    ["cat many/*", "<project>/other.txt", false],
+    // (3) names that match in another case, with nocaseglob on
+    ["shopt -s nocaseglob; cat SECR*.txt", "<project>/secret.txt", true],
+    ["cat SECR*.TXT", "<project>/secret.txt", true],
+    // (4) more distinct wildcards than one command may expand
+    [`cat ${many}`, "<project>/secret.txt", true],
+    [`cat ${many}`, "/elsewhere/**", false],
+    // (5) a character class holds a `:` that is no stream name
+    ["cat secre[[:alpha:]].txt", "<project>/secret.txt", true],
+    ["cat oth[[:alpha:]]r.txt", "<project>/secret.txt", false],
+  ]
+  for (const layer of ["managed", "configured"] as const)
+    for (const [command, resource, stopped] of rows)
+      it.live(`${layer}: ${command.slice(0, 50)} ${stopped ? "is stopped" : "is not stopped"} under ${resource}`, () =>
+        Effect.gen(function* () {
+          const { exit } = yield* run(command, layer, { action: "Read", resource, effect: "deny" })
+          expect(Exit.isFailure(exit)).toBe(stopped)
+        }),
+      )
+})
+
+// One shell call may not tie up the server: a command of about 10,000 characters made of quoted brace words and wildcards
+// is decided within a deadline. It runs in a child process, because a loop in the scan would block this runner's timer.
+const budgetChild = "a command of 10000 characters of brace and wildcard words is decided within the budget"
+if (process.env.ORBIT_GLOB_BUDGET_CHILD === "1")
+  describe("glob budget (child)", () => {
+    it.live(budgetChild, () =>
+      Effect.gen(function* () {
+        const words = Array.from({ length: 600 }, (_, index) => `'{1..99999}'${index}* many/f${index}*`).join(" ")
+        const command = `cat ${words.slice(0, words.lastIndexOf(" ", 9_900))}`
+        const started = Date.now()
+        const { exit } = yield* run(command, "configured", { action: "Read", resource: "<project>/secret.txt", effect: "deny" })
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(Date.now() - started).toBeLessThan(20_000)
+      }),
+      60_000,
+    )
+  })
+
+describe("glob budget", () => {
+  test("a 10,000 character input of brace and wildcard words ends before the deadline", async () => {
+    const child = Bun.spawn(["bun", "test", "test/shell-glob-read.test.ts", "-t", budgetChild], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: { ...process.env, ORBIT_GLOB_BUDGET_CHILD: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 90_000)
+    const code = await child.exited
+    clearTimeout(timer)
+    expect(code).toBe(0)
+  }, 100_000)
 })

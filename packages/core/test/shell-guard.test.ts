@@ -1,5 +1,6 @@
-import { describe, expect } from "bun:test"
+import { afterAll, beforeAll, beforeEach, describe, expect } from "bun:test"
 import fs from "fs/promises"
+import net from "net"
 import os from "os"
 import path from "path"
 import { Duration, Effect, Exit, Layer } from "effect"
@@ -272,6 +273,67 @@ describe("ShellGuard.facts: places", () => {
         expect(found.places.map((place) => [place.status, place.why])).toEqual([["unresolved", "share"]])
         expect(found.external).toEqual([])
         expect(found.probes).toEqual([])
+      }).pipe(provide(project, true))
+    }),
+  )
+})
+
+// A wildcard read lists the folder it starts in, so a folder that is a link to a share must not be listed (class 6): the
+// repository chose that host, and listing it blocks on the network before anything is asked. A WebDAV listener records
+// every connection, which a slow or failing host would hide. The operand is left undecided, so the command asks. Only
+// Windows has links to shares; the rows skip where the account cannot make one.
+describe("ShellGuard.facts: a wildcard read under a link to a share", () => {
+  const connections: string[] = []
+  const recorder = net.createServer((socket) => {
+    connections.push(`${socket.remoteAddress}`)
+    socket.destroy()
+  })
+  let port = 0
+  beforeAll(async () => {
+    await new Promise<void>((resolve) => recorder.listen(0, "127.0.0.1", resolve))
+    port = (recorder.address() as net.AddressInfo).port
+  })
+  beforeEach(() => {
+    connections.length = 0
+  })
+  afterAll(() => {
+    recorder.close()
+  })
+
+  for (const trusted of [true, false])
+    for (const [command, name, undecided] of [
+      ["cat docs/*", "docs", true],
+      ["cat docs/**/*.md", "docs", true],
+      // A link met below the wildcard's folder is not followed by the walk, so nothing is opened and nothing is undecided.
+      ["cat */x", "docs", false],
+    ] as const)
+      it.live(`${command} opens no share (${trusted ? "trusted" : "untrusted"})`, () =>
+        Effect.gen(function* () {
+          if (!win) return
+          const { project } = yield* layout
+          const made = yield* Effect.promise(() =>
+            fs.symlink(`\\\\127.0.0.1@${port}\\DavWWWRoot\\x`, path.join(project, name), "dir").then(
+              () => true,
+              () => false,
+            ),
+          )
+          if (!made) return
+          yield* Effect.gen(function* () {
+            const found = yield* facts(command, { cwd: project })
+            expect(connections).toEqual([])
+            if (undecided && trusted) expect(found.findings.map((item) => item.reason)).toContain("glob-read")
+          }).pipe(provide(project, trusted))
+        }),
+      )
+
+  it.live("cat a/* in a local folder is still expanded (control)", () =>
+    Effect.gen(function* () {
+      const { project } = yield* layout
+      yield* Effect.promise(() => fs.writeFile(path.join(project, "a", "one.txt"), "x"))
+      yield* Effect.gen(function* () {
+        const found = yield* facts("cat a/*", { cwd: project })
+        expect(found.findings.map((item) => item.reason)).not.toContain("glob-read")
+        expect(found.probes.flatMap((item) => item.resources).some((item) => item.endsWith("one.txt"))).toBe(true)
       }).pipe(provide(project, true))
     }),
   )
@@ -770,6 +832,11 @@ describe("ShellGuard.authorize", () => {
     "tree -o OUT",
     "git diff --output=OUT",
     "git format-patch -o OUT",
+    "git --git-dir .git diff --output=OUT",
+    "git --work-tree . diff --output=OUT",
+    "git --namespace x diff --output=OUT",
+    "git format-patch -1 -ko OUT",
+    "sed -n '/[/]/w OUT' f",
     "sed -n 'w OUT' f",
     "sed -n 's/a/b/w OUT' f",
   ])
@@ -785,6 +852,18 @@ describe("ShellGuard.authorize", () => {
         expect(asked.map((input) => input.action)).toContain("external_directory")
       }),
     )
+
+  // `git -C` moves the folder an output is written in, so one that leads out of the project asks the folder question.
+  it.live("git -C ../outside diff --output=x asks about the folder it writes in", () =>
+    Effect.gen(function* () {
+      expect(Exit.isSuccess(yield* run("git -C ../outside diff --output=x", () => false))).toBe(true)
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+      expect(Exit.isFailure(yield* run("git -C ../outside diff --output=x", (input) => input.action === "Edit"))).toBe(true)
+      const control = asked.length
+      expect(Exit.isSuccess(yield* run("git -C sub diff --output=x", () => false))).toBe(true)
+      expect(asked.slice(control).map((input) => input.action)).not.toContain("external_directory")
+    }),
+  )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
   // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can

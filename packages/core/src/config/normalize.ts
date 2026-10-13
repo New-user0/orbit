@@ -750,8 +750,8 @@ function decodeQuiet<S extends Schema.Codec<unknown, unknown, never, never>>(sch
 
 /**
  * Decodes an object whose fields are independent, one field at a time when the whole does not decode, so a bad field
- * costs only itself. A field is judged by decoding it alone, which holds because the fields that can be missing are
- * optional. `rules` names a list of permission rules that is kept rule by rule, since one bad rule must not take the
+ * costs only itself. A field is judged by decoding it alone; an object that fails because a required field is missing
+ * has no field to drop and is reported as a whole. `rules` names a list of permission rules that is kept rule by rule, since one bad rule must not take the
  * valid denies beside it. Each loss is reported at its own path, and an object of which nothing survives is dropped.
  */
 function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
@@ -767,6 +767,7 @@ function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
     invalid(path, diagnostics)
     return undefined
   }
+  const reported = diagnostics.length
   const input =
     rules !== undefined && Array.isArray(value[rules])
       ? { ...value, [rules]: decodeList(value[rules], Permission.Rule, [...path, rules], diagnostics, decodeEncoded) }
@@ -779,7 +780,9 @@ function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
     }),
   )
   const result = Object.keys(kept).length === 0 ? undefined : decodeQuiet(schema, kept)
-  if (result === undefined && Object.keys(kept).length > 0) invalid(path, diagnostics)
+  // An object that fails only because a required field is missing (an empty one, or one with only unknown keys) has no
+  // field to drop, so report the object itself rather than losing it silently.
+  if (result === undefined && (Object.keys(kept).length > 0 || diagnostics.length === reported)) invalid(path, diagnostics)
   return result
 }
 

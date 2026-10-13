@@ -175,7 +175,8 @@ function operand(state: State, input: Input): Operand {
   if (share) flags.add("share")
   if (win && input.literal) {
     const rest = text.replace(/^[\\/]{2}[?.][\\/](?:UNC[\\/])?/i, "").replace(/^[A-Za-z]:/, "")
-    if (!flags.has("provider") && rest.includes(":")) flags.add("stream")
+    // A `:` inside a bracket expression (`[[:alpha:]]`) is part of the wildcard, not a stream name.
+    if (!flags.has("provider") && rest.replace(/\[(?:[^\][]|\[:[a-z]+:\])*\]/g, "").includes(":")) flags.add("stream")
     if (/~\d/.test(text)) flags.add("short-name")
     const parts = text.split(/[\\/]/).filter(Boolean)
     if (parts.some((part) => /^\.{3,}$/.test(part))) flags.add("dots")
@@ -556,13 +557,25 @@ function sedFiles(script: string) {
     // GNU sed writes these two to the streams, not to files.
     if (file !== "" && file !== "/dev/stdout" && file !== "/dev/stderr") found.push({ role, file })
   }
-  const skip = (delimiter: string) => {
+  // GNU sed reads a bracket expression of a regex as one unit, so a delimiter inside `[/]` does not end the regex.
+  const skip = (delimiter: string, regex = false) => {
     while (at < script.length) {
       const char = script[at++]
       if (char === "\\") at++
       else if (char === delimiter) return true
+      else if (char === "[" && regex) bracket()
     }
     return false
+  }
+  const bracket = () => {
+    if (script[at] === "^") at++
+    if (script[at] === "]") at++
+    while (at < script.length && script[at] !== "]") {
+      // `[:alpha:]`, `[.x.]` and `[=x=]` hold their own `]`.
+      const close = script[at] === "[" && ":.=".includes(script[at + 1] ?? "") ? script.indexOf(`${script[at + 1]}]`, at + 2) : -1
+      at = close < 0 ? at + 1 : close + 2
+    }
+    at++
   }
   const rest = () => {
     const end = script.indexOf("\n", at)
@@ -578,13 +591,13 @@ function sedFiles(script: string) {
     if (char === "/" || char === "\\") {
       const delimiter = char === "/" ? "/" : script[at + 1]
       at += char === "/" ? 1 : 2
-      if (delimiter === undefined || !skip(delimiter)) break
+      if (delimiter === undefined || !skip(delimiter, true)) break
       continue
     }
     at++
     if (char === "s" || char === "y") {
       const delimiter = script[at++]
-      if (delimiter === undefined || !skip(delimiter) || !skip(delimiter)) break
+      if (delimiter === undefined || !skip(delimiter, char === "s") || !skip(delimiter)) break
       if (char === "y") continue
       // The flags end at `;`, `}` or the end of the line, except `w`, whose file name takes the rest of the line.
       while (at < script.length && !/[;}\n]/.test(script[at])) {
@@ -755,7 +768,31 @@ function outputs(name: string, words: Word[]): Outputs {
       }
     }
   } else if (name === "git") {
-    const verb = words.findIndex((item, at) => !item.value.startsWith("-") && !["-C", "-c"].includes(words[at - 1]?.value ?? ""))
+    // Global options come first. `-C` moves the folder that a relative output is written in (each one relative to the one
+    // before), and these take their value as the next word, which is not the verb.
+    let folder: Word | undefined
+    let verb = -1
+    for (let at = 0; at < words.length && verb < 0; at++) {
+      const text = words[at].value
+      if (text === "-C" && words[at + 1]) {
+        const next = words[++at]
+        folder =
+          folder === undefined || /^(?:[\/~]|[A-Za-z]:)/.test(next.value) || next.tilde
+            ? next
+            : { ...next, value: `${folder.value}/${next.value}`, literal: folder.literal && next.literal, glob: folder.glob || next.glob }
+      } else if (["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path", "--config-env"].includes(text)) at++
+      else if (!text.startsWith("-")) verb = at
+    }
+    // A relative output lies in the folder of the last `-C`; one the shell expands from `~` or that is absolute does not.
+    const placed = (item: Word): Word =>
+      folder === undefined || item.tilde || /^(?:[\/~]|[A-Za-z]:)/.test(item.value)
+        ? item
+        : { ...item, value: `${folder.value}/${item.value}`, literal: item.literal && folder.literal, glob: item.glob || folder.glob, tilde: folder.tilde }
+    const output = (item: Word | undefined) => {
+      if (!item) return
+      found.writes.push(placed(item))
+      found.skip.add(item)
+    }
     const options = GIT_OUTPUTS[words[verb]?.value ?? ""]
     if (verb >= 0 && options)
       for (let at = verb + 1; at < words.length; at++) {
@@ -763,8 +800,18 @@ function outputs(name: string, words: Word[]): Outputs {
         if (text === "--") break
         const equals = text.indexOf("=")
         const option = equals < 0 ? text : text.slice(0, equals)
-        if (options.includes(option)) write(equals < 0 ? words[++at] : cut(words[at], text.slice(equals + 1)))
-        else if (options.includes("-o") && text.startsWith("-o") && !text.startsWith("--")) write(cut(words[at], text.slice(2)))
+        if (options.includes(option)) output(equals < 0 ? words[++at] : cut(words[at], text.slice(equals + 1)))
+        else if (options.includes("-o") && /^-[^-]/.test(text)) {
+          // `-o` may sit anywhere in a cluster of short options (`-ko out`); a letter that takes its value from the rest of
+          // the cluster (`-U3`, `-Sfoo`) ends the search.
+          for (let char = 1; char < text.length; char++) {
+            if (text[char] === "o") {
+              output(text.length > char + 1 ? cut(words[at], text.slice(char + 1)) : words[++at])
+              break
+            }
+            if ("UvMCBlSGO".includes(text[char])) break
+          }
+        }
       }
   } else if (name === "rg") {
     // `--pre` and `--hostname-bin` run the program they name, which is no file to read.
