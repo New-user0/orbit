@@ -128,7 +128,8 @@ export function evaluate(
 
 // A shell command that changes how its program is found or loaded (a PATH, LD_*, DYLD_*, BASH_ENV, ENV or IFS assignment,
 // or an `env` option) is lifted by a saved approval only when that approval is its exact text, so a grant saved for the
-// program, or an `env *` saved earlier, never lifts it (class 8).
+// program, or an `env *` saved earlier, does not lift the spellings matched below (class 8). Other spellings, such as a
+// quoted assignment, are not matched and `env *` still lifts them (follow-up).
 const STEERING = /(?:^|\s)(?:(?:PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=|env\s+(?:\S+\s+)*?-)/i
 
 function steersProgram(action: string, resource: string) {
