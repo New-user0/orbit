@@ -32,12 +32,14 @@ export const description = `Search the web using the user's selected search inte
 
 When your reply draws on search results, end it with a "Sources:" section that lists the pages you used as markdown links, like [Title](URL).
 
-Use allowedDomains to restrict results to certain sites (subdomains included) and blockedDomains to exclude sites. Both are optional and are applied to the results after the search.
+Use allowedDomains to restrict results to certain sites (subdomains included) and blockedDomains to exclude sites. Both are optional and are applied to the results after the search. Give one of them, not both: a call with both is refused.
 
 The current year is ${new Date().getFullYear()}. Use this year when searching for recent information or current events.`
 
 export const Input = Schema.Struct({
-  query: Schema.String.annotate({ description: "Websearch query" }),
+  query: Schema.String.check(Schema.isMinLength(2, { message: "Query must be at least 2 characters" })).annotate({
+    description: "Websearch query",
+  }),
   allowedDomains: Schema.optionalKey(Schema.Array(Schema.String)).annotate({
     description: 'Only return results from these domains and their subdomains, such as ["docs.python.org"]',
   }),
@@ -80,6 +82,12 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              // Refused before anything is asked or sent. The two lists cannot both apply, so which one wins is not guessed.
+              if (input.allowedDomains?.length && input.blockedDomains?.length)
+                return yield* new ToolFailure({
+                  message: "Give allowedDomains or blockedDomains, not both.",
+                  code: Tool.ErrorCode.WebSearchInvalid,
+                })
               yield* permission.assert({
                 action: name,
                 resources: [input.query],
@@ -204,7 +212,7 @@ export const Plugin = {
               return { output, content, metadata: { provider: output.provider } }
             }).pipe(
               Effect.mapError((error) => {
-                if (error instanceof ToolFailure && error.code === Tool.ErrorCode.WebSearchNotEnabled) return error
+                if (error instanceof ToolFailure && error.code !== undefined) return error
                 const fallback = `Unable to search the web for ${input.query}`
                 if (!Schema.is(WebSearch.RequestError)(error)) return new ToolFailure({ message: fallback, error })
                 const status = HttpClientError.isHttpClientError(error.cause) ? error.cause.response?.status : undefined

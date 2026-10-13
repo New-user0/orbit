@@ -701,7 +701,7 @@ describe("ReadTool", () => {
         { type: "file", uri: media.uri, mime: media.mime, name: "wide.png" },
         {
           type: "text",
-          text: "[Image resized: the original is 1000×7 px and it is shown at 300×2 px. Multiply coordinates read from the shown image by 3.33 to get coordinates in the original.]",
+          text: "[Shown at 300×2 px; the file itself is 1000×7 px. Scale positions on the shown image by 3.33 to map them onto the file.]",
         },
       ])
     }),

@@ -677,7 +677,7 @@ describe("WebFetchTool registration", () => {
 
         expect(yield* executeTool(registry, call({ url, prompt: "q" }))).toEqual({
           status: "error",
-          error: { type: "unknown", message: "URL host must not contain *" },
+          error: { type: "webfetch.refused", message: "URL host must not contain *" },
         })
         expect(assertions).toEqual([])
         expect(requests).toEqual([])
@@ -697,6 +697,11 @@ describe("WebFetchTool registration", () => {
               "accept-language": request.headers.get("accept-language"),
               "sec-fetch-mode": request.headers.get("sec-fetch-mode"),
               "user-agent": request.headers.get("user-agent"),
+              // Orbit's trace context must not reach a site, on the first request or on a redirect hop.
+              traceparent: request.headers.get("traceparent"),
+              tracestate: request.headers.get("tracestate"),
+              b3: request.headers.get("b3"),
+              "x-b3-traceid": request.headers.get("x-b3-traceid"),
             })
             if (new URL(request.url).pathname === "/redirect")
               return new Response("", { status: 302, headers: { location: "/target" } })
@@ -738,6 +743,10 @@ describe("WebFetchTool registration", () => {
               "accept-language": "en-US,en;q=0.9",
               "sec-fetch-mode": null,
               "user-agent": webFetchUserAgent,
+              traceparent: null,
+              tracestate: null,
+              b3: null,
+              "x-b3-traceid": null,
             })),
           )
         }),
@@ -753,7 +762,7 @@ describe("WebFetchTool registration", () => {
       // toSessionError unwraps the "Unable to fetch <url>" ToolFailure to its cause message.
       expect(yield* executeTool(registry, call({ url: "file:///etc/passwd", prompt: "q" }))).toEqual({
         status: "error",
-        error: { type: "unknown", message: "URL must use http:// or https://" },
+        error: { type: "webfetch.refused", message: "URL must use http:// or https://" },
       })
       expect(assertions).toEqual([])
       expect(requests).toEqual([])
@@ -920,7 +929,7 @@ const requested = () => requests.map((request) => `${request.headers.host}${new 
 const asked = () => assertions.map((assertion) => assertion.metadata?.url)
 const run = (registry: Tool.Interface, input: typeof WebFetchTool.Input.Type) =>
   executeTool(registry, call(input))
-const failed = (message: string) => ({ status: "error" as const, error: { type: "unknown", message } })
+const failed = (message: string, type = "unknown") => ({ status: "error" as const, error: { type, message } })
 
 describe("WebFetchTool redirects", () => {
   it.effect("follows a same-host redirect, asking about each hop and connecting to the checked address", () =>
@@ -1022,7 +1031,7 @@ describe("WebFetchTool redirects", () => {
       reset()
       chain(11, "example.org")
       expect(yield* run(registry, { url: "https://example.org/0", prompt: "q" })).toEqual(
-        failed("Too many redirects (more than 10)"),
+        failed("Too many redirects (more than 10)", "webfetch.redirect-limit"),
       )
       expect(requests).toHaveLength(11)
     }),
@@ -1161,7 +1170,7 @@ describe("WebFetchTool address guard and pinning", () => {
       const registry = yield* Tool.Service
 
       const settled = yield* run(registry, { url: "https://meta.example/x", prompt: "q" })
-      expect(settled.status).toBe("error")
+      expect(settled).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
       expect(settled.error?.message).toContain("cloud metadata address")
       expect(asked()).toEqual(["https://meta.example/x"])
       expect(requests).toEqual([])
@@ -1176,7 +1185,7 @@ describe("WebFetchTool address guard and pinning", () => {
       const registry = yield* Tool.Service
 
       const settled = yield* run(registry, { url: "https://example.com/a", prompt: "q" })
-      expect(settled.status).toBe("error")
+      expect(settled).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
       expect(settled.error?.message).toContain("cloud metadata address")
       expect(requests).toHaveLength(1)
       expect(asked()).toEqual(["https://example.com/a", "https://www.example.com/a"])
@@ -1195,7 +1204,7 @@ describe("WebFetchTool address guard and pinning", () => {
         addresses = { "odd.example": answer }
         const registry = yield* Tool.Service
 
-        expect((yield* run(registry, { url: "https://odd.example/x", prompt: "q" })).status).toBe("error")
+        expect(yield* run(registry, { url: "https://odd.example/x", prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
         expect(requests).toEqual([])
       }),
     )
@@ -1206,7 +1215,7 @@ describe("WebFetchTool address guard and pinning", () => {
       reset()
       const registry = yield* Tool.Service
       for (const url of ["http://localhost/x", "http://10.0.0.1/x", "http://127.0.0.1:8080/x", "http://[::1]/x"])
-        expect((yield* run(registry, { url, prompt: "q" })).status).toBe("error")
+        expect(yield* run(registry, { url, prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
       expect(requests).toEqual([])
 
       yield* allowLocal
@@ -1223,7 +1232,7 @@ describe("WebFetchTool address guard and pinning", () => {
       yield* allowLocal
       const registry = yield* Tool.Service
       for (const url of ["http://169.254.169.254/latest", "http://169.254.1.1/x", "http://[fd00:ec2::254]/x"])
-        expect((yield* run(registry, { url, prompt: "q" })).status).toBe("error")
+        expect(yield* run(registry, { url, prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
       expect(requests).toEqual([])
     }),
   )
@@ -1244,7 +1253,7 @@ describe("WebFetchTool address guard and pinning", () => {
     Effect.gen(function* () {
       reset()
       const registry = yield* Tool.Service
-      expect((yield* run(registry, { url: "file:///etc/passwd", prompt: "q" })).status).toBe("error")
+      expect(yield* run(registry, { url: "file:///etc/passwd", prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
       expect(requests).toEqual([])
       expect(lookups).toEqual([])
     }),
@@ -1275,7 +1284,7 @@ describe("WebFetchTool URL checks", () => {
         reset()
         const registry = yield* Tool.Service
         expect(yield* run(registry, { url, prompt: "q" })).toEqual(
-          failed("URL must not contain a username or password"),
+          failed("URL must not contain a username or password", "webfetch.refused"),
         )
         expect(assertions).toEqual([])
         expect(requests).toEqual([])
@@ -1288,7 +1297,7 @@ describe("WebFetchTool URL checks", () => {
       const registry = yield* Tool.Service
       const url = (length: number) => "https://example.com/" + "a".repeat(length - "https://example.com/".length)
 
-      expect((yield* run(registry, { url: url(2001), prompt: "q" })).status).toBe("error")
+      expect(yield* run(registry, { url: url(2001), prompt: "q" })).toMatchObject({ status: "error", error: { type: "webfetch.refused" } })
       expect(assertions).toEqual([])
       expect(requests).toEqual([])
       expect((yield* run(registry, { url: url(2000), prompt: "q" })).status).toBe("completed")
@@ -1821,10 +1830,10 @@ describe("WebFetchTool verbatim hosts", () => {
       yield* run(registry, { url: "https://other.example/long", prompt: "q" })
       const unlisted = lastQuery().system
 
-      expect(listed).toContain("code examples")
+      expect(listed).toContain("sample code")
       expect(listed).not.toContain("125 characters")
       expect(unlisted).toContain("125 characters")
-      expect(unlisted).not.toContain("code examples")
+      expect(unlisted).not.toContain("sample code")
       expect(unlisted).toContain("legality")
     }),
   )

@@ -122,6 +122,8 @@ export const Plugin = {
             redirect: "manual",
             ...(place.tls ? { tls: place.tls } : {}),
           }),
+          // The site must not receive Orbit's trace context (traceparent, b3): it would link every hop and call of a run.
+          Effect.provideService(HttpClient.TracerPropagationEnabled, false),
           Effect.catchIf(
             (error) => index < places.length - 1 && isNotConnected(error),
             () => attempt(index + 1),
@@ -166,10 +168,10 @@ export const Plugin = {
 
               // The URL that will be fetched is the one that is asked about, so an http: URL cannot step around a rule
               // written for the https: one.
-              const start = yield* Effect.try({ try: () => prepare(input.url), catch: (error) => error })
+              const start = yield* Effect.try({ try: () => prepare(input.url), catch: refusal })
               const web = yield* Effect.try({
                 try: () => PermissionWeb.request(start.href, "GET"),
-                catch: (error) => error,
+                catch: refusal,
               })
               // The method and the URL are the ones the rules matched and the fetch connects to (no credentials, an
               // ASCII host), so a client shows them rather than the spelling the model chose, which stays in the call's
@@ -190,7 +192,7 @@ export const Plugin = {
               const assertHop = Effect.fnUntraced(function* (from: string, to: string, status: number) {
                 const hopWeb = yield* Effect.try({
                   try: () => PermissionWeb.request(to, "GET"),
-                  catch: (error) => error,
+                  catch: refusal,
                 })
                 yield* assertWeb(hopWeb, {
                   method: hopWeb.metadata.method,
@@ -235,7 +237,12 @@ export const Plugin = {
                   })
                   if (!sameSite(url, next)) return { redirect: { from: url, to: next, status: response.status } }
                   if (hops.length === MAX_REDIRECTS)
-                    return yield* Effect.fail(new Error(`Too many redirects (more than ${MAX_REDIRECTS})`))
+                    return yield* Effect.fail(
+                      new ToolFailure({
+                        message: `Too many redirects (more than ${MAX_REDIRECTS})`,
+                        code: Tool.ErrorCode.WebFetchRedirectLimit,
+                      }),
+                    )
                   yield* assertHop(url.href, next.href, response.status)
                   return yield* follow(next, [...hops, { from: url.href, to: next.href, status: response.status }])
                 })
@@ -337,11 +344,27 @@ export const Plugin = {
                 )
               }
               return finish(answer.answer, { answered: true, url: fetched.finalUrl })
-            }).pipe(Effect.mapError((error) => new ToolFailure({ message: `Unable to fetch ${input.url}`, error }))),
+            }).pipe(
+              // A failure that was given a code where it was made goes out as it is, so a client can tell it from a crash.
+              Effect.mapError((error) =>
+                error instanceof Tool.Error && error.code !== undefined
+                  ? error
+                  : new ToolFailure({ message: `Unable to fetch ${input.url}`, error }),
+              ),
+            ),
         }),
       )
       .pipe(Effect.orDie)
   }),
+}
+
+// The address was turned down before anything was sent: a URL that cannot be fetched, or one the permission layer refuses.
+function refusal(error: unknown) {
+  return new ToolFailure({
+    message: error instanceof Error ? error.message : String(error),
+    code: Tool.ErrorCode.WebFetchRefused,
+    error,
+  })
 }
 
 /**
@@ -395,7 +418,7 @@ function extractionInstructions(listed: boolean) {
     "You answer a question about one web page. The page is between <page> tags and the question follows it.",
     "Answer only from the page and use no outside knowledge. If the page does not contain the answer, say so plainly. Be concise.",
     listed
-      ? "Include the relevant details, code examples and short excerpts of the documentation when they help."
+      ? "The user has chosen to trust this site, so you may quote longer passages and keep sample code or commands intact when they answer the question."
       : "Quote the page only when exact wording matters: keep each quotation to about 125 characters, put it in quotation marks, and paraphrase everything else. Do not reproduce song lyrics, and do not comment on the legality of the request or the answer.",
   ].join("\n")
 }
