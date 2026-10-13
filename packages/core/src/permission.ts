@@ -196,15 +196,32 @@ const layer = Layer.effect(
     const hooks = yield* PluginHooks.Service
     const managed = yield* ManagedPolicy.Service
     const fs = yield* FSUtil.Service
+    const global = yield* Global.Service
     // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
     // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
     const spelled = [location.directory, path.resolve(location.project.directory)]
-    const real = yield* Effect.forEach(spelled, (folder) =>
+    // Any failure keeps the spelled path, not only NotFound: `resolve` dies on a link loop, and a folder that cannot be
+    // resolved must not stop the permission layer from starting.
+    const realOf = (folder: string) =>
       fs.resolve(folder).pipe(
         Effect.map(FSUtil.normalizePath),
-        Effect.orElseSucceed(() => folder),
-      ),
-    )
+        Effect.catchCause(() => Effect.succeed(folder)),
+      )
+    const real = yield* Effect.forEach(spelled, realOf)
+    // Orbit's own folders as spelled and as the disk has them. An allow of Orbit's own is written for both, so a rule the
+    // person wrote for the spelling (a deny on the linked config folder) must also decide a place named by its real path.
+    const orbitSpelled = [global.data, global.tmp, global.config].map((folder) => path.resolve(folder))
+    const orbitReal = yield* Effect.forEach(orbitSpelled, realOf)
+    const respelled = (action: string, resource: string) => {
+      const canonical = ToolNames.canonical(action)
+      if (canonical !== "external_directory" && canonical !== "Read" && canonical !== "Edit") return []
+      return orbitReal.flatMap((folder, index) => {
+        const inside = path.relative(folder, resource)
+        return inside === "" || inside.startsWith("..") || path.isAbsolute(inside)
+          ? []
+          : [path.join(orbitSpelled[index]!, inside)]
+      })
+    }
     const pending = new Map<ID, Pending>()
     // Orbit's own allows are marked where `Agent.folders` makes them, not recognised by value: a copy that an agent took
     // of them, as Explore does, keeps the mark, and a rule of the person's with the same value does not have it.
@@ -229,6 +246,7 @@ const layer = Layer.effect(
       const decided = evaluate(input.action, resource, all, [
         ...(input.aliases?.[resource] ?? []),
         ...resolved(input.action, resource),
+        ...respelled(input.action, resource),
       ])
       if (decided.effect === "deny") return decided
       const led = stricter(input.action, input.leads?.[resource], all)
@@ -287,7 +305,12 @@ const layer = Layer.effect(
       resource: string,
       rules: Permission.Ruleset,
     ): Permission.Effect | undefined {
-      const subjects = [resource, ...resolved(input.action, resource), ...(input.aliases?.[resource] ?? [])]
+      const subjects = [
+        resource,
+        ...resolved(input.action, resource),
+        ...respelled(input.action, resource),
+        ...(input.aliases?.[resource] ?? []),
+      ]
       const own = rules.findLast(
         (rule) =>
           actionMatches(input.action, rule.action) &&

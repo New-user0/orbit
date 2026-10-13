@@ -1786,6 +1786,14 @@ In any settings file, including the managed ones, a malformed field in an `agent
 
 **What to do:** Nothing; fix the field that `orb doctor` names.
 
+### A deny for the linked spelling of Orbit's own folders covers its real path
+
+When the global config, data or temporary folder is reached through a link, Orbit allows it by both spellings. A deny or ask you wrote for the linked spelling (`external_directory ~/orbit-link/* deny`) now also decides a place named by the real path, and a deny written for the real path decides the linked spelling, as it did. Before, naming the real path directly fell through to Orbit's own allow. If a folder cannot be resolved at startup (a link loop), Orbit now keeps the spelled path and starts, instead of failing to build its agent and permission layers.
+
+**Affects:** people whose config, data or temporary folder is a link and who wrote rules about it.
+
+**What to do:** Nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
