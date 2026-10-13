@@ -60,6 +60,7 @@ export type Reason =
   | "unresolved-path"
   | "unvalidatable"
   | "glob-write"
+  | "glob-read"
   | "multiple-cd"
   | "cd-write"
   | "location-path"
@@ -132,6 +133,7 @@ const MESSAGES: Record<Reason, string> = {
   "internal-write": "This command creates git's own files (HEAD, objects, refs or hooks) and then runs git, which could run a planted hook.",
   "unresolved-path": `${COMPLEX}: a file it writes or removes is a network share, a device, a data stream, or a name that could not be resolved.`,
   unvalidatable: `${COMPLEX}: it takes options or input that hide which files it touches.`,
+  "glob-read": `${COMPLEX}: it reads through a wildcard that reaches more files than can be checked against the rules.`,
   "glob-write": `${COMPLEX}: it writes or removes through a wildcard, so the files it reaches are not known.`,
   "multiple-cd": "This command changes folder more than once, so its relative paths cannot be placed.",
   "cd-write": "This command changes folder and then writes, so its relative paths cannot be placed.",
