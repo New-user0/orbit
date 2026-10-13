@@ -921,7 +921,11 @@ export function expansions(analysis: Analysis, cwd: string, shell: string) {
       // path (which the folder reading below turns into home).
       [
         ...(command.name === "set-location" &&
-        !namesTarget(command.arguments.map((argument) => ({ parameter: argument.parameter, bound: argument.bound !== undefined })))
+        !namesTarget(
+          command.arguments
+            .filter((argument) => argument.text !== "--")
+            .map((argument) => ({ parameter: argument.parameter, bound: argument.bound !== undefined })),
+        )
           ? [os.homedir()]
           : []),
         ...command.arguments.flatMap((argument) => {
@@ -1012,21 +1016,22 @@ export function locations(
     const comment = words.findIndex((word, index) => index > 0 && /^(#|<#)/.test(word.raw))
     const operands = words.slice(1, comment === -1 ? undefined : comment)
     // PowerShell 7 goes home for a bare Set-Location (and its aliases cd, chdir, sl).
-    // The raw reading stops a fragment at the first comment opener, so it cannot tell an empty target from a hidden one.
-    // A comment opener beside parameters may hide the target a misread dropped, so only a bare command is home in input that holds one.
+    // The end-of-parameters marker names nothing: later words are positional, and a command with none still goes home.
     const home =
       ps &&
       !raw &&
       target === "set-location" &&
-      !namesTarget(operands.map((item) => parameterOf(item))) &&
-      (operands.length === 0 || !text.includes("<#"))
+      !namesTarget(operands.filter((item) => item.value !== "--").map((item) => parameterOf(item)))
         ? [os.homedir()]
         : []
+    const ender = operands.findIndex((item) => item.value === "--")
     return [...home, ...(ps ? operands : bashOperands(operands).slice(0, 1)).flatMap((item, index, rest) => {
-      const bound = ps ? colonBound(item, rest[index + 1]) : undefined
+      if (ps && index === ender) return []
+      const positional = ps && ender !== -1 && index > ender
+      const bound = ps && !positional ? colonBound(item, rest[index + 1]) : undefined
       if (bound !== undefined && !pathParameter(bound.name)) return []
       const word = bound?.word ?? item
-      if (bound === undefined && /^[-–—―]/.test(item.raw)) return []
+      if (bound === undefined && !positional && /^[-–—―]/.test(item.raw)) return []
       if (ps && (word.value === "" || word.value.includes("$"))) {
         const folder = ShellParse.directoryArgument(word.value, true, cwd, shell)
         if (folder !== undefined) return [folder]
