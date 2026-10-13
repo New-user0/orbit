@@ -151,7 +151,8 @@ The file tools hold a link to the folder in the same way. Until the project is t
 the project leads out of the project as outside it, and ask about the folder it leads to (`external_directory`) as for
 any other path outside the project, which a run with nobody to ask rejects. A file that does not exist yet counts by
 where the nearest folder of its path that does exist leads, so a `write` through a link is asked about too. A trusted
-project follows links as before.
+project follows its links, and asks about the folder they lead to in the same way (see "A link inside a trusted project
+that leads out is asked about like the folder it leads to").
 
 Orbit starts no language server and runs no formatter in a folder that is not trusted, the built-in ones and the ones
 in your own config alike, because they read the folder's own code and config and several of them run it. Both start
@@ -1350,7 +1351,7 @@ revoke it prints removes M and leaves the grant of the repository around it.
 
 ### The status line stays blank until the folder is trusted
 
-The status line command used to run as soon as the terminal UI opened, in the folder it was started in, which for a clone can make the command's own programs (`bun`, `git`, `npx`) run code the clone chose. It now runs no command and draws no line while that folder is untrusted, and starts as soon as it is trusted (`/trust` in the terminal UI, or `orb trust`).
+The status line command used to run as soon as the terminal UI opened, in the folder it was started in, which for a clone can make the command's own programs (`bun`, `git`, `npx`) run code the clone chose. It now runs no command and draws no line while that folder is untrusted, and starts as soon as it is trusted (`/trust` in the terminal UI, or `orb trust`). The command is also given the folder of the session in view as `cwd` and `project_dir`, and runs only while that folder is trusted as well, because a status line that runs `git` there would run the folder's own `core.fsmonitor`.
 
 **Affects:** people with a `status_line` command who open `orb` in a folder they have not trusted.
 
@@ -1725,6 +1726,36 @@ did for `Read` and `Edit` rules. An allow written for the real folder still does
 **Affects:** people with `external_directory` deny or ask rules, and managed settings that carry them.
 
 **What to do:** Nothing. A path that is blocked by its plain spelling is now blocked by every spelling.
+
+### A link inside a trusted project that leads out is asked about like the folder it leads to
+
+Read, Grep, Glob, the language-server tool, Edit, Write, Patch, NotebookEdit and the shell's working folder used to follow
+a link of a trusted project without a question, so `external_directory` rules (the built-in ask, and any deny or ask you
+or your organization wrote) did not apply to a link such as `keys` pointing at `~/.ssh`, while the same folder named
+directly, or by the shell, was asked about. They now ask `external_directory` for the folder the link leads to, and show
+that folder as the place. Orbit's own allows still apply to it, because a trusted project's link is not an escape; the
+extra mark that stops them is only for a project that is not trusted. A link to a network share is left as it was. A read
+through such a link is outside the project, so it no longer picks up instruction files from the folder it leads to, as a
+read of that folder by its own name never did.
+
+**Affects:** people who work in a trusted project that has links to files or folders outside it, and anyone with
+`external_directory` rules.
+
+**What to do:** Answer the new question once, or allow the folder with `external_directory <folder>/* allow`.
+
+### A chain of 41 or more links is judged like a short one
+
+Windows follows a chain of up to 63 links, but Orbit stopped looking after 40 and then treated the path as having no
+share and as lying inside the project. A repository with such a chain could make Orbit connect to a host it chose before
+anyone was asked (when the chain ends at a share, even while its config loads or `orb trust` runs), and a write through a
+chain that ends at a file outside the project was judged to be inside it, so no question was asked and deny rules for the
+real folder did not apply. Orbit now follows up to 80 links, and a chain it gives up on is refused as a share is, or
+reported as a place it could not resolve. A folder named `plugin` or `plugins` in a config directory that is itself a link
+to a share is no longer listed when the trust status is read.
+
+**Affects:** people who open repositories that contain links, on Windows.
+
+**What to do:** Nothing. A chain that long is refused with the same message as a share.
 
 ## Plugins and SDK
 

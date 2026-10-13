@@ -371,9 +371,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `test/plugin-trust.test.ts`, `test/plugin-discovery.test.ts`.
 - The status line command (`status_line.command`, user config): it runs with the terminal UI's own working folder, the
   folder it was started in, and programs such as `bun` or `git` read a `bunfig.toml` preload or a `core.fsmonitor` from
-  there. `Prompt` hands it to `StatusLine` only while `trust.startup.trusted()`, so no command runs and no line is drawn
-  in an untrusted start folder, and it runs again when trust is granted. Proof: `test/status-line-trust.test.tsx` (the
-  command itself and a `bunfig.toml` preload, each with a trusted control run).
+  there. It is also handed the folder of the session in view as `cwd` and `project_dir`, which a status line commonly
+  gives to `git`. `Prompt` hands the command to `StatusLine` only while both `trust.startup.trusted()` and the status of
+  that folder (`trust.folder`) are true, so no command runs and no line is drawn while either is untrusted, and it runs
+  again when trust is granted. Proof: `test/status-line-trust.test.tsx` (the command itself and a `bunfig.toml` preload in
+  the start folder, and `core.fsmonitor` and a `bunfig.toml` preload in the folder it is handed, each with a trusted
+  control run).
 - The trust dialog, bound to the folder in view when it opened: `TrustProvider` and `useTrustPrompt` in
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
@@ -943,6 +946,17 @@ one table covers every spelling.
   https", and `packages/core/test/codemode.test.ts`, "fails a URL that is not http(s) before any permission ask or
   I/O").
 - Mutations: native redirects (11 tests fail), the guard before the ask, the guard removed.
+- A share named through a chain of links (class 6 and 7). Windows follows up to 63 links in one path, and a repository
+  can ship a chain of any length that ends at a share. `LinkShare` follows up to `LinkShare.LIMIT` (80) links, one
+  `readLink` at a time, and a walk that reaches the limit answers `LinkShare.unresolved(file)`, a path that starts with
+  two separators, never "no share": every caller then refuses or skips the path, as it does for a share, instead of
+  opening it. `ProjectTrust.follow`, which decides where a write through a dangling chain lands, ends the same way. The
+  listing of a config directory's `plugin` and `plugins` folders in `ProjectTrust.status` asks `LinkShare` first, since a
+  direct link there is a share too. Proof: `packages/core/test/link-chain.test.ts` (40, 41, 63 and 85 links, for
+  `LinkShare.of` and `ofSync`, `FileAccess.resolve`, `ShellGuard.facts` for an operand and for the workdir, and
+  `ShellTool.concurrent` with a Git Bash context) and `test/config/fingerprint-plugin-share.test.ts` (an untrusted Config
+  load and status, for 1 to 85 links from `.orbit/plugins` and `.orbit/plugin`). Mutation: restoring the old limit of 40
+  with `return undefined` fails every 41, 63 and 85 row.
 
 **Review questions:**
 
