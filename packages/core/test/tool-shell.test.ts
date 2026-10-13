@@ -532,6 +532,27 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
+    // "Always" on a wrapped command saves the wrapper and the program it runs, so the same command repeats without a
+    // question; it does not lift a different program behind the same wrapper (class 8).
+    for (const wrapper of ["timeout 5", "nice", "nohup", "env A=1"])
+      test(`${scanner}: always on ${wrapper} touch y sticks, and ${wrapper} rm x still asks`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const marker = path.join(fixture.active, "marker")
+            const command = `${wrapper} touch y`
+            const first = yield* runPermissionCommand(registry, command, marker, ["always"])
+            expect(first.requests).toHaveLength(1)
+            expect(first.requests[0]!.resources).toContain("touch y")
+            const repeated = yield* runPermissionCommand(registry, command, marker, [])
+            expect(repeated.requests).toEqual([])
+            expect(repeated.exit).toMatchObject({ _tag: "Success", value: { status: "completed" } })
+            yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+            const other = yield* runPermissionCommand(registry, `${wrapper} rm x`, marker, ["reject"])
+            expect(other.requests).toHaveLength(1)
+            expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "x")).exists())).toBe(true)
+          }),
+        ))
+
     // A declaration that prints the environment is a request beside any other command (class 8): a rule written for it
     // applies, and an allow for the other command does not lift it. The secret is what the model would be shown.
     for (const [command, declaration] of [

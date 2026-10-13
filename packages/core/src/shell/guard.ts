@@ -227,8 +227,16 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     if (pattern === undefined) return Effect.succeed({ resources: [], undecided: true })
     const actions: ("Read" | "Edit")[] = operand.role === "source" ? ["Read", "Edit"] : ["Read"]
     return Effect.forEach(place.real, (folder) =>
-      fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot: true, symlink: false }).pipe(
-        Effect.map((found) => (found.length > GLOB_LIMIT ? undefined : found)),
+      // A folder that is a share, or a link the repository ships to one, is never listed: that connects to a host the
+      // repository chose before anything was asked (class 6). The operand is left undecided, so the command asks.
+      (process.platform === "win32" && /^[\\/]{2}/.test(folder) ? Effect.succeed(true) : LinkShare.of(fs, folder).pipe(Effect.map((share) => share !== undefined))).pipe(
+        Effect.flatMap((share) =>
+          share
+            ? Effect.succeed(undefined)
+            : // One more than the limit is enough to know the wildcard reaches too many, so the walk stops there.
+              fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot: true, symlink: false, limit: GLOB_LIMIT + 1 }),
+        ),
+        Effect.map((found) => (found === undefined || found.length > GLOB_LIMIT ? undefined : found)),
         Effect.catch(() => Effect.succeed(undefined)),
         Effect.flatMap((found) =>
           found === undefined
@@ -689,18 +697,27 @@ export function request(
   const save = scan?.commands.map((command) => command.save) ?? []
   // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
   if (resources.length > 0) {
-    // Requests of their own beside the scanned commands (class 8), none with a save:
+    // Requests of their own beside the scanned commands (class 8):
     // - a declaration that prints the environment, so a Bash ask or a rule for it applies and a grant for the other command
     //   does not lift it;
     // - a command that starts with assignments or a wrapper, in the spelling of the program it runs (`FOO=1 rm x` and
-    //   `timeout 5 rm x` as `rm x`), so a deny or ask written for the program meets it. An allow for that spelling lifts
+    //   `timeout 5 rm x` as `rm x`), so a deny or ask written for the program meets it. A grant for that spelling lifts
     //   only this extra request, never the command as written.
-    const extra = analysis.commands.flatMap((command) => {
-      if (PRINTERS.has(command.head) && !assigns(command)) return [command.text.trim()]
+    const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
+      if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
       const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => argv.join(" "))
+      return steps
+        .slice(command.env.length > 0 ? 0 : 1)
+        .map((argv) => ({ resource: argv.join(" "), save: `${ShellParse.prefix(argv).join(" ")} *` }))
     })
-    return { resources: [...resources, ...distinct(extra).filter((item) => item !== "" && !resources.includes(item))], save }
+    const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
+    // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`),
+    // since both spellings were asked about and a repeat must be lifted. The wrapper's own save is the one scanned above,
+    // so `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
+    return {
+      resources: distinct([...resources, ...added.map((item) => item.resource)]),
+      save: [...save, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !save.includes(item))],
+    }
   }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
