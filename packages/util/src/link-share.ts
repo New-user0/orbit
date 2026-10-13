@@ -39,11 +39,27 @@ export const of = (
   depth = 0,
   reads: Reads = new Map(),
 ): Effect.Effect<string | undefined> =>
+  follow(fs, file, depth, reads).pipe(Effect.map((found) => ("share" in found ? found.share : undefined)))
+
+/** Where a path leads: the share it reaches, or the path with every link on it followed (`undefined` off Windows, where nothing is read). */
+export type Followed = { readonly share: string } | { readonly real: string | undefined }
+
+/**
+ * `of`, and when the answer is no share, the path that the links lead to. It is read from the same one walk, so a caller
+ * that goes on to ask what the path is can ask about the end of the chain, which is one step for the file system, and not
+ * about the link, which it follows hop by hop (a chain of 63 links took seconds to stat for each entry that led to it).
+ */
+export const follow = (
+  fs: Reader,
+  file: string,
+  depth = 0,
+  reads: Reads = new Map(),
+): Effect.Effect<Followed> =>
   Effect.gen(function* () {
-    if (process.platform !== "win32") return undefined
-    if (depth >= LIMIT) return unresolved(file)
+    if (process.platform !== "win32") return { real: undefined }
+    if (depth >= LIMIT) return { share: unresolved(file) }
     // Already a share or device spelling: it is the answer, and its root is not read as a folder.
-    if (/^[\\/]{2}/.test(file)) return file
+    if (/^[\\/]{2}/.test(file)) return { share: file }
     const root = path.parse(file).root
     const parts = path.relative(root, file).split(path.sep)
     for (const index of parts.keys()) {
@@ -59,9 +75,10 @@ export const of = (
       // The rest of the path is part of what the link leads to, so that one walk answers for it and the parts after the
       // link are not read again through it.
       const step = leadsTo(named, target, parts.slice(index + 1))
-      return "answer" in step ? step.answer : yield* of(fs, step.leads, depth + 1, reads)
+      if (step.answer !== undefined) return { share: step.answer }
+      return yield* follow(fs, step.leads, depth + 1, reads)
     }
-    return undefined
+    return { real: file }
   })
 
 /** The same question for a caller that cannot yield, such as the scheduling check. Only `readlink` is called, never a call that opens the target. */
@@ -137,7 +154,8 @@ export const scan = (fs: FSUtil.Interface, cwd: string, patterns: readonly strin
     const nocase = process.platform === "win32" || process.platform === "darwin"
     const found: string[] = []
     // The real folders already listed, so that a link back to a folder above (or beside) it is not listed again.
-    const seen = new Set<string>([yield* fs.resolve(cwd)])
+    const key = (file: string) => (nocase ? file.toLowerCase() : file)
+    const seen = new Set<string>([key((yield* followed(fs, cwd, reads)).real)])
     const visit = (directory: string, relative: string, depth: number): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (depth > DEPTH) return
@@ -145,13 +163,14 @@ export const scan = (fs: FSUtil.Interface, cwd: string, patterns: readonly strin
         for (const entry of entries) {
           const full = path.join(directory, entry.name)
           const name = relative === "" ? entry.name : `${relative}/${entry.name}`
-          const kind = entry.type === "symlink" ? yield* linked(fs, full, reads) : entry.type
+          const where = entry.type === "symlink" ? yield* followed(fs, full, reads) : undefined
+          const kind = where === undefined ? entry.type : where.share ? ("other" as const) : yield* kindOf(fs, where.real)
           if (kind === "directory") {
             // A folder that no pattern can match below is not entered, and nor is a package folder, which holds thousands.
             if (!enters(name, patterns, nocase)) continue
-            // Only a link can lead back, and it is known not to lead to a share, so resolving it is safe.
-            const real = entry.type === "symlink" ? yield* fs.resolve(full) : full
-            if (entry.type === "symlink" && seen.has(real)) continue
+            // Only a link can lead back, and it is known not to lead to a share.
+            const real = key(where === undefined ? full : where.real)
+            if (where !== undefined && seen.has(real)) continue
             seen.add(real)
             yield* visit(full, name, depth + 1)
           }
@@ -163,10 +182,19 @@ export const scan = (fs: FSUtil.Interface, cwd: string, patterns: readonly strin
     return found
   })
 
-// What a link entry is, asked only after the link was found not to lead to a share.
-const linked = (fs: FSUtil.Interface, file: string, reads: Reads) =>
+// Where a link entry leads, as one walk of its links: a share, or the end of its chain. Off Windows, where the walk reads
+// nothing, the file system resolves it. The end of a chain is asked about once and not hop by hop, which is what made a
+// listing of 63 links to one folder take seconds.
+const followed = (fs: FSUtil.Interface, file: string, reads: Reads) =>
   Effect.gen(function* () {
-    if (yield* blocked(fs, file, reads)) return "other" as const
+    const found = yield* follow(fs, file, 0, reads)
+    if ("share" in found) return { share: true as const, real: file }
+    return { share: false as const, real: found.real ?? (yield* fs.resolve(file)) }
+  })
+
+// What the end of a chain is. It has no link on it, so asking does not follow one.
+const kindOf = (fs: FSUtil.Interface, file: string) =>
+  Effect.gen(function* () {
     if (yield* fs.isDir(file)) return "directory" as const
     if (yield* fs.isFile(file)) return "file" as const
     return "other" as const
