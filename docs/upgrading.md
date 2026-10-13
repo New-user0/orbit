@@ -464,6 +464,14 @@ scripts that edit executable project config while Orbit runs.
 **What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
 in a folder you have not trusted.
 
+### Config `env` cannot set Orbit's own control variables
+
+`env` in any settings document now skips `ORBIT_MANAGED_DIR`, `ORBIT_TRUST_PROJECT`, `ORBIT_CONFIG`, `ORBIT_CONFIG_DIR`, `ORBIT_CONFIG_CONTENT`, `ORBIT_CONFIG_CONTENT_FILE` and `ORBIT_PASSWORD`, in any spelling, with one "unsupported" diagnostic at the entry's own path. Before, a trusted project's or your own `env` could hand them to every program Orbit starts, so an `orb` started from a hook or an approved command could read another managed folder or trust its folder implicitly. A nested `orb` now inherits these names exactly as the parent process has them.
+
+**Affects:** setups that set one of these names from `env` on purpose.
+
+**What to do:** Export the variable in the environment you start Orbit from instead.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
