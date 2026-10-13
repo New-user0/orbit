@@ -277,3 +277,100 @@ describe("an external_directory rule meets the real folder behind a link inside 
       }),
     )
 })
+
+// A managed allow lifts the built-in `external_directory * ask` for a place it names in any spelling, the link's folder or
+// the real place behind it, however the person answered before: with an allow of their own or an "Always" for the link's
+// folder, the lead onto the real place is still only the default question (class 8). A lead onto an ask the person wrote
+// stays explicit, and a link out of an untrusted project is not lifted at all.
+describe("a managed allow for a link's folder and its real place", () => {
+  const provideWith = (project: string, untrusted: boolean) =>
+    Effect.provide(
+      AppNodeBuilder.build(
+        LayerNode.group([
+          Database.node,
+          Bus.node,
+          SessionStore.node,
+          PermissionSaved.node,
+          Agent.node,
+          PluginHooks.node,
+          ManagedPolicy.node,
+          Permission.node,
+          Global.node,
+          FileAccess.node,
+          ProjectTrust.node,
+        ]),
+        [
+          ...(untrusted ? untrustedProjectNodes : []),
+          Location.node.replace(
+            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
+          ),
+        ],
+      ),
+    )
+  const rows = [
+    { name: "no rule of the person's", person: [], grant: false, untrusted: false, effect: "allow" },
+    { name: "the person's allow for the link's folder", person: ["links-allow"], grant: false, untrusted: false, effect: "allow" },
+    { name: "a saved grant for the link's folder", person: [], grant: true, untrusted: false, effect: "allow" },
+    { name: "the person's ask for the real place and a grant", person: ["real-ask"], grant: true, untrusted: false, effect: "ask" },
+    { name: "a link out of an untrusted project", person: [], grant: false, untrusted: true, effect: "ask" },
+  ] as const
+
+  for (const row of rows)
+    it.live(row.name, () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const project = path.join(tmp, "project")
+        const shared = path.join(tmp, "shared")
+        const links = path.join(tmp, "links")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(project, { recursive: true })
+          await fs.mkdir(shared, { recursive: true })
+          await fs.mkdir(links, { recursive: true })
+          await fs.symlink(shared, path.join(row.untrusted ? project : links, "lnk"), "junction")
+        })
+        const linksRule = `${slash(links)}/*`
+        const person = row.person.map(
+          (kind): Permission.Rule =>
+            kind === "links-allow"
+              ? { action: "external_directory", resource: linksRule, effect: "allow" }
+              : { action: "external_directory", resource: `${slash(shared)}/*`, effect: "ask" },
+        )
+        const decision = yield* Effect.gen(function* () {
+          yield* prepare(project, [])
+          const agents = yield* Agent.Service
+          // A fresh agent has the built-in rules with the default question marked; the person's come after them.
+          yield* agents.transform((editor) => {
+            editor.remove(Agent.ID.make("test"))
+            editor.update(Agent.ID.make("test"), (agent) => {
+              agent.permissions = [...agent.permissions, ...person]
+            })
+          })
+          if (row.grant)
+            yield* (yield* PermissionSaved.Service).add({
+              projectID: Project.ID.global,
+              action: "external_directory",
+              resources: [linksRule],
+            })
+          yield* (yield* ManagedPolicy.Service).set("file", {
+            statements: [],
+            rules: [
+              { action: "external_directory", resource: linksRule, effect: "allow" },
+              { action: "external_directory", resource: `${slash(shared)}/*`, effect: "allow" },
+            ],
+          })
+          const access = yield* FileAccess.Service
+          const file = path.join(row.untrusted ? project : links, "lnk", "x.txt")
+          const targets = row.untrusted ? yield* access.escaped([file]) : [yield* access.resolve({ path: file })]
+          const request = access.externalRequest(targets, {
+            sessionID,
+            agent: Agent.ID.make("test"),
+          })
+          return request === undefined
+            ? undefined
+            : yield* (yield* Permission.Service).ask({ ...request, id: Permission.ID.create() })
+        }).pipe(provideWith(project, row.untrusted))
+        expect(decision).toMatchObject({ effect: row.effect })
+      }),
+      60_000,
+    )
+})
