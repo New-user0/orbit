@@ -30,7 +30,9 @@ import type { PluginInternal } from "../../plugin/internal.js"
  * run is logged and skipped, so a broken script never stops the session.
  *
  * No hook runs while the project's folder is not trusted, the user's and the organization's included, because a hook
- * starts in that folder and the programs it runs read the clone's own files there.
+ * starts in that folder and the programs it runs read the clone's own files there. A PreToolUse hook is a guard, so a
+ * tool call that one applies to is refused meanwhile, with a reason that names the trust commands, instead of going
+ * through as if no hook existed. The other events cannot stop a call and simply wait.
  *
  * A matcher accepts every spelling of a built-in tool's name (`ToolNames`), so a hook written for `shell` still fires
  * for `Bash`. A native hook is told the old name as `tool_name` whenever its matcher accepts it (an absent, `*` or
@@ -82,6 +84,9 @@ interface Outcome {
 }
 
 const NOTHING: Outcome = { context: "" }
+
+const UNTRUSTED_GUARD =
+  "a hook is configured for this call, and hooks wait for the project folder to be trusted; trust the folder (`/trust`, `orb trust` or `--trust`) to run it"
 
 export const Plugin = define({
   id: "orbit.config.lifecycle-hooks",
@@ -200,13 +205,16 @@ export const Plugin = define({
       // A hook starts with the project's folder as its working folder, where bun, npx, git and the like read the
       // repository's own files (a bunfig preload, a package registry, a repository config) before the hook's script
       // runs. Until the person trusts the folder, no hook runs, the user's own and the organization's included.
-      if (!(yield* trust.trusted()))
-        return yield* warnOnce("untrusted", "hooks wait for the project folder to be trusted and did not run", {
-          event,
-        }).pipe(Effect.as(NOTHING))
+      const trusted = yield* trust.trusted()
+      if (!trusted)
+        yield* warnOnce("untrusted", "hooks wait for the project folder to be trusted and did not run", { event })
+      if (!trusted && event !== "PreToolUse") return NOTHING
       const aliases = yield* foreignNames(target)
       const configured = yield* commands(event, target, aliases)
       if (configured.length === 0) return NOTHING
+      // A guard that cannot run is not the same as no guard. PreToolUse is the one event whose hook can stop a call,
+      // so a call that a hook would have judged is refused until the folder is trusted, never let through unjudged.
+      if (!trusted) return { block: UNTRUSTED_GUARD, context: "" }
       const shell = yield* shells.resolve({ priority: "compat" })
       const compat = yield* config.compatEnabled()
       const settingsEnv = location.workspaceID === undefined ? ConfigEnv.resolve(yield* config.entries()) : {}

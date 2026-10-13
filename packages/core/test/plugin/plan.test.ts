@@ -15,9 +15,14 @@ import { SessionEvent } from "@orbit/core/session/event"
 import { SessionInbox } from "@orbit/core/session/inbox"
 import { SessionMessage } from "@orbit/core/session/message"
 import { Tool } from "@orbit/schema/tool"
+import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import fs from "fs/promises"
 import path from "path"
 import { it } from "../lib/effect"
+import { tmpdirScoped } from "../fixture/tmpdir"
 import { host } from "./host"
 
 const sessionID = Session.ID.make("ses_plan_test")
@@ -35,7 +40,7 @@ const agentSelected = (agent: Agent.ID, previous: Agent.ID): SessionEvent.AgentS
 })
 
 /** Runs the plan plugin against stubbed domains, capturing persisted reminders and the context hook. */
-const run = Effect.fnUntraced(function* (events: ReadonlyArray<SessionEvent.AgentSelected> = []) {
+const run = Effect.fnUntraced(function* (events: ReadonlyArray<SessionEvent.AgentSelected> = [], planHome = home) {
   const persisted = new Array<string>()
   let contextHook: ((input: SessionContext) => Effect.Effect<void>) | undefined
   let toolHook: ((input: ToolHooks["execute.after"]) => Effect.Effect<void>) | undefined
@@ -107,7 +112,8 @@ const run = Effect.fnUntraced(function* (events: ReadonlyArray<SessionEvent.Agen
       },
     }),
   ).pipe(
-    Effect.provideService(Global.Service, Global.Service.of({ ...Global.make(), home })),
+    Effect.provide(AppNodeBuilder.build(LayerNode.group([FSUtil.node]))),
+    Effect.provideService(Global.Service, Global.Service.of({ ...Global.make(), home: planHome })),
     Effect.provideService(
       Environment.Service,
       Environment.Service.of({ files: Environment.makeFiles(driver), spawner: driver.spawner }),
@@ -263,6 +269,35 @@ describe("plan plugin mutations", () => {
       expect(Permission.evaluate("shell", "git status", planAgent.permissions).effect).toBe("ask")
     }),
   )
+
+  // Deny and ask rules are decided on the real place, so the allow for the folder is also written for it when a link is
+  // part of the folder's path (a linked home, or a linked ~/.orbit) and not otherwise.
+  for (const linkAt of ["home", "orbit", "none"] as const)
+    it.live(`also allows the real path of the Plan directory, link at: ${linkAt}`, () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const realHome = path.join(tmp, "real")
+        const linked = path.join(tmp, "linked")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(realHome, ".orbit"), { recursive: true })
+          if (linkAt === "home") await fs.symlink(realHome, linked, "junction")
+          if (linkAt === "orbit") {
+            await fs.mkdir(path.join(tmp, "dotfiles"))
+            await fs.rmdir(path.join(realHome, ".orbit"))
+            await fs.symlink(path.join(tmp, "dotfiles"), path.join(realHome, ".orbit"), "junction")
+          }
+        })
+        const where = linkAt === "home" ? linked : realHome
+        const { planAgent } = yield* run([], where)
+        const real = yield* Effect.promise(() => fs.realpath(path.join(where, ".orbit")))
+        const folders = new Set(
+          planAgent.permissions.filter((rule) => rule.action === "Edit" && rule.effect === "allow").map((rule) => rule.resource),
+        )
+        expect(folders.has(path.join(where, ".orbit", "plan", "*"))).toBe(true)
+        expect(folders.has(path.join(real, "plan", "*"))).toBe(true)
+        expect(folders.size).toBe(linkAt === "none" ? 1 : 2)
+      }),
+    )
 
   it.effect("marks only its own deny of edits as the mode's, which shell probes skip", () =>
     Effect.gen(function* () {

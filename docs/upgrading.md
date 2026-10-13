@@ -1707,12 +1707,17 @@ and no stdio MCP server starts: it shows as failed with the reason, whatever its
 waiting servers at once, and hooks run from the next event. Remote MCP servers are not held. Before, only the project's
 own hooks waited.
 
+A `PreToolUse` hook is a guard, so it does not just stand aside: while the folder is not trusted, a tool call that one of
+your or your organization's `PreToolUse` hooks applies to is refused, with a reason that names `/trust`, `orb trust` and
+`--trust`, instead of going through as if no hook existed. Calls that no hook applies to run as before, and the other
+events (which cannot stop a call) wait without refusing anything.
+
 **Affects:** people who run `orb run` without `--trust`, the TUI, ACP editors and SDK hosts in a folder they have not
 trusted, with hooks or stdio MCP servers in their user or managed config. A folder that holds nothing back shows no
 trust dialog, so the hooks and servers wait without a prompt.
 
 **What to do:** Trust the folder (`/trust` in the TUI, `orb trust`, or `--trust` on `orb run`) when you want your hooks
-and servers there.
+and servers there, and so that calls your guard hooks cover are judged by them again.
 
 ### An `external_directory` deny or ask also meets the folder a link or junction leads to
 
@@ -2708,7 +2713,9 @@ A link in a trusted project (a symlink or a junction) was followed, but the rule
 
 ### A deny on the place a link leads to now holds for links outside the project, and for rules written relative to it
 
-The check above also applies to a path outside the project that goes through a link (`~/elsewhere/k` leading to `~/.ssh`). A place a link leads to is matched in every spelling a rule can be written in: its real path, the same place under the project's folders as they are spelled, and each of those relative to the session folder (`secrets/*`, `.env`). This holds whether Orbit was started in the project's folder directly or through a link to it, so a link to another folder of the project does not pass a relative or absolute deny or ask. For a place inside the project the last rule that matches any of those spellings decides, so an allow written relative to the project or as the spelled absolute path (`src/*`) covers a link to `src/real-gen` as it did before links were checked. A link that leads out of the project is decided by the folder it leads to: under a broad `Edit * ask`, an allow written for the link's own name (`vendor/*`) does not lift the ask for the folder behind it. For a path outside the project the spelling given counts too, so the Plan agent can still write its plan file when the home folder, or `~/.orbit`, is a link. Absolute rules for a file inside the project now also decide the project-relative path the file tools send, for configured rules as they already did for managed ones. `packages/core/test/permission-leads.test.ts` pins these claims. Read now refuses a `\\?\Volume{...}` or `\\.\Volume{...}` path as a share or device spelling (`file.spelling`), and a device such as `NUL` with the new `file.device` code instead of `unknown`.
+The check above also applies to a path outside the project that goes through a link (`~/elsewhere/k` leading to `~/.ssh`): a deny or an ask written for the real folder holds even when an allow for `~/elsewhere/*` comes after it, in the person's rules and in the managed ones (the rows "a deny or ask for the real place beats a later allow for the link's folder" in `packages/core/test/permission-leads.test.ts`). The Plan agent keeps its plan file when the home folder or `~/.orbit` is a link, because its allow for the plan folder is also written for the folder's real path (`packages/core/test/plugin/plan.test.ts` and the Plan rows of `permission-leads.test.ts`); a link inside the plan folder that leads elsewhere stays denied.
+
+A place a link leads to is matched in its real path, in the same place under the project's folders as they are spelled, and relative to the session folder (`secrets/*`, `.env`), whether Orbit was started in the project's folder or through a link to it, for relative and absolute rules, managed and configured ("the session folder spelled directly or through a link" rows). For a place inside the project the last rule that matches any of those spellings decides, so an allow written as `src/*` or as the absolute path still covers a link to `src/real-gen`. A link that leads out of the project is decided by the folder it leads to: under a broad `Edit * ask`, an allow written for the link's own name (`vendor/*`) does not lift the ask. Read refuses a `\?Volume{...}` or `\.Volume{...}` path as a share or device spelling (`file.spelling`), and a device such as `NUL` with `file.device` instead of `unknown` (`file-access-spelling.test.ts`, `tool-read.test.ts`).
 
 **Affects:** projects with links to folders, and `\\?\` or `\\.\` paths on Windows.
 
