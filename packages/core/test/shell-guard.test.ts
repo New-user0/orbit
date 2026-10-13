@@ -539,7 +539,9 @@ describe("ShellGuard.request", () => {
     Effect.gen(function* () {
       const { analysis, request: asked } = yield* request("Get-ChildItem; Remove-Item x", "pwsh")
       expect(analysis.opaque).toBeDefined()
-      expect(asked).toEqual({ resources: ["Get-ChildItem; Remove-Item x", "Get-ChildItem", "Remove-Item x"], save: [] })
+      expect(asked).toMatchObject({ resources: ["Get-ChildItem; Remove-Item x", "Get-ChildItem", "Remove-Item x"], save: [] })
+      // Each fragment also answers to the cmdlet's aliases, so a rule written with one still meets it.
+      expect(asked?.aliases?.["Remove-Item x"]).toEqual(expect.arrayContaining(["del x", "ri x"]))
     }),
   )
 })

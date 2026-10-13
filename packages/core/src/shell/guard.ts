@@ -686,11 +686,13 @@ function spellings(piece: string, analysis: Analysis) {
   const bare = strip(match[2]!)
   const target = aliasTarget(bare.toLowerCase(), analysis.dialect, process.platform) ?? bare.toLowerCase()
   const rest = piece.slice(match[0].length).trim()
-  const names = distinct([
-    bare,
-    target,
-    ...aliasNames().filter((alias) => aliasTarget(alias, analysis.dialect, process.platform) === target),
-  ]).map((name) => (rest === "" ? name : name + " " + rest))
+  const names = [
+    ...new Map(
+      [bare, target, ...aliasNames().filter((alias) => aliasTarget(alias, analysis.dialect, process.platform) === target)].map(
+        (name) => [name.toLowerCase(), name] as const,
+      ),
+    ).values(),
+  ].map((name) => (rest === "" ? name : name + " " + rest))
   return { piece, names, stripped: bare === match[2] ? undefined : names[0] }
 }
 
