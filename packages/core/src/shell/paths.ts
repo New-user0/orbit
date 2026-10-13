@@ -772,7 +772,11 @@ function outputs(name: string, words: Word[], platform: string): Outputs {
     // Global options come first. `-C` moves the folder that a relative output is written in (each one relative to the one
     // before), and these take their value as the next word, which is not the verb.
     // On Windows a root-relative word and a UNC path are absolute too: they are not joined under `-C`.
-    const rooted = (item: Word) => item.tilde || /^(?:[\/~]|[A-Za-z]:)/.test(item.value) || (platform === "win32" && nodePath.win32.isAbsolute(item.value))
+    // A `~` the shell left alone and, off Windows, an `X:` prefix are ordinary relative names to git.
+    const rooted = (item: Word) =>
+      item.tilde ||
+      item.value.startsWith("/") ||
+      (platform === "win32" && (nodePath.win32.isAbsolute(item.value) || /^[A-Za-z]:/.test(item.value)))
     let folder: Word | undefined
     let verb = -1
     for (let at = 0; at < words.length && verb < 0; at++) {

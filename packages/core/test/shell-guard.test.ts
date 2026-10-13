@@ -913,6 +913,17 @@ describe("ShellGuard.authorize", () => {
     }),
   )
 
+  // A `~` the shell leaves alone (and `C:` off Windows) is a relative name to git, so it lies under the `-C` folder.
+  it.live("a literal ~ or X: output under git -C ../outside asks the folder question and meets an Edit deny", () =>
+    Effect.gen(function* () {
+      for (const text of ["git -C ../outside diff --output='~x'", "git -C ../outside diff --output='~/x'", ...(win ? [] : ["git -C ../outside diff --output=C:x"])]) {
+        expect(Exit.isSuccess(yield* run(text, () => false))).toBe(true)
+        expect([text, asked.map((input) => input.action)]).toEqual([text, expect.arrayContaining(["external_directory"])])
+        expect([text, Exit.isFailure(yield* run(text, (input) => input.action === "Edit"))]).toEqual([text, true])
+      }
+    }),
+  )
+
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
   // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can
   // take seconds on this input, so the time bound is generous.

@@ -42,7 +42,10 @@ const layout = Effect.gen(function* () {
     await fs.mkdir(path.join(project, "many"))
     await fs.writeFile(path.join(project, "secret.txt"), "s")
     await fs.writeFile(path.join(project, "other.txt"), "o")
+    await fs.writeFile(path.join(project, "Zeta.txt"), "z")
     await fs.writeFile(path.join(project, ".env"), "e")
+    await fs.writeFile(path.join(project, "Token.txt"), "t")
+    await fs.writeFile(path.join(project, "_key.txt"), "k")
     await fs.writeFile(path.join(project, "sub", "secret.txt"), "s")
     await fs.mkdir(path.join(project, "src", "a", "b"), { recursive: true })
     await fs.writeFile(path.join(project, "src", "a", "m.ts"), "m")
@@ -205,7 +208,26 @@ describe("a Read deny on a dotfile and a wildcard", () => {
     ["setopt glob''dots; cat *", true, "zsh"],
     ["eval 'shopt -s dotglob'; cat *", true],
     ["bash -c 'shopt -s dotglob; cat *'", true],
+    // Options set where the launch reader consumes them (a nested shell, a wrapper, a trap); real bash 5.2 and zsh 5.9 print .env for each.
+    ["bash -O dotglob -c 'cat *'", true],
+    ["env BASHOPTS=dotglob bash -c 'cat *'", true],
+    ["zsh -o globdots -c 'cat *'", true],
+    ["zsh -4 -c 'cat *'", true],
+    ["trap 'shopt -s dotglob' DEBUG; cat *", true],
+    ["bash -c 'cat *'", false],
     ["cat * | wc -l", false],
+    // Spellings that parsing alone does not name; real bash 5.2 prints .env for each.
+    ["bash -O dotglob -c 'cat *'", true],
+    ["bash +O extglob -c 'cat *'", true],
+    ["bash -o posix -c 'cat *'", true],
+    ["env BASHOPTS=dotglob bash -c 'cat *'", true],
+    ["read GLOBIGNORE <<< x; cat *", true],
+    ["printf -v GLOBIGNORE x; cat *", true],
+    ["for GLOBIGNORE in x; do cat *; done", true],
+    ["let GLOBIGNORE=1; cat *", true],
+    ["trap 'shopt -s dotglob' DEBUG; cat *", true],
+    ["zsh -o globdots -c 'cat *'", true],
+    ["bash -c 'cat *'", false],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, stopped, shell] of rows)
@@ -228,6 +250,16 @@ describe("a Read deny and a double star", () => {
     ["shopt -s globstar && grep -n foo src/**/*.ts", true],
     ["grep -n foo src/**/*.ts", true, "zsh"],
     ["grep -n foo src/*/*.ts", false],
+    ["bash -O globstar -c 'cat src/**/n.ts'", true],
+    // zsh reads three stars before a slash as a recursion that follows links; bash reads them as one star.
+    ["cat ***/n.ts", true, "zsh"],
+    ["cat src/***/n.ts", true, "zsh"],
+    ["shopt -s globstar; cat ***/n.ts", false],
+    ["bash -O globstar -c 'grep -n foo src/**/*.ts'", true],
+    ["env BASHOPTS=globstar bash -c 'grep -n foo src/**/*.ts'", true],
+    ["trap 'shopt -s globstar' DEBUG; grep -n foo src/**/*.ts", true],
+    ["zsh -c 'grep -n foo src/**/*.ts'", true],
+    ["bash -c 'grep -n foo src/**/*.ts'", false],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, stopped, shell] of rows)
@@ -237,6 +269,59 @@ describe("a Read deny and a double star", () => {
           expect(Exit.isFailure(exit)).toBe(stopped)
         }),
       )
+})
+
+// Bracket classes that real bash 5.2 expands to the denied file (class 8). `Zeta.txt` is the case-folding row: a class or a
+// negation must not lose a capital because the name was lower-cased first.
+describe("a Read deny and a bracket class", () => {
+  // [command, denied file, whether the deny stops it]
+  const rows: [string, string, boolean][] = [
+    ["cat [[:graph:]]*", "secret.txt", true],
+    ["cat [[:word:]]*", "secret.txt", true],
+    ["cat [[:ascii:]]*", "secret.txt", true],
+    ["cat [[:print:]]*", "secret.txt", true],
+    ["cat [[=s=]]ecret.txt", "secret.txt", true],
+    ["cat [[.s.]]ecret.txt", "secret.txt", true],
+    ["cat [[:upper:]]*", "Zeta.txt", true],
+    ["cat [[:upper:]]eta.txt", "Zeta.txt", true],
+    ["cat [!z]*", "Zeta.txt", true],
+    ["cat [^z]*", "Zeta.txt", true],
+    ["cat [A-z]eta.txt", "Zeta.txt", true],
+    // A form the matcher does not know matches any character, so the word still reaches the file.
+    ["cat [[:nope:]]*", "secret.txt", true],
+    ["cat [[=ss=]]ecret.txt", "secret.txt", true],
+    ["cat Z*", "secret.txt", false],
+    ["cat Q*", "Zeta.txt", false],
+  ]
+  for (const layer of ["managed", "configured"] as const)
+    for (const [command, file, stopped] of rows)
+      it.live(`${layer}: ${command} ${stopped ? "is stopped" : "is not stopped"} under a deny of ${file}`, () =>
+        Effect.gen(function* () {
+          const { exit } = yield* run(command, layer, { action: "Read", resource: `<project>/${file}`, effect: "deny" })
+          expect(Exit.isFailure(exit)).toBe(stopped)
+        }),
+      )
+})
+
+// Repeated `**` over a deep chain used to multiply the work by about six per segment (zsh, or bash after an assignment). The
+// words are decided within a second whatever the shell; the test has its own deadline since the run is asynchronous.
+describe("a Read deny and a repeated double star", () => {
+  const deep = async (project: string) => {
+    await fs.mkdir(path.join(project, ...Array.from({ length: 30 }, () => "d")), { recursive: true })
+  }
+  const word = "**/**/**/**/**/**/**/**/zz"
+  for (const [command, shell] of [
+    [`cat ${word}`, "zsh"],
+    [`X=1; cat ${word}`, "sh"],
+  ] as const)
+    it.live(`${command.slice(0, 20)} is decided within a second (${shell})`, () =>
+      Effect.gen(function* () {
+        const started = Date.now()
+        const { exit } = yield* run(command, "configured", { action: "Read", resource: "<project>/secret.txt", effect: "deny" }, shell, deep)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        expect(Date.now() - started).toBeLessThan(1_000)
+      }),
+    )
 })
 
 // On Windows a path through a link to a share connects to the host. Each row listens on its own port (the WebDAV client
@@ -316,6 +401,22 @@ describe("a Read deny and a wildcard that cannot be expanded", () => {
     // (5) a character class holds a `:` that is no stream name
     ["cat secre[[:alpha:]].txt", "<project>/secret.txt", true],
     ["cat oth[[:alpha:]]r.txt", "<project>/secret.txt", false],
+    // (6) classes the shell reads by case, by range or by a name the old library knew, each with a plain-name control
+    ["cat Token.txt", "<project>/Token.txt", true],
+    ["cat [[:upper:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:graph:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:print:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:upper:][:digit:]]oken.txt", "<project>/Token.txt", true],
+    ["cat [[:digit:]]oken.txt", "<project>/Token.txt", false],
+    ["cat _key.txt", "<project>/_key.txt", true],
+    ["cat [A-z]key.txt", "<project>/_key.txt", true],
+    ["cat [0-9]key.txt", "<project>/_key.txt", false],
+    // (7) a negated class under case folding, and a class named after an Object.prototype key (no defect, decided)
+    ["cat [!x]ecret.txt", "<project>/secret.txt", true],
+    ["cat [^[:upper:]]ecret.txt", "<project>/secret.txt", true],
+    ["cat [[:constructor:]]ecret.txt", "<project>/secret.txt", true],
+    ["cat [[:__proto__:]]ecret.txt", "<project>/secret.txt", true],
+    ["cat [[:toString:]]ecret.txt", "<project>/secret.txt", true],
   ]
   for (const layer of ["managed", "configured"] as const)
     for (const [command, resource, stopped] of rows)
