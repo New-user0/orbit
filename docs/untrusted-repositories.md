@@ -1942,7 +1942,7 @@ fixes it or asks.
   control (the link rows and the deny row also assert that only `readLink` names the link or a path below it, which the
   recorded drive path would otherwise hide from the share check); the link rows need Developer Mode and fail instead of passing without it. The `orb acp` table in
   `permission-files.subprocess.test.ts` crosses every row of `linkRows` with the six link targets untrusted, and the
-  first with the person's deny and with a trusted control. What remains: a share named in a shell command's text
+  first with the person's deny and, trusted, with a control that expects one folder question naming the share (answered once and rejected, nothing opened on a reject). What remains: a share named in a shell command's text
   directly, which is asked about as the shell asks, or in a path that a loader other than the file tools reads, such
   as a `{file:path}` reference, and a mapped network drive, which is a drive letter.
   The file tools (Write, NotebookEdit, Patch) take a file's lock only after `FileAccess` has checked the path, because the lock key

@@ -959,29 +959,36 @@ for (const row of linkRows)
         ),
       90_000,
     )
-    // The owner trusted the folder: its links are its own, so no spelling refuses the call and no folder is asked about.
-    test.concurrent(
-      `a trusted ${row.name} through a repository link to ${share.name} is not refused and asks no folder question (control)`,
-      () =>
-        approval(
-          {
-            tool: row.tool,
-            rule: row.rule,
-            shell: "shell" in row ? row.shell : undefined,
-            trusted: true,
-            reply: "once",
-            args: () => row.args,
-            setup: shareLinkSetup(share.target),
-          },
-          (run) => {
-            expect(toolResult(run)).not.toContain("file.spelling")
-            expect(
-              run.permissions.filter((item) => String(item.toolCall.title).includes("external directory")),
-            ).toEqual([])
-          },
-        ),
-      90_000,
-    )
+    // The owner trusted the folder (2026-10-13: a trusted folder asks before a tool touches a link to a share): no
+    // spelling refuses the call, and one folder question names the share. A reject keeps everything unopened.
+    for (const reply of ["once", "reject"] as const)
+      test.concurrent(
+        `a trusted ${row.name} through a repository link to ${share.name} is not refused and asks one folder question that names the share, answered ${reply} (control)`,
+        () =>
+          approval(
+            {
+              tool: row.tool,
+              rule: row.rule,
+              shell: "shell" in row ? row.shell : undefined,
+              trusted: true,
+              reply,
+              args: () => row.args,
+              setup: shareLinkSetup(share.target),
+            },
+            async (run) => {
+              expect(toolResult(run)).not.toContain("file.spelling")
+              const folder = run.permissions.filter((item) =>
+                String(item.toolCall.title).includes("external directory"),
+              )
+              expect(folder).toHaveLength(1)
+              // The question shows the share as the request resolved it, in forward slashes.
+              expect(String(folder[0]?.toolCall.title)).toContain(`//localhost/${run.root[0]}$/`)
+              expect(folder[0]?.toolCall.locations?.[0]?.path).toStartWith(`//localhost/${run.root[0]}$/`)
+              if (reply === "reject") expect(await row.acted(run.root, run.bodies)).toBe(false)
+            },
+          ),
+        90_000,
+      )
   }
 
 type Run = {
