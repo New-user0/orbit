@@ -99,3 +99,54 @@ describe("Project.resolve and a folder with .hg that is not trusted", () => {
       60_000,
     )
 })
+
+// Class 5 and class 3 (round 7): `.hg/orbit` is a file the folder supplies, and Orbit never writes it. An untrusted folder
+// must not choose its project ID with it (`global`, another project's ID, a path), and a trusted one keeps a valid one.
+describe("a shipped .hg/orbit", () => {
+  const other = "a".repeat(40)
+  const own = "b".repeat(40)
+  const spellings = [
+    ["global", "global"],
+    ["another project's ID", other],
+    ["a path out of the data folder", "../".repeat(40) + "elsewhere"],
+    ["a short hash", "abc123"],
+  ] as const
+  const plantId = (project: string, id: string) => Effect.promise(() => Bun.write(path.join(project, ".hg", "orbit"), id + "\n"))
+
+  for (const [name, id] of spellings)
+    untrusted.live(
+      `an untrusted folder gets its own ID, not ${name}`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* fakeHg
+          yield* plantId(found.project, id)
+          const result = yield* (yield* Project.Service).resolve(AbsolutePath.make(found.project))
+          expect(result.id).not.toBe(Project.ID.make(id))
+          expect(result.id).toMatch(/^[0-9a-f]{40}$/)
+        }),
+      60_000,
+    )
+
+  trusted.live(
+    "a trusted folder keeps a valid cached ID (control)",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* fakeHg
+        yield* plantId(found.project, own)
+        expect((yield* (yield* Project.Service).resolve(AbsolutePath.make(found.project))).id).toBe(Project.ID.make(own))
+      }),
+    60_000,
+  )
+
+  for (const [name, id] of spellings.filter(([, id]) => id !== other && id !== "global"))
+    trusted.live(
+      `a trusted folder drops ${name}, which is not an ID of the shape Orbit makes`,
+      () =>
+        Effect.gen(function* () {
+          const found = yield* fakeHg
+          yield* plantId(found.project, id)
+          expect((yield* (yield* Project.Service).resolve(AbsolutePath.make(found.project))).id).not.toBe(Project.ID.make(id))
+        }),
+      60_000,
+    )
+})
