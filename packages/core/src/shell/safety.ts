@@ -606,7 +606,7 @@ function dynamicGitDir(command: Command) {
       const next = words[++index]
       if (next !== undefined && !next.literal) return true
     } else if (!word.value.startsWith("-")) break
-    else if (["-c", "--work-tree", "--namespace", "--exec-path"].includes(word.value)) index++
+    else if (["-c", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source", "--shallow-file"].includes(word.value)) index++
   }
   return false
 }

@@ -269,9 +269,11 @@ const layer = Layer.effect(
       ])
       if (decided.effect === "deny") return decided
       const led = stricter(input.action, input.leads?.[resource], all)
-      return led === "deny" || (led === "ask" && decided.effect === "allow")
-        ? ({ action: input.action, resource: "*", effect: led } satisfies Permission.Rule)
-        : decided
+      if (led.effect === "deny") return { action: input.action, resource: "*", effect: "deny" } satisfies Permission.Rule
+      if (led.effect !== "ask" || decided.effect !== "allow") return decided
+      const rule = { action: input.action, resource: "*", effect: "ask" } satisfies Permission.Rule
+      // A lead that only the built-in `external_directory * ask` decided is still the default question.
+      return led.defaulted ? Agent.defaultAsk(rule) : rule
     }
     let closed = false
 
@@ -336,7 +338,7 @@ const layer = Layer.effect(
           subjects.some((subject) => Wildcard.match(subject, rule.resource)),
       )?.effect
       if (own === "deny") return own
-      const led = stricter(input.action, input.leads?.[resource], rules)
+      const led = stricter(input.action, input.leads?.[resource], rules).effect
       return led === "deny" || (led === "ask" && own !== "ask") ? led : own
     }
 
@@ -367,12 +369,15 @@ const layer = Layer.effect(
             : [relative.replaceAll("\\", "/")]
         })
         const subjects = [...places, ...relatives]
-        const effect = rules.findLast(
+        const rule = rules.findLast(
           (rule) => actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
-        )?.effect
-        return effect === "deny" || effect === "ask" ? [effect] : []
+        )
+        return rule?.effect === "deny" || rule?.effect === "ask" ? [rule] : []
       })
-      return effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : undefined
+      if (effects.some((rule) => rule.effect === "deny")) return { effect: "deny" as const, defaulted: false }
+      if (effects.length === 0) return { effect: undefined, defaulted: false }
+      // `defaulted`: every ask came from the built-in default, none from a rule the person or a project wrote.
+      return { effect: "ask" as const, defaulted: effects.every((rule) => Agent.isDefaultAsk(rule)) }
     }
 
     function anyDenied(
@@ -410,7 +415,8 @@ const layer = Layer.effect(
       const all = [...rules, ...approvals]
       const decisions = input.resources.map((resource) => decide(input, resource, rules, approvals))
       const effect: Permission.Effect = decisions.some((rule) => rule.effect === "ask") ? "ask" : "allow"
-      // An ask that a rule wrote (yours, the project's, an agent's built-in `.env` ask, a grant's lead) is explicit.
+      // An ask that a rule wrote (yours, the project's, an agent's built-in `.env` ask) is explicit, and so is a lead onto
+      // such a rule (a grant's lead onto the person's ask). A lead onto the built-in default ask is not.
       // The built-in `external_directory * ask` of every agent is the default question, so it counts like the fallthrough.
       const explicit = decisions.some(
         (rule) => rule.effect === "ask" && !isFallthrough(rule) && !Agent.isDefaultAsk(rule),
