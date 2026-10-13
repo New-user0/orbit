@@ -2,6 +2,7 @@ export * as WebSearchExa from "./exa.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { Effect, Schema, Scope } from "effect"
+import { untraced } from "./untraced.js"
 import { HttpClient } from "effect/unstable/http"
 import { WebSearchMcp } from "./mcp.js"
 
@@ -25,7 +26,7 @@ const McpOutput = Schema.Struct({
 export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
   id: "orbit.websearch.exa",
   effect: Effect.fn("WebSearchExa.Plugin")(function* (ctx) {
-    const http = yield* HttpClient.HttpClient
+    const http = untraced(yield* HttpClient.HttpClient)
     yield* ctx.integration.transform((editor) => {
       editor.update("exa", (integration) => (integration.name = "Exa"))
       editor.method.update({

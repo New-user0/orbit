@@ -52,6 +52,29 @@ describe("built-in web search providers", () => {
     )
   })
 
+  ;[
+    WebSearchExa.Plugin,
+    WebSearchParallel.Plugin,
+    WebSearchFirecrawl.Plugin,
+    WebSearchTavily.Plugin,
+    WebSearchTinyFish.Plugin,
+  ].forEach((plugin) => {
+    it.effect(`sends no trace context to the provider for ${plugin.id}`, () =>
+      Effect.gen(function* () {
+        const integrations = yield* Integration.Service
+        const websearch = yield* WebSearch.Service
+        yield* plugin.effect(host({ integration: integrationHost(integrations), websearch: webSearchHost(websearch) }))
+        yield* websearch.select("random")
+        // The answer may not parse for every provider; what was sent is what matters.
+        yield* websearch.query({ query: "tracing" }).pipe(Effect.exit)
+        expect(requests.length).toBeGreaterThan(0)
+        requests.forEach((request) =>
+          expect(Object.keys(request.headers).filter((name) => /^(traceparent|tracestate|b3|x-b3-.*)$/i.test(name))).toEqual([]),
+        )
+      }),
+    )
+  })
+
   it.effect("registers a provider without an integration", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

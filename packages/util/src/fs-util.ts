@@ -164,12 +164,14 @@ export namespace FSUtil {
 
       const up = Effect.fn("FileSystem.up")(function* (options: UpOptions) {
         const result: string[] = []
+        // Links are read once for the whole walk, so each folder asks only about its own names.
+        const reads: LinkShare.Reads = new Map()
         let current = options.start
         while (true) {
           for (const target of options.targets) {
             const search = join(current, target)
             // A marker that is a link to a share is not a marker: looking at it would connect to the share.
-            if (yield* LinkShare.blocked(fs, search)) continue
+            if (yield* LinkShare.blocked(fs, search, reads)) continue
             const found =
               options.type === "file"
                 ? yield* isFile(search)

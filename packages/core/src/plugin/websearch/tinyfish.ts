@@ -2,6 +2,7 @@ export * as WebSearchTinyFish from "./tinyfish.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { Effect, Option, Schema, Scope } from "effect"
+import { untraced } from "./untraced.js"
 import { HttpClient } from "effect/unstable/http"
 import { App } from "../../app.js"
 import { WebSearchMcp } from "./mcp.js"
@@ -32,7 +33,7 @@ const decodeSearchResponse = Schema.decodeUnknownOption(SearchResponse)
 export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
   id: "orbit.websearch.tinyfish",
   effect: Effect.fn("WebSearchTinyFish.Plugin")(function* (ctx) {
-    const http = yield* HttpClient.HttpClient
+    const http = untraced(yield* HttpClient.HttpClient)
     yield* ctx.integration.transform((editor) => {
       editor.update("tinyfish", (integration) => (integration.name = "TinyFish"))
       editor.method.update({

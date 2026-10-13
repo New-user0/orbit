@@ -2774,11 +2774,15 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone by
-every loader before anything is asked: `.orbit`, the orbit files, the compatibility roots, the MCP file, settings files,
-the commands, agents, skills and plugin folders, `{file:}` references and instruction markers. Folders are listed
-without following links, and a link inside them is entered only after its target is known not to be a share (in a
-trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer.
+In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone by
+the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts` pin, before anything is asked:
+`.orbit`, the compatibility roots and the MCP file in config discovery, settings files, `{file:}` references, instruction
+markers, the commands, agents, skills and plugin source folders, the terminal UI's and Mini's custom themes
+(`.orbit/themes`), and the run store that every `orb flow` command that reads it opens (`.orbit/runs.db`). Folders are
+listed without following links, and a link inside them is entered only after its target is known not to be a share (in a
+trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer. A
+theme or a run store behind such a link is skipped, with one line in the log, and `orb flow` stops with a message that
+names the store. Not covered: the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
 
 A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
 for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
@@ -2789,6 +2793,17 @@ so it can no longer be taken for a path inside the working folder.
 
 **What to do:** Nothing; use the share's drive path, or copy the files into the project, if a loader should read them.
 
+### Mercurial is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and Mercurial loads the
+`[extensions]` and `[hooks]` of that folder's own `.hg/hgrc` into the command. It is now run only in a folder you trust.
+Until then such a project has the shared `global` ID, as it does when `hg` is not installed, and a trusted folder
+runs `hg log` as before.
+
+**Affects:** Mercurial users who open a clone before trusting it.
+
+**What to do:** Nothing; trust the folder.
+
 ### Declarations that print the environment ask like any command
 
 `export -p`, a bare `export`, `declare` or `typeset` (with or without `-p`, `-f`, `-F`), a bare `local` or `readonly`, and any of them with a print or function flag list every variable with its value, which would send credentials in the environment to the model. They are now shell requests that a `Bash` rule (yours or your organization's) can allow, ask about or deny. Declarations that only set named variables (`export A=1`, `declare -x B=2`, `export A`) and `unset`, `cd`, `pushd` and `popd` still run without a question.
@@ -2798,3 +2813,30 @@ A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network 
 **Affects:** anyone who runs `export -p`, `declare -p` or similar from the shell tool under a rule that allowed them silently, and Windows users who open a folder that holds such links.
 
 **What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.
+
+### Web tools refuse bad searches with a type, send no trace headers, and Read keeps folders and long lines in bounds
+
+- `WebSearch` refuses a query shorter than 2 characters (type `tool.input-invalid`) and a call that gives both
+  `allowedDomains` and `blockedDomains` (type `websearch.invalid`). Both are refused before the permission request, the
+  consent form or any provider call, so nothing is asked or sent. Before, a one-character query was sent to the provider
+  and the blocked list silently won over the allowed one.
+- `WebFetch` refusals now carry a type: `webfetch.refused` for a URL that cannot be fetched (not http or https,
+  credentials, longer than 2,000 characters, a host with `*`) and for an address the address guard blocks, and
+  `webfetch.redirect-limit` for more than 10 same-site redirects. Code Mode `fetch` uses `webfetch.refused` for the same
+  refusals. Before, they arrived as `unknown` or `tool.execution`. Failures that are not refusals (a status error, a
+  timeout, an unsupported content type) keep their old type.
+- `WebFetch` and the web search providers no longer send `traceparent`, `tracestate` or `b3` headers to the sites and
+  providers they contact, on the first request or on a redirect hop. Requests to model providers are not affected.
+- `Read` of a folder now stays within about 25,000 tokens, like a file: a long listing is cut before the entry that
+  would pass the budget, with the usual `Continue reading with offset:` note.
+- `Read` of a file with very long lines, or none, no longer slows down with the file's size or holds the whole file in
+  memory. The part of a line past what a page can show is skipped as it is read; a null byte in it still makes the file
+  binary.
+- The note for a repeat read of an unchanged range and the note after a resized image are worded differently
+  ("this range has not changed since you last read it ..." and "[Shown at W x H px; the file itself is ...]"), and the
+  extraction instruction for a host in `webfetch.verbatim_hosts` is reworded. The meaning is the same.
+
+**Affects:** clients and hooks that match on the error type of a failed `WebSearch` or `WebFetch` call or on the exact
+wording of those notes, and models that sent a one-character query or both domain lists.
+
+**What to do:** Nothing. Send one domain list per search.
