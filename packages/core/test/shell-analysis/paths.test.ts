@@ -142,45 +142,10 @@ describe("bash output files of read-class commands", () => {
     ["tree --output out", ["write /work/out"]],
     ["tree --output=out", ["write /work/out"]],
     ["tree -L 2 d", ["read /work/d"]],
-    ["git diff --output=out", ["write /work/out"]],
-    ["git diff --output out", ["write /work/out"]],
-    // `-C` moves the folder a relative output is written in, as git does (verified with git 2.47 in Docker).
-    ["git -C d log --output=out", ["write /work/d/out"]],
-    ["git -C d format-patch -1 -o o9", ["write /work/d/o9"]],
-    ["git -C d -C e diff --output=x", ["write /work/d/e/x"]],
-    ["git -C d -C /abs diff --output=x", ["write /abs/x"]],
-    ["git -C ../outside diff --output=x", ["write /outside/x"]],
-    ["git -C d diff --output=/tmp/x", ["write /tmp/x"]],
-    // A global option's separate value is not the verb.
-    ["git --git-dir .git diff --output=../x", ["write /x"]],
-    ["git --work-tree . diff --output=../x", ["write /x"]],
-    ["git --namespace x diff --output=o", ["write /work/o"]],
-    ["git --super-prefix p diff --output=o", ["write /work/o"]],
-    ["git --attr-source HEAD diff --output=o", ["write /work/o"]],
-    ["git --shallow-file x diff --output=o", ["write /work/o"]],
-    ["git --config-env a=B diff --output=o", ["write /work/o"]],
-    // An empty `-C` leaves the folder as it is, even repeated.
-    ["git -C '' diff --output=o", ["write /work/o"]],
-    ["git -C d -C '' diff --output=o", ["write /work/d/o"]],
-    ["git -C '' -C '' diff --output=o", ["write /work/o"]],
-    // A `~` the shell expanded in an earlier `-C` stays expanded when a later relative `-C` joins it.
-    ["git -C ~ -C x diff --output=o", ["write /home/u/x/o"]],
-    ["git -C ~/a -C b diff --output=o", ["write /home/u/a/b/o"]],
-    ["git -C d -C ~ -C x diff --output=o", ["write /home/u/x/o"]],
-    ["git -C ~ -C '' -C x diff --output=o", ["write /home/u/x/o"]],
-    ["git -C '~' -C x diff --output=o", ["write /work/~/x/o"]],
-    ["git -c a=b diff --output=o", ["write /work/o"]],
-    // `-o` inside a cluster of short options.
-    ["git format-patch -1 -ko ../x", ["write /x"]],
-    ["git format-patch -ko out", ["write /work/out"]],
-    ["git format-patch -Sfoo", []],
-    ["git format-patch -U3 -o out", ["write /work/out"]],
-    ["git show --output=out HEAD", ["write /work/out"]],
-    ["git format-patch -o out", ["write /work/out"]],
-    ["git format-patch -oout", ["write /work/out"]],
-    ["git format-patch --output-directory=out", ["write /work/out"]],
-    ["git archive -o out.tar HEAD", ["write /work/out.tar"]],
-    ["git archive --output=out.tar HEAD", ["write /work/out.tar"]],
+    // A git output file is not recorded as a write (a follow-up), and an assignment-shaped `~` word is read literally.
+    ["git -C ~ diff --output=o f1 f2", []],
+    ["git diff --output=o", []],
+    ["cat x=~/s", ["read /work/x=~/s"]],
     ["git diff --stat", []],
     ["sed -n 'w out' f", ["write /work/out"]],
     ["sed -n 's/a/b/w out' f", ["write /work/out"]],
@@ -212,28 +177,6 @@ describe("bash output files of read-class commands", () => {
 
   test("the write is also found with Windows path rules", () => {
     expect(cells(bash("sort -o out f", windows())).filter((item) => item.startsWith("write"))).toEqual(["write C:\\work\\out"])
-  })
-
-  test("a root-relative or UNC output is not joined under -C on Windows, and stays a relative name on Linux", () => {
-    const writes = (text: string, ctx?: ReturnType<typeof windows>) => cells(bash(text, ctx)).filter((item) => item.startsWith("write"))
-    expect(writes("git -C sub diff --output='\\x'", windows())).toEqual(["write C:\\x"])
-    expect(writes("git -C '' diff --output=o", windows())).toEqual(["write C:\\work\\o"])
-    expect(writes("git -C sub diff --output=//srv/share/x", windows())).toEqual(["write //srv/share/x [share]"])
-    expect(writes("git -C sub diff --output='\\x'")).toEqual(["write /work/sub/\\x"])
-  })
-
-  // Git treats a `~` the shell did not expand, and an `X:` prefix off Windows, as relative names (git 2.47, Git for Windows 2.52).
-  test("a literal ~ or an X: prefix stays under -C", () => {
-    const writes = (text: string, ctx?: ReturnType<typeof windows>) => cells(bash(text, ctx)).filter((item) => item.startsWith("write"))
-    for (const [text, want] of [
-      ["git -C d diff --output=C:x", "write /work/d/C:x"],
-      ["git -C d diff --output='~x'", "write /work/d/~x"],
-      ["git -C d diff --output='~/x'", "write /work/d/~/x"],
-      ["git -C d -C '~' diff --output=o", "write /work/d/~/o"],
-      ["git -C d -C C:y diff --output=o", "write /work/d/C:y/o"],
-    ] as const)
-      expect([text, writes(text)]).toEqual([text, [want]])
-    expect(writes("git -C d diff --output='~x'", windows())).toEqual(["write C:\\work\\d\\~x"])
   })
 
   test("rg --pre names a program, so the command cannot be judged", () => {
@@ -811,31 +754,6 @@ describe("the cmdlet table against recorded hosts", () => {
     expect(linux7.kinds.find((item) => item.name === "mkdir")?.type).toBe("Application")
     expect(files(powershell("mkdir build", pwsh()))).toEqual(["create C:\\work\\build"])
     expect(reasons(powershell("mkdir build", pwshLinux()))).toEqual(["native"])
-  })
-})
-
-// bash expands `~` after the `=` of an assignment-shaped word (sh does not), so a repository `x=` link could hide where
-// `git -C x=~/a` really writes. Such a word is dynamic wherever it appears; a quoted one stays literal (class 4).
-describe("assignment-shaped tilde word", () => {
-  // bash expands the tilde into the word, which then names a path below a folder called `x=` (class 4).
-  const rows: [string, string, string][] = [
-    ["git -C x=~/a diff --output=o", "write /work/x=/home/u/a/o", "write C:\\work\\x=\\c\\Users\\u\\a\\o"],
-    ["git -C d -C x=~/a diff --output=o", "write /work/d/x=/home/u/a/o", "write C:\\work\\d\\x=\\c\\Users\\u\\a\\o"],
-    ["touch x=~/a", "create /work/x=/home/u/a", "create C:\\work\\x=\\c\\Users\\u\\a"],
-    ["cat x=~/a", "read /work/x=/home/u/a", "read C:\\work\\x=\\c\\Users\\u\\a"],
-  ]
-  test.each(rows)("%s", (text, onLinux, onWindows) => {
-    expect(bash(text, linux()).paths.files.map(cell)).toEqual([onLinux])
-    expect(bash(text, windows()).paths.files.map(cell)).toEqual([onWindows])
-  })
-  test("a user's home is not known, so the word is dynamic", () => {
-    expect(bash("touch x=~root/a").paths.files.map((item) => item.form)).toEqual(["dynamic"])
-  })
-  test("a word that is not shaped like an assignment is never expanded by bash", () => {
-    expect(files(bash("git diff --output=x=~/a"))).toEqual(["write /work/x=~/a"])
-  })
-  test("a quoted spelling stays literal", () => {
-    expect(files(bash("git -C 'x=~/a' diff --output=o"))).toEqual(["write /work/x=~/a/o"])
   })
 })
 

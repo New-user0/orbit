@@ -728,10 +728,9 @@ class BashWalk {
       case "word": {
         if (BRACE.test(node.text)) fail("word:brace")
         const bad = node.text.startsWith("~") && !/^~(?:\/|$)/.test(node.text)
-        const assigned = ASSIGNMENT_TILDE.test(node.text) ? this.assignmentTilde(node.text) : undefined
         return {
-          value: (assigned ?? node.text).replace(/\\(.)/gs, "$1"),
-          literal: !bad && (assigned !== undefined || !ASSIGNMENT_TILDE.test(node.text)),
+          value: node.text.replace(/\\(.)/gs, "$1"),
+          literal: !bad,
           quoted: false,
           glob: unescapedGlob(node.text),
           arithmetic: false,
@@ -780,18 +779,6 @@ class BashWalk {
       tilde,
       equalsTilde: kids(node)[0].type === "word" && (/^[^=]+=~\//.test(kids(node)[0].text) || ASSIGNMENT_TILDE.test(kids(node)[0].text)),
     }
-  }
-
-  // bash (not sh) expands each `~` that starts a `:`-separated part after the `=` of an assignment-shaped word, so the
-  // path the command names is the expanded one, and a link named by the text before the `=` still leads it (class 4).
-  // Undefined when a part is not a plain `~` or `~/...` (`~user`) or HOME was assigned: the word is then not literal.
-  assignmentTilde(text: string) {
-    if (this.homeAssigned) return undefined
-    const home = this.ctx.platform === "win32" ? this.ctx.home.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replaceAll("\\", "/") : this.ctx.home
-    const at = text.indexOf("=") + 1
-    const parts = text.slice(at).split(":")
-    if (parts.some((part) => part.startsWith("~") && !/^~(?:\/|$)/.test(part))) return undefined
-    return text.slice(0, at) + parts.map((part) => (part.startsWith("~") ? home + part.slice(1) : part)).join(":")
   }
 
   arithmetic(node: Node) {

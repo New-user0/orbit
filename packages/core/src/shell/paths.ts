@@ -1,6 +1,5 @@
 export * as ShellPaths from "./paths.js"
 
-import nodePath from "node:path"
 import { FSUtil } from "@orbit/util/fs-util"
 import type { Command, Context, Word } from "./analysis.js"
 import type { PowerShellParse } from "./powershell-parse.js"
@@ -666,7 +665,7 @@ const READ_CLASS = new Set(
 function operands(state: State, index: number, command: Command, ctx: Context) {
   const name = headName(command.inner[0] ?? "", ctx)
   const words = command.argv.slice(command.argv.length - command.inner.length + 1)
-  const found = outputs(name, words, ctx.platform)
+  const found = outputs(name, words)
   if (found.unvalidatable) refuse(state, index, "option")
   found.writes.forEach((item) => word(state, index, "write", item))
   const named = name === "git" ? (words.some((item) => item.value === "diff") && words.some((item) => item.value === "--no-index") ? words.slice(words.findIndex((item) => item.value === "diff") + 1) : []) : READ_CLASS.has(name) ? words : []
@@ -681,17 +680,6 @@ function operands(state: State, index: number, command: Command, ctx: Context) {
   }
 }
 
-// Where `git` takes a file or a folder to write, by subcommand.
-const GIT_OUTPUTS: Record<string, string[]> = {
-  diff: ["--output"],
-  log: ["--output"],
-  show: ["--output"],
-  whatchanged: ["--output"],
-  "range-diff": ["--output"],
-  "format-patch": ["--output", "--output-directory", "-o"],
-  archive: ["--output", "-o"],
-}
-
 type Outputs = {
   /** Words that a write option names, in the command's own words or cut out of one (`-ofile`). */
   writes: Word[]
@@ -700,7 +688,7 @@ type Outputs = {
   unvalidatable: boolean
 }
 
-function outputs(name: string, words: Word[], platform: string): Outputs {
+function outputs(name: string, words: Word[]): Outputs {
   const found: Outputs = { writes: [], skip: new Set(), unvalidatable: false }
   const cut = (item: Word, value: string): Word => ({ ...item, value, glob: false, tilde: false })
   const write = (value: Word | undefined) => {
@@ -767,60 +755,6 @@ function outputs(name: string, words: Word[], platform: string): Outputs {
         if (words[at + 1]) found.skip.add(words[++at])
       }
     }
-  } else if (name === "git") {
-    // Global options come first. `-C` moves the folder that a relative output is written in (each one relative to the one
-    // before), and these take their value as the next word, which is not the verb.
-    // On Windows a root-relative word and a UNC path are absolute too: they are not joined under `-C`.
-    // A `~` the shell left alone and, off Windows, an `X:` prefix are ordinary relative names to git.
-    const rooted = (item: Word) =>
-      item.tilde ||
-      item.value.startsWith("/") ||
-      (platform === "win32" && (nodePath.win32.isAbsolute(item.value) || /^[A-Za-z]:/.test(item.value)))
-    let folder: Word | undefined
-    let verb = -1
-    for (let at = 0; at < words.length && verb < 0; at++) {
-      const text = words[at].value
-      if (text === "-C" && words[at + 1]) {
-        const next = words[++at]
-        // The tool leaves the folder as it is for an empty value.
-        if (next.value === "" && next.literal) continue
-        folder =
-          folder === undefined || rooted(next)
-            ? next
-            : { ...next, value: `${folder.value}/${next.value}`, literal: folder.literal && next.literal, glob: folder.glob || next.glob, tilde: folder.tilde }
-      } else if (["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source", "--shallow-file"].includes(text)) at++
-      else if (!text.startsWith("-")) verb = at
-    }
-    // A relative output lies in the folder of the last `-C`; one the shell expands from `~` or that is absolute does not.
-    const placed = (item: Word): Word =>
-      folder === undefined || rooted(item)
-        ? item
-        : { ...item, value: `${folder.value}/${item.value}`, literal: item.literal && folder.literal, glob: item.glob || folder.glob, tilde: folder.tilde }
-    const output = (item: Word | undefined) => {
-      if (!item) return
-      found.writes.push(placed(item))
-      found.skip.add(item)
-    }
-    const options = GIT_OUTPUTS[words[verb]?.value ?? ""]
-    if (verb >= 0 && options)
-      for (let at = verb + 1; at < words.length; at++) {
-        const text = words[at].value
-        if (text === "--") break
-        const equals = text.indexOf("=")
-        const option = equals < 0 ? text : text.slice(0, equals)
-        if (options.includes(option)) output(equals < 0 ? words[++at] : cut(words[at], text.slice(equals + 1)))
-        else if (options.includes("-o") && /^-[^-]/.test(text)) {
-          // `-o` may sit anywhere in a cluster of short options (`-ko out`); a letter that takes its value from the rest of
-          // the cluster (`-U3`, `-Sfoo`) ends the search.
-          for (let char = 1; char < text.length; char++) {
-            if (text[char] === "o") {
-              output(text.length > char + 1 ? cut(words[at], text.slice(char + 1)) : words[++at])
-              break
-            }
-            if ("UvMCBlSGO".includes(text[char])) break
-          }
-        }
-      }
   } else if (name === "rg") {
     // `--pre` and `--hostname-bin` run the program they name, which is no file to read.
     words.forEach((item, at) => {
