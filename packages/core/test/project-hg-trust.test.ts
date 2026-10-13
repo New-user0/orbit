@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
@@ -149,4 +150,45 @@ describe("a shipped .hg/orbit", () => {
         }),
       60_000,
     )
+})
+
+// The git counterpart (class 5, class 3): `.git/orbit` is also a file the folder supplies. A folder that is not trusted
+// is identified by its root commit, whatever ID a shipped file names; a trusted one reads it.
+describe("a shipped .git/orbit", () => {
+  const other = "a".repeat(40)
+  const git = Effect.gen(function* () {
+    const dir = (yield* tmpdirScoped()).path
+    yield* Effect.promise(async () => {
+      await $`git init`.cwd(dir).quiet()
+      await $`git config commit.gpgsign false`.cwd(dir).quiet()
+      await $`git config user.email test@orbit.test`.cwd(dir).quiet()
+      await $`git config user.name Test`.cwd(dir).quiet()
+      await $`git commit --allow-empty -m root`.cwd(dir).quiet()
+      await Bun.write(path.join(dir, ".git", "orbit"), other)
+    })
+    return { dir, root: (yield* Effect.promise(() => $`git rev-list --max-parents=0 HEAD`.cwd(dir).text())).trim() }
+  })
+
+  untrusted.live(
+    "an untrusted folder resolves to its root commit, not the shipped ID",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* git
+        const result = yield* (yield* Project.Service).resolve(AbsolutePath.make(found.dir))
+        expect(result.id).toBe(Project.ID.make(found.root))
+        expect(result.previous).toBeUndefined()
+      }),
+    60_000,
+  )
+
+  trusted.live(
+    "a trusted folder reads it as the previous ID (control)",
+    () =>
+      Effect.gen(function* () {
+        const found = yield* git
+        const result = yield* (yield* Project.Service).resolve(AbsolutePath.make(found.dir))
+        expect(result.previous).toBe(Project.ID.make(other))
+      }),
+    60_000,
+  )
 })
