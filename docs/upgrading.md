@@ -300,7 +300,7 @@ no plugin can override it. In order of precedence: a configured deny (agent rule
 config) first, then the last managed rule that matches each resource, then plugin hooks, then grants and config rules,
 then the default ask. A managed deny blocks with "Blocked by <organization>'s managed settings" (without the name when
 `managed.organization` is unset); a managed `ask` downgrades a config allow, a grant or a hook allow; a managed `allow`
-upgrades only the default asks: the one no rule spoke to and every agent's built-in `external_directory` ask for a place outside the project. It never lifts an ask that your own rule (an `external_directory` one included), an agent's built-in `.env` ask, Plan's `Bash` ask or a plugin hook gave, and never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a `Read` or `Edit` rule, managed or your own (agent, user, project or session), also decides a file inside the session's folder by its absolute place, so a deny or an ask on `~/.ssh/*` holds when Orbit runs in the home folder (the rows "under the person's ... rule" in `permission.test.ts`). The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
+upgrades only the default asks: the one no rule spoke to and every agent's built-in `external_directory` ask for a place outside the project, also when it reaches a link's folder through the real place the link leads to and your own allow or an "Always" covers that folder (`external-leads.test.ts`). It never lifts an ask that your own rule (an `external_directory` one included), an agent's built-in `.env` ask, Plan's `Bash` ask or a plugin hook gave, and never lifts a deny (a hook's included, also against a managed `ask`) or a place that a link in an untrusted folder leads out to. Managed `Read`, `Edit` and `external_directory` rules expand `~` and `$HOME` (and `~\` on Windows), and a `Read` or `Edit` rule, managed or your own (agent, user, project or session), also decides a file inside the session's folder by its absolute place, so a deny or an ask on `~/.ssh/*` holds when Orbit runs in the home folder (the rows "under the person's ... rule" in `permission.test.ts`). The same expansion now applies to user and project config rules: `~\` works on Windows, and a rule whose action is a pattern such as `*` or `Read*` gets one expanded copy for each of `Read`, `Edit` and `external_directory` that it names (Bash text is still matched as written). The rules that a
 managed `agents.<name>.permissions` gives an agent now apply to that agent too; they took effect nowhere before.
 
 - `managed_permissions_only` ignores the permission rules of every non-managed document and the saved "always"
@@ -2817,7 +2817,7 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone,
+In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone,
 before anything is asked, by the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts`
 pin: the commands, agents, skill folders and plugin source folders of a config folder, the compatibility roots, the
 settings file, the MCP file, `{file:}` references, instruction markers found by walking up, the custom themes of the
@@ -2923,3 +2923,16 @@ wording of those notes, and models that sent a one-character query or both domai
 **Affects:** people who saved grants for those programs or answered "always" on wrapped commands.
 
 **What to do:** Nothing.
+
+## A project ID file shipped in a folder is ignored unless the folder is trusted
+
+- Orbit reads `.git/orbit` and `.hg/orbit` only in a trusted folder, and only when the file holds a hash of the shape Orbit
+  makes (40 or 64 hexadecimal characters). Anything else (`global`, a short value, a path) is dropped with one log line.
+  Orbit never writes these files, so a folder that ships one could pick its own project ID, and with it the saved "always
+  allow" answers and the data folders of another project. An untrusted Mercurial folder is its own project, as before.
+- A link that the file system cannot resolve (a loop, a path through a file, no access) in a commands, agents or skills
+  folder is now skipped with one log line on Linux and macOS. It used to stop the loaders.
+
+**Affects:** people who edited `.git/orbit` or `.hg/orbit` by hand, and repositories that ship such a file or link.
+
+**What to do:** Nothing; trust the folder, or use a 40-character hash, to keep a hand-written ID.
