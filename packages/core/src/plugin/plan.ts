@@ -4,6 +4,7 @@ import { Message, ToolFailure } from "@orbit/ai"
 import { define } from "@orbit/plugin/effect/plugin"
 import { Agent } from "../agent.js"
 import type { SessionEvent } from "@orbit/schema/session-event"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Effect, Stream } from "effect"
 import path from "path"
@@ -30,7 +31,12 @@ export const Plugin = define({
   id: "orbit.plan",
   effect: Effect.fn(function* (ctx) {
     const global = yield* Global.Service
+    const fs = yield* FSUtil.Service
     const directory = PlanMode.directory(global.home)
+    // Deny and ask rules are decided by where a path really leads, so when a link is part of the plan folder's path
+    // (a linked home or ~/.orbit) the allow is also written for that real place.
+    const real = yield* realFolder(fs, directory)
+    const folders = real === path.resolve(directory) ? [directory] : [directory, real]
     const enterReminder = enter(directory)
     yield* ctx.agent.transform((editor) => {
       editor.update(plan, (item) => {
@@ -41,8 +47,10 @@ export const Plugin = define({
         item.permissions.push(Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }))
         // Shell commands can change files too, so in Plan mode each one needs the user's approval.
         item.permissions.push({ action: "Bash", resource: "*", effect: "ask" })
-        item.permissions.push({ action: "Edit", resource: path.join(directory, "*"), effect: "allow" })
-        item.permissions.push({ action: "external_directory", resource: path.join(directory, "*"), effect: "allow" })
+        folders.forEach((folder) => {
+          item.permissions.push({ action: "Edit", resource: path.join(folder, "*"), effect: "allow" })
+          item.permissions.push({ action: "external_directory", resource: path.join(folder, "*"), effect: "allow" })
+        })
       })
     })
 
@@ -100,6 +108,20 @@ export const Plugin = define({
       Effect.forkScoped({ startImmediately: true }),
     )
   }),
+})
+
+// The folder with the links of its path followed. The folder may not exist yet, so the nearest part that does is
+// resolved and the rest is appended.
+const realFolder: (fs: FSUtil.Interface, folder: string) => Effect.Effect<string> = Effect.fnUntraced(function* (
+  fs: FSUtil.Interface,
+  folder: string,
+) {
+  const lexical = path.resolve(folder)
+  const resolved = yield* fs.resolve(lexical)
+  if (resolved !== lexical) return resolved
+  const parent = path.dirname(lexical)
+  if (parent === lexical) return lexical
+  return path.join(yield* realFolder(fs, parent), path.basename(lexical))
 })
 
 function switchReminder(

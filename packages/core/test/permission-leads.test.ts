@@ -272,6 +272,26 @@ const decide = (
   }).pipe(provide(project))
 
 describe("a link outside the project, and rules written relative to the project", () => {
+  // A deny or ask written for the real place holds over a later allow that names only the link's spelling.
+  for (const layer of ["managed", "configured"] as const)
+    for (const action of ["Read", "Edit"] as const)
+      for (const effect of ["deny", "ask"] as const)
+        it.live(`${layer} ${action} ${effect} for the real place beats a later allow for the link's folder`, () =>
+          Effect.gen(function* () {
+            const { project, ssh, elsewhere } = yield* more
+            const rules = [
+              { action: "*", resource: "*", effect: "allow" },
+              { action, resource: `${slash(ssh)}/*`, effect },
+              { action, resource: `${slash(elsewhere)}/*`, effect: "allow" },
+            ] satisfies Permission.Ruleset
+            expect(yield* decide(project, rules, layer, action, path.join(ssh, "id_rsa"))).toBe(effect)
+            for (const file of ["id_rsa", "new.txt"])
+              expect([file, yield* decide(project, rules, layer, action, path.join(elsewhere, "k", file))]).toEqual([file, effect])
+            // The control: the allow still covers the rest of the folder it names.
+            expect(yield* decide(project, rules, layer, action, path.join(elsewhere, "other.txt"))).toBe("allow")
+          }),
+        )
+
   for (const layer of ["managed", "configured"] as const)
     for (const action of ["Read", "Edit"] as const) {
       it.live(`${layer} ${action} deny of the folder an external link leads to`, () =>
@@ -448,12 +468,19 @@ describe("the Plan agent writes its plan file when the plan folder's path goes t
           }
         })
         const planDir = path.join(home, ".orbit", "plan")
+        // As `PlanPlugin` writes them: the folder as spelled and its real path.
+        const realPlan = yield* Effect.promise(() => fs.realpath(planDir))
         const rules = [
           { action: "*", resource: "*", effect: "allow" },
           Agent.modeRule({ action: "Edit", resource: "*", effect: "deny" as const }),
           { action: "Edit", resource: slash(path.join(planDir, "*")), effect: "allow" },
+          { action: "Edit", resource: slash(path.join(realPlan, "*")), effect: "allow" },
         ] satisfies Permission.Ruleset
         expect(yield* decideAt(project, rules, "configured", "Edit", path.join(planDir, "ses.md"))).toBe("allow")
+        // A link inside the plan folder to a folder outside it is not the plan folder: the mode's deny holds.
+        const { ssh } = yield* layout
+        yield* Effect.promise(() => fs.symlink(ssh, path.join(planDir, "k"), "junction"))
+        expect(yield* decideAt(project, rules, "configured", "Edit", path.join(planDir, "k", "authorized_keys"))).toBe("deny")
         // Only the plan folder: another file of the home folder stays denied.
         expect(yield* decideAt(project, rules, "configured", "Edit", path.join(home, "other.md"))).toBe("deny")
       }),

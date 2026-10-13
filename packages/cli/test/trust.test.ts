@@ -13,6 +13,8 @@ import { isolatedEnv } from "./fixture/environment"
 // outlives the process that made it, and each test uses a repository of its own.
 const model = "ollama/trust:1b"
 let runs = 0
+// How long the model server takes to answer /api/show, which is what a private server's first model discovery waits on.
+let showDelay = 0
 // What the model was told the last time a tool answered it.
 const toolAnswers: string[] = []
 // The agents that a request of the model was made as, which are the ones that a system prompt of the form AGENT-<name>
@@ -46,13 +48,15 @@ const ollama = Bun.serve({
           },
         ],
       })
-    if (pathname === "/api/show")
+    if (pathname === "/api/show") {
+      if (showDelay > 0) await Bun.sleep(showDelay)
       return Response.json({
         parameters: "",
         capabilities: ["completion", "tools"],
         model_info: { "general.architecture": "llama", "llama.context_length": 32_768 },
         details: { parent_model: "", ...details },
       })
+    }
     if (pathname === "/api/ps") return Response.json({ models: [] })
     const body: { model?: string; tools?: unknown; messages: Array<{ role: string; content?: unknown }> } =
       await request.json()
@@ -923,6 +927,25 @@ test("a recorded YAML run's commands are not run again by resume in an untrusted
   succeeded(await orb(repository, ["flow", "resume", "--trust", "--standalone", id]))
   expect(await Bun.file(check.marker).exists()).toBe(true)
 }, 360_000)
+
+test.each([50, 250, 700])(
+  "orb flow run --trust runs a permissions: auto workflow on its default model when /api/show takes %i ms",
+  async (delay) => {
+    // --trust reloads the location after the grant, which interrupts the first discovery of the local model server.
+    const repository = await bare(`slow-discovery-${delay}`)
+    const file = path.join(repository, "agent.yaml")
+    await Bun.write(file, "name: agent\nnodes:\n  - id: work\n    prompt: say ok\n    permissions: auto\n")
+    const before = runs
+    showDelay = delay
+    try {
+      succeeded(await orb(repository, ["flow", "run", "--trust", "--standalone", file]))
+    } finally {
+      showDelay = 0
+    }
+    expect(runs).toBeGreaterThan(before)
+  },
+  120_000,
+)
 
 test("a YAML workflow that sets permissions to auto is not run in an untrusted folder that holds nothing back, and runs with --trust", async () => {
   const repository = await bare("approvals")

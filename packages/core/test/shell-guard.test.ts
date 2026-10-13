@@ -854,6 +854,23 @@ describe("ShellGuard.authorize", () => {
             ...(raw ? [] : ["Set-Location ${env:ORBIT_NO_SUCH_VARIABLE}"]),
             "Set-Location $env:ORBIT_NO_SUCH_VARIABLE",
             "Set-Location -Path:$null",
+            // An empty path is home on PowerShell 7, whatever the quotes or the name that was used.
+            ...["Set-Location", "cd", "chdir", "sl", "Microsoft.PowerShell.Management\\Set-Location"].flatMap((name) => [
+              `${name} ''`,
+              `${name} ""`,
+              `${name} -Path ''`,
+              `${name} -Path:''`,
+              `${name} -Path ""`,
+            ]),
+            // A parameter that is not a path, with no path after it, leaves the location at home.
+            ...(raw
+              ? []
+              : [
+                  "Set-Location -PassThru",
+                  "cd -PassThru",
+                  "sl -ErrorAction:Stop",
+                  "cd -Verbose -PassThru",
+                ]),
           ])
             expect([platform, raw, text, ShellGuard.locations(text, "pwsh", platform, "", "", raw)]).toEqual([
               platform,
@@ -861,8 +878,15 @@ describe("ShellGuard.authorize", () => {
               text,
               [os.homedir()],
             ])
+      // A parameter that reads a word leaves home named too; the word it reads shows as a folder beside it, inside the project.
+      for (const platform of ["win32", "linux"] as const)
+        for (const text of ["cd -ErrorAction Stop", "cd -ea Stop", "Set-Location -ErrorVariable ev"])
+          expect([text, ShellGuard.locations(text, "pwsh", platform)[0]]).toEqual([text, os.homedir()])
       // A name that is set, and a folder that is written out, are not home.
       expect(ShellGuard.locations("Set-Location ../a", "pwsh", "linux")).toEqual(["../a"])
+      for (const text of ["Set-Location -PassThru ../a", "cd -Path ../a -PassThru"])
+        expect([text, ShellGuard.locations(text, "pwsh", "linux")]).toEqual([text, ["../a"]])
+      expect(ShellGuard.locations("cd -ErrorAction Stop ../a", "pwsh", "linux")).not.toContain(os.homedir())
     }),
   )
   it.live("keeps text that only looks like an opener out of the split", () =>
@@ -922,7 +946,7 @@ describe("ShellGuard.authorize", () => {
       ["Set-Location ..\\\nRemove-Item outside\\s", "a bare trailing backslash", /^[^]*\/\*$/],
       ["Set-Location <# c #> ../outside\nRemove-Item s", "a block comment before the folder", /\/outside\/\*$/],
     ] as const)
-      (win || !why.includes("backslash") ? it.live : it.live.skip)(
+      it.live(
         `asks for the folder of padded input after ${name} and ${why}`,
         () =>
           Effect.gen(function* () {
@@ -1134,6 +1158,8 @@ console.log("done")`,
         "../q",
       ])
       expect(ShellGuard.locations("Set-Location -PassThru:$true; Set-Location ../x/$Y/z; cd $Y", "pwsh", "win32")).toEqual([
+        // -PassThru names no place, so the first command goes home.
+        os.homedir(),
         "../x/",
       ])
       // Every word that is not a parameter, and the variables the shell defines for folders.

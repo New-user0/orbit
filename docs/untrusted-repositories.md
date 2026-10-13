@@ -99,7 +99,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   repository's config, so the program the person chose loads code the clone chose. Until `ProjectTrust.trusted()` holds,
   `LifecycleHooksPlugin` runs no hook (one warning per process) and `Mcp` starts no `local` server whatever its `cwd`
   (status `failed`, saying it waits for trust); a `trust.updated` event starts the waiting servers, and hooks read the
-  trust each time one fires. A remote server is not a spawn and is not held. Proof: `test/plugin/lifecycle-hooks.test.ts`
+  trust each time one fires. A guard that cannot run never reads as no guard: a `PreToolUse` hook, the one event
+  here that can stop a call, that applies to a call (user, managed or any document that reaches the runner) refuses
+  it with a reason naming `/trust`, `orb trust` and `--trust`, and no process starts; the other events wait. Proof:
+  `test/plugin/lifecycle-hooks-untrusted.test.ts` (scope x trusted x block, allow, error, with a marker and a trusted
+  control). A remote server is not a spawn and is not held. Proof: `test/plugin/lifecycle-hooks.test.ts`
   (a hook that writes a marker in its working folder, untrusted then granted, and the project and other-product hooks
   held as before) and `test/mcp.test.ts` ("a local MCP server waits for the project folder to be trusted": spawn
   recorder, three `cwd` spellings, trusted control). The interactive clients show no trust dialog for this, since no
