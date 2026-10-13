@@ -2798,3 +2798,17 @@ A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network 
 **Affects:** anyone who runs `export -p`, `declare -p` or similar from the shell tool under a rule that allowed them silently, and Windows users who open a folder that holds such links.
 
 **What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.
+
+### Shell rules see through assignments, wrappers and printing declarations
+
+A `Bash` deny or ask rule for a program (`rm *`) now also meets that program when a command puts leading assignments or a wrapper in front of it: `FOO=1 rm x`, `timeout 5 rm x`, `nice`, `nohup`, `time`, `stdbuf`, `env`, `sudo`, `doas` and `exec`, alone or stacked. The request lists the command as written and, as requests of their own, each stripped spelling (`rm x`). An allow for `rm *` lifts only the stripped spelling, so the command as written still needs an allow of its own. Under a broad allow, a deny or ask for the program now applies.
+
+A declaration that prints the environment (`export -p`, `declare -p`) next to other commands (`export -p; ls`, `declare -p && git status`, `export -p | cat`) is a request of its own, so a `Bash` ask or deny for it applies and an allow for the other command does not lift it.
+
+Opaque PowerShell input that starts with a path to a program in the repository (`.\rm x`, `scripts\rm x`) is no longer lifted by an allow written for the cmdlet of the same name; a deny for the cmdlet still blocks it.
+
+"Always allow" no longer offers `Where-Object *`, `Select-Object *`, `Sort-Object *`, `Group-Object *`, `Measure-Object *`, the `Format-*` cmdlets, `Out-String`, `Out-Host`, `Write-Output`, `Write-Host`, `Start-Sleep`, `Invoke-WmiMethod` or `Invoke-CimMethod`, or their aliases, because a saved grant would lift script blocks and .NET calls in their arguments.
+
+**Affects:** people whose rules are written for a program and who run it behind a wrapper, and anyone who saved "always" for one of the cmdlets above.
+
+**What to do:** Nothing; answer the questions, or write a rule for the stripped spelling.

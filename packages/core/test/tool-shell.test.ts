@@ -464,6 +464,109 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
+    // A leading assignment or a wrapper does not hide the program from a deny or ask written for it (class 8), whether the
+    // rule is managed or the person's own. An allow for the program lifts only its own spelling, never the wrapped command.
+    for (const rules of ["own", "managed"] as const)
+      for (const command of [
+        "FOO=1 rm x",
+        "LD_PRELOAD=y rm x",
+        "timeout 5 rm x",
+        "time rm x",
+        "nice rm x",
+        "nice -n 5 rm x",
+        "nohup rm x",
+        "stdbuf -o0 rm x",
+        "env rm x",
+        "env A=1 rm x",
+        "FOO=1 timeout 5 nice rm x",
+      ])
+        test(`${scanner}: a ${rules} deny for rm * blocks ${command} under a broad allow`, () =>
+          withScanner(portable, (registry, fixture) =>
+            Effect.gen(function* () {
+              const rule = { action: "Bash", resource: "rm *", effect: "deny" } as const
+              const agents = yield* Agent.Service
+              yield* agents.transform((editor) =>
+                editor.update(toolIdentity.agent, (agent) => {
+                  agent.permissions = [{ action: "Bash", resource: "*", effect: "allow" }, ...(rules === "own" ? [rule] : [])]
+                }),
+              )
+              if (rules === "managed") {
+                const policy = yield* ManagedPolicy.Service
+                yield* policy.set("file", { statements: [], rules: [rule], organization: "Acme" })
+              }
+              yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+              expectBlocked(yield* runPermissionCommand(registry, command, path.join(fixture.active, "marker"), []))
+              expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "x")).exists())).toBe(true)
+            }),
+          ))
+
+    test(`${scanner}: an allow for rm * does not lift a wrapped rm, and an ask for rm * still asks`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          const agents = yield* Agent.Service
+          const rules = (...list: { action: "Bash"; resource: string; effect: "allow" | "ask" }[]) =>
+            agents.transform((editor) =>
+              editor.update(toolIdentity.agent, (agent) => {
+                agent.permissions = list
+              }),
+            )
+          yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+          const marker = path.join(fixture.active, "marker")
+          yield* rules(
+            { action: "Bash", resource: "*", effect: "ask" },
+            { action: "Bash", resource: "rm *", effect: "allow" },
+          )
+          for (const command of ["FOO=1 rm x", "timeout 5 rm x"]) {
+            const asked = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(asked.requests).toHaveLength(1)
+          }
+          yield* rules(
+            { action: "Bash", resource: "*", effect: "allow" },
+            { action: "Bash", resource: "rm *", effect: "ask" },
+          )
+          for (const command of ["FOO=1 rm x", "timeout 5 rm x"]) {
+            const asked = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(asked.requests).toHaveLength(1)
+          }
+          expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "x")).exists())).toBe(true)
+        }),
+      ))
+
+    // A declaration that prints the environment is a request beside any other command (class 8): a rule written for it
+    // applies, and an allow for the other command does not lift it. The secret is what the model would be shown.
+    for (const [command, declaration] of [
+      ["export -p; ls", "export *"],
+      ["ls; declare -p", "declare *"],
+      ["declare -p && printf x", "declare *"],
+      ["export -p | cat", "export *"],
+    ] as const) {
+      test(`${scanner}: ${command} asks, and a deny for the declaration blocks it, though the other command is allowed`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const agents = yield* Agent.Service
+            const rules = (...extra: { action: "Bash"; resource: string; effect: "deny" }[]) =>
+              agents.transform((editor) =>
+                editor.update(toolIdentity.agent, (agent) => {
+                  agent.permissions = [
+                    { action: "Bash", resource: "*", effect: "ask" },
+                    { action: "Bash", resource: "ls", effect: "allow" },
+                    { action: "Bash", resource: "cat", effect: "allow" },
+                    { action: "Bash", resource: "printf x", effect: "allow" },
+                    ...extra,
+                  ]
+                }),
+              )
+            const marker = path.join(fixture.active, "marker")
+            yield* rules()
+            const asked = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(asked.requests).toHaveLength(1)
+            expect(asked.requests[0]?.resources.some((resource) => /^(export|declare)\b/.test(resource))).toBe(true)
+            yield* rules({ action: "Bash", resource: declaration, effect: "deny" })
+            expectBlocked(yield* runPermissionCommand(registry, command, marker, []))
+          }),
+        ))
+    }
+
     test(`${scanner}: pipeline redirect preserves exact approval and denial despite broad saved approval`, () =>
       withScanner(portable, (registry, fixture) =>
         Effect.gen(function* () {
@@ -918,9 +1021,9 @@ describe("ShellTool ordinary shell syntax", () => {
 
   for (const [command, pattern] of [
     // The grant names the cmdlet, not the spelling: the repeat meets it through the cmdlet's canonical spelling.
-    ["Write-Output\thello", "Write-Output *"],
-    ["& 'Write-Output' hello", "Write-Output *"],
-    ["Write-Output `\n  hello", "Write-Output *"],
+    ["Get-Date\t-Format yyyy", "Get-Date *"],
+    ["& 'Get-Date' -Format yyyy", "Get-Date *"],
+    ["Get-Date `\n  -Format yyyy", "Get-Date *"],
   ]) {
     test(
       `PowerShell native: always allow covers repeat execution and preserves exact deny: ${command}`,
@@ -1175,7 +1278,7 @@ describe("ShellTool", () => {
                 },
               ])
               expect(assertions[0]?.save).toEqual(
-                isWindows ? ["Start-Sleep *", "[Console]::Out.Write('hello')"] : ["printf *"],
+                isWindows ? ["[Console]::Out.Write('hello')"] : ["printf *"],
               )
             }),
           )
@@ -3917,6 +4020,40 @@ describe("ShellTool guard (PowerShell)", () => {
     ["pwsh -c x", undefined],
     ["node x.js", undefined],
     ["ForEach-Object { }", undefined],
+    // Cmdlets whose script-block and member-access arguments run code, under every spelling of their names: a saved
+    // `Where-Object *` would lift each of them.
+    ...[
+      "Where-Object { 1 }",
+      "where { 1 }",
+      "? { 1 }",
+      "Select-Object Name",
+      "select Name",
+      "Sort-Object Name",
+      "sort Name",
+      "Group-Object Name",
+      "group Name",
+      "Measure-Object",
+      "measure",
+      "Format-Table",
+      "ft",
+      "Format-List",
+      "fl",
+      "Format-Wide",
+      "fw",
+      "Format-Custom",
+      "fc",
+      "Out-String",
+      "Out-Host",
+      "oh",
+      "Write-Output x",
+      "echo x",
+      "write x",
+      "Write-Host x",
+      "Start-Sleep 1",
+      "sleep 1",
+      "iwmi Win32_Process Create",
+      "icim Win32_Process Create",
+    ].map((command) => [command, undefined] as const),
     // Spawners and runners: a saved `ssh *` would lift `ssh -o ProxyCommand=... x`, which runs a local command.
     ["ssh host ls", undefined],
     ["py x.py", undefined],
@@ -4040,6 +4177,48 @@ describe("ShellTool guard (PowerShell)", () => {
       ),
     options,
   )
+
+  // Input too long to parse that starts with a path to a program of the repository is never lifted by an allow written for the
+  // cmdlet of the same name (class 8): the program is not the cmdlet. Its stripped spelling still answers to a deny.
+  for (const [rule, command] of [
+    ["rm *", ".\\rm x"],
+    ["rm *", "scripts\\rm x"],
+    ["rm *", "&.\\rm x"],
+    ["rm *", "& '.\\rm' x"],
+    ["Remove-Item *", ".\\Remove-Item x"],
+  ] as const)
+    windows(
+      `an allow for ${rule} does not lift ${command} when the input is too long to parse, and a deny still blocks it`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            const ran = path.join(fixture.active, "ran.txt")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.join(fixture.active, "scripts"))
+              const body = `@echo off\r\necho ran> "${ran}"\r\n`
+              await Promise.all(
+                ["rm.cmd", "Remove-Item.cmd", "scripts\\rm.cmd"].map((file) => Bun.write(path.join(fixture.active, file), body)),
+              )
+            })
+            const padded = `${command} #${"x".repeat(20_000)}`
+            yield* permissions([
+              { action: "Bash", resource: "*", effect: "ask" },
+              { action: "Bash", resource: rule, effect: "allow" },
+            ])
+            const asked = yield* runPermissionCommand(registry, padded, path.join(fixture.active, "marker"), ["reject"])
+            expect(asked.requests).toHaveLength(1)
+            expect(yield* Effect.promise(() => Bun.file(ran).exists())).toBe(false)
+
+            yield* permissions([
+              { action: "Bash", resource: "*", effect: "allow" },
+              { action: "Bash", resource: rule, effect: "deny" },
+            ])
+            expectBlocked(yield* runPermissionCommand(registry, padded, path.join(fixture.active, "marker"), []))
+            expect(yield* Effect.promise(() => Bun.file(ran).exists())).toBe(false)
+          }),
+        ),
+      { timeout: 60_000 },
+    )
 
   // New-PSDrive makes a drive, which can be a network share with a connection to any host: it is a command like any other,
   // not a change of location that the guard sets aside.
@@ -4190,10 +4369,10 @@ describe("ShellTool guard (PowerShell)", () => {
       )
 
   // A `<#` inside a word or quotes is not a comment opener (class 3/4/8): the raw reading keeps the text as written too.
-  for (const [name, line] of [
-    ["a word that ends in the opener", "Set-Location -ErrorVariable e<# ../outside #>\nRemove-Item s"],
-    ["a stack name that ends in the opener", "Push-Location -StackName a<# ../outside #>\nRemove-Item s"],
-    ["quoted openers", "Write-Output x<#\nSet-Location -ErrorVariable '<#' ../outside -OutVariable '#>'\nRemove-Item s"],
+  for (const [name, line, home] of [
+    ["a word that ends in the opener", "Set-Location -ErrorVariable e<# ../outside #>\nRemove-Item s", true],
+    ["a stack name that ends in the opener", "Push-Location -StackName a<# ../outside #>\nRemove-Item s", false],
+    ["quoted openers", "Write-Output x<#\nSet-Location -ErrorVariable '<#' ../outside -OutVariable '#>'\nRemove-Item s", false],
   ] as const)
     test(
       `a removal after ${name} asks for the folder, and a reject keeps the file`,
@@ -4211,7 +4390,8 @@ describe("ShellTool guard (PowerShell)", () => {
             expect(result.requests).toHaveLength(1)
             expect(result.requests[0]).toMatchObject({
               action: "external_directory",
-              resources: [path.join(fixture.outside, "*").replaceAll("\\", "/")],
+              // The comment-blanked reading of the first row is a parameter-only Set-Location, which asks for home first.
+              resources: [...(home ? [path.join(os.homedir(), "*")] : []), path.join(fixture.outside, "*")].map((item) => item.replaceAll("\\", "/")),
             })
             expectDeclined(result.exit)
             expect(yield* absent(path.join(fixture.outside, "s"))).toBe(false)

@@ -642,7 +642,20 @@ export function request(
   const resources = [...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? [])]
   const save = scan?.commands.map((command) => command.save) ?? []
   // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
-  if (resources.length > 0) return { resources, save }
+  if (resources.length > 0) {
+    // Requests of their own beside the scanned commands (class 8), none with a save:
+    // - a declaration that prints the environment, so a Bash ask or a rule for it applies and a grant for the other command
+    //   does not lift it;
+    // - a command that starts with assignments or a wrapper, in the spelling of the program it runs (`FOO=1 rm x` and
+    //   `timeout 5 rm x` as `rm x`), so a deny or ask written for the program meets it. An allow for that spelling lifts
+    //   only this extra request, never the command as written.
+    const extra = analysis.commands.flatMap((command) => {
+      if (PRINTERS.has(command.head) && !assigns(command)) return [command.text.trim()]
+      const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
+      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => argv.join(" "))
+    })
+    return { resources: [...resources, ...distinct(extra).filter((item) => item !== "" && !resources.includes(item))], save }
+  }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
 }
@@ -660,7 +673,10 @@ function opaque(analysis: Analysis, whole: string, scan: ShellParse.Result | und
     : bashFragments(whole)
   const spelled = ps ? pieces.map((piece) => spellings(piece, analysis)) : []
   const aliases = Object.fromEntries(
-    spelled.filter((item) => item.names.length > 0).map((item) => [item.piece, item.names]),
+    // A path or module-qualified first word puts its spellings on the stripped resource, never on the piece: a rule written for
+    // the cmdlet then meets the stripped spelling (a deny), while the piece, which may be a program of the repository, still
+    // needs a rule of its own.
+    spelled.filter((item) => item.names.length > 0).map((item) => [item.stripped ?? item.piece, item.names]),
   )
   return {
     resources: distinct([
@@ -768,6 +784,11 @@ const NEVER = new Set(
     // Spawners and code runners that a saved "name *" would lift for every argument.
     "start-threadjob register-scheduledjob register-engineevent register-objectevent register-wmievent new-pssession",
     "enter-pssession save-script new-object python2 tsx lua bunx ssh py new-psdrive",
+    // Cmdlets whose script-block and member-access arguments run code: a saved "name *" would lift every such argument. Each
+    // is listed with its aliases, since a written alias is checked as spelled.
+    "where-object where ? select-object select sort-object sort group-object group measure-object measure",
+    "format-table ft format-list fl format-wide fw format-custom fc out-string out-host oh write-output echo write",
+    "write-host start-sleep sleep invoke-wmimethod iwmi invoke-cimmethod icim",
   ]
     .join(" ")
     .split(" "),
