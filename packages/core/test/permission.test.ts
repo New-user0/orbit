@@ -1352,6 +1352,70 @@ describe("Permission under managed settings", () => {
     }),
   )
 
+  // An ask from any layer survives a managed allow; only a managed ask or deny changes it (class 8). Each row names the
+  // source of the ask, and the control row shows the default ask, which no rule wrote, is still lifted.
+  const read = (resources: string[]) => assertion({ action: "Read", resources, ...next() })
+  for (const row of [
+    {
+      name: "the person's own ask rule",
+      arrange: () => setup([{ action: "Read", resource: "secrets/*", effect: "ask" }]),
+      resources: ["secrets/key"],
+      effect: "ask",
+    },
+    {
+      name: "a session ask rule",
+      arrange: () => setup().pipe(Effect.andThen(sessionRules([{ action: "Read", resource: "secrets/*", effect: "ask" }]))),
+      resources: ["secrets/key"],
+      effect: "ask",
+    },
+    {
+      name: "the built-in .env ask",
+      arrange: () =>
+        setup([
+          { action: "Read", resource: "*.env", effect: "ask" },
+          { action: "Read", resource: "*.env.*", effect: "ask" },
+          { action: "Read", resource: "*.env.example", effect: "allow" },
+        ]),
+      resources: ["prod.env"],
+      effect: "ask",
+    },
+    {
+      name: "the built-in .env ask beside a resource no rule covers",
+      arrange: () => setup([{ action: "Read", resource: "*.env", effect: "ask" }]),
+      resources: ["plain.txt", "prod.env"],
+      effect: "ask",
+    },
+    {
+      name: "a plugin hook's ask over an allow",
+      arrange: () => setup([{ action: "Read", resource: "*", effect: "allow" }]).pipe(Effect.andThen(hookSets("ask"))),
+      resources: ["a.txt"],
+      effect: "ask",
+    },
+    {
+      name: "the default ask (control)",
+      arrange: () => setup(),
+      resources: ["a.txt"],
+      effect: "allow",
+    },
+    {
+      name: "the default ask beside an allow rule (control)",
+      arrange: () => setup([{ action: "Read", resource: "src/*", effect: "allow" }]),
+      resources: ["src/a.txt", "a.txt"],
+      effect: "allow",
+    },
+  ] as const)
+    it.effect(`a managed Read allow leaves ${row.name} ${row.effect === "ask" ? "as an ask" : "lifted"}`, () =>
+      Effect.gen(function* () {
+        yield* row.arrange()
+        yield* managed({ rules: [{ action: "Read", resource: "*", effect: "allow" }] })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(read([...row.resources]))).toMatchObject({ effect: row.effect })
+        // The managed layer's own ask still decides, with the same rules around it.
+        yield* managed({ rules: [{ action: "Read", resource: "*", effect: "ask" }] })
+        expect(yield* service.ask(read([...row.resources]))).toMatchObject({ effect: "ask" })
+      }),
+    )
+
   it.effect("a managed ask does not lift a hook's deny", () =>
     Effect.gen(function* () {
       yield* setup()
