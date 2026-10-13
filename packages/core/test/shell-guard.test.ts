@@ -672,6 +672,32 @@ describe("ShellGuard.authorize", () => {
       }),
     )
 
+  // Declarations that print every variable (and so the environment's credentials) are commands a Bash rule must see; the
+  // ones that only set named variables stay inert. `printenv` is the control that always asks.
+  for (const [command, inert] of [
+    ["export -p", false],
+    ["declare -p", false],
+    ["declare", false],
+    ["typeset -p", false],
+    ["readonly", false],
+    ["export", false],
+    ["declare -fx", false],
+    ["declare -x -p A", false],
+    ["export -f fn", false],
+    ["local", false],
+    ["export A=1; declare -x B=2", true],
+    ["export A", true],
+    ["unset A", true],
+    ["printenv", false],
+  ] as const)
+    it.live(`${command} ${inert ? "makes no shell request" : "is denied by a Bash deny"}`, () =>
+      Effect.gen(function* () {
+        const exit = yield* run(command, anyBash)
+        expect(Exit.isFailure(exit)).toBe(!inert)
+        expect(asked.filter(anyBash)).toEqual([])
+      }),
+    )
+
   it.live("checks every request for a deny before the first question", () =>
     Effect.gen(function* () {
       // The shell request is denied, the folder request would be asked: nothing is asked.

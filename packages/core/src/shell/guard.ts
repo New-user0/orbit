@@ -686,8 +686,26 @@ function inert(analysis: Analysis) {
     !analysis.features.herestring &&
     analysis.commands.every(
       (command) =>
-        DECLARATIONS.has(command.head) && command.redirects.length === 0 && command.argv.every((word) => word.literal),
+        DECLARATIONS.has(command.head) &&
+        command.redirects.length === 0 &&
+        command.argv.every((word) => word.literal) &&
+        (!PRINTERS.has(command.head) || assigns(command)),
     )
+  )
+}
+
+// These builtins list every variable (or function) with its value when they get no name or a print flag, which would carry
+// the environment's credentials to the model. They are inert only when they set named variables.
+const PRINTERS = new Set(["export", "declare", "typeset", "local", "readonly"])
+
+function assigns(command: Command) {
+  const words = command.argv.slice(1).map((word) => word.value)
+  const flags = words.filter((word) => word.startsWith("-"))
+  const names = words.filter((word) => !word.startsWith("-"))
+  return (
+    names.length > 0 &&
+    names.every((word) => /^[A-Za-z_][A-Za-z0-9_]*(?:=|$)/.test(word)) &&
+    !flags.some((flag) => /[pfF]/.test(flag))
   )
 }
 
