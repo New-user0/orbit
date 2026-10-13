@@ -15,6 +15,7 @@ import { Credential } from "./credential.js"
 import { Bus } from "./bus.js"
 import { Watcher } from "./filesystem/watcher.js"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { Global } from "@orbit/util/global"
 import { Location } from "./location.js"
 import { AbsolutePath } from "./schema.js"
@@ -261,6 +262,8 @@ export const layer = (options?: Options) =>
       })
 
       const loadFile = Effect.fnUntraced(function* (filepath: string, scope: Scope) {
+        // A file of a project that a link leads to a share is not read: reading connects, before any trust check.
+        if ((scope === "project" || scope === "local") && (yield* LinkShare.blocked(fs, filepath))) return
         const text = yield* fs.readFileStringSafe(filepath)
         if (text === undefined) return
         // What the file of an untrusted folder refers to is read before anything decides what to keep of it, so it is

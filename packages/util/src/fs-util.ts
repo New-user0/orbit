@@ -5,6 +5,7 @@ import { lookup } from "mime-types"
 import { Context, Effect, FileSystem, Layer, Schema } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { Glob } from "./glob.js"
+import { LinkShare } from "./link-share.js"
 import { serviceUse } from "./effect/service-use.js"
 import { makeGlobalNode } from "./effect/app-node.js"
 import { filesystem } from "./effect/app-node-platform.js"
@@ -167,6 +168,8 @@ export namespace FSUtil {
         while (true) {
           for (const target of options.targets) {
             const search = join(current, target)
+            // A marker that is a link to a share is not a marker: looking at it would connect to the share.
+            if (yield* LinkShare.blocked(fs, search)) continue
             const found =
               options.type === "file"
                 ? yield* isFile(search)

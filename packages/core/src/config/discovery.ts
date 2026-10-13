@@ -7,6 +7,7 @@ import { CompatRoots } from "@orbit/compat/roots"
 import { CompatSettings } from "@orbit/compat/settings"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { LinkShare } from "@orbit/util/link-share"
 import { Location } from "../location.js"
 import { AbsolutePath } from "../schema.js"
 import type { Options } from "../config.js"
@@ -57,12 +58,19 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
   const probe = (directory: string, targets: readonly string[]) =>
     Effect.gen(function* () {
       // Resolve the parent too: missing children must honor symlinked global roots.
-      const parent = yield* fs.resolve(directory)
-      return yield* Effect.forEach(targets, (name) =>
-        fs
-          .resolve(path.join(parent, name))
-          .pipe(Effect.map((resolved) => ({ item: AbsolutePath.make(path.join(directory, name)), resolved, parent }))),
+      const parent = yield* LinkShare.resolve(fs, directory)
+      if (parent === undefined) return []
+      // A name that a link leads to a share is not resolved, or listed: resolving it connects, before any trust check.
+      const found = yield* Effect.forEach(targets, (name) =>
+        LinkShare.resolve(fs, path.join(parent, name)).pipe(
+          Effect.map((resolved) =>
+            resolved === undefined
+              ? undefined
+              : { item: AbsolutePath.make(path.join(directory, name)), resolved, parent },
+          ),
+        ),
       )
+      return found.filter((candidate) => candidate !== undefined)
     })
   const discovered = yield* Effect.forEach(directories, (directory) =>
     probe(directory, [".orbit", ...names.toReversed(), ...localNames.toReversed()]),

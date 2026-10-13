@@ -3,6 +3,7 @@ export * as ConfigCompatibilityPlugin from "./compatibility.js"
 import { define } from "@orbit/plugin/effect/plugin"
 import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import path from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Bus } from "../../bus.js"
@@ -46,15 +47,15 @@ export const Plugin = define({
         const loaded = new Map<Skill.ID, Skill.Info>()
         for (const root of roots) {
           const directory = path.join(root.path, "skills")
+          // A link to a share is not resolved: realpath connects to it, and this runs before trust is asked.
+          if (yield* LinkShare.blocked(fs, directory)) continue
           const resolved = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))
           if (!resolved) continue
           // Until the root's folder is trusted, a skills folder that a link leads out of it is not scanned, and neither
           // is a skill that a link leads out of it: they are not the repository's to supply.
           if (!(yield* trust.supplies(root, directory))) continue
           yield* watch(resolved, "directory")
-          const files = yield* fs
-            .scan("{*.md,**/SKILL.md}", { cwd: resolved, absolute: true, include: "file", symlink: true, dot: true })
-            .pipe(Effect.orElseSucceed(() => [] as string[]))
+          const files = yield* LinkShare.scan(fs, resolved, ["{*.md,**/SKILL.md}"])
           for (const filepath of files.toSorted()) {
             if (!(yield* trust.supplies(root, filepath))) continue
             const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))

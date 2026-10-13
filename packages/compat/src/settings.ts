@@ -8,6 +8,7 @@ import { HookConfig } from "@orbit/schema/config/hook-config"
 import type { Permission } from "@orbit/schema/permission"
 import { AbsolutePath, optional } from "@orbit/schema/schema"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import type { CompatDiagnostic } from "./diagnostic.js"
 import { CompatNames } from "./names.js"
 import type { CompatRoots } from "./roots.js"
@@ -74,7 +75,9 @@ export function files(roots: readonly CompatRoots.Root[]): readonly File[] {
 export const read = Effect.fn("CompatSettings.read")(function* (roots: readonly CompatRoots.Root[]) {
   const fs = yield* FSUtil.Service
   const results = yield* Effect.forEach(files(roots), (file) =>
-    fs.readFileStringSafe(file.path).pipe(
+    // A settings file of a project that a link leads to a share is not read: reading connects.
+    LinkShare.blocked(fs, file.path).pipe(
+      Effect.flatMap((stop) => (stop ? Effect.succeed(undefined) : fs.readFileStringSafe(file.path))),
       Effect.orElseSucceed(() => undefined),
       Effect.map((text) => (text === undefined ? empty : parse(text, file))),
     ),

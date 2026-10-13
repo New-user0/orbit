@@ -959,8 +959,20 @@ one table covers every spelling.
   direct link there is a share too. Proof: `packages/core/test/link-chain.test.ts` (40, 41, 63 and 85 links, for
   `LinkShare.of` and `ofSync`, `FileAccess.resolve`, `ShellGuard.facts` for an operand and for the workdir, and
   `ShellTool.concurrent` with a Git Bash context) and `test/config/fingerprint-plugin-share.test.ts` (an untrusted Config
-  load and status, for 1 to 85 links from `.orbit/plugins` and `.orbit/plugin`). Mutation: restoring the old limit of 40
-  with `return undefined` fails every 41, 63 and 85 row.
+  load and status, for 1, 40, 41 and 63 links from `.orbit/plugins` and `.orbit/plugin`). Mutation: restoring the old
+  limit of 40 with `return undefined` fails every 41, 63 and 85 row.
+- Every touch of a path a repository supplies asks `LinkShare` first (class 6, round 5). It lives in
+  `packages/util/src/link-share.ts`, so that the compatibility package asks it too. `LinkShare.blocked` and
+  `LinkShare.resolve` stand in front of a stat, a realpath or a read; `LinkShare.scan` lists a folder with `readdir`
+  and asks about each link entry before it enters it, at any depth, where the `glob` package follows every link (a
+  link one level below a checked folder still connected). `FSUtil.up` skips a marker that is a link to a share. The
+  sites: `.orbit`, the orbit files, the compatibility roots and the MCP file in config discovery and in `CompatRoots`, a
+  settings file, a `{file:}` reference, the command, agent, skill and compatibility-skill listings, and the plugin
+  source folders. Proof: `packages/core/test/share-roots.test.ts` (each loader with its folder and the folder's
+  children linked to a share; the recorded file system sees only `readLink` on the link and no `scan`; a control with
+  links that stay on the disk, and a loop of links that ends). Mutation: `LinkShare.scan` entering a link entry without
+  asking fails the nested rows. Not covered yet and still listed as a gap: the terminal UI's theme and plugin
+  discovery, `orb flow` and the VS Code diff view (they run in other processes), and the native watcher.
 
 **Review questions:**
 

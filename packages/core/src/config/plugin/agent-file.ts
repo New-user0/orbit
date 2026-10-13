@@ -8,6 +8,7 @@ import { Effect, Option, Schema } from "effect"
 import { AbsolutePath } from "../../schema.js"
 import { ConfigAgentV1 } from "../../v1/config/agent.js"
 import { ConfigMigrateV1 } from "../../v1/config/migrate.js"
+import { LinkShare } from "@orbit/util/link-share"
 import { ConfigMarkdown } from "../markdown.js"
 
 const legacySources = [
@@ -42,11 +43,9 @@ export const load = Effect.fn("AgentFile.load")(function* (
 
 function discover(fs: FSUtil.Interface, directory: string) {
   return Effect.forEach(legacySources, (source) =>
-    fs
-      .scan(source.pattern, { cwd: directory, absolute: true, dot: true, symlink: true })
-      .pipe(
-        Effect.map((files) => files.toSorted().map((filepath) => ({ directory, filepath, primary: source.primary }))),
-      ),
+    LinkShare.scan(fs, directory, [source.pattern]).pipe(
+      Effect.map((files) => files.toSorted().map((filepath) => ({ directory, filepath, primary: source.primary }))),
+    ),
   ).pipe(
     Effect.map((files) => files.flat()),
     Effect.orElseSucceed(() => []),

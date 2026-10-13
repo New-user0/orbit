@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import path from "path"
 import { Effect } from "effect"
 import { LinkShare } from "@orbit/core/config/link-share"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -34,4 +35,16 @@ describe("LinkShare", () => {
       }),
     )
   }
+})
+
+describe("LinkShare.unresolved", () => {
+  // On POSIX a name without a root is read from the working folder, so it would count as inside it.
+  it.live("is rooted and outside the working folder on every platform", () =>
+    Effect.sync(() => {
+      const answer = LinkShare.unresolved("some/link")
+      expect(LinkShare.isUnresolved(answer)).toBe(true)
+      expect(path.isAbsolute(answer)).toBe(true)
+      expect(FSUtil.contains(process.cwd(), answer)).toBe(false)
+    }),
+  )
 })

@@ -1,6 +1,7 @@
 export * as PluginSourceDirectory from "./source-directory.js"
 
 import { FSUtil } from "@orbit/util/fs-util"
+import { LinkShare } from "@orbit/util/link-share"
 import { Host } from "@orbit/plugin/host"
 import { Effect, Option } from "effect"
 import path from "path"
@@ -14,7 +15,9 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
   folders: readonly string[] = names,
 ) {
   const children = (yield* Effect.forEach(folders, (source) =>
-    fs.readDirectoryEntries(path.join(directory, source)).pipe(
+    // A folder that a link leads to a share is not listed: listing it connects. Neither is an entry in it that does.
+    LinkShare.blocked(fs, path.join(directory, source)).pipe(
+      Effect.flatMap((stop) => (stop ? Effect.succeed([]) : fs.readDirectoryEntries(path.join(directory, source)))),
       Effect.orElseSucceed(() => []),
       // A dependency folder is never a plugin, so the digest does not read it and the loaders do not activate it.
       Effect.map((entries) =>
@@ -32,6 +35,7 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
       if (entry.type === "file" && source) return Option.some(entry.target)
       if (entry.type === "directory") return Option.some(entry.target)
       if (entry.type !== "symlink") return Option.none<string>()
+      if (yield* LinkShare.blocked(fs, entry.target)) return Option.none<string>()
       if (source && (yield* fs.isFile(entry.target))) return Option.some(entry.target)
       if (yield* fs.isDir(entry.target)) return Option.some(entry.target)
       return Option.none<string>()

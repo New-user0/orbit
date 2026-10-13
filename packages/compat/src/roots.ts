@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import { AbsolutePath } from "@orbit/schema/schema"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
+import { LinkShare } from "@orbit/util/link-share"
 import { CompatNames } from "./names.js"
 
 /** The convention a root follows: the reference vendor's dot-directory, or the vendor-neutral `.agents` directory. */
@@ -54,17 +55,19 @@ export const discover = Effect.fn("CompatRoots.discover")(function* (input: {
   const candidates = (yield* Effect.forEach(input.directories, (directory) =>
     Effect.gen(function* () {
       // Resolve the parent too: missing children must honor symlinked global roots.
-      const parent = yield* fs.resolve(directory)
-      return yield* Effect.forEach(conventions, (convention) =>
-        fs.resolve(path.join(parent, convention.name)).pipe(
-          Effect.map((resolved) => ({
-            kind: convention.kind,
-            path: path.join(directory, convention.name),
-            resolved,
-            parent,
-          })),
+      const parent = yield* LinkShare.resolve(fs, directory)
+      if (parent === undefined) return []
+      // A root that a link leads to a share is not a root: resolving it connects, and this runs before trust is asked.
+      const found = yield* Effect.forEach(conventions, (convention) =>
+        LinkShare.resolve(fs, path.join(parent, convention.name)).pipe(
+          Effect.map((resolved) =>
+            resolved === undefined
+              ? undefined
+              : { kind: convention.kind, path: path.join(directory, convention.name), resolved, parent },
+          ),
         ),
       )
+      return found.filter((candidate) => candidate !== undefined)
     }),
   )).flat()
 
