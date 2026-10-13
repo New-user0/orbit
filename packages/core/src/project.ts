@@ -322,7 +322,6 @@ const layer = Layer.effect(
       // there, and this runs before anyone has been asked about the folder (class 1). It is the same folder that the
       // trust decision is asked for, and no `hg` is started in one that is not trusted: the project is then identified
       // without a first changeset, as it is when `hg` is not installed.
-      if (!(yield* trust.status(worktree)).trusted) return undefined
       const result = yield* proc
         .run(
           ChildProcess.make("hg", ["log", "-r", "roots(all())", "-T", "{node}\n"], {
@@ -347,10 +346,13 @@ const layer = Layer.effect(
       const worktree = AbsolutePath.make(path.dirname(dotHg))
       const store = AbsolutePath.make(dotHg)
       const previous = yield* cached(store)
-      const id = previous ?? (yield* hgRoot(worktree))
+      const trusted = (yield* trust.status(worktree)).trusted
+      const id = previous ?? (trusted ? yield* hgRoot(worktree) : undefined)
       return {
         previous,
-        id: id ?? ID.global,
+        // An untrusted folder is its own project, as a folder without version control is, and not `ID.global`: saved
+        // "always allow" answers are keyed by project ID, so every untrusted folder that shared `global` would share them.
+        id: id ?? (trusted ? ID.global : ID.make(Hash.fast(`directory:${worktree}`))),
         directory: worktree,
         vcs: { type: "hg" as const, store },
       }

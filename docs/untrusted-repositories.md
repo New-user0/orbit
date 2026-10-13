@@ -80,9 +80,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Server** (`packages/core`):
 
-- `hg log` in `Project.resolve` (a folder that holds `.hg`): Mercurial loads the `[extensions]` and `[hooks]` of the
-  folder's `.hg/hgrc` into the command, so it is started only when `WorkspaceTrust` trusts the folder; an untrusted
-  one is named without a first changeset. Proof: `test/project-hg-trust.test.ts`.
+- `hg` in `Project.resolve` (`hg log`) and in the Mercurial VCS provider (`hg branch`, `status`, `diff`, which the
+  terminal UI asks for on connect): Mercurial loads the `[extensions]` and `[hooks]` of the folder's `.hg/hgrc` into
+  each command, so none is started while the folder is untrusted. The provider answers an empty branch, status and
+  diff and reloads on `Trust.Event.Updated`; `Project.resolve` names an untrusted folder by its path, not `global`,
+  whose saved approvals every such folder would share. Proof: `test/project-hg-trust.test.ts`,
+  `test/vcs-hg-trust.test.ts`.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
@@ -999,7 +1002,9 @@ one table covers every spelling.
     connections, and a bad theme that costs only itself. The listing does not depend on trust, so there is no separate
     trusted row; the control is a plain folder read by the same call.
   - `packages/flow/test/store-share.test.ts` (`orb flow`): the run store `openStore` opens for every command that
-    reads it, with `.orbit` linked to the same kind of listener, and two controls.
+    reads it, with `.orbit` and each of `runs.db-wal`, `-shm` and `-journal` linked to the same kind of listener, and
+    the workflow and suite readers (`workflowCommands`, `loadWorkflow`, `suiteCommands`, `loadSuite`, which
+    `trustOptions`, `load` and `resume` use before `requireTrust`) with a file linked to it, and controls.
   - `packages/core/test/link-share-bounds.test.ts`: the work the checks do (folders listed, links read) and a child
     process with a deadline.
   Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
@@ -1934,9 +1939,10 @@ fixes it or asks.
   `.git/config`, which can name programs for git to run. `shell-safety-18` carries the read-only `.git/hooks` and
   `.git/config` of the shell sandbox. The git calls of `Project.resolve` before the folder is trusted have no task yet:
   give them one (a project's identity can be read from files, without running git). Fingerprints do not cover `.git`.
-  Mercurial is not part of this gap: `Project.resolve` starts no `hg` in a folder that `WorkspaceTrust` does not
-  trust (`packages/core/test/project-hg-trust.test.ts`, with a trusted control that does start it), because `hg`
-  loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
+  Mercurial is not part of this gap: neither `Project.resolve` nor the Mercurial VCS provider starts an `hg` in a
+  folder that `WorkspaceTrust` does not trust (`packages/core/test/project-hg-trust.test.ts` and
+  `test/vcs-hg-trust.test.ts`, each with a trusted control that does start it), because `hg` loads the `[extensions]`
+  and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.

@@ -77,8 +77,11 @@ describe("Project.resolve and a folder with .hg that is not trusted", () => {
           const result = yield* withCurrentDirectoryOnPath(project.resolve(AbsolutePath.make(path.join(found.project, start))))
           expect(yield* found.ran()).toEqual([])
           expect(result.vcs?.type).toBe("hg")
-          // Identified without a first changeset, as it is when `hg` is not installed.
-          expect(result.id).toBe(Project.ID.make("global"))
+          // Identified without a first changeset, and not as `global`, whose saved approvals every such folder would share.
+          expect(result.id).not.toBe(Project.ID.make("global"))
+          const other = yield* fakeHg
+          expect((yield* project.resolve(AbsolutePath.make(other.project))).id).not.toBe(result.id)
+          expect(yield* project.resolve(AbsolutePath.make(path.join(found.project, start)))).toMatchObject({ id: result.id })
         }),
       60_000,
     )

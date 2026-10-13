@@ -2817,15 +2817,18 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone by
-the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts` pin, before anything is asked:
-`.orbit`, the compatibility roots and the MCP file in config discovery, settings files, `{file:}` references, instruction
-markers, the commands, agents, skills and plugin source folders, the terminal UI's and Mini's custom themes
-(`.orbit/themes`), and the run store that every `orb flow` command that reads it opens (`.orbit/runs.db`). Folders are
-listed without following links, and a link inside them is entered only after its target is known not to be a share (in a
-trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer. A
-theme or a run store behind such a link is skipped, with one line in the log, and `orb flow` stops with a message that
-names the store. Not covered: the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
+In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone,
+before anything is asked, by the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts`
+pin: the commands, agents, skill folders and plugin source folders of a config folder, the compatibility roots, the
+settings file, the MCP file, `{file:}` references, instruction markers found by walking up, the custom themes of the
+terminal UI and Mini (`.orbit/themes`), the run store (`.orbit/runs.db` and its `-wal`, `-shm` and `-journal` files)
+that `orb flow` opens, and the workflow and suite files that `orb flow` reads before it asks about trust, which
+includes the file name that `orb flow resume` takes from the run store. Folders are listed without following links,
+and a link inside them is entered only after its target is known not to be a share (in a trusted project too). Before,
+one such link made the start, the trust status or a reload wait for the share to answer. A theme behind such a link is
+skipped, with one line in the log, and `orb flow` stops with a message that names the store or the file. Not covered:
+config discovery's own `.orbit` folder, the loading of config files by `Config`, the compatibility plugin's real-path
+lookup, the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
 
 A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
 for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
@@ -2838,10 +2841,12 @@ so it can no longer be taken for a path inside the working folder.
 
 ### Mercurial is not run in a folder that is not trusted
 
-When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and Mercurial loads the
-`[extensions]` and `[hooks]` of that folder's own `.hg/hgrc` into the command. It is now run only in a folder you trust.
-Until then such a project has the shared `global` ID, as it does when `hg` is not installed, and a trusted folder
-runs `hg log` as before.
+When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and then `hg branch`,
+`hg status` and `hg diff` for the branch and the changes, and Mercurial loads the `[extensions]` and `[hooks]` of that
+folder's own `.hg/hgrc` into each command. None of them is run now until you trust the folder: the branch is unknown
+and there are no changes or diffs, and they appear once you trust it. An untrusted Mercurial folder is its own project
+(identified by its path), not the shared `global` project, so its saved "always allow" answers are not shared with other
+folders; a trusted folder with no `hg` or no changeset is `global`, as before.
 
 **Affects:** Mercurial users who open a clone before trusting it.
 
