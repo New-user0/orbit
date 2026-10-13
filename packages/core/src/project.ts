@@ -15,6 +15,7 @@ import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Hash } from "@orbit/util/hash"
 import { ProjectSchema } from "./project/schema.js"
 import { ProjectTable, upsertProject } from "./project/sql.js"
+import { WorkspaceTrust } from "./workspace-trust.js"
 import { WorktreeTable } from "./worktree/sql.js"
 
 export const ID = ProjectSchema.ID
@@ -101,6 +102,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const git = yield* Git.Service
     const proc = yield* AppProcess.Service
+    const trust = yield* WorkspaceTrust.Service
     const bus = yield* Bus.Service
     const db = (yield* Database.Service).db
 
@@ -316,6 +318,11 @@ const layer = Layer.effect(
     // Mercurial identity uses the cached ID or the first root changeset; remote-derived
     // identity (the git `remote()` path) is a follow-up.
     const hgRoot = Effect.fnUntraced(function* (worktree: AbsolutePath) {
+      // Mercurial loads the `[extensions]` (Python) and `[hooks]` of the folder's own `.hg/hgrc` into any command it runs
+      // there, and this runs before anyone has been asked about the folder (class 1). It is the same folder that the
+      // trust decision is asked for, and no `hg` is started in one that is not trusted: the project is then identified
+      // without a first changeset, as it is when `hg` is not installed.
+      if (!(yield* trust.status(worktree)).trusted) return undefined
       const result = yield* proc
         .run(
           ChildProcess.make("hg", ["log", "-r", "roots(all())", "-T", "{node}\n"], {
@@ -395,5 +402,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer: layer,
-  deps: [Bus.node, Database.node, FSUtil.node, Git.node, AppProcess.node],
+  deps: [Bus.node, Database.node, FSUtil.node, Git.node, AppProcess.node, WorkspaceTrust.node],
 })

@@ -1352,6 +1352,70 @@ describe("Permission under managed settings", () => {
     }),
   )
 
+  // An ask from any layer survives a managed allow; only a managed ask or deny changes it (class 8). Each row names the
+  // source of the ask, and the control row shows the default ask, which no rule wrote, is still lifted.
+  const read = (resources: string[]) => assertion({ action: "Read", resources, ...next() })
+  for (const row of [
+    {
+      name: "the person's own ask rule",
+      arrange: () => setup([{ action: "Read", resource: "secrets/*", effect: "ask" }]),
+      resources: ["secrets/key"],
+      effect: "ask",
+    },
+    {
+      name: "a session ask rule",
+      arrange: () => setup().pipe(Effect.andThen(sessionRules([{ action: "Read", resource: "secrets/*", effect: "ask" }]))),
+      resources: ["secrets/key"],
+      effect: "ask",
+    },
+    {
+      name: "the built-in .env ask",
+      arrange: () =>
+        setup([
+          { action: "Read", resource: "*.env", effect: "ask" },
+          { action: "Read", resource: "*.env.*", effect: "ask" },
+          { action: "Read", resource: "*.env.example", effect: "allow" },
+        ]),
+      resources: ["prod.env"],
+      effect: "ask",
+    },
+    {
+      name: "the built-in .env ask beside a resource no rule covers",
+      arrange: () => setup([{ action: "Read", resource: "*.env", effect: "ask" }]),
+      resources: ["plain.txt", "prod.env"],
+      effect: "ask",
+    },
+    {
+      name: "a plugin hook's ask over an allow",
+      arrange: () => setup([{ action: "Read", resource: "*", effect: "allow" }]).pipe(Effect.andThen(hookSets("ask"))),
+      resources: ["a.txt"],
+      effect: "ask",
+    },
+    {
+      name: "the default ask (control)",
+      arrange: () => setup(),
+      resources: ["a.txt"],
+      effect: "allow",
+    },
+    {
+      name: "the default ask beside an allow rule (control)",
+      arrange: () => setup([{ action: "Read", resource: "src/*", effect: "allow" }]),
+      resources: ["src/a.txt", "a.txt"],
+      effect: "allow",
+    },
+  ] as const)
+    it.effect(`a managed Read allow leaves ${row.name} ${row.effect === "ask" ? "as an ask" : "lifted"}`, () =>
+      Effect.gen(function* () {
+        yield* row.arrange()
+        yield* managed({ rules: [{ action: "Read", resource: "*", effect: "allow" }] })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(read([...row.resources]))).toMatchObject({ effect: row.effect })
+        // The managed layer's own ask still decides, with the same rules around it.
+        yield* managed({ rules: [{ action: "Read", resource: "*", effect: "ask" }] })
+        expect(yield* service.ask(read([...row.resources]))).toMatchObject({ effect: "ask" })
+      }),
+    )
+
   it.effect("a managed ask does not lift a hook's deny", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -1528,6 +1592,65 @@ describe("Permission under managed settings", () => {
     }
   }
 
+  // The same table for the person's own rules (an agent's, which is where config and project rules arrive), as the
+  // managed rows above have it, with the shell's deny-only probe (`denied`) as the Bash column: the shell guard asks about
+  // each file a command names with the path relative to the session folder (class 3 and 4).
+  for (const where of [
+    { name: "the home folder", home: sessionDirectory, resource: ".ssh/id_rsa" },
+    { name: "a folder under a repository at home", home: path.dirname(sessionDirectory), resource: "../.ssh/id_rsa" },
+    { name: "a folder outside home", home: path.join(sessionDirectory, "..", "elsewhere"), resource: undefined },
+  ]) {
+    const secret = path.join(where.home, ".ssh", "id_rsa")
+    for (const tool of ["Read", "Edit"]) {
+      for (const spelling of [
+        { name: "~", rule: "~/.ssh/*" },
+        { name: "$HOME", rule: "$HOME/.ssh/*" },
+        { name: "absolute", rule: `${path.join(where.home, ".ssh").replaceAll("\\", "/")}/*` },
+      ]) {
+        for (const effect of ["deny", "ask"] as const) {
+          it.effect(
+            `${effect === "deny" ? "denies" : "asks about"} a ${tool} of ${secret} under the person's ${spelling.name} rule in ${where.name}`,
+            () =>
+              Effect.gen(function* () {
+                yield* setup([
+                  { action: "*", resource: "*", effect: "allow" },
+                  ...ConfigPermissionExpand.expandPermissions(
+                    [{ action: tool, resource: spelling.rule, effect }],
+                    where.home,
+                  ),
+                ])
+                const service = yield* Permission.Service
+                const resources = [where.resource ?? secret]
+                expect(yield* service.ask(assertion({ ...next(), action: tool, resources }))).toMatchObject({ effect })
+                expect(yield* service.denied(assertion({ ...next(), action: tool, resources, probe: true }))).toBe(
+                  effect === "deny",
+                )
+              }),
+          )
+        }
+      }
+    }
+  }
+
+  // An allow written as an absolute path matches the relative resource the same way, which is the side effect for the Plan
+  // agent's absolute Edit allow in a session whose folder holds that folder; a neighbour stays denied.
+  for (const row of [
+    { name: "a file under the allowed folder", resource: ".orbit/plans/p.md", effect: "allow" },
+    { name: "a file beside it", resource: "src/p.md", effect: "deny" },
+  ] as const)
+    it.effect(`an absolute Edit allow decides ${row.name} in a session at home`, () =>
+      Effect.gen(function* () {
+        yield* setup([
+          { action: "Edit", resource: "*", effect: "deny" },
+          { action: "Edit", resource: `${sessionDirectory.replaceAll("\\", "/")}/.orbit/plans/*`, effect: "allow" },
+        ])
+        const service = yield* Permission.Service
+        expect(
+          yield* service.ask(assertion({ ...next(), action: "Edit", resources: [row.resource] })),
+        ).toMatchObject({ effect: row.effect })
+      }),
+    )
+
   // The kept literal still decides Bash text, and the expanded copy is limited to the path actions.
   const bashHome = path.join(path.parse(process.cwd()).root, "users", "tester")
   const bashAbsolute = `${bashHome.replaceAll("\\", "/")}/.ssh/run.sh`
@@ -1702,6 +1825,18 @@ describe("Permission under managed network settings", () => {
     ["a single-number IPv4", "127.0.0.1", "http://2130706433/", true],
     ["an IPv6 literal", "[::1]", "http://[0:0:0:0:0:0:0:1]/", true],
     ["a single-label host", "intranet", "http://intranet/", true],
+    // Class 6: an IPv4 entry and every IPv6 spelling of that address are one entry, in both directions.
+    ["an IPv4 entry and its mapped spelling", "203.0.113.5", "http://[::ffff:203.0.113.5]/", true],
+    ["an IPv4 entry and its hex mapped spelling", "203.0.113.5", "http://[::ffff:cb00:7105]/", true],
+    ["an IPv4 entry and its compatible spelling", "203.0.113.5", "http://[::203.0.113.5]/", true],
+    ["an IPv4 entry and its translated spelling", "203.0.113.5", "http://[::ffff:0:203.0.113.5]/", true],
+    ["an IPv4 entry and its NAT64 spelling", "203.0.113.5", "http://[64:ff9b::203.0.113.5]/", true],
+    ["an IPv4 entry and the shorthand of its mapped spelling", "203.0.113.5", "http://[0:0:0:0:0:ffff:cb00:7105]/", true],
+    ["a mapped entry and the dotted URL", ManagedNetwork.pattern("[::ffff:203.0.113.5]")!, "http://203.0.113.5/", true],
+    ["a NAT64 entry and the mapped URL", ManagedNetwork.pattern("[64:ff9b::203.0.113.5]")!, "http://[::ffff:203.0.113.5]/", true],
+    ["an IPv4 entry does not cover another address mapped", "203.0.113.5", "http://[::ffff:203.0.113.6]/", false],
+    ["an IPv4 entry does not cover the address in a 6to4 prefix", "203.0.113.5", "http://[2002:cb00:7105::]/", false],
+    ["the IPv6 loopback is no IPv4 address", "0.0.0.1", "http://[::1]/", false],
   ]
   for (const [name, pattern, url, denied] of cases) {
     it.effect(`${denied ? "denies" : "allows"} ${name}`, () =>

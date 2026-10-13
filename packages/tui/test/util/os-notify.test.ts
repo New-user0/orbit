@@ -281,6 +281,19 @@ describe("decoys in the working folder", () => {
     expect(await ran()).toEqual([])
   }, 60_000)
 
+  // The rows above empty PATH, so they never reach the start. This one lets the real program be found and started while
+  // decoys of every kind sit in the working folder: only the program on PATH may run, never the folder's.
+  test("a decoy in the working folder is not started when the real program is found on PATH", async () => {
+    using _ = currentDirectoryOnPath()
+    const folderRan = await decoys(cwd)
+    const binRan = await decoys(bin)
+    process.chdir(cwd)
+    process.env.PATH = bin
+    await notifySystem(benign)
+    expect((await binRan()).length).toBeGreaterThan(0)
+    expect(await folderRan()).toEqual([])
+  }, 60_000)
+
   test("control: the same decoy in a PATH directory is found and started", async () => {
     using _ = currentDirectoryOnPath()
     const ran = await decoys(bin)

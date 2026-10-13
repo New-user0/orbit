@@ -78,7 +78,7 @@ import { advance, drain } from "./lib/clock"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
-import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
+import { decoyName, row } from "./fixture/decoy"
 import { trustedProject, untrustedProject } from "./fixture/project-trust"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { grantWithRecords } from "./fixture/grant"
@@ -942,33 +942,38 @@ test("joins concurrent stdio transport closes", async () => {
 })
 
 // A server is started in the folder of its project, which can be a clone that is not trusted yet, and its command is
-// usually a bare name such as `node`, `uvx` or `docker`. Windows would start a .exe of that name from the folder.
+// usually a bare name such as `node`, `uvx` or `docker`. Windows would start a .exe, .bat or .cmd of that name from the
+// folder (class 10). Each row runs the server with the program's name nowhere on PATH, where only a decoy could start,
+// and then with the real program on PATH, which must start exactly once. The second row leaves out the .exe decoy,
+// because an .exe is found before the batch files and would hide them.
+const mcpDecoyRow = (options: { readonly exe: boolean }) =>
+  row(
+    tmpdirScoped().pipe(Effect.map((tmp) => tmp.path)),
+    (directory) =>
+      Effect.gen(function* () {
+        const transport = yield* McpStdio.make({
+          server: "bare-name",
+          command: decoyName,
+          args: [],
+          cwd: directory,
+          environment: {},
+        })
+        // The program that the control puts on PATH is not an MCP server, so starting may fail or close at once.
+        yield* Effect.exit(Effect.promise(() => transport.start()))
+        yield* Effect.exit(Effect.promise(() => transport.close()))
+      }),
+    options,
+  )
+
 testEffect(hostEnvironmentLayer).live(
   "starts an MCP server that is given only a name from PATH and never from its working folder",
   Effect.gen(function* () {
     if (process.platform !== "win32") return
-
-    const tmp = yield* tmpdirScoped()
-    const ran = yield* Effect.promise(() => plant(tmp.path, "node"))
-
-    yield* withCurrentDirectoryOnPath(
-      Effect.gen(function* () {
-        const transport = yield* McpStdio.make({
-          server: "bare-name",
-          command: "node",
-          args: ["-e", ""],
-          cwd: tmp.path,
-          environment: {},
-        })
-        yield* Effect.promise(() => transport.start())
-        yield* Effect.promise(() => transport.close())
-      }),
-    )
-
-    expect(yield* Effect.promise(ran)).toEqual([])
+    yield* mcpDecoyRow({ exe: true })
+    yield* mcpDecoyRow({ exe: false })
   }),
   // The test compiles its decoy program, which takes longer on a slow disk.
-  30_000,
+  60_000,
 )
 
 const testMcpDescendants =

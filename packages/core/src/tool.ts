@@ -155,7 +155,7 @@ const layer = Layer.effect(
               ? [
                   {
                     type: "text" as const,
-                    text: `[Image resized: the original is ${result.resized.from.width}×${result.resized.from.height} px and it is shown at ${result.resized.to.width}×${result.resized.to.height} px. Multiply coordinates read from the shown image by ${(result.resized.from.width / result.resized.to.width).toFixed(2)} to get coordinates in the original.]`,
+                    text: `[Shown at ${result.resized.to.width}×${result.resized.to.height} px; the file itself is ${result.resized.from.width}×${result.resized.from.height} px. Scale positions on the shown image by ${(result.resized.from.width / result.resized.to.width).toFixed(2)} to map them onto the file.]`,
                   },
                 ]
               : []),
@@ -280,7 +280,9 @@ const layer = Layer.effect(
         Effect.flatMap((checked) =>
           checked.allowed
             ? Effect.succeed(checked.connect)
-            : Effect.fail(new Tool.Error({ message: refusedMessage(host, checked.refusal) })),
+            : Effect.fail(
+                new Tool.Error({ message: refusedMessage(host, checked.refusal), code: Tool.ErrorCode.WebFetchRefused }),
+              ),
         ),
       )
 
@@ -293,7 +295,11 @@ const layer = Layer.effect(
         )
       return Effect.try({
         try: () => CodeModeWeb.request(call.args),
-        catch: (error) => new Tool.Error({ message: error instanceof Error ? error.message : String(error) }),
+        catch: (error) =>
+          new Tool.Error({
+            message: error instanceof Error ? error.message : String(error),
+            code: Tool.ErrorCode.WebFetchRefused,
+          }),
       }).pipe(
         Effect.flatMap((web) =>
           permission

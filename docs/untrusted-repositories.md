@@ -80,6 +80,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Server** (`packages/core`):
 
+- `hg log` in `Project.resolve` (a folder that holds `.hg`): Mercurial loads the `[extensions]` and `[hooks]` of the
+  folder's `.hg/hgrc` into the command, so it is started only when `WorkspaceTrust` trusts the folder; an untrusted
+  one is named without a first changeset. Proof: `test/project-hg-trust.test.ts`.
 - Project and local config documents, the compat settings files and `.mcp.json`: `ConfigTrust.stamp` cuts each down with
   `ConfigTrust.sanitize`, as `ConfigTrust.classification` says. Proof: `test/config/trust.test.ts`,
   `test/config/config-trust.test.ts`.
@@ -196,8 +199,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   folders are ones only an administrator (root, or on Windows a member of Administrators) can create or add a file to;
   Windows uses Program Files, not ProgramData, because a standard user can create and write under ProgramData and
   what they put there would run as every other user (owner decision 2026-10-10, "Program Files (Recommended)"; no ACL
-  check is built, and an `ORBIT_MANAGED_DIR` that a user can write is the user's own choice), and nothing in a project can name its location (the override is the server's environment or
-  `ServerOptions.managed.directory`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
+  check is built, and an `ORBIT_MANAGED_DIR` that a user can write is the user's own choice), and no project file can name its location (the override is the server's environment or
+  `ServerOptions.managed.directory`); a config `env` cannot set `ORBIT_MANAGED_DIR` or the other `ORBIT_*` control names
+  for the programs Orbit starts either (`EnvConfig.isReserved`, pinned in `env.test.ts`). A repository file cannot write the `managed` key: `ConfigNormalize` drops it
   with a diagnostic. An empty or relative override is refused with one log line and the per-OS default applies
   (`ManagedPath.directory` and `ManagedSettings`), so the working folder is never read. Each file and each entry decodes
   on its own (class 7): a file or folder that exists but cannot be read or listed, an unknown key in `managed` or its
@@ -306,6 +310,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
 
+- The run store (`Store.at`, which `openStore` and the runner call for `orb flow ls`, `approve`, `cost`, `clean`,
+  `replay`, `resume`, `show`, `trace`, `watch` and `run`): SQLite at `.orbit/runs.db` of the repository. It is not
+  code, and `flow ls` runs before a trust answer, so the gate is class 6: a store whose path leads through a link to a
+  share is refused without being opened. Proof: `packages/flow/test/store-share.test.ts`.
 - Workflow and suite modules, which are imported: `trustRefusal` with `imports`. Proof:
   `packages/cli/test/trust.test.ts`.
 - Workflow and suite data files that carry commands, approvals or agents: `trustRefusal` with `defines`, listed by
@@ -373,6 +381,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 
 **Terminal UI** (`packages/tui`):
 
+- Custom themes (`discoverThemes`, called by the terminal UI's theme provider and by Mini when they mount): a JSON file
+  per theme, read from `<folder>/.orbit/themes` of every folder above the working folder, before any trust answer. It is
+  data, not code, so trust does not gate it; the class 6 rule does: a name that is, or leads through a link to, a share
+  is skipped before it is listed or read, and a theme that fails costs only itself. Proof:
+  `test/theme-share.test.ts`.
 - Plugins that the terminal UI imports in its own process: `trustedPluginDirectories` with `trust.startup`. Proof:
   `test/plugin-trust.test.ts`, `test/plugin-discovery.test.ts`.
 - The status line command (`status_line.command`, user config): it runs with the terminal UI's own working folder, the
@@ -959,7 +972,8 @@ one table covers every spelling.
 - A share named through a chain of links (class 6 and 7). Windows follows up to 63 links in one path, and a repository
   can ship a chain of any length that ends at a share. `LinkShare` follows up to `LinkShare.LIMIT` (80) links, one
   `readLink` at a time, and a walk that reaches the limit answers `LinkShare.unresolved(file)`, a path that starts with
-  two separators, never "no share": every caller then refuses or skips the path, as it does for a share, instead of
+  two separators on Windows (`\\?\too-many-links\…`, a rooted `/\?\…` form elsewhere), never "no share": every caller
+  then refuses or skips the path, as it does for a share, instead of
   opening it. `ProjectTrust.follow`, which decides where a write through a dangling chain lands, ends the same way. The
   listing of a config directory's `plugin` and `plugins` folders in `ProjectTrust.status` asks `LinkShare` first, since a
   direct link there is a share too. Proof: `packages/core/test/link-chain.test.ts` (40, 41, 63 and 85 links, for
@@ -967,18 +981,32 @@ one table covers every spelling.
   `ShellTool.concurrent` with a Git Bash context) and `test/config/fingerprint-plugin-share.test.ts` (an untrusted Config
   load and status, for 1, 40, 41 and 63 links from `.orbit/plugins` and `.orbit/plugin`). Mutation: restoring the old
   limit of 40 with `return undefined` fails every 41, 63 and 85 row.
-- Every touch of a path a repository supplies asks `LinkShare` first (class 6, round 5). It lives in
-  `packages/util/src/link-share.ts`, so that the compatibility package asks it too. `LinkShare.blocked` and
-  `LinkShare.resolve` stand in front of a stat, a realpath or a read; `LinkShare.scan` lists a folder with `readdir`
+- The loaders that the guard table pins ask `LinkShare` before they touch a path a repository supplies (class 6, rounds
+  5 and 6). It lives in `packages/util/src/link-share.ts`, so that the compatibility package and the terminal UI ask it
+  too. `LinkShare.blocked` and `LinkShare.resolve` stand in front of a stat, a realpath or a read; `LinkShare.scan`
+  lists a folder with `readdir`, enters only a folder that a pattern can still match below (and never `node_modules`),
   and asks about each link entry before it enters it, at any depth, where the `glob` package follows every link (a
-  link one level below a checked folder still connected). `FSUtil.up` skips a marker that is a link to a share. The
-  sites: `.orbit`, the orbit files, the compatibility roots and the MCP file in config discovery and in `CompatRoots`, a
-  settings file, a `{file:}` reference, the command, agent, skill and compatibility-skill listings, and the plugin
-  source folders. Proof: `packages/core/test/share-roots.test.ts` (each loader with its folder and the folder's
-  children linked to a share; the recorded file system sees only `readLink` on the link and no `scan`; a control with
-  links that stay on the disk, and a loop of links that ends). Mutation: `LinkShare.scan` entering a link entry without
-  asking fails the nested rows. Not covered yet and still listed as a gap: the terminal UI's theme and plugin
-  discovery, `orb flow` and the VS Code diff view (they run in other processes), and the native watcher.
+  link one level below a checked folder still connected). `FSUtil.up` skips a marker that is a link to a share. One
+  question reads each part of a path once, however many links lead back through it. The rows, one test file per process:
+  - `packages/core/test/share-roots.test.ts` (the server): `CommandFile.load`, `AgentFile.load`,
+    `PluginSourceDirectory.discover`, `LinkShare.scan` for the skill folders, `CompatRoots.discover`, the settings
+    file, the MCP file, a `{file:}` reference and an instruction marker found by `FSUtil.up`, each with its folder and
+    the folder's children linked to a share. The recorded file system sees only `readLink` on the link and no `scan`;
+    a control has links that stay on the disk, and a loop of links that ends. It has no row for config discovery's own
+    `.orbit` and orbit files, for `Config`'s file loading or for the compatibility plugin's `realPath`.
+  - `packages/tui/test/theme-share.test.ts` (the terminal UI and Mini, which both call `discoverThemes`):
+    `.orbit`, `.orbit/themes` and a theme file linked to a WebDAV share served by a local listener that records
+    connections, and a bad theme that costs only itself. The listing does not depend on trust, so there is no separate
+    trusted row; the control is a plain folder read by the same call.
+  - `packages/flow/test/store-share.test.ts` (`orb flow`): the run store `openStore` opens for every command that
+    reads it, with `.orbit` linked to the same kind of listener, and two controls.
+  - `packages/core/test/link-share-bounds.test.ts`: the work the checks do (folders listed, links read) and a child
+    process with a deadline.
+  Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
+  taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
+  `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
+  Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
+  watcher, and the git calls that `orb flow` makes in the folder before it opens the store.
 
 **Review questions:**
 
@@ -1906,6 +1934,9 @@ fixes it or asks.
   `.git/config`, which can name programs for git to run. `shell-safety-18` carries the read-only `.git/hooks` and
   `.git/config` of the shell sandbox. The git calls of `Project.resolve` before the folder is trusted have no task yet:
   give them one (a project's identity can be read from files, without running git). Fingerprints do not cover `.git`.
+  Mercurial is not part of this gap: `Project.resolve` starts no `hg` in a folder that `WorkspaceTrust` does not
+  trust (`packages/core/test/project-hg-trust.test.ts`, with a trusted control that does start it), because `hg`
+  loads the `[extensions]` and `[hooks]` of `.hg/hgrc` into whatever it runs there (class 1).
 - **The dormant `instructions` config key** needs the same real-path guard when it is wired in (M4).
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.

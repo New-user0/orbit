@@ -163,7 +163,9 @@ export function normalize(input: unknown): Result {
     canonical(ConfigAgent.Info, ConfigMigrateV1.migrateAgent({ ...value, mode: "primary" })),
   )
   const migratedAgents = mergeMaps(legacyAgents, modeAgents, ["agents"], diagnostics)
-  const nativeAgents = decodeMap(input.agents, ConfigAgent.Info, ["agents"], diagnostics, decodeEncoded)
+  const nativeAgents = decodeMap(input.agents, ConfigAgent.Info, ["agents"], diagnostics, (schema, value, at, found) =>
+    decodeFields(schema, value, at, found, "permissions"),
+  )
   diagnoseAgentUnsupported(input.agent, ["agent"], diagnostics)
   diagnoseAgentUnsupported(input.mode, ["mode"], diagnostics)
   mergeMap(
@@ -232,9 +234,14 @@ export function normalize(input: unknown): Result {
     worktree: Info.fields.worktree,
     warming: Info.fields.warming,
   }
+  // Objects whose fields are independent settings: a bad field costs only itself, so `sandbox.enabled` survives a bad
+  // `sandbox.write` (class 7).
+  const independent = ["sandbox", "shell_tool", "tool_execution", "websearch", "webfetch", "worktree", "warming"]
   Object.entries(nativeAtomic).forEach(([key, schema]) => {
     if (!own(input, key)) return
-    const value = decodeEncoded(schema, input[key], [key], diagnostics)
+    const value = independent.includes(key)
+      ? decodeFields(schema, input[key], [key], diagnostics)
+      : decodeEncoded(schema, input[key], [key], diagnostics)
     if (value === undefined) return
     overlay(encoded, key, value, [key], diagnostics)
   })
@@ -729,15 +736,51 @@ function decodeEncoded<S extends Schema.Codec<unknown, unknown, never, never>>(
   path: string[],
   diagnostics: Diagnostic[],
 ) {
+  const decoded = decodeQuiet(schema, value)
+  if (decoded === undefined) invalid(path, diagnostics)
+  return decoded
+}
+
+function decodeQuiet<S extends Schema.Codec<unknown, unknown, never, never>>(schema: S, value: unknown) {
   const decoded = Schema.decodeUnknownOption(schema, options)(value)
-  if (Option.isNone(decoded)) {
+  if (Option.isNone(decoded)) return undefined
+  const encoded = Schema.encodeUnknownOption(schema, options)(decoded.value)
+  return Option.isSome(encoded) ? plain(encoded.value) : undefined
+}
+
+/**
+ * Decodes an object whose fields are independent, one field at a time when the whole does not decode, so a bad field
+ * costs only itself. A field is judged by decoding it alone, which holds because the fields that can be missing are
+ * optional. `rules` names a list of permission rules that is kept rule by rule, since one bad rule must not take the
+ * valid denies beside it. Each loss is reported at its own path, and an object of which nothing survives is dropped.
+ */
+function decodeFields<S extends Schema.Codec<unknown, unknown, never, never>>(
+  schema: S,
+  value: unknown,
+  path: string[],
+  diagnostics: Diagnostic[],
+  rules?: string,
+) {
+  const whole = decodeQuiet(schema, value)
+  if (whole !== undefined) return whole
+  if (!isRecord(value)) {
     invalid(path, diagnostics)
     return undefined
   }
-  const encoded = Schema.encodeUnknownOption(schema, options)(decoded.value)
-  if (Option.isSome(encoded)) return plain(encoded.value)
-  invalid(path, diagnostics)
-  return undefined
+  const input =
+    rules !== undefined && Array.isArray(value[rules])
+      ? { ...value, [rules]: decodeList(value[rules], Permission.Rule, [...path, rules], diagnostics, decodeEncoded) }
+      : value
+  const kept = Object.fromEntries(
+    Object.entries(input).filter(([key, item]) => {
+      if (decodeQuiet(schema, { [key]: item }) !== undefined) return true
+      invalid([...path, key], diagnostics)
+      return false
+    }),
+  )
+  const result = Object.keys(kept).length === 0 ? undefined : decodeQuiet(schema, kept)
+  if (result === undefined && Object.keys(kept).length > 0) invalid(path, diagnostics)
+  return result
 }
 
 function canonical<S extends Schema.Codec<unknown, unknown, never, never>>(schema: S, value: unknown) {
