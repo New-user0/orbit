@@ -261,6 +261,12 @@ const layer = Layer.effect(
         Effect.map((value) => value.trim()),
         Effect.map((value) => (value ? ID.make(value) : undefined)),
         Effect.orElseSucceed(() => undefined),
+        // The file is the folder's to write: Orbit never creates it. An ID is a commit hash or the hash of a name, and
+        // anything else (`global`, a path) is dropped, because the ID is later joined into data-folder paths (class 5).
+        Effect.flatMap((id) => {
+          if (!id || /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) return Effect.succeed(id)
+          return Effect.logWarning("ignored a project ID of an unknown shape in " + dir).pipe(Effect.as(undefined))
+        }),
       )
     })
 
@@ -345,8 +351,9 @@ const layer = Layer.effect(
     const hgDiscover = Effect.fnUntraced(function* (dotHg: AbsolutePath) {
       const worktree = AbsolutePath.make(path.dirname(dotHg))
       const store = AbsolutePath.make(dotHg)
-      const previous = yield* cached(store)
       const trusted = (yield* trust.status(worktree)).trusted
+      // A folder that is not trusted does not choose its own ID by shipping `.hg/orbit` (class 5, class 3).
+      const previous = trusted ? yield* cached(store) : undefined
       const id = previous ?? (trusted ? yield* hgRoot(worktree) : undefined)
       return {
         previous,
@@ -369,7 +376,7 @@ const layer = Layer.effect(
           ? yield* git.repo.discover(AbsolutePath.make(path.dirname(native)))
           : undefined
       if (repo) {
-        const previous = yield* cached(repo.commonDirectory)
+        const previous = (yield* trust.status(repo.worktree)).trusted ? yield* cached(repo.commonDirectory) : undefined
         const id = (yield* remote(repo)) ?? previous ?? (yield* rootCommit(repo))
         const canonical = repo.gitDirectory === repo.commonDirectory ? repo.worktree : yield* mainCheckout(repo)
         return yield* persist({

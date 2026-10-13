@@ -1,5 +1,6 @@
 export * as ShellPaths from "./paths.js"
 
+import nodePath from "node:path"
 import { FSUtil } from "@orbit/util/fs-util"
 import type { Command, Context, Word } from "./analysis.js"
 import type { PowerShellParse } from "./powershell-parse.js"
@@ -666,7 +667,7 @@ const READ_CLASS = new Set(
 function operands(state: State, index: number, command: Command, ctx: Context) {
   const name = headName(command.inner[0] ?? "", ctx)
   const words = command.argv.slice(command.argv.length - command.inner.length + 1)
-  const found = outputs(name, words)
+  const found = outputs(name, words, ctx.platform)
   if (found.unvalidatable) refuse(state, index, "option")
   found.writes.forEach((item) => word(state, index, "write", item))
   const named = name === "git" ? (words.some((item) => item.value === "diff") && words.some((item) => item.value === "--no-index") ? words.slice(words.findIndex((item) => item.value === "diff") + 1) : []) : READ_CLASS.has(name) ? words : []
@@ -700,7 +701,7 @@ type Outputs = {
   unvalidatable: boolean
 }
 
-function outputs(name: string, words: Word[]): Outputs {
+function outputs(name: string, words: Word[], platform: string): Outputs {
   const found: Outputs = { writes: [], skip: new Set(), unvalidatable: false }
   const cut = (item: Word, value: string): Word => ({ ...item, value, glob: false, tilde: false })
   const write = (value: Word | undefined) => {
@@ -770,22 +771,26 @@ function outputs(name: string, words: Word[]): Outputs {
   } else if (name === "git") {
     // Global options come first. `-C` moves the folder that a relative output is written in (each one relative to the one
     // before), and these take their value as the next word, which is not the verb.
+    // On Windows a root-relative word and a UNC path are absolute too: they are not joined under `-C`.
+    const rooted = (item: Word) => item.tilde || /^(?:[\/~]|[A-Za-z]:)/.test(item.value) || (platform === "win32" && nodePath.win32.isAbsolute(item.value))
     let folder: Word | undefined
     let verb = -1
     for (let at = 0; at < words.length && verb < 0; at++) {
       const text = words[at].value
       if (text === "-C" && words[at + 1]) {
         const next = words[++at]
+        // The tool leaves the folder as it is for an empty value.
+        if (next.value === "" && next.literal) continue
         folder =
-          folder === undefined || /^(?:[\/~]|[A-Za-z]:)/.test(next.value) || next.tilde
+          folder === undefined || rooted(next)
             ? next
             : { ...next, value: `${folder.value}/${next.value}`, literal: folder.literal && next.literal, glob: folder.glob || next.glob }
-      } else if (["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path", "--config-env"].includes(text)) at++
+      } else if (["-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source", "--shallow-file"].includes(text)) at++
       else if (!text.startsWith("-")) verb = at
     }
     // A relative output lies in the folder of the last `-C`; one the shell expands from `~` or that is absolute does not.
     const placed = (item: Word): Word =>
-      folder === undefined || item.tilde || /^(?:[\/~]|[A-Za-z]:)/.test(item.value)
+      folder === undefined || rooted(item)
         ? item
         : { ...item, value: `${folder.value}/${item.value}`, literal: item.literal && folder.literal, glob: item.glob || folder.glob, tilde: folder.tilde }
     const output = (item: Word | undefined) => {

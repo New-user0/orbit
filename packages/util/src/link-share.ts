@@ -2,7 +2,7 @@ export * as LinkShare from "./link-share.js"
 
 import fsSync from "fs"
 import path from "path"
-import { Effect } from "effect"
+import { Cause, Effect } from "effect"
 import { minimatch } from "minimatch"
 import type { FSUtil } from "./fs-util.js"
 
@@ -155,7 +155,8 @@ export const scan = (fs: FSUtil.Interface, cwd: string, patterns: readonly strin
     const found: string[] = []
     // The real folders already listed, so that a link back to a folder above (or beside) it is not listed again.
     const key = (file: string) => (nocase ? file.toLowerCase() : file)
-    const seen = new Set<string>([key((yield* followed(fs, cwd, reads)).real)])
+    const start = (yield* followed(fs, cwd, reads)).real
+    const seen = new Set<string>(start === undefined ? [] : [key(start)])
     const visit = (directory: string, relative: string, depth: number): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (depth > DEPTH) return
@@ -164,12 +165,17 @@ export const scan = (fs: FSUtil.Interface, cwd: string, patterns: readonly strin
           const full = path.join(directory, entry.name)
           const name = relative === "" ? entry.name : `${relative}/${entry.name}`
           const where = entry.type === "symlink" ? yield* followed(fs, full, reads) : undefined
-          const kind = where === undefined ? entry.type : where.share ? ("other" as const) : yield* kindOf(fs, where.real)
+          const kind =
+            where === undefined
+              ? entry.type
+              : where.share || where.real === undefined
+                ? ("other" as const)
+                : yield* kindOf(fs, where.real)
           if (kind === "directory") {
             // A folder that no pattern can match below is not entered, and nor is a package folder, which holds thousands.
             if (!enters(name, patterns, nocase)) continue
             // Only a link can lead back, and it is known not to lead to a share.
-            const real = key(where === undefined ? full : where.real)
+            const real = key(where === undefined ? full : where.real!)
             if (where !== undefined && seen.has(real)) continue
             seen.add(real)
             yield* visit(full, name, depth + 1)
@@ -189,7 +195,15 @@ const followed = (fs: FSUtil.Interface, file: string, reads: Reads) =>
   Effect.gen(function* () {
     const found = yield* follow(fs, file, 0, reads)
     if ("share" in found) return { share: true as const, real: file }
-    return { share: false as const, real: found.real ?? (yield* fs.resolve(file)) }
+    if (found.real !== undefined) return { share: false as const, real: found.real }
+    // Off Windows the file system resolves it. A link it cannot resolve (a loop, a path through a file, no access) is not a
+    // share and is not followed; it must not be a defect, because a repository can ship one (class 7).
+    const real = yield* fs.resolve(file).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(`not following ${file}: ${Cause.pretty(cause).slice(0, 200)}`).pipe(Effect.as(undefined)),
+      ),
+    )
+    return { share: false as const, real }
   })
 
 // What the end of a chain is. It has no link on it, so asking does not follow one.
