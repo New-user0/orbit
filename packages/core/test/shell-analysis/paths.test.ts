@@ -144,7 +144,24 @@ describe("bash output files of read-class commands", () => {
     ["tree -L 2 d", ["read /work/d"]],
     ["git diff --output=out", ["write /work/out"]],
     ["git diff --output out", ["write /work/out"]],
-    ["git -C d log --output=out", ["write /work/out"]],
+    // `-C` moves the folder a relative output is written in, as git does (verified with git 2.47 in Docker).
+    ["git -C d log --output=out", ["write /work/d/out"]],
+    ["git -C d format-patch -1 -o o9", ["write /work/d/o9"]],
+    ["git -C d -C e diff --output=x", ["write /work/d/e/x"]],
+    ["git -C d -C /abs diff --output=x", ["write /abs/x"]],
+    ["git -C ../outside diff --output=x", ["write /outside/x"]],
+    ["git -C d diff --output=/tmp/x", ["write /tmp/x"]],
+    // A global option's separate value is not the verb.
+    ["git --git-dir .git diff --output=../x", ["write /x"]],
+    ["git --work-tree . diff --output=../x", ["write /x"]],
+    ["git --namespace x diff --output=o", ["write /work/o"]],
+    ["git --super-prefix p diff --output=o", ["write /work/o"]],
+    ["git -c a=b diff --output=o", ["write /work/o"]],
+    // `-o` inside a cluster of short options.
+    ["git format-patch -1 -ko ../x", ["write /x"]],
+    ["git format-patch -ko out", ["write /work/out"]],
+    ["git format-patch -Sfoo", []],
+    ["git format-patch -U3 -o out", ["write /work/out"]],
     ["git show --output=out HEAD", ["write /work/out"]],
     ["git format-patch -o out", ["write /work/out"]],
     ["git format-patch -oout", ["write /work/out"]],
@@ -165,6 +182,12 @@ describe("bash output files of read-class commands", () => {
     ["sed -n 's/w out/x/p' f", []],
     ["sed -n 'y/w/x/' f", []],
     ["sed -n '/w out/p' f", []],
+    // GNU sed reads `[/]` as a bracket expression that holds the delimiter.
+    ["sed -n '/[/]/w ../out' f", ["write /out"]],
+    ["sed -n 's/[/]/x/w out' f", ["write /work/out"]],
+    ["sed -n '/[[:alpha:]/]/w out' f", ["write /work/out"]],
+    ["sed -n '/[]/]/w out' f", ["write /work/out"]],
+    ["sed -n '/[a]/p' f", []],
     ["sed 'a w out' f", []],
   ]
   const cells = (result: ReturnType<typeof bash>) => result.paths.files.map(cell)

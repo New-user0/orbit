@@ -8,6 +8,11 @@ export namespace Glob {
     include?: "file" | "all"
     dot?: boolean
     symlink?: boolean
+    nocase?: boolean
+    /** Take braces literally, as a shell does for a quoted word; brace expansion can run for seconds on a few words. */
+    nobrace?: boolean
+    /** Take `+(a|b)` and its kin literally. */
+    noext?: boolean
   }
 
   function toGlobOptions(options: Options): GlobOptions {
@@ -17,6 +22,9 @@ export namespace Glob {
       dot: options.dot,
       follow: options.symlink ?? false,
       nodir: options.include !== "all",
+      nocase: options.nocase,
+      nobrace: options.nobrace,
+      noext: options.noext,
     }
   }
 

@@ -42,7 +42,8 @@ export type Place = {
   real: string[]
 }
 
-export type Probe = { action: "Read" | "Edit"; resources: string[] }
+/** `under` makes the resources folders: the probe is denied when a deny rule could match any file below one of them. */
+export type Probe = { action: "Read" | "Edit"; resources: string[]; under?: true }
 
 export type Facts = {
   places: Place[]
@@ -218,30 +219,61 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
 
   // A read through a wildcard reaches every file the wildcard matches, so the Read rules are asked about each match and
   // not only about the folder it starts in (class 8). Matches are found on the real folder without following links; one
-  // that is a link is probed as the place it leads to as well. A walk that cannot be bounded or decided asks instead.
-  const matched = yield* Effect.forEach(operands, ({ operand }, index) => {
-    const place = resolved[index]!
-    if (operand.form !== "glob" || WRITES.has(operand.role) || place.status === "unresolved")
-      return Effect.succeed({ resources: [] as { action: "Read" | "Edit"; resource: string }[], undecided: false })
-    const pattern = globRemainder(operand, input.ctx.platform === "win32")
-    if (pattern === undefined) return Effect.succeed({ resources: [], undecided: true })
-    const actions: ("Read" | "Edit")[] = operand.role === "source" ? ["Read", "Edit"] : ["Read"]
-    return Effect.forEach(place.real, (folder) =>
-      fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot: true, symlink: false }).pipe(
-        Effect.map((found) => (found.length > GLOB_LIMIT ? undefined : found)),
+  // that is a link is probed as the place it leads to as well. A wildcard that cannot be expanded (too many matches, a scan
+  // that failed, too many words or too much time for one command) is decided too: an `under` probe is denied when a deny
+  // rule could match anything below its folders, so a walk that is not bounded never slips past a rule (class 8).
+  // The scan is a superset of what the shell expands: names match in any case, and a leading dot matches when the input
+  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. Braces and extglobs are literal, since a
+  // quoted brace would otherwise be expanded by the library for seconds (class 7).
+  const budget = { matches: 0, scans: 0, until: Date.now() + GLOB_MILLIS }
+  const seen = new Map<string, { targets: string[]; undecided: boolean }>()
+  const dot = ps || DOTGLOB.test(input.text)
+  const expand = (folder: string, pattern: string, role: ShellPaths.Role) => {
+    const key = `${folder}
+${pattern}`
+    const known = seen.get(key)
+    if (known) return Effect.succeed(known)
+    if (budget.scans >= GLOB_WORDS || Date.now() > budget.until) return Effect.succeed({ targets: [] as string[], undecided: true })
+    budget.scans++
+    return fs
+      .scan(pattern, { cwd: folder, absolute: true, include: "all", dot, nocase: true, nobrace: true, noext: true, symlink: false })
+      .pipe(
+        Effect.map((found) => {
+          budget.matches += found.length
+          return found.length > GLOB_LIMIT || budget.matches > GLOB_LIMIT ? undefined : found
+        }),
         Effect.catch(() => Effect.succeed(undefined)),
         Effect.flatMap((found) =>
           found === undefined
             ? Effect.succeed({ targets: [] as string[], undecided: true })
             : Effect.forEach(found, (file) =>
-                resolveCandidate(file, { candidates: [file], kind: "file", role: operand.role, removal: false, change: false, level: 0 }),
+                resolveCandidate(file, { candidates: [file], kind: "file", role, removal: false, change: false, level: 0 }),
               ).pipe(Effect.map((all) => ({ targets: all.flatMap((item) => item.targets), undecided: false }))),
         ),
-      ),
+        Effect.tap((result) => Effect.sync(() => seen.set(key, result))),
+      )
+  }
+  const matched = yield* Effect.forEach(operands, ({ operand }, index) => {
+    const place = resolved[index]!
+    if (operand.form !== "glob" || WRITES.has(operand.role) || place.status === "unresolved")
+      return Effect.succeed({ resources: [] as { action: "Read" | "Edit"; resource: string }[], undecided: false, folders: [] as string[] })
+    const win = input.ctx.platform === "win32"
+    const pattern = globRemainder(operand, win)
+    // A `..` after a wildcard leaves no fixed folder: the whole word is expanded from each folder the command may be in,
+    // as node-glob reads `..` segments. A word that starts with `~` or holds a variable is not expanded by the library.
+    const whole = pattern === undefined
+    const spelled = win ? operand.spelled.replaceAll("\\", "/") : operand.spelled
+    const folders = whole ? operand.bases : place.real
+    const pending = whole && /^~|\$/.test(spelled)
+    const actions: ("Read" | "Edit")[] = operand.role === "source" ? ["Read", "Edit"] : ["Read"]
+    return Effect.forEach(folders, (folder) =>
+      pending ? Effect.succeed({ targets: [] as string[], undecided: true }) : expand(folder, whole ? spelled : pattern!, operand.role),
     ).pipe(
       Effect.map((all) => ({
         resources: actions.flatMap((action) => [...new Set(all.flatMap((item) => item.targets))].map((resource) => ({ action, resource }))),
         undecided: all.some((item) => item.undecided),
+        // What a probe of an undecided wildcard asks about: where the word starts and, for a `..`, the places above.
+        folders: [...new Set([...folders, ...(whole ? place.real.map((item) => path.dirname(item)) : [])])],
       })),
     )
   })
@@ -273,13 +305,24 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   return {
     places: everything.map(({ resources: _resources, external: _external, ...place }) => place),
     external: everything.flatMap((item) => item.external),
-    probes: [...everything, ...matched].flatMap((item) => {
-      const actions = [...new Set(item.resources.map((entry) => entry.action))]
-      return actions.map((action) => ({
-        action,
-        resources: item.resources.filter((entry) => entry.action === action).map((entry) => entry.resource),
-      }))
-    }),
+    probes: [
+      ...[...everything, ...matched].flatMap((item) => {
+        const actions = [...new Set(item.resources.map((entry) => entry.action))]
+        return actions.map((action): Probe => ({
+          action,
+          resources: item.resources.filter((entry) => entry.action === action).map((entry) => entry.resource),
+        }))
+      }),
+      ...matched.flatMap((item, index) =>
+        item.undecided
+          ? (operands[index]!.operand.role === "source" ? (["Read", "Edit"] as const) : (["Read"] as const)).map((action): Probe => ({
+              action,
+              resources: item.folders,
+              under: true,
+            }))
+          : [],
+      ),
+    ],
     bare,
     findings: [
       ...found,
@@ -293,8 +336,13 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   } satisfies Facts
 })
 
-// The most matches of one wildcard that are checked one by one; a wildcard that reaches more is asked about.
+// What one command may spend on wildcards: matches checked one by one, distinct wildcards expanded, and time. A command
+// that reaches past any of them is decided through an `under` probe instead (class 7, class 8).
 const GLOB_LIMIT = 500
+const GLOB_WORDS = 32
+const GLOB_MILLIS = 3000
+// Input that turns on what makes a shell's wildcard reach dotfiles or ignore case.
+const DOTGLOB = /dotglob|nocaseglob|globdots|globignore|case_?glob|glob_?dots/i
 
 // The part of a wildcard operand after its folder, as a pattern relative to that folder. None when the folder part is the
 // whole operand (a `..` after the wildcard), which cannot be expanded from one folder.
@@ -489,6 +537,7 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
         action: probe.action,
         resources: probe.resources,
         probe: true,
+        ...(probe.under ? { under: true } : {}),
         ...input.base,
       }),
     ),
