@@ -2774,11 +2774,15 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 
 ### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
 
-In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone by
-every loader before anything is asked: `.orbit`, the orbit files, the compatibility roots, the MCP file, settings files,
-the commands, agents, skills and plugin folders, `{file:}` references and instruction markers. Folders are listed
-without following links, and a link inside them is entered only after its target is known not to be a share (in a
-trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer.
+In a repository, a link that leads to a Windows share or device path (`\\host\share`, `\\.\...`) is now left alone by
+the loaders that `share-roots.test.ts`, `theme-share.test.ts` and `store-share.test.ts` pin, before anything is asked:
+`.orbit`, the compatibility roots and the MCP file in config discovery, settings files, `{file:}` references, instruction
+markers, the commands, agents, skills and plugin source folders, the terminal UI's and Mini's custom themes
+(`.orbit/themes`), and the run store that every `orb flow` command that reads it opens (`.orbit/runs.db`). Folders are
+listed without following links, and a link inside them is entered only after its target is known not to be a share (in a
+trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer. A
+theme or a run store behind such a link is skipped, with one line in the log, and `orb flow` stops with a message that
+names the store. Not covered: the terminal UI's plugin folders, the native file watcher and the VS Code diff view.
 
 A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
 for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
@@ -2788,6 +2792,17 @@ so it can no longer be taken for a path inside the working folder.
 **Affects:** projects that link to network shares, on Windows.
 
 **What to do:** Nothing; use the share's drive path, or copy the files into the project, if a loader should read them.
+
+### Mercurial is not run in a folder that is not trusted
+
+When a client opened a folder that holds `.hg`, Orbit ran `hg log` there to name the project, and Mercurial loads the
+`[extensions]` and `[hooks]` of that folder's own `.hg/hgrc` into the command. It is now run only in a folder you trust.
+Until then such a project has the shared `global` ID, as it does when `hg` is not installed, and a trusted folder
+runs `hg log` as before.
+
+**Affects:** Mercurial users who open a clone before trusting it.
+
+**What to do:** Nothing; trust the folder.
 
 ### Declarations that print the environment ask like any command
 
