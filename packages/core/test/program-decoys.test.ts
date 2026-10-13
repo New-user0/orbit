@@ -25,7 +25,7 @@ import { Shell } from "@orbit/core/shell"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
-import { plant, withCurrentDirectoryOnPath } from "./fixture/decoy"
+import { decoyName as name, plant, row, withCurrentDirectoryOnPath } from "./fixture/decoy"
 import { hostEnvironmentLayer } from "./fixture/environment"
 import { tempGlobalLayer } from "./fixture/global"
 import { location, tempLocationLayer } from "./fixture/location"
@@ -40,61 +40,6 @@ import { PluginTestLayer } from "./plugin/fixture"
 // Windows runs (.exe, .bat, .cmd) named like the program, with NoDefaultCurrentDirectoryInExePath removed from this
 // process. The real program, a compiled .exe in a folder of its own, is the control: when it is put on PATH it starts
 // exactly once, which also shows that a decoy of the same kind can run, and the decoys of the folder still do not.
-const name = "orbit-fake-prog"
-
-// Decoys of every kind Windows runs, in the folder, with a mark that each leaves when run. `plant` also records the
-// arguments, so a decoy that ran shows up as a line.
-const decoys = (directory: string) =>
-  Effect.gen(function* () {
-    const ran = yield* Effect.promise(() => plant(directory, name))
-    const marks = path.join(directory, "batch-ran.txt")
-    yield* Effect.promise(() =>
-      Promise.all(
-        [".bat", ".cmd"].map((extension) =>
-          fs.writeFile(path.join(directory, `${name}${extension}`), `@echo off\r\necho ran> "${marks}"\r\n`),
-        ),
-      ),
-    )
-    return async () => [...(await ran()), ...((await Bun.file(marks).exists()) ? ["batch"] : [])]
-  })
-
-// A folder first on PATH while `body` runs.
-const onPath = <A, E, R>(bin: string, body: Effect.Effect<A, E, R>) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => {
-      const before = process.env.PATH
-      process.env.PATH = `${bin}${path.delimiter}${before}`
-      return before
-    }),
-    () => body,
-    (before) =>
-      Effect.sync(() => {
-        process.env.PATH = before
-      }),
-  )
-
-/**
- * One row: `start` runs the surface in `directory` with the program's name as its command. First with the real program
- * nowhere on PATH, where only a decoy could start; then with it on PATH, where only the real one may.
- */
-const row = <E, R, S>(directory: Effect.Effect<string, unknown, R>, start: (directory: string) => Effect.Effect<unknown, E, S>) =>
-  Effect.gen(function* () {
-    const project = yield* directory
-    const bin = (yield* tmpdirScoped()).path
-    const projectRan = yield* decoys(project)
-    const binRan = yield* Effect.promise(() => plant(bin, name))
-    yield* withCurrentDirectoryOnPath(
-      Effect.gen(function* () {
-        yield* start(project)
-        expect(yield* Effect.promise(projectRan)).toEqual([])
-        expect(yield* Effect.promise(binRan)).toEqual([])
-
-        yield* onPath(bin, start(project))
-        expect(yield* Effect.promise(binRan)).toHaveLength(1)
-        expect(yield* Effect.promise(projectRan)).toEqual([])
-      }),
-    )
-  })
 
 // Every shell Windows can offer, as ShellSelect resolves each; one that is not installed here is left out.
 const shells = ["pwsh", "powershell", "bash", "cmd"].filter(
