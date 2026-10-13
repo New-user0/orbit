@@ -3982,6 +3982,40 @@ describe("ShellTool guard (PowerShell)", () => {
       options,
     )
 
+  // Padded past the parse limit the input is opaque, and its fragments must still answer to every spelling of the cmdlet.
+  for (const [rule, commands] of [
+    [
+      "Remove-Item *",
+      ["rm x", "del x", "ri x", "Microsoft.PowerShell.Management\\Remove-Item x", "Remove-Item\tx", "& 'rm' x", "Remove-Item x"],
+    ],
+    ["rm *", ["Remove-Item x", "del x"]],
+    ["Invoke-Expression *", ["iex 'Remove-Item x'"]],
+  ] as const)
+    windows(
+      `a deny written as ${rule} meets ${commands.join(" | ")} when the input is too long to parse`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            yield* permissions([
+              { action: "Bash", resource: "*", effect: "allow" },
+              { action: "Bash", resource: rule, effect: "deny" },
+            ])
+            yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+            for (const command of commands)
+              expectBlocked(
+                yield* runPermissionCommand(
+                  registry,
+                  `${command}; #${"x".repeat(20_000)}`,
+                  path.join(fixture.active, "marker"),
+                  [],
+                ),
+              )
+            expect(yield* absent(path.join(fixture.active, "x"))).toBe(false)
+          }),
+        ),
+      { timeout: 60_000 },
+    )
+
   windows(
     "an application is denied by the rule for its cmdlet name and never lifted by an allow for it",
     () =>
@@ -4102,7 +4136,7 @@ describe("ShellTool guard (PowerShell)", () => {
       )
 
   // PowerShell 7 goes home for a location change with no path: an empty one, or only parameters that take none (class 8).
-  for (const spelling of ["Set-Location", "cd", "Set-Location ''", 'cd ""', "sl -Path ''", "cd -Path:''", "cd -PassThru", "cd -ErrorAction Stop"])
+  for (const spelling of ["Set-Location", "cd", "Set-Location ''", 'cd ""', "sl -Path ''", "cd -Path:''", "cd -PassThru", "cd -ErrorAction Stop", "cd --", "cd -PassThru --", "cd -Verbose --", "cd -ea Stop <#p#>", "Write-Output '<#'; cd -PassThru"])
     for (const padded of [false, true])
       test(
         `a removal after ${spelling} asks for the home folder first${padded ? ", in input over the length limit" : ""}`,

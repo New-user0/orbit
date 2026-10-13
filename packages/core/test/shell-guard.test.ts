@@ -539,7 +539,9 @@ describe("ShellGuard.request", () => {
     Effect.gen(function* () {
       const { analysis, request: asked } = yield* request("Get-ChildItem; Remove-Item x", "pwsh")
       expect(analysis.opaque).toBeDefined()
-      expect(asked).toEqual({ resources: ["Get-ChildItem; Remove-Item x", "Get-ChildItem", "Remove-Item x"], save: [] })
+      expect(asked).toMatchObject({ resources: ["Get-ChildItem; Remove-Item x", "Get-ChildItem", "Remove-Item x"], save: [] })
+      // Each fragment also answers to the cmdlet's aliases, so a rule written with one still meets it.
+      expect(asked?.aliases?.["Remove-Item x"]).toEqual(expect.arrayContaining(["del x", "ri x"]))
     }),
   )
 })
@@ -668,6 +670,32 @@ describe("ShellGuard.authorize", () => {
       Effect.gen(function* () {
         const exit = yield* run(command, anyBash, { shell: host!, real: true })
         expect(Exit.isFailure(exit)).toBe(false)
+        expect(asked.filter(anyBash)).toEqual([])
+      }),
+    )
+
+  // Declarations that print every variable (and so the environment's credentials) are commands a Bash rule must see; the
+  // ones that only set named variables stay inert. `printenv` is the control that always asks.
+  for (const [command, inert] of [
+    ["export -p", false],
+    ["declare -p", false],
+    ["declare", false],
+    ["typeset -p", false],
+    ["readonly", false],
+    ["export", false],
+    ["declare -fx", false],
+    ["declare -x -p A", false],
+    ["export -f fn", false],
+    ["local", false],
+    ["export A=1; declare -x B=2", true],
+    ["export A", true],
+    ["unset A", true],
+    ["printenv", false],
+  ] as const)
+    it.live(`${command} ${inert ? "makes no shell request" : "is denied by a Bash deny"}`, () =>
+      Effect.gen(function* () {
+        const exit = yield* run(command, anyBash)
+        expect(Exit.isFailure(exit)).toBe(!inert)
         expect(asked.filter(anyBash)).toEqual([])
       }),
     )
@@ -870,6 +898,18 @@ describe("ShellGuard.authorize", () => {
                   "cd -PassThru",
                   "sl -ErrorAction:Stop",
                   "cd -Verbose -PassThru",
+                  // The end-of-parameters marker names nothing, alone or after parameters, and a block comment pad or a
+                  // quoted opener before the command does not hide it (class 3/4/8).
+                  ...["cd --", "cd -PassThru --", "cd -Verbose --", "Set-Location -ErrorAction:Stop --"].flatMap((spelling) => [
+                    spelling,
+                    `${spelling} <#xxx#>`,
+                    `${spelling} #xxx`,
+                    `Write-Output '<#'; ${spelling} #xxx`,
+                  ]),
+                  ...["cd -PassThru", "sl -ea:Stop", "cd -Verbose", "cd -ErrorAction:Stop"].flatMap((spelling) => [
+                    `${spelling} <#xxx#>`,
+                    `Write-Output '<#'; ${spelling} #xxx`,
+                  ]),
                 ]),
           ])
             expect([platform, raw, text, ShellGuard.locations(text, "pwsh", platform, "", "", raw)]).toEqual([
@@ -1270,4 +1310,64 @@ describe("ShellGuard.authorize: a share named in input the analysis cannot read"
           }),
       )
     }
+})
+
+// The bare-repository probe stats HEAD, objects, refs and `.git` of every folder git could start in. A repository can ship
+// any of them as a link to a share, and a stat through it connects to a host the repository chose, before anyone is asked
+// (class 6). The FSUtil is the recording one, so the rows pin which paths were stat-ed, not how long the answer took.
+describe("ShellGuard.facts: the bare-repository probe and links to shares", () => {
+  const rows = [
+    { name: "cwd in the folder", command: "git status", cwd: "sub" },
+    { name: "cd into the folder", command: "cd sub && git log", cwd: "" },
+    { name: "git -C the folder", command: "git -C sub status", cwd: "" },
+  ]
+  const shares = { HEAD: "file", objects: "dir", refs: "dir" } as const
+
+  for (const trusted of [true, false])
+    for (const row of rows)
+      for (const [name, kind] of Object.entries(shares))
+        (win ? it.live : it.live.skip)(
+          `${name} linked to a share is flagged and never stat-ed: ${row.name} (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.gen(function* () {
+              const { project } = yield* layout
+              const recorded = recordedFileSystem()
+              const made = yield* Effect.promise(async () => {
+                await repository(project)
+                return fs.symlink("\\\\192.0.2.201\\share\\x", path.join(project, "sub", name), kind).then(
+                  () => true,
+                  () => false,
+                )
+              })
+              // Without the right to make a link there is nothing to probe.
+              if (!made) return
+              const started = Date.now()
+              const found = yield* facts(row.command, { cwd: path.join(project, row.cwd) }).pipe(
+                Effect.provide(
+                  AppNodeBuilder.build(
+                    LayerNode.group([FileAccess.node, ProjectTrust.node, FSUtil.node, Location.node]),
+                    [
+                      Location.node.replace(
+                        Layer.succeed(
+                          Location.Service,
+                          Location.Service.of(location({ directory: AbsolutePath.make(project) })),
+                        ),
+                      ),
+                      Permission.node.replace(permissionLayer({ assert: () => Effect.void })),
+                      FSUtil.node.replace(recorded.layer),
+                      ...(trusted ? [] : untrustedProjectNodes),
+                    ],
+                  ),
+                ),
+              )
+              expect(Date.now() - started).toBeLessThan(15_000)
+              expect(found.bare.map((item) => item.why)).toEqual(["indicators"])
+              expect(
+                recorded.calls.filter((call) => call.startsWith("stat ") && call.endsWith(path.join("sub", name))),
+              ).toEqual([])
+              // The control: other paths of the walk are stat-ed as before.
+              expect(recorded.calls.some((call) => call.startsWith("stat "))).toBe(true)
+            }),
+          60_000,
+        )
 })
