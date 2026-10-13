@@ -641,15 +641,40 @@ function opaque(analysis: Analysis, whole: string, scan: ShellParse.Result | und
   const pieces = ps
     ? ShellSafety.fragments(whole).map((piece) => piece.replace(/^(["'])(.*?)\1(?=\s|$)/, "$2"))
     : bashFragments(whole)
+  const spelled = ps ? pieces.map((piece) => spellings(piece, analysis)) : []
+  const aliases = Object.fromEntries(
+    spelled.filter((item) => item.names.length > 0).map((item) => [item.piece, item.names]),
+  )
   return {
     resources: distinct([
       whole,
       ...(scan?.commands.map((command) => command.resource) ?? []),
       ...(scan?.bare ?? []),
       ...pieces,
+      // A module-qualified or path-like first word is also judged under its stripped name, as a parsed application is, so a
+      // deny written for the cmdlet meets it and an allow cannot lift it.
+      ...spelled.flatMap((item) => (item.stripped === undefined ? [] : [item.stripped])),
     ]).filter((item) => item !== ""),
     save: [],
+    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
   }
+}
+
+// The spellings a PowerShell rule may be written in for a fragment of unreadable input: its first word without quotes, call
+// operator or module qualifier, that word's cmdlet and every alias of it here, each followed by the rest of the fragment
+// after one space (so a tab does not hide it).
+function spellings(piece: string, analysis: Analysis) {
+  const match = /^[&.]?\s*(["']?)([^\s"']+)\1(?=\s|$)/.exec(piece)
+  if (!match) return { piece, names: [] as string[], stripped: undefined }
+  const bare = strip(match[2]!)
+  const target = aliasTarget(bare.toLowerCase(), analysis.dialect, process.platform) ?? bare.toLowerCase()
+  const rest = piece.slice(match[0].length).trim()
+  const names = distinct([
+    bare,
+    target,
+    ...aliasNames().filter((alias) => aliasTarget(alias, analysis.dialect, process.platform) === target),
+  ]).map((name) => (rest === "" ? name : name + " " + rest))
+  return { piece, names, stripped: bare === match[2] ? undefined : names[0] }
 }
 
 function bashFragments(text: string) {

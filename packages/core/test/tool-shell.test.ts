@@ -3982,6 +3982,40 @@ describe("ShellTool guard (PowerShell)", () => {
       options,
     )
 
+  // Padded past the parse limit the input is opaque, and its fragments must still answer to every spelling of the cmdlet.
+  for (const [rule, commands] of [
+    [
+      "Remove-Item *",
+      ["rm x", "del x", "ri x", "Microsoft.PowerShell.Management\\Remove-Item x", "Remove-Item\tx", "& 'rm' x", "Remove-Item x"],
+    ],
+    ["rm *", ["Remove-Item x", "del x"]],
+    ["Invoke-Expression *", ["iex 'Remove-Item x'"]],
+  ] as const)
+    windows(
+      `a deny written as ${rule} meets ${commands.join(" | ")} when the input is too long to parse`,
+      () =>
+        ask((registry, fixture) =>
+          Effect.gen(function* () {
+            yield* permissions([
+              { action: "Bash", resource: "*", effect: "allow" },
+              { action: "Bash", resource: rule, effect: "deny" },
+            ])
+            yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+            for (const command of commands)
+              expectBlocked(
+                yield* runPermissionCommand(
+                  registry,
+                  `${command}; #${"x".repeat(20_000)}`,
+                  path.join(fixture.active, "marker"),
+                  [],
+                ),
+              )
+            expect(yield* absent(path.join(fixture.active, "x"))).toBe(false)
+          }),
+        ),
+      { timeout: 60_000 },
+    )
+
   windows(
     "an application is denied by the rule for its cmdlet name and never lifted by an allow for it",
     () =>
