@@ -1,6 +1,5 @@
-import { afterAll, beforeAll, beforeEach, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import fs from "fs/promises"
-import net from "net"
 import os from "os"
 import path from "path"
 import { Duration, Effect, Exit, Layer } from "effect"
@@ -278,67 +277,6 @@ describe("ShellGuard.facts: places", () => {
   )
 })
 
-// A wildcard read lists the folder it starts in, so a folder that is a link to a share must not be listed (class 6): the
-// repository chose that host, and listing it blocks on the network before anything is asked. A WebDAV listener records
-// every connection, which a slow or failing host would hide. The operand is left undecided, so the command asks. Only
-// Windows has links to shares; the rows skip where the account cannot make one.
-describe("ShellGuard.facts: a wildcard read under a link to a share", () => {
-  const connections: string[] = []
-  const recorder = net.createServer((socket) => {
-    connections.push(`${socket.remoteAddress}`)
-    socket.destroy()
-  })
-  let port = 0
-  beforeAll(async () => {
-    await new Promise<void>((resolve) => recorder.listen(0, "127.0.0.1", resolve))
-    port = (recorder.address() as net.AddressInfo).port
-  })
-  beforeEach(() => {
-    connections.length = 0
-  })
-  afterAll(() => {
-    recorder.close()
-  })
-
-  for (const trusted of [true, false])
-    for (const [command, name, undecided] of [
-      ["cat docs/*", "docs", true],
-      ["cat docs/**/*.md", "docs", true],
-      // A link met below the wildcard's folder is not followed by the walk, so nothing is opened and nothing is undecided.
-      ["cat */x", "docs", false],
-    ] as const)
-      it.live(`${command} opens no share (${trusted ? "trusted" : "untrusted"})`, () =>
-        Effect.gen(function* () {
-          if (!win) return
-          const { project } = yield* layout
-          const made = yield* Effect.promise(() =>
-            fs.symlink(`\\\\127.0.0.1@${port}\\DavWWWRoot\\x`, path.join(project, name), "dir").then(
-              () => true,
-              () => false,
-            ),
-          )
-          if (!made) return
-          yield* Effect.gen(function* () {
-            const found = yield* facts(command, { cwd: project })
-            expect(connections).toEqual([])
-            if (undecided && trusted) expect(found.findings.map((item) => item.reason)).toContain("glob-read")
-          }).pipe(provide(project, trusted))
-        }),
-      )
-
-  it.live("cat a/* in a local folder is still expanded (control)", () =>
-    Effect.gen(function* () {
-      const { project } = yield* layout
-      yield* Effect.promise(() => fs.writeFile(path.join(project, "a", "one.txt"), "x"))
-      yield* Effect.gen(function* () {
-        const found = yield* facts("cat a/*", { cwd: project })
-        expect(found.findings.map((item) => item.reason)).not.toContain("glob-read")
-        expect(found.probes.flatMap((item) => item.resources).some((item) => item.endsWith("one.txt"))).toBe(true)
-      }).pipe(provide(project, true))
-    }),
-  )
-})
-
 // A place FileAccess refuses is reported as unresolved, not looked up and not counted inside the sandbox's writable roots
 // (class 6): a link of the project that leads to a share is refused by name, and the writable root must not make it
 // internal. Only such a link reaches the guard's check, so the row needs a privileged account on Windows.
@@ -564,66 +502,6 @@ describe("ShellGuard.request", () => {
         const asked = (yield* request(command)).request
         expect(asked?.resources).toEqual([...resources])
         expect(asked?.save).toHaveLength(1)
-      }),
-    )
-
-  // A leading assignment or a wrapper is also judged in the spelling of the program it runs, as a request of its own, so a
-  // deny or ask for the program meets it and an allow for it cannot lift the command as written (class 8).
-  for (const [command, resources] of [
-    ["FOO=1 rm x", ["FOO=1 rm x", "rm x"]],
-    ["timeout 5 rm x", ["timeout 5 rm x", "rm x"]],
-    ["nice -n 5 rm x", ["nice -n 5 rm x", "rm x"]],
-    ["nohup rm x", ["nohup rm x", "rm x"]],
-    ["env A=1 rm x", ["env A=1 rm x", "rm x"]],
-    ["FOO=1 timeout 5 nice rm x", ["FOO=1 timeout 5 nice rm x", "timeout 5 nice rm x", "nice rm x", "rm x"]],
-    ["rm x", ["rm x"]],
-  ] as const)
-    it.live(`holds ${command} in the spelling of the program it runs`, () =>
-      Effect.gen(function* () {
-        const asked = (yield* request(command)).request
-        expect(asked?.resources).toEqual([...resources])
-      }),
-    )
-
-  // What an "always" reply saves (class 8). A command that reshapes its program saves its own text, or nothing when that
-  // text holds a wildcard (a saved pattern has no escape); a program behind a wrapper is saved only at the end of a chain
-  // that has no env, sudo, doas or exec in it and no assignment-shaped word.
-  for (const [command, save] of [
-    ["env A=1 ls", ["env A=1 ls", "ls"]],
-    ["timeout 5 env A=1 ls", ["timeout 5 env A=1 ls", "ls"]],
-    ["nice env A=1 ls", ["nice env A=1 ls", "ls"]],
-    ["nohup env A=1 ls", ["nohup env A=1 ls", "ls"]],
-    ["time env A=1 ls", ["time env A=1 ls", "ls"]],
-    ["stdbuf -o0 env A=1 ls", ["stdbuf -o0 env A=1 ls", "ls"]],
-    ["nice -n 5 env A=1 ls", ["nice -n 5 env A=1 ls", "ls"]],
-    ["timeout 5 env A=1 npm test", ["timeout 5 env A=1 npm test", "npm test"]],
-    ["env A=1 ls 2>/dev/null", ["env A=1 ls 2>/dev/null", "ls"]],
-    ["env A=1 ls > out", ["env A=1 ls > out", "ls"]],
-    ["env A=1 ls < in", ["env A=1 ls < in", "ls"]],
-    ["timeout 5 FOO=1 ls", ["timeout *"]],
-    ["FOO=1 ls", ["FOO=1 ls", "ls"]],
-    ["FOO=* ls", ["ls"]],
-    ["FOO='*' ls", ["ls"]],
-    ["env PATTERN='src/*' ls", ["ls"]],
-    ["FOO='*.ts' npm test", ["npm test"]],
-    ["timeout 60 npm test", ["timeout *", "npm test *"]],
-  ] as const)
-    it.live(`saves ${JSON.stringify(save)} for ${JSON.stringify(command)}`, () =>
-      Effect.gen(function* () {
-        const asked = (yield* request(command)).request
-        expect(asked?.save ?? []).toEqual([...save])
-        // The only wildcard in a saved pattern is the closing one that Orbit adds.
-        for (const item of asked?.save ?? []) expect(item.replace(/ \*$/, "")).not.toMatch(/[*?]/)
-      }),
-    )
-
-  // The scanner's own text decides, so a pipe or a line continuation does not bring back `env *` or `ls *`.
-  for (const command of ["env A=1 ls 2>&1 | head", "env A=1 \\\nls", "env A=1 ls >/dev/null 2>&1"])
-    it.live(`saves nothing for env or the program behind it for ${JSON.stringify(command)}`, () =>
-      Effect.gen(function* () {
-        const saved = (yield* request(command)).request?.save ?? []
-        expect(saved.length).toBeGreaterThan(0)
-        for (const item of saved) expect(item).not.toMatch(/^(env|ls) \*$/)
       }),
     )
 

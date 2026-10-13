@@ -176,8 +176,7 @@ function operand(state: State, input: Input): Operand {
   if (share) flags.add("share")
   if (win && input.literal) {
     const rest = text.replace(/^[\\/]{2}[?.][\\/](?:UNC[\\/])?/i, "").replace(/^[A-Za-z]:/, "")
-    // A `:` inside a bracket expression (`[[:alpha:]]`) is part of the wildcard, not a stream name.
-    if (!flags.has("provider") && rest.replace(/\[(?:[^\][]|\[:[a-z]+:\])*\]/g, "").includes(":")) flags.add("stream")
+    if (!flags.has("provider") && rest.includes(":")) flags.add("stream")
     if (/~\d/.test(text)) flags.add("short-name")
     const parts = text.split(/[\\/]/).filter(Boolean)
     if (parts.some((part) => /^\.{3,}$/.test(part))) flags.add("dots")

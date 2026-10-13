@@ -2862,9 +2862,9 @@ A repository's `HEAD`, `objects`, `refs` and `.git` that are links to a network 
 
 **What to do:** Nothing; answer the question, or write a `Bash` rule for the form you want.
 
-### Shell rules see through assignments, wrappers and printing declarations
+### Shell rules meet printing declarations
 
-A `Bash` deny or ask rule for a program (`rm *`) now also meets that program when a command puts leading assignments or a wrapper in front of it: `FOO=1 rm x`, `timeout 5 rm x`, `nice`, `nohup`, `time`, `stdbuf`, `env`, `sudo`, `doas` and `exec`, alone or stacked. The request lists the command as written and, as requests of their own, each stripped spelling (`rm x`). An allow for `rm *` lifts only the stripped spelling, so the command as written still needs an allow of its own. An "always" reply to such a command saves both the wrapper (`timeout *`) and the program it runs (`touch *`), so the same command is not asked again; `timeout 5 rm x` after that still asks for `rm`. Under a broad allow, a deny or ask for the program now applies.
+A leading assignment or a wrapper in front of a program (`FOO=1 rm x`, `timeout 5 rm x`, `nice`, `nohup`, `time`, `stdbuf`, `env`, `sudo`, `doas`, `exec`) is still not looked through: a `Bash` deny or ask rule written for the program (`rm *`) does not meet it, and an "always" reply to such a command saves what the scanner saves for it and nothing more. That is a known gap, carried as a follow-up, so a leading assignment or a wrapper can still step around a `Bash` deny rule.
 
 A declaration that prints the environment (`export -p`, `declare -p`) next to other commands (`export -p; ls`, `declare -p && git status`, `export -p | cat`) is a request of its own, so a `Bash` ask or deny for it applies and an allow for the other command does not lift it.
 
@@ -2872,19 +2872,17 @@ Opaque PowerShell input that starts with a path to a program in the repository (
 
 "Always allow" no longer offers `Where-Object *`, `Select-Object *`, `Sort-Object *`, `Group-Object *`, `Measure-Object *`, the `Format-*` cmdlets, `Out-String`, `Out-Host`, `Write-Output`, `Write-Host`, `Start-Sleep`, `Invoke-WmiMethod` or `Invoke-CimMethod`, or their aliases, because a saved grant would lift script blocks and .NET calls in their arguments.
 
-**Affects:** people whose rules are written for a program and who run it behind a wrapper, and anyone who saved "always" for one of the cmdlets above.
+**Affects:** anyone who runs `export -p`, `declare -p` or similar next to other commands under a rule that allowed them silently, and anyone who saved "always" for one of the cmdlets above.
 
-**What to do:** Nothing; answer the questions, or write a rule for the stripped spelling.
+**What to do:** Nothing; answer the questions. For a program that you do not want run behind a wrapper, deny the wrapper too.
 
-### Shell commands that write through an output option, and wildcards in reads, meet your Edit and Read rules
+### Shell commands that write through an output option meet your Edit rules
 
 The shell guard now records the file that an output option names as a write: `sort -o`, `-oFILE`, `--output` (and any prefix of it that `sort` accepts), the second operand of `uniq IN OUT`, `find -fprint`, `-fprint0`, `-fprintf` and `-fls`, `tree -o` and `--output`, `git diff`, `log` and `show` `--output`, `git format-patch -o` and `git archive -o`, and the file of a `w`, `W` or `s///w` command (and the file of an `r`) in a sed script given on the command line. An `Edit` rule on that file applies, a file outside the project asks the folder question, and the sandbox treats it as a write. Before, these files were recorded as reads or not at all. `rg --pre` and `--hostname-bin` name a program, so such a command is asked about as a whole. A relative output is placed in the folder that `git -C` names (each `-C` relative to the one before), a global option's separate value (`--git-dir X`, `--work-tree X`, `--namespace X`) is no longer taken for the subcommand, `-o` is found inside a cluster of short options (`format-patch -ko out`), and sed reads `[/]` as a bracket that holds the delimiter, so `sed -n '/[/]/w out'` records `out`. Writers that the guard does not model (`curl -o`, `wget -O`, `awk` redirects, `tar -x`, interpreter one-liners) are unchanged.
 
-A read through a wildcard (`cat secr*.txt`, `head *`) is now checked against your `Read` deny rules and the managed ones for each file the wildcard matches in its folder, not only for the folder. Folders are only listed, never entered through a link: a link that the last part of the word matches is checked as the place it leads to, and a word that would have to go through a link (`*/link/x`, `*/link/*`) is left undecided, so the command asks and nothing is opened. A wildcard whose own folder is a share, or a link to one, is not listed at all (that would connect to the host the link names): the command asks instead. Like bash, the check does not let `*` or `?` match a name that starts with a dot, so a `Read` deny on `.env` does not refuse `grep -n foo *` or `cat *`; `cat .e*`, `cat .*` and any command that can change the wildcard options are checked against dotfiles too, as is every PowerShell wildcard. That is decided two ways, and either is enough: from the parsed commands (`shopt`, `set`, `setopt`, `declare`, `export`, `eval`, `source`, an assignment, a shell the guard cannot read, a shell started with `-O`, `+O`, `-o` or `+o`, a word that is `GLOBIGNORE`, `BASHOPTS` or `SHELLOPTS`), which see through quoting, and from the raw text of every level, which looks for `dotglob`, `globstar`, `globignore`, `bashopts`, `shellopts`, `setopt`, `trap` and the zsh spellings. `**` is read as two stars, as bash and PowerShell read it, so `grep -n foo src/**/*.ts` covers one folder level; it recurses after such input or when zsh runs anywhere in the command. Names are compared in any case, a class such as `[[:upper:]]`, `[A-z]` or `[!a]` is read with every class name bash accepts (an unknown name matches any character) and in both letter cases, in PowerShell `[!x]` means `!` or `x`, braces and extglobs are taken literally, names are matched in time linear in their length however many stars the word has, and one command may spend at most 500 matches, 32 distinct wildcards, 50,000 folder entries and about three seconds on them. A wildcard that cannot be expanded within that (more matches, more words, entries or time, a link on the way, or a `..` after a wildcard whose folder cannot be named) is refused when any `Read` deny rule, yours or the managed one, could match a file below its folder; with no such rule it runs. An allow rule written later does not lift that refusal. A recursive folder search such as `grep -r x .` is still judged by its folder; per-file checks for searches belong to the later permissions work.
+A read through a wildcard (`cat secr*.txt`, `head *`) is still checked against your `Read` rules for the folder it starts in, not for each file the wildcard matches. A glob spelling of a file can therefore still read past a `Read` deny on that file. That is a known gap, carried as a follow-up.
 
-Round 7 of the wildcard check: a nested shell started with any option before its script (`bash -O dotglob -c`, `zsh -o globdots -c`, `zsh -4 -c`, `bash -lc`), a wrapper that sets a variable (`env BASHOPTS=dotglob bash -c`), `trap` and every other builtin that runs text as code now count like `shopt`, so dotfiles and `**` are checked too. Character classes keep the case of the name and match when any case of a character matches, so `[[:upper:]]*` and `[!z]*` reach `Zeta.txt`; the classes `print`, `graph`, `word`, `ascii`, `blank` and `cntrl` are supported, equivalence and collating forms read as their one character, and any other `[:x:]`, `[=x=]` or `[.x.]` matches any character. `**/**` is read as one recursion, every visit of a folder listing (cached or not) counts against the 50,000-entry cap, and the deadline is checked inside long listings. In zsh, three stars before a slash recurse like two and follow links, so a link met there leaves the word undecided.
-
-**Affects:** anyone with `Edit` or `Read` deny rules who also lets the model run shell commands.
+**Affects:** anyone with `Edit` deny rules who also lets the model run shell commands.
 
 **What to do:** Nothing; a command that your rules now stop is refused with the rule that matched.
 
@@ -2915,25 +2913,19 @@ wording of those notes, and models that sent a one-character query or both domai
 
 **What to do:** Nothing. Send one domain list per search.
 
-## Always allow on a wrapped shell command, and no saved grant for `ipconfig`, `hostname` and `route`
+## No saved grant for `ipconfig`, `hostname` and `route`
 
-- Choosing "always allow" for a command that starts with `timeout`, `nohup`, `nice`, `env`, `time` or `stdbuf` now saves the
-  grant for the wrapper and for the program it runs (for example `timeout *` and `printf *`), so the same command no longer
-  asks again. The wrapper around another program still asks, because that program has no grant.
 - PowerShell and shell no longer offer a saved grant for `ipconfig`, `hostname` and `route`, whose arguments change what they do.
 
-**Affects:** people who saved grants for those programs or answered "always" on wrapped commands.
+**Affects:** people who saved grants for those programs.
 
 **What to do:** Nothing.
 
-## "Always allow" on a wrapped shell command saves only what was typed
+## A saved grant lifts a command that steers its program only by exact text
 
-- A saved grant for a command behind a wrapper (`timeout`, `nice`, `env` and the like) now names the program only when its words are plain: unquoted, without a wildcard or a space. `timeout 5 'r*' x` saves the wrapper and nothing for the program.
-- A command that starts with `sudo`, `doas`, `exec`, an `env` option such as `-i`, or an assignment to `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS` saves no grant for the program behind it.
-- A command with `env`, `sudo`, `doas`, `exec` or leading assignments, however many wrappers, redirects or pipes surround it, saves its own text and nothing for the program behind it. That text is saved only when it holds no `*` or `?`; otherwise nothing is saved and the command asks again, because a saved pattern has no escape. Deny and ask rules still meet the program under its stripped spelling.
 - A saved grant lifts a command that sets `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS`, or gives `env` an option, only when it is that command's exact text. An `env *` or `ls *` saved earlier no longer lifts `env PATH=. ls`.
 
-**Affects:** people who answered "always" on such commands; an `env *` grant saved earlier still covers other `env` commands but not the ones above.
+**Affects:** people who answered "always" on `env` or `PATH=` commands; an `env *` grant saved earlier still covers other `env` commands but not the ones above.
 
 **What to do:** Answer again; the new grant is narrower.
 

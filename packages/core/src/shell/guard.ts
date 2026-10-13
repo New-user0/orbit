@@ -11,14 +11,12 @@ import { Permission } from "../permission.js"
 import { ProjectTrust } from "../project-trust.js"
 import { aliasNames, aliasTarget, inspect, LOCATION, type Analysis, type Command, type Context } from "./analysis.js"
 import { LinkShare } from "@orbit/util/link-share"
-import { ShellLaunch } from "./launch.js"
 import { ShellParse } from "./parse.js"
 import { PowerShellParse } from "./powershell-parse.js"
 import { ShellPaths } from "./paths.js"
 import { ShellReadOnly } from "./readonly.js"
 import { ShellSafety } from "./safety.js"
 import { ShellWrappers } from "./wrappers.js"
-import { Wildcard } from "./wildcard.js"
 
 // The effectful half of the shell permission check. The analysis says which files a command names and what it does to
 // them; the safety checks describe what no rule may lift. This module puts the disk between them: it resolves every named
@@ -44,8 +42,7 @@ export type Place = {
   real: string[]
 }
 
-/** `under` makes the resources folders: the probe is denied when a deny rule could match any file below one of them. */
-export type Probe = { action: "Read" | "Edit"; resources: string[]; under?: true }
+export type Probe = { action: "Read" | "Edit"; resources: string[] }
 
 export type Facts = {
   places: Place[]
@@ -219,79 +216,6 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   )
   const everything = [...resolved, ...extra, ...guessed]
 
-  // A read through a wildcard reaches every file the wildcard matches, so the Read rules are asked about each match and
-  // not only about the folder it starts in (class 8). Matches are found on the real folder without following links; one
-  // that is a link is probed as the place it leads to as well. A wildcard that cannot be expanded (too many matches, a scan
-  // that failed, too many words or too much time for one command) is decided too: an `under` probe is denied when a deny
-  // rule could match anything below its folders, so a walk that is not bounded never slips past a rule (class 8).
-  // The word is expanded by `Wildcard` (linear matching, folders listed without following links, capped in entries and time).
-  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the input (read
-  // parsed and as raw text, see `globOptions`) can switch dotglob on, or for PowerShell, whose wildcards include dotfiles.
-  // `**` is two stars unless the input can switch globstar on, or zsh runs at any level. Braces and extglobs are literal (class 7).
-  const budget = { matches: 0, scans: 0, entries: GLOB_ENTRIES, until: Date.now() + GLOB_MILLIS }
-  const seen = new Map<string, { targets: string[]; undecided: boolean }>()
-  const options = globOptions(all, ps, input.ctx)
-  const expand = (folder: string, pattern: string, role: ShellPaths.Role) => {
-    const key = `${folder}
-${pattern}`
-    const known = seen.get(key)
-    if (known) return Effect.succeed(known)
-    if (budget.scans >= GLOB_WORDS || Date.now() > budget.until) return Effect.succeed({ targets: [] as string[], undecided: true })
-    budget.scans++
-    // A folder that is a share, or a link the repository ships to one, is never listed: that connects to a host the
-    // repository chose before anything was asked (class 6). The word is left undecided, so the command asks.
-    return (
-      process.platform === "win32" && /^[\\/]{2}/.test(folder)
-        ? Effect.succeed(true)
-        : LinkShare.of(fs, folder).pipe(Effect.map((share) => share !== undefined))
-    )
-      .pipe(
-        Effect.flatMap((share) =>
-          share
-            ? Effect.succeed(undefined)
-            : // One match past the limit is enough to know the word reaches too many, so the walk stops there.
-              Effect.promise(() => Wildcard.expand(folder, pattern, { ...options, limit: GLOB_LIMIT, budget })),
-        ),
-        Effect.map((found) => {
-          budget.matches += found?.length ?? 0
-          return found === undefined || found.length > GLOB_LIMIT || budget.matches > GLOB_LIMIT ? undefined : found
-        }),
-        Effect.catch(() => Effect.succeed(undefined)),
-        Effect.flatMap((found) =>
-          found === undefined
-            ? Effect.succeed({ targets: [] as string[], undecided: true })
-            : Effect.forEach(found, (file) =>
-                resolveCandidate(file, { candidates: [file], kind: "file", role, removal: false, change: false, level: 0 }),
-              ).pipe(Effect.map((all) => ({ targets: all.flatMap((item) => item.targets), undecided: false }))),
-        ),
-        Effect.tap((result) => Effect.sync(() => seen.set(key, result))),
-      )
-  }
-  const matched = yield* Effect.forEach(operands, ({ operand }, index) => {
-    const place = resolved[index]!
-    if (operand.form !== "glob" || WRITES.has(operand.role) || place.status === "unresolved")
-      return Effect.succeed({ resources: [] as { action: "Read" | "Edit"; resource: string }[], undecided: false, folders: [] as string[] })
-    const win = input.ctx.platform === "win32"
-    const pattern = globRemainder(operand, win)
-    // A `..` after a wildcard leaves no fixed folder: the whole word is expanded from each folder the command may be in,
-    // as node-glob reads `..` segments. A word that starts with `~` or holds a variable is not expanded by the library.
-    const whole = pattern === undefined
-    const spelled = win ? operand.spelled.replaceAll("\\", "/") : operand.spelled
-    const folders = whole ? operand.bases : place.real
-    const pending = whole && /^~|\$/.test(spelled)
-    const actions: ("Read" | "Edit")[] = operand.role === "source" ? ["Read", "Edit"] : ["Read"]
-    return Effect.forEach(folders, (folder) =>
-      pending ? Effect.succeed({ targets: [] as string[], undecided: true }) : expand(folder, whole ? spelled : pattern!, operand.role),
-    ).pipe(
-      Effect.map((all) => ({
-        resources: actions.flatMap((action) => [...new Set(all.flatMap((item) => item.targets))].map((resource) => ({ action, resource }))),
-        undecided: all.some((item) => item.undecided),
-        // What a probe of an undecided wildcard asks about: where the word starts and, for a `..`, the places above.
-        folders: [...new Set([...folders, ...(whole ? place.real.map((item) => path.dirname(item)) : [])])],
-      })),
-    )
-  })
-
   const git = ShellSafety.runsGit(input.analysis, input.ctx.platform)
   const probed = git ? yield* probeGit(all, input.cwd.absolute) : { bare: [], dynamic: false }
   const bare = probed.bare
@@ -319,28 +243,17 @@ ${pattern}`
   return {
     places: everything.map(({ resources: _resources, external: _external, ...place }) => place),
     external: everything.flatMap((item) => item.external),
-    probes: [
-      ...[...everything, ...matched].flatMap((item) => {
-        const actions = [...new Set(item.resources.map((entry) => entry.action))]
-        return actions.map((action): Probe => ({
-          action,
-          resources: item.resources.filter((entry) => entry.action === action).map((entry) => entry.resource),
-        }))
-      }),
-      ...matched.flatMap((item, index) =>
-        item.undecided
-          ? (operands[index]!.operand.role === "source" ? (["Read", "Edit"] as const) : (["Read"] as const)).map((action): Probe => ({
-              action,
-              resources: item.folders,
-              under: true,
-            }))
-          : [],
-      ),
-    ],
+    probes: everything.flatMap((item) => {
+      const actions = [...new Set(item.resources.map((entry) => entry.action))]
+      return actions.map((action) => ({
+        action,
+        resources: item.resources.filter((entry) => entry.action === action).map((entry) => entry.resource),
+      }))
+    }),
     bare,
     findings: [
       ...found,
-      ...own(all, operands, resolved, ps, matched.map((item) => item.undecided)),
+      ...own(all, operands, resolved, ps),
       // A folder that only the raw reading found and FileAccess cannot name never fails the call, but it is said.
       ...guessed
         .filter((item) => item.status === "unresolved")
@@ -349,79 +262,6 @@ ${pattern}`
     ].filter(unique),
   } satisfies Facts
 })
-
-// What one command may spend on wildcards: matches checked one by one, distinct wildcards expanded, and time. A command
-// that reaches past any of them is decided through an `under` probe instead (class 7, class 8).
-const GLOB_LIMIT = 500
-const GLOB_WORDS = 32
-const GLOB_MILLIS = 3000
-const GLOB_ENTRIES = 50_000
-
-// The part of a wildcard operand after its folder, as a pattern relative to that folder. None when the folder part is the
-// whole operand (a `..` after the wildcard), which cannot be expanded from one folder.
-function globRemainder(operand: ShellPaths.Operand, win: boolean) {
-  const text = win ? operand.spelled.replaceAll("\\", "/") : operand.spelled
-  const prefix = win ? (operand.prefix ?? "").replaceAll("\\", "/") : (operand.prefix ?? "")
-  if (prefix === text) return undefined
-  const rest = prefix.endsWith("/") ? text.slice(prefix.length) : text.startsWith(`${prefix}/`) ? text.slice(prefix.length + 1) : text
-  const trimmed = rest.replace(/^\/+/, "")
-  return trimmed === "" ? undefined : trimmed
-}
-
-// Input that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
-// text the guard cannot see, decides the word as undecided: dot and `**` both on. Two readings are ORed (class 8):
-// the parsed commands, which see through quoting (`dot''glob`), and the raw text of every level, which sees what the parsed
-// commands do not name (`read GLOBIGNORE`, `printf -v`, a `trap`, `env BASHOPTS=...`).
-const OPTION_COMMANDS = new Set([
-  "shopt", "set", "setopt", "unsetopt", "emulate", "declare", "typeset", "export", "local", "readonly", "eval", "source", ".",
-  "builtin", "command",
-])
-const OPTION_VARIABLES = /^(globignore|bashopts|shellopts|zsh_?opts)$/i
-const OPTION_WORDS = /^(globignore|bashopts|shellopts)(=|$)/i
-const OPTION_TEXT = /dotglob|nocaseglob|globdots|globignore|case_?glob|glob_?dots|globstar|bashopts|shellopts|setopt|trap/i
-
-function globOptions(all: Level[], ps: boolean, ctx: Context) {
-  if (ps) return { dot: true, globstar: false, follow: false, powershell: true }
-  const heads = (command: Command) => [command.head, command.inner[0] ?? ""]
-  // zsh reads `***/` as a recursion that follows links: the login shell, or any program the input starts as zsh.
-  const zsh =
-    /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell)) ||
-    all.some((level) =>
-      level.analysis.commands.some((command) => heads(command).some((head) => ShellLaunch.programName(head, ctx.platform) === "zsh")),
-    )
-  const undecided = all.some(
-    (level) =>
-      level.analysis.opaque !== undefined || level.analysis.features.assignment || OPTION_TEXT.test(level.text) ||
-      level.analysis.commands.some(
-        (command) =>
-          command.dynamicHead ||
-          command.wrapper === "unanalysable" ||
-          heads(command).some((head) => OPTION_COMMANDS.has(head) || ShellSafety.EVAL_LIKE.has(head)) ||
-          command.env.some((item) => OPTION_VARIABLES.test(item.name)) ||
-          command.argv.some((word) => OPTION_WORDS.test(word.value)) ||
-          setsVariable(command) ||
-          launchesWithOptions(command, ctx.platform),
-      ),
-  )
-  return { dot: undecided, globstar: undecided || zsh, follow: zsh, powershell: false }
-}
-
-// A wrapper that sets a variable for the program it starts (`env BASHOPTS=dotglob bash -c ...`): the assignment is an operand
-// of the wrapper, so `command.env` does not hold it.
-function setsVariable(command: Command) {
-  return command.argv
-    .slice(0, command.argv.length - command.inner.length)
-    .some((word) => /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value))
-}
-
-// A nested shell started with anything but a bare `-c` before its script (`-O dotglob`, `-o globdots`, `--rcfile`, zsh's `-4`,
-// a cluster such as `-lc`). The launch reader consumes those as known, so the nested level carries no trace of them.
-function launchesWithOptions(command: Command, platform: NodeJS.Platform) {
-  if (!ShellLaunch.BASH_SHELLS.includes(ShellLaunch.programName(command.inner[0] ?? "", platform))) return false
-  const rest = command.inner.slice(1)
-  const options = rest.findIndex((word) => !/^[-+]/.test(word))
-  return (options < 0 ? rest : rest.slice(0, options)).some((word) => word !== "-c")
-}
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
   return (
@@ -441,11 +281,9 @@ function own(
   operands: { level: Level; operand: ShellPaths.Operand; file: number }[],
   resolved: { status: Place["status"]; why?: Place["why"] }[],
   ps: boolean,
-  undecided: boolean[],
 ) {
   const found: ShellSafety.Finding[] = []
   operands.forEach(({ level, operand }, index) => {
-    if (undecided[index]) found.push(ShellSafety.finding("too-complex", "glob-read", level.depth === 0 ? operand.command : undefined))
     const at = level.depth === 0 ? operand.command : undefined
     const place = resolved[index]!
     const unplaceable =
@@ -605,7 +443,6 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
         action: probe.action,
         resources: probe.resources,
         probe: true,
-        ...(probe.under ? { under: true } : {}),
         ...input.base,
       }),
     ),
@@ -805,79 +642,16 @@ export function request(
   const resources = [...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? [])]
   // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
   if (resources.length > 0) {
-    // Requests of their own beside the scanned commands (class 8):
-    // - a declaration that prints the environment, so a Bash ask or a rule for it applies and a grant for the other command
-    //   does not lift it;
-    // - a command that starts with assignments or a wrapper, in the spelling of the program it runs (`FOO=1 rm x` and
-    //   `timeout 5 rm x` as `rm x`), so a deny or ask written for the program meets it. A grant for that spelling lifts
-    //   only this extra request, never the command as written.
-    const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
-      if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
-      const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      // Only the program at the end of the chain gets a save. When anything in the chain reshapes it (env, assignments),
-      // that save is the stripped text itself, not a pattern, so a repeat is covered and a later PATH=. is not (class 8).
-      const open = command.env.length === 0 && !reshapes(command, steps)
-      const stripped = !steersProgram(command, steps)
-      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv, index, rest) => ({
-        resource: argv.join(" "),
-        save: stripped && index === rest.length - 1 ? innerSave(command, argv, !open) : undefined,
-      }))
-    })
-    const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
-    // A scanned save of a command that reshapes its program (`env *`, `FOO=1 *`) is replaced by the scanned text, and by
-    // nothing when that text holds a wildcard: a saved pattern has no escape, so `FOO=* ls` would lift `FOO=1 PATH=. ls`.
-    // The test reads the scanner's own words, so a redirect, a pipe or a continuation does not hide it.
-    const saves = (scan?.commands ?? []).flatMap((command) => {
-      if (!ASSIGNED.test(command.resource) && !reshapes(undefined, ShellWrappers.unwrap(command.resource.split(/\s+/)).steps))
-        return [command.save]
-      return /[*?]/.test(command.resource) ? [] : [command.resource]
-    })
-    // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`)
-    // when every word naming that program is plain, as typed. The extras come after the scanned saves.
-    return {
-      resources: distinct([...resources, ...added.map((item) => item.resource)]),
-      save: [...saves, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !saves.includes(item))],
-    }
+    // A declaration that prints the environment is a request of its own beside the scanned commands, so a Bash ask or a rule
+    // for it applies and a grant for the other command does not lift it (class 8).
+    const printed = analysis.commands
+      .filter((command) => PRINTERS.has(command.head) && !assigns(command))
+      .map((command) => command.text.trim())
+      .filter((resource) => resource !== "" && !resources.includes(resource))
+    return { resources: distinct([...resources, ...printed]), save: scan?.commands.map((command) => command.save) ?? [] }
   }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
-}
-
-const ASSIGNED = /^\s*[A-Za-z_][A-Za-z0-9_]*=/
-
-const RESHAPERS = new Set(["env", "sudo", "doas", "exec"])
-
-function reshapes(command: Command | undefined, steps: string[][]) {
-  return (command?.env.length ?? 0) > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
-}
-
-const LOOKUP = /^(PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=/i
-
-// Whether the command changes how its program is found or started: sudo, doas or exec, an `env` option (-i, -u), or an
-// assignment to a variable that picks the program or loads code into it.
-function steersProgram(command: Command, steps: string[][]) {
-  return (
-    command.env.some((item) => LOOKUP.test(item.name + "=")) ||
-    steps.some((argv, index) => {
-      if (argv[0] === "sudo" || argv[0] === "doas" || argv[0] === "exec") return true
-      if (argv[0] !== "env") return false
-      const next = steps[index + 1]
-      return argv.slice(1, argv.length - (next?.length ?? 0)).some((word) => word.startsWith("-") || LOOKUP.test(word))
-    })
-  )
-}
-
-// The save for the program a wrapper runs, or undefined unless the words that name it are plain: unquoted, unescaped, with
-// no whitespace or wildcard, so the pattern is the text as the person wrote it.
-function innerSave(command: Command, argv: string[], exact: boolean) {
-  const named = exact ? argv : ShellParse.prefix(argv)
-  if (ASSIGNED.test(named[0] ?? "") || RESHAPERS.has(named[0] ?? "")) return undefined
-  const offset = command.argv.length - argv.length
-  const plain = named.every((_, index) => {
-    const word = command.argv[offset + index]
-    return word !== undefined && word.literal && !word.quoted && !word.glob && !word.escaped && !/[\s*?[\\]/.test(word.value)
-  })
-  return plain ? (exact ? named.join(" ") : `${named.join(" ")} *`) : undefined
 }
 
 function distinct<A>(list: readonly A[]) {

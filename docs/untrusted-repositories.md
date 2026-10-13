@@ -1957,9 +1957,11 @@ fixes it or asks.
   (`ShellParse.operands`, `FileAccess.escaped`). It does not ask about a path the command builds as it runs (a variable,
   a substitution, a glob before the link's name, quoting that the scan does not undo), one a script or program opens by
   itself, or a path in the text that names a place outside the project directly, such as `cat ~/.ssh/id_rsa`, which the
-  Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis. The Read rules
-  are asked about each match of a wildcard read (`globRemainder` in `shell/guard.ts`, pinned by `shell-glob-read.test.ts`),
-  and the output files of `sort`, `uniq`, `find`, `tree`, `git` and `sed` are writes (`outputs` in `shell/paths.ts`,
+  Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis. A read
+  through a wildcard is judged by its folder only: a glob spelling of a file can still read past a Read deny on that file
+  (the per-match check was reverted in round 8 after it kept opening holes, and is a follow-up). A leading assignment or a
+  wrapper (`FOO=1`, `timeout`, `nice`, `env`) is not looked through either, so it can step around a Bash deny rule (also a
+  follow-up). The output files of `sort`, `uniq`, `find`, `tree`, `git` and `sed` are writes (`outputs` in `shell/paths.ts`,
   pinned by `paths.test.ts`); other writers and interpreters are not modelled.
 - **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a

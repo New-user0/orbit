@@ -60,7 +60,6 @@ export type Reason =
   | "unresolved-path"
   | "unvalidatable"
   | "glob-write"
-  | "glob-read"
   | "multiple-cd"
   | "cd-write"
   | "location-path"
@@ -133,7 +132,6 @@ const MESSAGES: Record<Reason, string> = {
   "internal-write": "This command creates git's own files (HEAD, objects, refs or hooks) and then runs git, which could run a planted hook.",
   "unresolved-path": `${COMPLEX}: a file it writes or removes is a network share, a device, a data stream, or a name that could not be resolved.`,
   unvalidatable: `${COMPLEX}: it takes options or input that hide which files it touches.`,
-  "glob-read": `${COMPLEX}: it reads through a wildcard that reaches more files than can be checked against the rules.`,
   "glob-write": `${COMPLEX}: it writes or removes through a wildcard, so the files it reaches are not known.`,
   "multiple-cd": "This command changes folder more than once, so its relative paths cannot be placed.",
   "cd-write": "This command changes folder and then writes, so its relative paths cannot be placed.",
@@ -264,7 +262,7 @@ function visit(level: Level, world: World, options: Options, add: Add) {
 const UNKNOWN = "\u0001"
 const KEYWORDS = new Set(["if", "then", "elif", "else", "fi", "while", "until", "for", "in", "do", "done", "case", "esac", "function", "select"])
 // Builtins that evaluate their arguments as shell code, or change how later names resolve (see `help` in bash).
-export const EVAL_LIKE = new Set(["eval", "source", ".", "exec", "command", "builtin", "fc", "coproc", "noglob", "nocorrect", "trap", "enable", "mapfile", "readarray", "hash", "bind", "complete", "compgen", "alias", "let"])
+const EVAL_LIKE = new Set(["eval", "source", ".", "exec", "command", "builtin", "fc", "coproc", "noglob", "nocorrect", "trap", "enable", "mapfile", "readarray", "hash", "bind", "complete", "compgen", "alias", "let"])
 // zsh modules that give raw file, socket and terminal access (see zshmodules(1)), plus the commands that load and reshape them.
 const ZSH = new Set(["sysopen", "sysread", "syswrite", "sysseek", "syserror", "zsystem", "zf_ln", "zf_mv", "zf_rm", "zf_mkdir", "zf_rmdir", "zf_chmod", "zf_chown", "zf_chgrp", "ztcp", "zsocket", "zpty", "zmodload", "emulate"])
 const ARITHMETIC = new Set(["-eq", "-ne", "-lt", "-le", "-gt", "-ge"])
