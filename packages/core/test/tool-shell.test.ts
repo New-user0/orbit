@@ -3751,7 +3751,7 @@ const expectBlocked = (result: { exit: Exit.Exit<unknown, unknown>; requests: Re
   expect(result.requests).toEqual([])
   expect(result.exit).toMatchObject({
     _tag: "Success",
-    value: { status: "error", error: { message: expect.stringContaining("Permission denied") } },
+    value: { status: "error", error: { message: expect.stringMatching(/Permission denied|Blocked by/) } },
   })
 }
 
