@@ -818,7 +818,7 @@ describe("search tools", () => {
         ),
     )
 
-  it.live("globs through an in-location external symlink without external approval", () =>
+  it.live("globs through an in-location external symlink after asking about the folder it leads to", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([active, outside]) => {
@@ -838,7 +838,7 @@ describe("search tools", () => {
           Effect.tap((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(assertions.map((input) => input.action)).toEqual(["Read", "Glob"])
+              expect(assertions.map((input) => input.action)).toEqual(["external_directory", "Read", "Glob"])
               expect(result).toMatchObject({
                 output: [{ path: path.join("linked", "outside.txt"), type: "file" }],
                 content: [{ type: "text", text: path.join(active.path, "linked", "outside.txt") }],

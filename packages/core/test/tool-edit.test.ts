@@ -293,7 +293,7 @@ describe("EditTool", () => {
     }),
   )
 
-  it.live("edits an external symlink target with only its in-location permission", () =>
+  it.live("edits an external symlink target after asking about the folder it leads to", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([active, outside]) => {
@@ -313,8 +313,8 @@ describe("EditTool", () => {
           Effect.andThen((result) =>
             Effect.sync(() => {
               expect(result.status).toBe("completed")
-              expect(edit.assertions.map((input) => input.action)).toEqual(["Edit"])
-              expect(edit.assertions[0]?.resources).toEqual(["link.txt"])
+              expect(edit.assertions.map((input) => input.action)).toEqual(["external_directory", "Edit"])
+              expect(edit.assertions[1]?.resources).toEqual(["link.txt"])
             }),
           ),
           Effect.andThen(Effect.promise(() => fs.readFile(target, "utf8"))),
