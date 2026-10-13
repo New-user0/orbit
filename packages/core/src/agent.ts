@@ -68,6 +68,19 @@ export const modeRule = <A extends object>(rule: A) => {
 const orbitMode = new WeakSet<object>()
 export const isModeRule = (rule: object) => orbitMode.has(rule)
 
+/**
+ * Marks the built-in `external_directory * ask` that `Info.default` gives every agent (and Explore's copy of it) and
+ * returns it. It is the default question for a place outside the project, not a rule the person wrote, so a managed
+ * `allow` lifts it as it lifts the fallthrough ask. The mark is the rule object itself, as for `folders`; the person's
+ * own `external_directory` ask, a session's, a grant's lead, the built-in `.env` asks and Plan's mode asks stay explicit.
+ */
+export const defaultAsk = <A extends object>(rule: A) => {
+  orbitDefaultAsk.add(rule)
+  return rule
+}
+const orbitDefaultAsk = new WeakSet<object>()
+export const isDefaultAsk = (rule: object) => orbitDefaultAsk.has(rule)
+
 export interface Selection {
   readonly id: ID
   readonly info: Info | undefined
@@ -126,6 +139,9 @@ const layer = Layer.effect(
         },
         update: (id, fn) => {
           const defaults = Info.default(id)
+          defaults.permissions.forEach((rule) => {
+            if (rule.action === "external_directory" && rule.effect === "ask") defaultAsk(rule)
+          })
           const current =
             editor.agents.get(id) ??
             ({
