@@ -59,8 +59,7 @@ echo "hg $@" >> ${JSON.stringify(log)}
 exit 1
 `)
       await fs.chmod(path.join(bin, "hg"), 0o755)
-      return async () => ((await Bun.file(log).exists()) ? (await Bun.file(log).text()).split("
-").filter(Boolean) : [])
+      return async () => ((await Bun.file(log).exists()) ? (await Bun.file(log).text()).split(/\r?\n/).filter(Boolean) : [])
     })
     const name = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH"
     const before = process.env[name]
