@@ -8,6 +8,7 @@ import { Array, Context, Effect, Layer, Schema } from "effect"
 import { lstat } from "fs/promises"
 import path from "path"
 import { DevicePath } from "./device-path.js"
+import { LinkShare } from "./config/link-share.js"
 import { Location } from "./location.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
@@ -126,12 +127,19 @@ export const resolvePath = (directory: string, input: string, home = Global.Path
 
 // A share or device path on Windows: `\\server\share`, `\\?\Volume{...}` or `\\.\...`. `resolvePath` already writes the
 // drive forms of a `\\?\` path as the drive.
-const isShare = (file: string) => process.platform === "win32" && file.startsWith("\\\\")
+// A path that a walk of links gave up on (`LinkShare.unresolved`) counts as one on every platform.
+const isShare = (file: string) =>
+  (process.platform === "win32" && file.startsWith("\\\\")) || LinkShare.isUnresolved(file)
 const shareFailure = (spelled: string) =>
   new ToolFailure({
     message: `${spelled} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
     code: Tool.ErrorCode.FileSpelling,
   })
+/**
+ * The name a diff in a request gives the file: the resource, which is the project's own spelling, unless the tool acts
+ * somewhere else (a link leads out), where it is the place, so that an approval does not show the link as the file.
+ */
+export const shownName = (target: Target) => (target.place === target.absolute ? target.resource : slash(target.place))
 /** The `leads` of a permission request for these targets: the real places they lead to, keyed by their resource. */
 export const leadsOf = (targets: readonly Target[]) => {
   const entries = targets.flatMap((target) =>
@@ -211,7 +219,13 @@ const layer = Layer.effect(
       )
 
     // A target outside the project, or one that a link in an untrusted project leads out to, which is `escapes`.
-    const external = Effect.fnUntraced(function* (absolute: AbsolutePath, kind: Kind | undefined, escapes?: string) {
+    const external = Effect.fnUntraced(function* (
+      absolute: AbsolutePath,
+      kind: Kind | undefined,
+      escapes?: string,
+      // A place that a link of a trusted project leads to is the real one too, but it is not an escape from an untrusted one.
+      escaped = true,
+    ) {
       const place = escapes ?? absolute
       const type =
         kind === "directory"
@@ -236,7 +250,7 @@ const layer = Layer.effect(
           directory,
           resource: slash(path.join(directory, "*")),
           save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
-          ...(escapes === undefined ? {} : { escaped: true as const }),
+          ...(escapes === undefined || !escaped ? {} : { escaped: true as const }),
         },
       } satisfies Target
     })
@@ -304,6 +318,20 @@ const layer = Layer.effect(
       // the place a file really is: a link to `~/.ssh` is that folder to them. The real place joins as a subject that only
       // a deny or an ask can use.
       const leads = yield* trust.leads(absolute)
+      // A link of a trusted project that leads out of it is asked about as the shell asks (class 3): the question is for the
+      // folder it really leads to. A walk that gave up on a long chain is refused as a share is. A link to a share is the
+      // owner's own in a trusted project, as before: the share is not a folder anyone's rules are written for.
+      if (LinkShare.isUnresolved(leads)) return yield* shareFailure(input.path)
+      if (!isShare(leads) && ![...folders, ...real].some((folder) => FSUtil.contains(folder, leads))) {
+        // The resource stays the spelling in the project, so a rule written for the link still decides, and `leads` joins
+        // the real place for a rule written for that.
+        const outside = yield* external(absolute, input.kind, leads, false)
+        return {
+          ...outside,
+          leads: AbsolutePath.make(leads),
+          resource: slash(path.relative(location.directory, absolute) || "."),
+        } satisfies Target
+      }
       return {
         absolute,
         place: absolute,

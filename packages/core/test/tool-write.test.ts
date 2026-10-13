@@ -429,13 +429,14 @@ describe("WriteTool", () => {
 
   // The repository ships its links, and a clone recreates them. In a project that is not trusted a link that leads out
   // of it is outside like any other path, so the write asks about the folder it would reach and creates nothing when
-  // that is refused. A junction stands for the link, since it needs no privilege on Windows.
+  // that is refused. A trusted project's link is asked about too, as the shell asks, but without the mark that stops
+  // Orbit's own allows. A junction stands for the link, since it needs no privilege on Windows.
   for (const item of [
     { project: "untrusted", untrusted: true, actions: ["external_directory", "Edit"] },
-    { project: "trusted", untrusted: false, actions: ["Edit"] },
+    { project: "trusted", untrusted: false, actions: ["external_directory", "Edit"] },
   ])
     it.live(
-      `${item.untrusted ? "asks" : "does not ask"} about the folder a link leads to in a ${item.project} project`,
+      `asks about the folder a link leads to in a ${item.project} project`,
       () =>
         Effect.acquireUseRelease(
           Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -452,10 +453,9 @@ describe("WriteTool", () => {
               )
               expect(settled.status).toBe("completed")
               expect(fixture.assertions.map((input) => input.action)).toEqual(item.actions)
-              if (item.untrusted) {
-                const real = yield* Effect.promise(() => fs.realpath(outside.path))
-                expect(fixture.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
-              }
+              const real = yield* Effect.promise(() => fs.realpath(outside.path))
+              expect(fixture.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
+              if (!item.untrusted) expect(fixture.assertions[0]).not.toHaveProperty("escaped")
               expect(yield* Effect.promise(() => fs.readFile(created, "utf8"))).toBe("pwned")
             }),
           ([active, outside]) =>

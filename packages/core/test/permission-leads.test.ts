@@ -126,9 +126,13 @@ describe("a link in a trusted project and the rules written for the place it lea
               yield* prepare(project, [{ action: "*", resource: "*", effect: "allow" }, ...(layer === "configured" ? [rule] : [])])
               if (layer === "managed") yield* (yield* ManagedPolicy.Service).set("file", { statements: [], rules: [rule] })
               const target = yield* (yield* FileAccess.Service).resolve({ path: file })
-              // The place stays the project's own spelling, as for any trusted project.
-              expect(target.place).toBe(target.absolute)
+              // The place is the real one, and the folder it is in is asked about, with no mark that would stop Orbit's own
+              // allows (that mark is for a link of an untrusted project).
+              expect(target.place).not.toBe(target.absolute)
+              expect(slash(target.place)).toContain(slash(real))
               expect(target.leads).toBeDefined()
+              expect(target.externalDirectory).toBeDefined()
+              expect(target.externalDirectory?.escaped).toBeUndefined()
               const permission = yield* Permission.Service
               const input = {
                 id: Permission.ID.create(),

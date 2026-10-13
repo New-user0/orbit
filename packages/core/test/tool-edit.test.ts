@@ -359,13 +359,14 @@ describe("EditTool", () => {
 
   // The repository ships its links, and a clone recreates them. In a project that is not trusted a link that leads out
   // of it is outside like any other path, so the edit asks about the folder it would reach and changes nothing when that
-  // is refused. A junction stands for the link, since it needs no privilege on Windows.
+  // is refused. A trusted project's link is asked about too, as the shell asks, but without the mark that stops Orbit's
+  // own allows. A junction stands for the link, since it needs no privilege on Windows.
   for (const item of [
     { project: "untrusted", untrusted: true, actions: ["external_directory", "Edit"] },
-    { project: "trusted", untrusted: false, actions: ["Edit"] },
+    { project: "trusted", untrusted: false, actions: ["external_directory", "Edit"] },
   ])
     it.live(
-      `${item.untrusted ? "asks" : "does not ask"} about the folder a link leads to in a ${item.project} project`,
+      `asks about the folder a link leads to in a ${item.project} project`,
       () =>
         Effect.acquireUseRelease(
           Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -389,10 +390,9 @@ describe("EditTool", () => {
               )
               expect(result.status).toBe("completed")
               expect(edit.assertions.map((input) => input.action)).toEqual(item.actions)
-              if (item.untrusted) {
-                const real = yield* Effect.promise(() => fs.realpath(outside.path))
-                expect(edit.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
-              }
+              const real = yield* Effect.promise(() => fs.realpath(outside.path))
+              expect(edit.assertions[0]).toMatchObject({ resources: [path.join(real, "*").replaceAll("\\", "/")] })
+              if (!item.untrusted) expect(edit.assertions[0]).not.toHaveProperty("escaped")
               expect(yield* Effect.promise(() => fs.readFile(target, "utf8"))).toBe("after")
             }),
           ([active, outside]) =>
@@ -1174,13 +1174,13 @@ describe("EditTool", () => {
     )
 
   // A link in a project that is not trusted leads out of it, and what it leads to is outside like any other path. The
-  // link is the repository's own, so `validate` must not read through it before the folder is approved. The trusted
-  // project is the control: there the same link is the project's own and the content is checked at once.
+  // link is the repository's own, so `validate` must not read through it before the folder is approved. A trusted
+  // project's link is asked about in the same way, so the content is not read before the approval there either.
   for (const item of [
     { project: "untrusted", untrusted: true, actions: ["external_directory"], reads: 0, type: "permission.rejected" },
-    { project: "trusted", untrusted: false, actions: [], reads: 1, type: "edit.no-match" },
+    { project: "trusted", untrusted: false, actions: ["external_directory"], reads: 0, type: "permission.rejected" },
   ])
-    it.live(`reads a file behind a link only when the link is the project's own, in a ${item.project} project`, () =>
+    it.live(`reads a file behind a link only after the folder is approved, in a ${item.project} project`, () =>
       Effect.acquireUseRelease(
         Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
         ([active, outside]) =>

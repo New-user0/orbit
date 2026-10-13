@@ -126,8 +126,8 @@ const layer = Layer.effect(
 
     // Where a path leads once every link in it is followed. `fs.resolve` stops at a part that is not there, which would
     // put a file that is about to be created under a link where the link is, not where it points. A link that points
-    // nowhere leads where it points, and that is where a write through it would land. The depth only ends a loop of
-    // links, which nothing can open anyway. Whether a path is there is asked of `stat`, which follows links: `access`
+    // nowhere leads where it points, and that is where a write through it would land. The depth ends a loop of links or a
+    // chain longer than any system follows, and is answered as unresolved, not as the name reached. Whether a path is there is asked of `stat`, which follows links: `access`
     // answers yes for a link that points nowhere on Windows.
     const follow = (file: string, depth = 0): Effect.Effect<string> =>
       Effect.gen(function* () {
@@ -136,7 +136,10 @@ const layer = Layer.effect(
         const parent = path.dirname(file)
         if (parent === file) return file
         const named = path.join(yield* follow(parent, depth), path.basename(file))
-        const target = depth < 40 ? yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined)) : undefined
+        // A walk that reaches the limit has not found where the path lands. It is answered as unresolved, which is outside
+        // every folder, and never as the name it got to: that name is inside the project.
+        if (depth >= LinkShare.LIMIT) return LinkShare.unresolved(named)
+        const target = yield* fs.readLink(named).pipe(Effect.orElseSucceed(() => undefined))
         return target === undefined ? named : yield* follow(path.resolve(path.dirname(named), target), depth + 1)
       })
 
@@ -193,7 +196,15 @@ const layer = Layer.effect(
     const inDirectory = Effect.fnUntraced(function* (directory: string) {
       const known = byDirectory.get(directory)
       if (known !== undefined) return known
-      const plugins = yield* PluginSourceDirectory.discover(fs, directory)
+      // Listing a plugin folder that a link leads to a share would connect to it. Such a folder is not listed: it counts as
+      // holding plugins, since nothing is known of what it holds.
+      const shared = yield* Effect.filter(PluginSourceDirectory.names, (name) =>
+        LinkShare.of(fs, path.join(directory, name)).pipe(Effect.map((found) => found !== undefined)),
+      )
+      const plugins =
+        shared.length > 0
+          ? [directory]
+          : yield* PluginSourceDirectory.discover(fs, directory)
       const supplied = (file: string) => supplies({ path: directory, scope: "project", trusted: false }, file)
       const commands = yield* CommandFile.load(fs, directory, supplied)
       const agents = yield* AgentFile.load(fs, directory, supplied)

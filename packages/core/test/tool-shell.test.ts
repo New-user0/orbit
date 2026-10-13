@@ -1536,7 +1536,7 @@ describe("ShellTool", () => {
   // link is its own (class 4, class 8).
   for (const trusted of [false, true])
     (trusted ? it : untrustedIt).live(
-      `${trusted ? "a trusted" : "an untrusted"} project's link into the global config folder ${trusted ? "is the workdir's own and a path in the command is judged where it leads" : "is asked about and shown as that folder"}`,
+      `${trusted ? "a trusted" : "an untrusted"} project's link into the global config folder is asked about and shown as that folder`,
       () =>
         Effect.acquireUseRelease(
           Effect.promise(() => tmpdir()),
@@ -1548,10 +1548,9 @@ describe("ShellTool", () => {
                 await fs.symlink(global.config, path.join(active.path, "cfg"), "junction")
               })
               const config = FSUtil.resolve(global.config)
-              const linked = path.join(active.path, "cfg")
               const folder = path.join(config, "*").replaceAll("\\", "/")
               const rows = [
-                { input: { command: cwdCommand, workdir: "cfg" }, workdir: trusted ? linked : config },
+                { input: { command: cwdCommand, workdir: "cfg" }, workdir: config },
                 { input: { command: `cd cfg; ${cwdCommand}` }, workdir: active.path },
                 // A plain word of the command, and a file it writes to, through the link.
                 { input: { command: "cat cfg/marker.txt" }, workdir: active.path },
@@ -1559,8 +1558,8 @@ describe("ShellTool", () => {
                 // Windows starts a process in `cfg.` as in `cfg`, while Bun's own `stat` finds no `cfg.`.
                 ...(isWindows
                   ? [
-                      { input: { command: cwdCommand, workdir: "cfg." }, workdir: trusted ? linked : config },
-                      { input: { command: cwdCommand, workdir: "cfg " }, workdir: trusted ? linked : config },
+                      { input: { command: cwdCommand, workdir: "cfg." }, workdir: config },
+                      { input: { command: cwdCommand, workdir: "cfg " }, workdir: config },
                     ]
                   : []),
               ]
@@ -1571,14 +1570,13 @@ describe("ShellTool", () => {
                     expect(yield* executeTool(registry, call(row.input, "call-link"))).toMatchObject({
                       status: "completed",
                     })
-                    // A trusted project's own workdir is its own, but a path in the command is judged where it really is
-                    // in either, so a link that leads to the global config folder is asked about as that folder.
-                    const workdirRow = "workdir" in row.input
-                    expect(assertions.map((item) => item.action)).toEqual(
-                      trusted && workdirRow ? ["Bash"] : ["external_directory", "Bash"],
-                    )
-                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
-                    if (trusted && !workdirRow) expect(assertions[0]).toMatchObject({ resources: [folder] })
+                    // A link that leads to the global config folder is asked about as that folder, whether it is the
+                    // workdir or a path in the command, in either trust state. Only a project that is not trusted marks
+                    // the folder as one a link leads to, so that Orbit's own allows do not decide it.
+                    expect(assertions.map((item) => item.action)).toEqual(["external_directory", "Bash"])
+                    expect(assertions[0]).toMatchObject({ resources: [folder] })
+                    if (!trusted) expect(assertions[0]).toMatchObject({ escaped: [folder] })
+                    else expect(assertions[0]).not.toHaveProperty("escaped")
                     expect(assertions.at(-1)?.metadata?.workdir).toEqual(row.workdir)
                   }),
                 ),

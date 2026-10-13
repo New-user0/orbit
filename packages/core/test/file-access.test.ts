@@ -302,11 +302,17 @@ describe("FileAccess in a project that is not trusted", () => {
           outsideAt(untrusted[4], "docs/sub", "sub", "sub")
           outsideAt(untrusted[5], "docs", ".", ".")
 
-          // Trusting the project follows links as before, and ending the trust holds them again.
+          // Trusting the project follows links, and the folder they lead to is still asked about, as the shell asks. The
+          // mark that keeps Orbit's own allows from deciding it is for a project that is not trusted.
           yield* trust.grant({ persist: false, via: "test" })
           const trusted = yield* paths()
-          for (const target of trusted) expect(target.externalDirectory).toBeUndefined()
-          for (const target of trusted) expect(target.place).toBe(target.absolute)
+          expect(trusted[0].externalDirectory).toBeUndefined()
+          for (const target of trusted.slice(1)) {
+            expect(target.externalDirectory).toBeDefined()
+            expect(target.externalDirectory?.escaped).toBeUndefined()
+            expect(target.leads).toBe(target.place)
+          }
+          expect(trusted[1].place).toBe(AbsolutePath.make(path.join(outside, "notes.md")))
           expect(trusted[1].resource).toBe("docs/notes.md")
           yield* trust.revoke()
           expect((yield* paths())[1].externalDirectory).toBeDefined()
@@ -431,8 +437,12 @@ describe("FileAccess in a project that is not trusted", () => {
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         yield* access.authorizeRead("docs/notes.md", invocation)
-        yield* access.authorizeExternal([yield* access.resolve({ path: "docs/new.txt", kind: "file" })], invocation)
-        expect(requests).toMatchObject([{ action: "Read", resources: ["docs/notes.md"] }])
+        // The folder is asked about without the mark, so Orbit's own allows still decide it.
+        expect(requests).toMatchObject([
+          { action: "external_directory", resources: [slash(path.join(outside, "*"))] },
+          { action: "Read", resources: ["docs/notes.md"] },
+        ])
+        expect(requests[0]).not.toHaveProperty("escaped")
       }).pipe(provideProject(project, requests, true))
     })
   })

@@ -88,17 +88,41 @@ describe.skipIf(process.platform !== "win32")("a plugin folder with a name that 
         const found = yield* Fingerprint.directory(recording.view, folder, [project])
         expect(found.plugins).toMatch(/^[0-9a-f]{64}$/)
         expect(recording.seen.filter((item) => path.resolve(item).startsWith(at + path.sep))).toEqual([])
-        expect(Date.now() - started).toBeLessThan(5000)
+        expect(Date.now() - started).toBeLessThan(15_000)
       }).pipe(Effect.provide(fsNode)),
     )
   }
 
-  it.live("an untrusted Config load and status do not connect to the share", () =>
+  // A chain of links from the plugin folder's own name to a share. Windows follows up to 63, so the chain has to be named
+  // as the share it leads to however long it is, and the folder is never listed (class 6 and 7).
+  for (const name of ["plugins", "plugin"])
+    for (const count of [1, 40, 41, 63])
+      it.live(`an untrusted Config load and status do not connect to a share that .orbit/${name} reaches through ${count} links`, () =>
+        Effect.gen(function* () {
+          const root = (yield* tmpdirScoped()).path
+          const repo = path.join(root, "work", "repo")
+          const folder = path.join(repo, ".orbit")
+          const names = [name, ...Array.from({ length: count - 1 }, (_, index) => `chain${index + 1}`)]
+          const made = yield* Effect.promise(async () => {
+            for (const index of names.keys().toArray().toReversed()) {
+              const target = index === names.length - 1 ? `\\\\${hostOf(name, count)}\\share` : names[index + 1]!
+              if (!(await link(target, path.join(folder, names[index]!), "dir"))) return false
+            }
+            return true
+          })
+          if (!made) return
+          const started = Date.now()
+          const prints = yield* untrustedLoad(root, repo)
+          expect(JSON.stringify(prints)).not.toContain("unreadable")
+          expect(Date.now() - started).toBeLessThan(15_000)
+        }),
+      30_000,
+    )
+
+  const hostOf = (name: string, count: number) => `10.255.255.${(name === "plugins" ? 10 : 30) + [1, 40, 41, 63].indexOf(count)}`
+
+  const untrustedLoad = (root: string, repo: string) =>
     Effect.gen(function* () {
-      const root = (yield* tmpdirScoped()).path
-      const repo = path.join(root, "work", "repo")
-      const at = path.join(repo, ".orbit", "plugins", "p", "tui.ts")
-      if (!(yield* Effect.promise(() => link("\\\\192.0.2.15\\share\\tui.ts", at, "file")))) return
       const build = AppNodeBuilder.build(
         LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node]),
         [
@@ -115,19 +139,14 @@ describe.skipIf(process.platform !== "win32")("a plugin folder with a name that 
           Watcher.node.replace(Watcher.testLayer),
         ],
       )
-      const started = Date.now()
-      const status = yield* Effect.gen(function* () {
+      return yield* Effect.gen(function* () {
         const config = yield* Config.Service
         const project = yield* ProjectTrust.Service
         const prints = yield* config.fingerprints()
         yield* project.status()
         return prints
       }).pipe(Effect.provide(build))
-      expect(JSON.stringify(status)).not.toContain("unreadable")
-      expect(Date.now() - started).toBeLessThan(5000)
-    }),
-    30_000,
-  )
+    })
 })
 
 describe("a plugin folder of regular files", () => {

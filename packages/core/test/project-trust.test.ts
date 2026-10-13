@@ -7,6 +7,7 @@ import { Event } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
+import { LinkShare } from "@orbit/core/config/link-share"
 import { ConfigAgentPlugin } from "@orbit/core/config/plugin/agent"
 import { ConfigSkillPlugin } from "@orbit/core/config/plugin/skill"
 import { Credential } from "@orbit/core/credential"
@@ -685,7 +686,7 @@ describe("ProjectTrust.escapes", () => {
     }),
   )
 
-  it.live("ends in a loop of links that points nowhere, and counts it as where it is", () =>
+  it.live("ends in a loop of links that points nowhere, and answers it as unresolved, not as the name it reached", () =>
     Effect.gen(function* () {
       const folders = yield* bare
       const first = path.join(folders.repo, "first")
@@ -697,8 +698,10 @@ describe("ProjectTrust.escapes", () => {
       })
       yield* Effect.gen(function* () {
         const project = yield* ProjectTrust.Service
-        // Nothing can be opened through such a loop, so there is nothing to ask about.
-        expect(yield* project.escapes(path.join(first, "later.txt"))).toBeUndefined()
+        // Nothing can be opened through such a loop, but the walk gave up on it and did not find where it leads, so it is
+        // not counted as a file of the project: callers refuse it as they refuse a share.
+        const escaped = yield* project.escapes(path.join(first, "later.txt"))
+        expect(escaped !== undefined && LinkShare.isUnresolved(escaped)).toBe(true)
       }).pipe(Effect.provide(loader(folders)))
     }),
   )

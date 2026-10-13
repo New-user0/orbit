@@ -150,11 +150,10 @@ describe("approval values: the request carries what the tool acts on", () => {
                 const folder = spelling.folder(world)
                 const spelled = `${spelling.spelled(world)}${extension}`
                 const moved = `${spelling.spelled(world)}-moved.txt`
-                // Where the file is, and the place a request must name for it: through a link in an untrusted folder
-                // that is the real folder, and in a trusted one the path the project spells.
+                // Where the file is, and the place a request must name for it: the real folder, through a link in a
+                // trusted folder as well as in an untrusted one.
                 const real = path.join(folder, `file${extension}`)
-                const named = (name: string) =>
-                  spelling.link && trusted ? path.join(project.path, "linked", name) : path.join(folder, name)
+                const named = (name: string) => path.join(folder, name)
                 yield* Effect.promise(async () => {
                   await fs.mkdir(folder, { recursive: true })
                   if (spelling.link) await fs.symlink(outside.path, path.join(project.path, "linked"), "junction")

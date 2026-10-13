@@ -83,7 +83,7 @@ export const Plugin = {
                 const edit = yield* resolveEdit(input, notebook)
                 const next = Notebook.apply(notebook, edit)
                 const after = Notebook.serialize(next, original.text)
-                const preview = fileDiff(target.resource, original.text, after)
+                const preview = fileDiff(FileAccess.shownName(target), original.text, after)
                 yield* permission.assert({
                   action: "Edit",
                   resources: [target.resource],

@@ -487,27 +487,27 @@
       ],
       "metadata": {
         "paths": [
-          "{project}/linked/file.txt"
+          "{outside}/file.txt"
         ],
         "files": [
           {
-            "file": "linked/file.txt",
-            "patch": "Index: linked/file.txt\n===================================================================\n--- linked/file.txt\n+++ linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/linked/file.txt"
+            "place": "{outside}/file.txt"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt"
+        "{outside}/file.txt"
       ],
       "files": [
         {
-          "place": "{project}/linked/file.txt"
+          "place": "{outside}/file.txt"
         }
       ]
     }
@@ -1164,13 +1164,13 @@
       ],
       "metadata": {
         "paths": [
-          "{project}/linked/file.txt"
+          "{outside}/file.txt"
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt"
+        "{outside}/file.txt"
       ],
       "files": []
     }
@@ -1882,27 +1882,27 @@
       ],
       "metadata": {
         "paths": [
-          "{project}/linked/file.ipynb"
+          "{outside}/file.ipynb"
         ],
         "files": [
           {
-            "file": "linked/file.ipynb",
-            "patch": "Index: linked/file.ipynb\n===================================================================\n--- linked/file.ipynb\n+++ linked/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "file": "{outside}/file.ipynb",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
-            "place": "{project}/linked/file.ipynb"
+            "place": "{outside}/file.ipynb"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.ipynb"
+        "{outside}/file.ipynb"
       ],
       "files": [
         {
-          "place": "{project}/linked/file.ipynb"
+          "place": "{outside}/file.ipynb"
         }
       ]
     }
@@ -2693,28 +2693,28 @@
       "metadata": {
         "filepath": "linked/file.txt",
         "paths": [
-          "{project}/linked/file.txt"
+          "{outside}/file.txt"
         ],
-        "diff": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
         "files": [
           {
             "file": "linked/file.txt",
-            "patch": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/linked/file.txt"
+            "place": "{outside}/file.txt"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt"
+        "{outside}/file.txt"
       ],
       "files": [
         {
-          "place": "{project}/linked/file.txt"
+          "place": "{outside}/file.txt"
         }
       ]
     }
@@ -3634,43 +3634,43 @@
       "metadata": {
         "filepath": "linked/file.txt, linked/file-moved.txt",
         "paths": [
-          "{project}/linked/file.txt",
-          "{project}/linked/file-moved.txt"
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
         ],
-        "diff": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\nIndex: {project}/linked/file-moved.txt\n===================================================================\n--- {project}/linked/file-moved.txt\n+++ {project}/linked/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n\n",
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\nIndex: {outside}/file-moved.txt\n===================================================================\n--- {outside}/file-moved.txt\n+++ {outside}/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n\n",
         "files": [
           {
             "file": "linked/file-moved.txt",
-            "patch": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/linked/file-moved.txt",
-            "from": "{project}/linked/file.txt"
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
           },
           {
             "file": "linked/file-moved.txt",
-            "patch": "Index: {project}/linked/file-moved.txt\n===================================================================\n--- {project}/linked/file-moved.txt\n+++ {project}/linked/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n",
+            "patch": "Index: {outside}/file-moved.txt\n===================================================================\n--- {outside}/file-moved.txt\n+++ {outside}/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n",
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/linked/file-moved.txt"
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt",
-        "{project}/linked/file-moved.txt"
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
       ],
       "files": [
         {
-          "place": "{project}/linked/file-moved.txt",
-          "from": "{project}/linked/file.txt"
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
         },
         {
-          "place": "{project}/linked/file-moved.txt"
+          "place": "{outside}/file-moved.txt"
         }
       ]
     }
@@ -4582,32 +4582,32 @@
       "metadata": {
         "filepath": "linked/file.txt, linked/file-moved.txt",
         "paths": [
-          "{project}/linked/file.txt",
-          "{project}/linked/file-moved.txt"
+          "{outside}/file.txt",
+          "{outside}/file-moved.txt"
         ],
-        "diff": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
         "files": [
           {
             "file": "linked/file-moved.txt",
-            "patch": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/linked/file-moved.txt",
-            "from": "{project}/linked/file.txt"
+            "place": "{outside}/file-moved.txt",
+            "from": "{outside}/file.txt"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt",
-        "{project}/linked/file-moved.txt"
+        "{outside}/file.txt",
+        "{outside}/file-moved.txt"
       ],
       "files": [
         {
-          "place": "{project}/linked/file-moved.txt",
-          "from": "{project}/linked/file.txt"
+          "place": "{outside}/file-moved.txt",
+          "from": "{outside}/file.txt"
         }
       ]
     }
@@ -5423,28 +5423,28 @@
       "metadata": {
         "filepath": "linked/file.txt",
         "paths": [
-          "{project}/linked/file.txt"
+          "{outside}/file.txt"
         ],
-        "diff": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "diff": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
         "files": [
           {
             "file": "linked/file.txt",
-            "patch": "Index: {project}/linked/file.txt\n===================================================================\n--- {project}/linked/file.txt\n+++ {project}/linked/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/linked/file.txt"
+            "place": "{outside}/file.txt"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt"
+        "{outside}/file.txt"
       ],
       "files": [
         {
-          "place": "{project}/linked/file.txt"
+          "place": "{outside}/file.txt"
         }
       ]
     }
@@ -6097,13 +6097,13 @@
       ],
       "metadata": {
         "paths": [
-          "{project}/linked/file.txt"
+          "{outside}/file.txt"
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt"
+        "{outside}/file.txt"
       ],
       "files": []
     }
@@ -6792,27 +6792,27 @@
       ],
       "metadata": {
         "paths": [
-          "{project}/linked/file.txt"
+          "{outside}/file.txt"
         ],
         "files": [
           {
-            "file": "linked/file.txt",
-            "patch": "Index: linked/file.txt\n===================================================================\n--- linked/file.txt\n+++ linked/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "file": "{outside}/file.txt",
+            "patch": "Index: {outside}/file.txt\n===================================================================\n--- {outside}/file.txt\n+++ {outside}/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
             "status": "added",
             "additions": 1,
             "deletions": 0,
-            "place": "{project}/linked/file.txt"
+            "place": "{outside}/file.txt"
           }
         ]
       }
     },
     "truth": {
       "places": [
-        "{project}/linked/file.txt"
+        "{outside}/file.txt"
       ],
       "files": [
         {
-          "place": "{project}/linked/file.txt"
+          "place": "{outside}/file.txt"
         }
       ]
     }

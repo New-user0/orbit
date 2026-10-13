@@ -709,7 +709,7 @@ describe("search tools", () => {
   for (const name of ["Glob", "Grep"] as const)
     for (const trusted of [false, true])
       it.live(
-        `${name} through a link in ${trusted ? "a trusted project searches the project's own folder" : "an untrusted project names the real folder"}`,
+        `${name} through a link in ${trusted ? "a trusted project asks about the folder it leads to" : "an untrusted project names the real folder"}`,
         () =>
           Effect.acquireUseRelease(
             Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
@@ -737,12 +737,13 @@ describe("search tools", () => {
                     const folder = path.join(real, "*").replaceAll("\\", "/")
                     expect(result.status).toBe("completed")
                     expect(assertions.map((item) => item.action)).toEqual(
-                      trusted ? ["Read", name] : ["external_directory", "Read", name],
+                      ["external_directory", "Read", name],
                     )
-                    if (!trusted) expect(assertions[0]).toMatchObject({ resources: [folder], escaped: [folder] })
-                    expect(assertions.find((item) => item.action === name)?.metadata?.path).toBe(
-                      trusted ? path.join(active.path, "linked") : real,
-                    )
+                    expect(assertions[0]).toMatchObject({ resources: [folder] })
+                    // Only a project that is not trusted marks the folder as one a link leads to.
+                    if (trusted) expect(assertions[0]).not.toHaveProperty("escaped")
+                    else expect(assertions[0]).toMatchObject({ escaped: [folder] })
+                    expect(assertions.find((item) => item.action === name)?.metadata?.path).toBe(real)
                   }),
                 ),
               )

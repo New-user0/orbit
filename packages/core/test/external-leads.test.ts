@@ -20,8 +20,10 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
+import { Agent as AgentSchema } from "@orbit/schema/agent"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 
@@ -157,5 +159,121 @@ describe("external_directory rules meet the real folder behind another spelling"
           ])
         }),
       60_000,
+    )
+})
+
+// The same deny meets a link that sits inside the project and leads out of it, in a trusted project as well as in one that
+// is not: Read, Grep, Glob and LSP (authorizeRead) and Edit, Write, Patch and NotebookEdit (authorizeExternal) are asked
+// for the folder the link leads to, as the shell is (class 3 and 4). The rows are a link to a folder, a file that is not
+// there yet below it, and a link whose target is gone.
+describe("an external_directory rule meets the real folder behind a link inside the project", () => {
+  const provideWith = (project: string, untrusted: boolean) =>
+    Effect.provide(
+      AppNodeBuilder.build(
+        LayerNode.group([
+          Database.node,
+          Bus.node,
+          SessionStore.node,
+          PermissionSaved.node,
+          Agent.node,
+          PluginHooks.node,
+          ManagedPolicy.node,
+          Permission.node,
+          Global.node,
+          FileAccess.node,
+          ProjectTrust.node,
+        ]),
+        [
+          ...(untrusted ? untrustedProjectNodes : []),
+          Location.node.replace(
+            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
+          ),
+        ],
+      ),
+    )
+
+  const files = [
+    ["a link to a folder, a file in it", "keys/id_rsa", "ssh"],
+    ["a link to a folder, a file that is not there yet", "keys/authorized_keys", "ssh"],
+    ["a link below a folder", "src/nested/id_rsa", "ssh"],
+    ["a link whose target is gone", "dangling/new.txt", "gone"],
+  ] as const
+
+  for (const untrusted of [false, true])
+    for (const managed of [false, true])
+      for (const [name, file, folder] of files)
+        it.live(
+          `${untrusted ? "untrusted" : "trusted"}, ${managed ? "managed" : "configured"} deny: ${name} (${file})`,
+          () =>
+            Effect.gen(function* () {
+              const tmp = (yield* tmpdirScoped()).path
+              const project = path.join(tmp, "home", "code", "repo")
+              const places = { ssh: path.join(tmp, "home", ".ssh"), gone: path.join(tmp, "home", "gone") }
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.join(project, "src"), { recursive: true })
+                await fs.mkdir(places.ssh, { recursive: true })
+                await fs.mkdir(places.gone, { recursive: true })
+                await fs.writeFile(path.join(places.ssh, "id_rsa"), "PRIVATE")
+                await fs.symlink(places.ssh, path.join(project, "keys"), "junction")
+                await fs.symlink(places.ssh, path.join(project, "src", "nested"), "junction")
+                await fs.symlink(places.gone, path.join(project, "dangling"), "junction")
+                await fs.rmdir(places.gone)
+              })
+              const rule = {
+                action: "external_directory",
+                resource: `${slash(places[folder])}/*`,
+                effect: "deny",
+              } satisfies Permission.Rule
+              const results = yield* Effect.gen(function* () {
+                yield* prepare(project, [{ action: "*", resource: "*", effect: "allow" }, ...(managed ? [] : [rule])])
+                if (managed) yield* (yield* ManagedPolicy.Service).set("file", { statements: [], rules: [rule] })
+                const access = yield* FileAccess.Service
+                const permission = yield* Permission.Service
+                const context = { sessionID, agent: Agent.ID.make("test"), messageID: "msg_leads", id: "call_leads" } as never
+                const outcome = (effect: Effect.Effect<unknown, unknown>) =>
+                  effect.pipe(
+                    Effect.map(() => "allowed"),
+                    Effect.catch((error) =>
+                      Effect.succeed(error instanceof Permission.BlockedError ? "blocked" : String(error)),
+                    ),
+                  )
+                const target = yield* access.resolve({ path: file })
+                const request = access.externalRequest([target], context)
+                return [
+                  yield* outcome(access.authorizeRead(file, context)),
+                  yield* outcome(access.authorizeExternal([target], context)),
+                  request === undefined ? false : yield* permission.denied(request),
+                ]
+              }).pipe(provideWith(project, untrusted))
+              expect(results).toEqual(["blocked", "blocked", true])
+            }),
+          60_000,
+        )
+
+  // Under the built-in defaults the folder is asked about, not allowed, whatever the trust.
+  for (const untrusted of [false, true])
+    it.live(`${untrusted ? "untrusted" : "trusted"}: under the default rules a read through the link asks about the folder`, () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const project = path.join(tmp, "home", "code", "repo")
+        const ssh = path.join(tmp, "home", ".ssh")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(project, { recursive: true })
+          await fs.mkdir(ssh, { recursive: true })
+          await fs.writeFile(path.join(ssh, "id_rsa"), "PRIVATE")
+          await fs.symlink(ssh, path.join(project, "keys"), "junction")
+        })
+        const decision = yield* Effect.gen(function* () {
+          yield* prepare(project, [...AgentSchema.Info.default(Agent.ID.make("test")).permissions])
+          const access = yield* FileAccess.Service
+          const permission = yield* Permission.Service
+          const request = access.externalRequest([yield* access.resolve({ path: "keys/id_rsa" })], {
+            sessionID,
+            agent: Agent.ID.make("test"),
+          })
+          return request === undefined ? undefined : yield* permission.ask({ ...request, id: Permission.ID.create() })
+        }).pipe(provideWith(project, untrusted))
+        expect(decision).toMatchObject({ effect: "ask" })
+      }),
     )
 })

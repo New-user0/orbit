@@ -86,7 +86,7 @@ export const Plugin = {
                 yield* ledger.assertFresh(context.sessionID, target.absolute, input.file_path, current)
                 const next = Bom.split(input.content)
                 const preview = fileDiff(
-                  target.resource,
+                  FileAccess.shownName(target),
                   current?.text ?? "",
                   next.text,
                   current ? "modified" : "added",

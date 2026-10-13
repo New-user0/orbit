@@ -130,16 +130,18 @@ describe("FileAccess for another spelling of the project's folder", () => {
       }),
   )
 
-  it.live("follows the link of a trusted project as for the plain spelling, with no folder question", () =>
+  it.live("follows the link of a trusted project as for the plain spelling: the question is for the folder it leads to", () =>
     Effect.gen(function* () {
-      const { project, spellings } = yield* layout
+      const { project, outside, spellings } = yield* layout
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         for (const spelling of spellings) {
           const through = yield* access.resolve({ path: path.join(spelling.spelled, "docs", "notes.md") })
-          expect([spelling.name, through.resource, through.externalDirectory]).toEqual([
+          // Not marked as an escape: the owner trusted the folder, so Orbit's own allows still apply.
+          expect([spelling.name, through.place, through.externalDirectory?.directory, through.externalDirectory?.escaped]).toEqual([
             spelling.name,
-            "docs/notes.md",
+            AbsolutePath.make(path.join(outside, "notes.md")),
+            AbsolutePath.make(outside),
             undefined,
           ])
         }

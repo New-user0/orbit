@@ -306,7 +306,7 @@ export const Plugin = {
                 // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
                 metadata: {
                   paths: [target.place],
-                  files: [{ ...fileDiff(target.resource, source, replaced), place: target.place }],
+                  files: [{ ...fileDiff(FileAccess.shownName(target), source, replaced), place: target.place }],
                 },
                 sessionID: context.sessionID,
                 agent: context.agent,
