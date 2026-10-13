@@ -2771,3 +2771,20 @@ A PowerShell location change to an empty path (`Set-Location ''`, `cd ""`, `-Pat
 **Affects:** `pwsh` users who run `cd` or `Set-Location` with no folder or with an unset variable, `pwsh` on Linux or macOS with backslash paths, and projects that hold links to shares or sit on a network share.
 
 **What to do:** Nothing; answer the extra question, or write the folder out.
+
+### A link to a network share is never opened by a loader, and a trusted project's tools ask about one
+
+In a repository, a link that leads to a Windows share or device path (`\host\share`, `\.\...`) is now left alone by
+every loader before anything is asked: `.orbit`, the orbit files, the compatibility roots, the MCP file, settings files,
+the commands, agents, skills and plugin folders, `{file:}` references and instruction markers. Folders are listed
+without following links, and a link inside them is entered only after its target is known not to be a share (in a
+trusted project too). Before, one such link made the start, the trust status or a reload wait for the share to answer.
+
+A trusted project's file tools now ask before they open a place that a link of the project leads to a share, as they do
+for any folder outside the project; the place is not read to draw the question. A chain of more than 80 links is
+refused with a message about links, not about shares. On Linux and macOS the "too many links" answer is a rooted path,
+so it can no longer be taken for a path inside the working folder.
+
+**Affects:** projects that link to network shares, on Windows.
+
+**What to do:** Nothing; use the share's drive path, or copy the files into the project, if a loader should read them.

@@ -109,13 +109,23 @@ describe.skipIf(!win || !canLinkFile)("a chain of links in the repository that e
           yield* Effect.promise(() => chain(project, names(count), `\\\\${address}\\share`, "dir"))
           const view = provide(project, trusted)
           const started = Date.now()
+          const refusals: string[] = []
           yield* Effect.gen(function* () {
             const access = yield* FileAccess.Service
-            yield* access.resolve({ path: "l0/x" }).pipe(Effect.exit)
+            refusals.push(
+              yield* access
+                .resolve({ path: "l0/x" })
+                .pipe(Effect.match({ onFailure: (error) => String((error as { message?: unknown }).message), onSuccess: () => "" })),
+            )
             yield* access.resolve({ path: ".", kind: "directory" }).pipe(Effect.exit)
             yield* access.resolve({ path: "l0", kind: "directory" }).pipe(Effect.exit)
           }).pipe(view.layer)
           expect(Date.now() - started).toBeLessThan(15_000)
+          // A chain past the limit is refused for its length, not named a network share (it may lead nowhere near one).
+          if (count > 63) {
+            expect(refusals[0]).toContain("links")
+            expect(refusals[0]).not.toContain("network share")
+          }
           expect(followed(view.recorded.calls, path.join(project, "l0"))).toEqual([])
         }),
       )

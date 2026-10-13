@@ -130,6 +130,12 @@ export const resolvePath = (directory: string, input: string, home = Global.Path
 // A path that a walk of links gave up on (`LinkShare.unresolved`) counts as one on every platform.
 const isShare = (file: string) =>
   (process.platform === "win32" && file.startsWith("\\\\")) || LinkShare.isUnresolved(file)
+// A chain of links that was followed to the limit has no known end, which is a different reason from a share.
+const linksFailure = (spelled: string) =>
+  new ToolFailure({
+    message: `${spelled} passes through more than ${LinkShare.LIMIT} links, more than any system follows, so it is not opened. Use the path of the file or folder itself.`,
+    code: Tool.ErrorCode.FileSpelling,
+  })
 const shareFailure = (spelled: string) =>
   new ToolFailure({
     message: `${spelled} is a network share or device path, which tools do not open. Use the path of the file or folder on a local drive.`,
@@ -227,12 +233,16 @@ const layer = Layer.effect(
       escaped = true,
     ) {
       const place = escapes ?? absolute
+      // A share is asked about without being opened: statting it, or looking for a repository in it, would connect.
+      const network = isShare(place)
       const type =
         kind === "directory"
           ? "Directory"
           : kind === "file"
             ? "File"
-            : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
+            : network
+              ? undefined
+              : (yield* fs.stat(place).pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.undefined)))
                 ?.type
       const directory = AbsolutePath.make(type === "Directory" ? place : path.dirname(place))
       // A link outside the project leads somewhere too, and a deny or ask written for that folder decides it. A share
@@ -249,7 +259,7 @@ const layer = Layer.effect(
           action: "external_directory",
           directory,
           resource: slash(path.join(directory, "*")),
-          save: slash(path.join((yield* Project.root(fs, directory)) ?? directory, "*")),
+          save: slash(path.join((network ? undefined : yield* Project.root(fs, directory)) ?? directory, "*")),
           ...(escapes === undefined || !escaped ? {} : { escaped: true as const }),
         },
       } satisfies Target
@@ -312,6 +322,7 @@ const layer = Layer.effect(
       // The person's rules name the folder as a drive path, so a question about the share's spelling would let their deny
       // become an ask, and approving it would connect to the host. It is refused as a share given directly is, before
       // anything is asked or opened.
+      if (escapes !== undefined && LinkShare.isUnresolved(escapes)) return yield* linksFailure(input.path)
       if (escapes !== undefined && isShare(escapes)) return yield* shareFailure(input.path)
       if (escapes !== undefined) return yield* external(absolute, input.kind, escapes)
       // A trusted project follows its links, but the person's deny and ask rules, and the managed ones, are written against
@@ -319,10 +330,10 @@ const layer = Layer.effect(
       // a deny or an ask can use.
       const leads = yield* trust.leads(absolute)
       // A link of a trusted project that leads out of it is asked about as the shell asks (class 3): the question is for the
-      // folder it really leads to. A walk that gave up on a long chain is refused as a share is. A link to a share is the
-      // owner's own in a trusted project, as before: the share is not a folder anyone's rules are written for.
-      if (LinkShare.isUnresolved(leads)) return yield* shareFailure(input.path)
-      if (!isShare(leads) && ![...folders, ...real].some((folder) => FSUtil.contains(folder, leads))) {
+      // folder it really leads to, and a link to a share is asked about the same way, before anything is opened: the question
+      // names the share, so the person decides whether to connect. A walk that gave up on a long chain is refused.
+      if (LinkShare.isUnresolved(leads)) return yield* linksFailure(input.path)
+      if (![...folders, ...real].some((folder) => FSUtil.contains(folder, leads))) {
         // The resource stays the spelling in the project, so a rule written for the link still decides, and `leads` joins
         // the real place for a rule written for that.
         const outside = yield* external(absolute, input.kind, leads, false)

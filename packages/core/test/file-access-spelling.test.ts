@@ -303,12 +303,24 @@ describe("FileAccess for another spelling of the project's folder", () => {
             }),
           ).toEqual([])
         }).pipe(provideProject(project, false, recorded))
-        // The owner trusted the folder: its link is its own, and nothing is refused.
+        // The owner trusted the folder: its link is followed as the reference follows one, but a share is asked about
+        // before anything is opened, as a folder outside the project is, and the place is not read to draw the question.
+        const trustedRecorded = recordedFileSystem()
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
           const through = yield* access.resolve({ path: "shared/notes.md" })
-          expect([through.resource, through.externalDirectory]).toEqual(["shared/notes.md", undefined])
-        }).pipe(provideProject(project, true))
+          expect(through.resource).toBe("shared/notes.md")
+          expect(through.externalDirectory?.action).toBe("external_directory")
+          expect(through.externalDirectory?.directory.startsWith("\\\\")).toBe(true)
+          const at = path.join(project, "shared").toLowerCase()
+          expect(
+            trustedRecorded.calls.filter((call) => {
+              const [method, ...rest] = call.split(" ")
+              const file = rest.join(" ").toLowerCase()
+              return method !== "readLink" && (file === at || file.startsWith(at + path.sep))
+            }),
+          ).toEqual([])
+        }).pipe(provideProject(project, true, trustedRecorded))
       }),
   )
 
