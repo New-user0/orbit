@@ -51,7 +51,17 @@ const run = (implicit: boolean) =>
       await fs.mkdir(path.join(project, ".hg"), { recursive: true })
       await fs.mkdir(bin)
     })
-    const ran = yield* Effect.promise(() => plant(bin, "hg"))
+    const ran = yield* Effect.promise(async () => {
+      if (process.platform === "win32") return plant(bin, "hg")
+      const log = path.join(bin, "ran.txt")
+      await Bun.write(path.join(bin, "hg"), `#!/bin/sh
+echo "hg $@" >> ${JSON.stringify(log)}
+exit 1
+`)
+      await fs.chmod(path.join(bin, "hg"), 0o755)
+      return async () => ((await Bun.file(log).exists()) ? (await Bun.file(log).text()).split("
+").filter(Boolean) : [])
+    })
     const name = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH"
     const before = process.env[name]
     yield* Effect.acquireRelease(
