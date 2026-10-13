@@ -298,10 +298,18 @@ describe("ShellGuard.facts: a place FileAccess refuses", () => {
             if (!made) return
             yield* Effect.gen(function* () {
               const found = yield* facts(command, { cwd: project, writable: [project] })
+              // A trusted project's link to a share is asked about, as a folder outside the project is, and not read to
+              // draw the question; an untrusted one is refused before anything is asked.
+              if (trusted) {
+                expect(found.places.map((place) => place.status)).toEqual(["external"])
+                expect(
+                  found.external.map((target) => target.externalDirectory?.directory.startsWith("\\\\")),
+                ).toEqual([true])
+                return
+              }
               expect(found.places.map((place) => place.status)).toEqual(["unresolved"])
               // Reported as written: the early return skips the lookup that would name the share the link leads to.
-              // (A trusted project follows its own links, so only the untrusted rows are refused before the lookup.)
-              if (!trusted) expect(found.places[0]?.real).toEqual([path.join(project, "lnk", "x")])
+              expect(found.places[0]?.real).toEqual([path.join(project, "lnk", "x")])
               expect(found.external).toEqual([])
             }).pipe(provide(project, trusted))
           }),
