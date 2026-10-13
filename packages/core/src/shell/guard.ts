@@ -17,6 +17,7 @@ import { ShellPaths } from "./paths.js"
 import { ShellReadOnly } from "./readonly.js"
 import { ShellSafety } from "./safety.js"
 import { ShellWrappers } from "./wrappers.js"
+import { Wildcard } from "./wildcard.js"
 
 // The effectful half of the shell permission check. The analysis says which files a command names and what it does to
 // them; the safety checks describe what no rule may lift. This module puts the disk between them: it resolves every named
@@ -222,12 +223,13 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   // that is a link is probed as the place it leads to as well. A wildcard that cannot be expanded (too many matches, a scan
   // that failed, too many words or too much time for one command) is decided too: an `under` probe is denied when a deny
   // rule could match anything below its folders, so a walk that is not bounded never slips past a rule (class 8).
-  // The scan is a superset of what the shell expands: names match in any case, and a leading dot matches when the input
-  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. Braces and extglobs are literal, since a
-  // quoted brace would otherwise be expanded by the library for seconds (class 7).
-  const budget = { matches: 0, scans: 0, until: Date.now() + GLOB_MILLIS }
+  // The word is expanded by `Wildcard` (linear matching, folders listed without following links, capped in entries and time).
+  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the parsed input
+  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. `**` is two stars unless the parsed input
+  // can switch globstar on, or the shell is zsh. Braces and extglobs are literal (class 7).
+  const budget = { matches: 0, scans: 0, entries: GLOB_ENTRIES, until: Date.now() + GLOB_MILLIS }
   const seen = new Map<string, { targets: string[]; undecided: boolean }>()
-  const dot = ps || DOTGLOB.test(input.text)
+  const options = globOptions(all, ps, input.ctx)
   const expand = (folder: string, pattern: string, role: ShellPaths.Role) => {
     const key = `${folder}
 ${pattern}`
@@ -247,7 +249,7 @@ ${pattern}`
           share
             ? Effect.succeed(undefined)
             : // One match past the limit is enough to know the word reaches too many, so the walk stops there.
-              fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot, nocase: true, nobrace: true, noext: true, symlink: false, limit: GLOB_LIMIT + 1 }),
+              Effect.promise(() => Wildcard.expand(folder, pattern, { ...options, limit: GLOB_LIMIT, budget })),
         ),
         Effect.map((found) => {
           budget.matches += found?.length ?? 0
@@ -352,8 +354,7 @@ ${pattern}`
 const GLOB_LIMIT = 500
 const GLOB_WORDS = 32
 const GLOB_MILLIS = 3000
-// Input that turns on what makes a shell's wildcard reach dotfiles or ignore case.
-const DOTGLOB = /dotglob|nocaseglob|globdots|globignore|case_?glob|glob_?dots/i
+const GLOB_ENTRIES = 50_000
 
 // The part of a wildcard operand after its folder, as a pattern relative to that folder. None when the folder part is the
 // whole operand (a `..` after the wildcard), which cannot be expanded from one folder.
@@ -364,6 +365,32 @@ function globRemainder(operand: ShellPaths.Operand, win: boolean) {
   const rest = prefix.endsWith("/") ? text.slice(prefix.length) : text.startsWith(`${prefix}/`) ? text.slice(prefix.length + 1) : text
   const trimmed = rest.replace(/^\/+/, "")
   return trimmed === "" ? undefined : trimmed
+}
+
+// Commands that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
+// text the guard cannot see. Decided from the parsed commands after quote removal, never from the raw text, so a quoted or
+// escaped spelling cannot hide one (class 8).
+const OPTION_COMMANDS = new Set([
+  "shopt", "set", "setopt", "unsetopt", "emulate", "declare", "typeset", "export", "local", "readonly", "eval", "source", ".",
+  "builtin", "command",
+])
+const OPTION_VARIABLES = /^(globignore|bashopts|shellopts|zsh_?opts)$/i
+
+function globOptions(all: Level[], ps: boolean, ctx: Context) {
+  if (ps) return { dot: true, globstar: false }
+  const zsh = /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell))
+  const undecided = all.some(
+    (level) =>
+      level.analysis.opaque !== undefined || level.analysis.features.assignment ||
+      level.analysis.commands.some(
+        (command) =>
+          command.dynamicHead ||
+          command.wrapper === "unanalysable" ||
+          [command.head, command.inner[0] ?? ""].some((head) => OPTION_COMMANDS.has(head)) ||
+          command.env.some((item) => OPTION_VARIABLES.test(item.name)),
+      ),
+  )
+  return { dot: undecided, globstar: undecided || zsh }
 }
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {

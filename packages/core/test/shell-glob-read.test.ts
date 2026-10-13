@@ -44,14 +44,23 @@ const layout = Effect.gen(function* () {
     await fs.writeFile(path.join(project, "other.txt"), "o")
     await fs.writeFile(path.join(project, ".env"), "e")
     await fs.writeFile(path.join(project, "sub", "secret.txt"), "s")
+    await fs.mkdir(path.join(project, "src", "a", "b"), { recursive: true })
+    await fs.writeFile(path.join(project, "src", "a", "m.ts"), "m")
+    await fs.writeFile(path.join(project, "src", "a", "b", "n.ts"), "n")
+    // One long name, for the words with many stars.
+    await fs.writeFile(path.join(project, "a".repeat(60)), "a")
+    // A folder link in a folder: a wildcard never enters it.
+    await fs.mkdir(path.join(project, "hold"))
+    await fs.symlink(path.join(project, "sub"), path.join(project, "hold", "link"), "junction")
     await Promise.all(Array.from({ length: 520 }, (_, index) => fs.writeFile(path.join(project, "many", `f${index}`), "x")))
   })
   return project
 })
 
-const run = (command: string, layer: "managed" | "configured", rule: Permission.Rule | undefined) =>
+const run = (command: string, layer: "managed" | "configured", rule: Permission.Rule | undefined, shell = "sh", setup?: (project: string) => Promise<void>) =>
   Effect.gen(function* () {
     const project = yield* layout
+    if (setup) yield* Effect.promise(() => setup(project))
     const rules = rule ? [{ ...rule, resource: rule.resource.replace("<project>", slash(project)) }] : []
     return yield* Effect.gen(function* () {
       const { db } = yield* Database.Service
@@ -76,7 +85,7 @@ const run = (command: string, layer: "managed" | "configured", rule: Permission.
       const access = yield* FileAccess.Service
       const input = {
         command,
-        shell: "sh",
+        shell,
         cwd: yield* access.resolve({ path: project, kind: "directory" }),
         env: {},
         portable: true,
@@ -170,7 +179,7 @@ describe("a Read deny and a wildcard in a shell read", () => {
 // A leading dot is not matched by bash's `*` unless dotglob is on, so a `.env` deny does not refuse `grep -n foo *`; a
 // wildcard that names the dot does, and so does input that can switch dotglob on.
 describe("a Read deny on a dotfile and a wildcard", () => {
-  const rows: [string, boolean][] = [
+  const rows: [string, boolean, string?][] = [
     ["grep -n foo *", false],
     ["ls *", false],
     ["ls -la *", false],
@@ -184,12 +193,102 @@ describe("a Read deny on a dotfile and a wildcard", () => {
     ["shopt -s dotglob; cat *", true],
     ["shopt -s dotglob && grep -n foo *", true],
     ["GLOBIGNORE=x; cat *", true],
+    // Spellings the shell reads as dotglob or GLOBIGNORE after quote removal; real bash 5.2 and zsh 5.9 print .env for each.
+    ["shopt -s dot''glob; cat *", true],
+    ["shopt -s dotglo\\b; cat *", true],
+    ['shopt -s "dot"glob; cat *', true],
+    ["declare GLOB''IGNORE=x; cat *", true],
+    ["export GLOB\\IGNORE=x; cat *", true],
+    ["setopt -4; cat *", true, "zsh"],
+    ["set -4; cat *", true, "zsh"],
+    ["setopt g_lob_dots; cat *", true, "zsh"],
+    ["setopt glob''dots; cat *", true, "zsh"],
+    ["eval 'shopt -s dotglob'; cat *", true],
+    ["bash -c 'shopt -s dotglob; cat *'", true],
+    ["cat * | wc -l", false],
   ]
   for (const layer of ["managed", "configured"] as const)
-    for (const [command, stopped] of rows)
+    for (const [command, stopped, shell] of rows)
       it.live(`${layer}: ${command} ${stopped ? "is stopped" : "is not stopped"} under a .env deny`, () =>
         Effect.gen(function* () {
-          const { exit } = yield* run(command, layer, { action: "Read", resource: "<project>/.env", effect: "deny" })
+          const { exit } = yield* run(command, layer, { action: "Read", resource: "<project>/.env", effect: "deny" }, shell)
+          expect(Exit.isFailure(exit)).toBe(stopped)
+        }),
+      )
+})
+
+// `**` is two stars in bash and PowerShell, so `src/**/*.ts` reads one folder level; it recurses only where globstar is on
+// (a parsed `shopt -s globstar`, or zsh). A deny of a file two levels down stops the recursive spellings only.
+describe("a Read deny and a double star", () => {
+  const rows: [string, boolean, string?][] = [
+    ["grep -n foo src/**/*.ts", false],
+    ["wc -l src/**/*.ts", false],
+    ["grep -n foo **/*.ts", false],
+    ["shopt -s globstar; grep -n foo src/**/*.ts", true],
+    ["shopt -s globstar && grep -n foo src/**/*.ts", true],
+    ["grep -n foo src/**/*.ts", true, "zsh"],
+    ["grep -n foo src/*/*.ts", false],
+  ]
+  for (const layer of ["managed", "configured"] as const)
+    for (const [command, stopped, shell] of rows)
+      it.live(`${layer}: ${command} ${stopped ? "is stopped" : "is not stopped"} (${shell ?? "sh"}) under a deny of src/a/b/n.ts`, () =>
+        Effect.gen(function* () {
+          const { exit } = yield* run(command, layer, { action: "Read", resource: "<project>/src/a/b/n.ts", effect: "deny" }, shell)
+          expect(Exit.isFailure(exit)).toBe(stopped)
+        }),
+      )
+})
+
+// On Windows a path through a link to a share connects to the host. Each row listens on its own port (the WebDAV client
+// remembers a failed host and port, which would hide a connection in a later row) and the wildcard must not reach it.
+// A row passes without asserting where the link cannot be made (it needs the symlink privilege).
+describe.skipIf(process.platform !== "win32")("a wildcard and a link to a share", () => {
+  // [command, where the link to the share sits, relative to the project]
+  const rows: [string, string, string?][] = [
+    ["cat */link/x", "a/link"],
+    ["cat */link/*", "a/link"],
+    ["cat docs/*/../x", "docs"],
+    ["Get-Content */link/x", "a/link", "pwsh"],
+  ]
+  for (const [command, where, shell] of rows)
+    it.live(`${command} opens no connection`, () =>
+      Effect.gen(function* () {
+        let seen = 0
+        const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open: () => void seen++, data() {} } })
+        yield* Effect.addFinalizer(() => Effect.sync(() => server.stop(true)))
+        let made = true
+        yield* run(command, "configured", undefined, shell, async (project) => {
+          await fs.mkdir(path.dirname(path.join(project, where)), { recursive: true })
+          await fs
+            .symlink(`\\\\127.0.0.1@${server.port}\\DavWWWRoot\\x`, path.join(project, where), "dir")
+            .catch(() => void (made = false))
+        })
+        yield* Effect.promise(() => Bun.sleep(300))
+        if (made) expect(seen).toBe(0)
+      }).pipe(Effect.scoped),
+    )
+})
+
+// A link is never entered by a wildcard: `*` stops at it, and a word that must go through it is undecided, so the call asks
+// (a finding) and a deny that could match below stops it (class 4, class 6, class 8). `hold/link` leads to `sub`.
+describe("a wildcard and a link below it", () => {
+  const rows: [string, boolean, boolean][] = [
+    // [command, whether it carries the glob-read finding, whether a deny of sub/secret.txt stops it]
+    ["cat */link/secret.txt", true, true],
+    ["cat */link/*", true, true],
+    ["cat h*/link/secret.txt", true, true],
+    ["cat hold/*/secret.txt", true, false],
+    ["cat hold/*", false, false],
+    ["cat s*/secret.txt", false, true],
+    ["cat oth*.txt", false, false],
+  ]
+  for (const layer of ["managed", "configured"] as const)
+    for (const [command, finding, stopped] of rows)
+      it.live(`${layer}: ${command} ${finding ? "asks" : "does not ask"} and ${stopped ? "is stopped" : "is not stopped"}`, () =>
+        Effect.gen(function* () {
+          const control = yield* run(command, layer, undefined)
+          expect(control.findings.includes("glob-read")).toBe(finding)
+          const { exit } = yield* run(command, layer, { action: "Read", resource: "<project>/sub/secret.txt", effect: "deny" })
           expect(Exit.isFailure(exit)).toBe(stopped)
         }),
       )
@@ -259,4 +358,42 @@ describe("glob budget", () => {
     clearTimeout(timer)
     expect(code).toBe(0)
   }, 100_000)
+})
+
+// A word with many stars over a long name made the library's backtracking matcher stall the process for minutes (it grows
+// about five times per star). The linear matcher answers at once; the child process has a deadline the runner's timer
+// cannot give a synchronous loop.
+const starsChild = "a wildcard word with twelve stars over a sixty character name is decided at once"
+if (process.env.ORBIT_GLOB_STARS_CHILD === "1")
+  describe("glob stars (child)", () => {
+    it.live(
+      starsChild,
+      () =>
+        Effect.gen(function* () {
+          const started = Date.now()
+          const { exit } = yield* run("cat *a*a*a*a*a*a*a*a*a*a*a*b *a*a*a*a*a*a*a*a*a*a*a*a", "configured", {
+            action: "Read",
+            resource: "<project>/secret.txt",
+            effect: "deny",
+          })
+          expect(Exit.isSuccess(exit)).toBe(true)
+          expect(Date.now() - started).toBeLessThan(3_000)
+        }),
+      60_000,
+    )
+  })
+
+describe("glob stars", () => {
+  test("a many-star word ends within seconds", async () => {
+    const child = Bun.spawn(["bun", "test", "test/shell-glob-read.test.ts", "-t", starsChild], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: { ...process.env, ORBIT_GLOB_STARS_CHILD: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const timer = setTimeout(() => child.kill(), 60_000)
+    const code = await child.exited
+    clearTimeout(timer)
+    expect(code).toBe(0)
+  }, 70_000)
 })
