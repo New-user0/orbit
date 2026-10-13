@@ -3,6 +3,7 @@ import type { EventSubscribeOutput, OrbitClient, PermissionReplyInput } from "@o
 import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { Cause, Effect } from "effect"
+import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
 import { ACPPromise } from "./promise"
 import { declaredFields, pendingToolCall, resourcePath, stringValue, type ToolInput } from "./tool"
@@ -70,7 +71,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
           input: rawInput,
           title: prefixedTitle(
             input.titlePrefix,
-            permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined),
+            permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
           ),
         },
         cwd: input.cwd,
@@ -149,6 +150,7 @@ function permissionTitle(
   previews: ReadonlyArray<ToolCallContent>,
   request: PermissionEvent["data"],
   owned: boolean,
+  cwd: string,
 ) {
   const metadata: ToolInput = request.metadata ?? {}
   const diffs = previews.filter((item) => item.type === "diff")
@@ -182,8 +184,10 @@ function permissionTitle(
     case "list":
     case "lsp":
       // The file the server named for its rules: relative to the project inside it, absolute outside it. Whatever the
-      // calling tool's input spelled changes nothing.
-      return files.length === 1 ? files[0] : (view.places[0] ?? view.files[0]?.file)
+      // calling tool's input spelled changes nothing. A trusted link that leads out keeps its link spelling as the
+      // resource, so when that resource is not the place the tool acts on, the real place is the title.
+      if (files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))) return files[0]
+      return view.places[0] ?? files[0] ?? view.files[0]?.file
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
       return owned ? undefined : [toolName, ...request.resources.filter((resource) => resource !== "*")].join(" ")
@@ -214,6 +218,12 @@ function permissionLocations(
   // A shell command with no folder named runs in the session's folder.
   if (action === "shell") return [{ path: cwd }]
   return []
+}
+
+function samePlace(resource: string, place: string, cwd: string) {
+  const a = resolve(resourcePath(resource, cwd))
+  const b = resolve(resourcePath(place, cwd))
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 // A URL, a `METHOD url` pair or the `*` wildcard is not a place on disk; a fetch's resources must not become file locations.
