@@ -10,6 +10,11 @@ export namespace Glob {
     symlink?: boolean
     /** Stops the walk after this many matches, so a caller that gives up on a large result does not pay for all of it. */
     limit?: number
+    nocase?: boolean
+    /** Take braces literally, as a shell does for a quoted word; brace expansion can run for seconds on a few words. */
+    nobrace?: boolean
+    /** Take `+(a|b)` and its kin literally. */
+    noext?: boolean
   }
 
   function toGlobOptions(options: Options): GlobOptions {
@@ -22,6 +27,9 @@ export namespace Glob {
       // (`*/x`) would otherwise stat `link/x`, which connects to a share when the link leads to one.
       ...(options.symlink ? {} : { ignore: { ignored: () => false, childrenIgnored: (item) => item.isSymbolicLink() } }),
       nodir: options.include !== "all",
+      nocase: options.nocase,
+      nobrace: options.nobrace,
+      noext: options.noext,
     }
   }
 

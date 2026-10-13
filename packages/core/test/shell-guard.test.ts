@@ -832,6 +832,11 @@ describe("ShellGuard.authorize", () => {
     "tree -o OUT",
     "git diff --output=OUT",
     "git format-patch -o OUT",
+    "git --git-dir .git diff --output=OUT",
+    "git --work-tree . diff --output=OUT",
+    "git --namespace x diff --output=OUT",
+    "git format-patch -1 -ko OUT",
+    "sed -n '/[/]/w OUT' f",
     "sed -n 'w OUT' f",
     "sed -n 's/a/b/w OUT' f",
   ])
@@ -847,6 +852,18 @@ describe("ShellGuard.authorize", () => {
         expect(asked.map((input) => input.action)).toContain("external_directory")
       }),
     )
+
+  // `git -C` moves the folder an output is written in, so one that leads out of the project asks the folder question.
+  it.live("git -C ../outside diff --output=x asks about the folder it writes in", () =>
+    Effect.gen(function* () {
+      expect(Exit.isSuccess(yield* run("git -C ../outside diff --output=x", () => false))).toBe(true)
+      expect(asked.map((input) => input.action)).toContain("external_directory")
+      expect(Exit.isFailure(yield* run("git -C ../outside diff --output=x", (input) => input.action === "Edit"))).toBe(true)
+      const control = asked.length
+      expect(Exit.isSuccess(yield* run("git -C sub diff --output=x", () => false))).toBe(true)
+      expect(asked.slice(control).map((input) => input.action)).not.toContain("external_directory")
+    }),
+  )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
   // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can

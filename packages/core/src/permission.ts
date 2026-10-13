@@ -65,6 +65,9 @@ export const AssertInput = Schema.Struct({
   // Set on the deny-only checks a shell command makes for the files it names: the rules that a mode puts on an agent
   // (`Agent.modeRule`) do not apply to them, since the mode asks about the command itself.
   probe: Schema.Boolean.pipe(Schema.optional),
+  // Set on a probe whose resources are folders and not files: it is denied when a deny rule could match any file below one
+  // of them (`reaches`), for a shell wildcard that cannot be expanded to the files it names. Rules that allow are ignored.
+  under: Schema.Boolean.pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -124,6 +127,22 @@ export function evaluate(
         actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
     ) ?? fallthrough(action)
   )
+}
+
+/**
+ * Whether a rule written as `pattern` could match some file below `folder`: the literal start of the pattern, up to its
+ * first wildcard, and the folder must lie on one path. Names are compared in any case. A pattern that is not absolute
+ * (`**\/.env`, `secret.txt`, `~/x`) can match anywhere, so it always reaches. This errs towards yes: it decides a
+ * wildcard that could not be expanded, and a false yes costs one refused command.
+ */
+export function reaches(folder: string, pattern: string) {
+  const norm = (text: string) => text.replaceAll("\\", "/").toLowerCase()
+  const rule = norm(pattern)
+  if (!/^(?:[a-z]:)?\//.test(rule)) return true
+  const start = rule.search(/[*?[{]/)
+  const literal = start < 0 ? rule : rule.slice(0, start)
+  const below = `${norm(folder).replace(/\/+$/, "")}/`
+  return literal.startsWith(below) || below.startsWith(literal)
 }
 
 // The ask that stands for "no rule said anything", told apart from a rule that asks by identity, since a rule can be
@@ -363,6 +382,19 @@ const layer = Layer.effect(
       return input.resources.some((resource) => decide(input, resource, rules).effect === "deny")
     }
 
+    // A deny that could apply below the folders of an `under` probe. A later allow does not undo it: the files are unknown.
+    function underDenied(input: Pick<AssertInput, "action" | "resources" | "under">, rules: Permission.Ruleset) {
+      return (
+        input.under === true &&
+        rules.some(
+          (rule) =>
+            rule.effect === "deny" &&
+            actionMatches(input.action, rule.action) &&
+            input.resources.some((folder) => reaches(folder, rule.resource)),
+        )
+      )
+    }
+
     function relevant(input: AssertInput, rules: Permission.Ruleset) {
       return rules.filter((rule) => actionMatches(input.action, rule.action))
     }
@@ -372,7 +404,7 @@ const layer = Layer.effect(
       const only = current.restrictions.managed_permissions_only === true
       const configuredRules = yield* configured(input.sessionID, input.agent)
       const rules = configuredRules.rules
-      if (anyDenied(input, rules)) return { effect: "deny" as const, rules }
+      if (anyDenied(input, rules) || underDenied(input, rules)) return { effect: "deny" as const, rules }
       // Saved approvals are grants; managed_permissions_only ignores every one of them.
       const approvals = only ? [] : yield* savedRules()
       const all = [...rules, ...approvals]
@@ -411,7 +443,8 @@ const layer = Layer.effect(
         ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
       )
         return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
-      if (decided.includes("deny")) return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
+      if (decided.includes("deny") || underDenied(input, layer))
+        return { effect: "deny" as const, message: blocked, rules: [...all, ...layer] }
       // A managed ask tightens an allow, never a hook's deny.
       if (decided.includes("ask"))
         return {
@@ -438,7 +471,7 @@ const layer = Layer.effect(
       const decisive = input.probe
         ? configuredRules.rules.filter((rule) => !Agent.isModeRule(rule))
         : configuredRules.rules
-      if (anyDenied(input, decisive)) return true
+      if (anyDenied(input, decisive) || underDenied(input, decisive)) return true
       if (
         ManagedNetwork.bearsUrl(input.action) &&
         ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
@@ -448,7 +481,9 @@ const layer = Layer.effect(
         ...current.rules,
         ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
       ]
-      return input.resources.some((resource) => managedEffect(input, resource, layer) === "deny")
+      return (
+        underDenied(input, layer) || input.resources.some((resource) => managedEffect(input, resource, layer) === "deny")
+      )
     })
 
     function request(input: AssertInput, message?: string): Request {
