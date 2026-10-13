@@ -696,11 +696,22 @@ export function request(
     //   `timeout 5 rm x` as `rm x`), so a deny or ask written for the program meets it. An allow for that spelling lifts
     //   only this extra request, never the command as written.
     const extra = analysis.commands.flatMap((command) => {
-      if (PRINTERS.has(command.head) && !assigns(command)) return [command.text.trim()]
-      const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => argv.join(" "))
+      if (PRINTERS.has(command.head) && !assigns(command))
+        return [{ resource: command.text.trim(), save: [] as string[] }]
+      const unwrapped = ShellWrappers.unwrap(command.argv.map((word) => word.value))
+      const inner = unwrapped.steps.at(-1)
+      return unwrapped.steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => ({
+        resource: argv.join(" "),
+        // The innermost program's grant, beside the wrapper's: an "always" then stores both and the same command runs again
+        // without asking, while the same wrapper around another program still meets that program's own request.
+        save: argv === inner && argv.length > 0 ? [`${ShellParse.prefix(argv).join(" ")} *`] : [],
+      }))
     })
-    return { resources: [...resources, ...distinct(extra).filter((item) => item !== "" && !resources.includes(item))], save }
+    const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
+    return {
+      resources: [...resources, ...distinct(added.map((item) => item.resource))],
+      save: [...save, ...distinct(added.flatMap((item) => item.save))],
+    }
   }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
@@ -835,6 +846,8 @@ const NEVER = new Set(
     "where-object where ? select-object select sort-object sort group-object group measure-object measure",
     "format-table ft format-list fl format-wide fw format-custom fc out-string out-host oh write-output echo write",
     "write-host start-sleep sleep invoke-wmimethod iwmi invoke-cimmethod icim",
+    // Programs whose arguments change what they do (`route add`, `hostname NAME`, `ipconfig /release`).
+    "ipconfig hostname route",
   ]
     .join(" ")
     .split(" "),

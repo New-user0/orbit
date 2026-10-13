@@ -2907,3 +2907,14 @@ A read through a wildcard (`cat secr*.txt`, `head *`) is now checked against you
 wording of those notes, and models that sent a one-character query or both domain lists.
 
 **What to do:** Nothing. Send one domain list per search.
+
+## Always allow on a wrapped shell command, and no saved grant for `ipconfig`, `hostname` and `route`
+
+- Choosing "always allow" for a command that starts with `timeout`, `nohup`, `nice`, `env`, `time` or `stdbuf` now saves the
+  grant for the wrapper and for the program it runs (for example `timeout *` and `printf *`), so the same command no longer
+  asks again. The wrapper around another program still asks, because that program has no grant.
+- PowerShell and shell no longer offer a saved grant for `ipconfig`, `hostname` and `route`, whose arguments change what they do.
+
+**Affects:** people who saved grants for those programs or answered "always" on wrapped commands.
+
+**What to do:** Nothing.

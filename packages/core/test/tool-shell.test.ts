@@ -532,6 +532,30 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
+    // An "always" on a wrapped command stores the wrapper's grant and the program's, so the same command then runs without
+    // asking (class 8); the same wrapper around another program is still asked, because that program has no grant.
+    for (const wrapper of ["timeout 5", "nohup", "nice", "env A=1", "time", "stdbuf -o0"])
+      test(`${scanner}: always on ${wrapper} printf x sticks, and ${wrapper} rm x still asks`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const agents = yield* Agent.Service
+            yield* agents.transform((editor) =>
+              editor.update(toolIdentity.agent, (agent) => {
+                agent.permissions = [{ action: "Bash", resource: "*", effect: "ask" }]
+              }),
+            )
+            yield* Effect.promise(() => Bun.write(path.join(fixture.active, "x"), "keep"))
+            const marker = path.join(fixture.active, "marker")
+            const first = yield* runPermissionCommand(registry, `${wrapper} printf x`, marker, ["always"])
+            expect(first.requests).toHaveLength(1)
+            const again = yield* runPermissionCommand(registry, `${wrapper} printf x`, marker, [])
+            expect(again.requests).toHaveLength(0)
+            const other = yield* runPermissionCommand(registry, `${wrapper} rm x`, marker, ["reject"])
+            expect(other.requests).toHaveLength(1)
+            expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "x")).exists())).toBe(true)
+          }),
+        ), 30_000)
+
     // A declaration that prints the environment is a request beside any other command (class 8): a rule written for it
     // applies, and an allow for the other command does not lift it. The secret is what the model would be shown.
     for (const [command, declaration] of [
@@ -4053,6 +4077,10 @@ describe("ShellTool guard (PowerShell)", () => {
       "sleep 1",
       "iwmi Win32_Process Create",
       "icim Win32_Process Create",
+      "ipconfig /all",
+      "ipconfig",
+      "route print",
+      "hostname",
     ].map((command) => [command, undefined] as const),
     // Spawners and runners: a saved `ssh *` would lift `ssh -o ProxyCommand=... x`, which runs a local command.
     ["ssh host ls", undefined],
