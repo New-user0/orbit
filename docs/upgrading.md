@@ -2923,11 +2923,12 @@ wording of those notes, and models that sent a one-character query or both domai
 
 ## A saved grant lifts a command that steers its program only by exact text
 
-- A saved grant lifts a command that sets `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS`, or gives `env` an option, only when it is that command's exact text. An `env *` or `ls *` saved earlier no longer lifts `env PATH=. ls`.
+- A saved grant lifts a command that sets `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `BASH_ENV`, `ENV` or `IFS` as a plain `NAME=` word, or gives `env` an option, only when it is that command's exact text. An `env *` or `ls *` grant does not lift `env PATH=. ls`.
+- That exact-text rule covers only those plain spellings. An "always" on a command led by `env`, `sudo`, `timeout`, `nice` and the like saves the scanner's prefix (`env *`, `sudo *`, `timeout *`), which lifts every later command behind that word, `env ./prog` included, so a program in the repository can run unasked. A quoted or escaped assignment such as `env "PATH"=. ls` is also lifted by `env *` (follow-up).
 
-**Affects:** people who answered "always" on `env` or `PATH=` commands; an `env *` grant saved earlier still covers other `env` commands but not the ones above.
+**Affects:** people who answer "always" on `env`, `sudo`, `timeout` or similar commands, or on `PATH=` commands.
 
-**What to do:** Answer again; the new grant is narrower.
+**What to do:** Do not rely on "always" for such a command. It saves `env *` or the program's pattern, which does not lift the command and lifts every other `env` command. To stop the question, write a Bash allow rule with the command's exact text.
 
 ## A project ID file shipped in a folder is ignored unless the folder is trusted
 

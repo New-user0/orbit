@@ -464,9 +464,10 @@ describe("ShellTool scanner permissions", () => {
         }),
       ))
 
-    // An "always" never saves more than the command as written (class 8). A command that reshapes its program (env, sudo,
-    // doas, exec, leading assignments) saves its exact text, and a word that is quoted or holds a wildcard or a space adds no
-    // save for the program behind a wrapper. Each later command must still ask, with the file it would delete or run absent.
+    // After an "always" on a plain command behind a wrapper (the scanner saves `env *`), a later command that steers its
+    // program with a plain `PATH=`, `LD_*=` or `env` option spelling must still ask: Permission's exact-text filter refuses
+    // the wildcard grant for it (class 8). These rows do not pin what the save holds; other spellings, such as a quoted
+    // assignment or `env ./prog`, are lifted by `env *` (follow-up). The file it would delete or run is absent.
     for (const [first, later] of [
       ["env A=1 ls", "env PATH=. ls"],
       ["env LD_PRELOAD=./nothing.so A=1 ls", "env LD_PRELOAD=./nothing.so PATH=. ls"],
