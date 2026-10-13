@@ -1245,6 +1245,24 @@ describe("ManagedSettings.read unknown keys at every depth", () => {
     ),
   )
 
+  // An object that fails only for a missing required field has no field to drop; it is reported as a whole.
+  ;["worktree", "websearch"].forEach((key) =>
+    it.live(`an empty ${key} object is dropped with one diagnostic at its own path`, () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* write(tmp.path, { "managed-settings.json": { [key]: {}, shell: "kept" } })
+
+        const snapshot = yield* read(tmp.path)
+
+        expect(field(snapshot.info, key)).toBeUndefined()
+        expect(snapshot.info.shell).toBe("kept")
+        expect(snapshot.diagnostics.filter((item) => item.path.startsWith(`$.${key}`))).toEqual([
+          expect.objectContaining({ path: `$.${key}`, kind: "invalid" }),
+        ])
+      }),
+    ),
+  )
+
   it.live("a bad permission rule in a managed agent still denies through the policy", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
