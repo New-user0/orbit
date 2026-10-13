@@ -17,6 +17,7 @@ import { ShellPaths } from "./paths.js"
 import { ShellReadOnly } from "./readonly.js"
 import { ShellSafety } from "./safety.js"
 import { ShellWrappers } from "./wrappers.js"
+import { Wildcard } from "./wildcard.js"
 
 // The effectful half of the shell permission check. The analysis says which files a command names and what it does to
 // them; the safety checks describe what no rule may lift. This module puts the disk between them: it resolves every named
@@ -222,12 +223,13 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   // that is a link is probed as the place it leads to as well. A wildcard that cannot be expanded (too many matches, a scan
   // that failed, too many words or too much time for one command) is decided too: an `under` probe is denied when a deny
   // rule could match anything below its folders, so a walk that is not bounded never slips past a rule (class 8).
-  // The scan is a superset of what the shell expands: names match in any case, and a leading dot matches when the input
-  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. Braces and extglobs are literal, since a
-  // quoted brace would otherwise be expanded by the library for seconds (class 7).
-  const budget = { matches: 0, scans: 0, until: Date.now() + GLOB_MILLIS }
+  // The word is expanded by `Wildcard` (linear matching, folders listed without following links, capped in entries and time).
+  // It is a superset of what the shell expands: names match in any case, and a leading dot matches when the parsed input
+  // can switch dotglob on, or for PowerShell, whose wildcards include dotfiles. `**` is two stars unless the parsed input
+  // can switch globstar on, or the shell is zsh. Braces and extglobs are literal (class 7).
+  const budget = { matches: 0, scans: 0, entries: GLOB_ENTRIES, until: Date.now() + GLOB_MILLIS }
   const seen = new Map<string, { targets: string[]; undecided: boolean }>()
-  const dot = ps || DOTGLOB.test(input.text)
+  const options = globOptions(all, ps, input.ctx)
   const expand = (folder: string, pattern: string, role: ShellPaths.Role) => {
     const key = `${folder}
 ${pattern}`
@@ -247,7 +249,7 @@ ${pattern}`
           share
             ? Effect.succeed(undefined)
             : // One match past the limit is enough to know the word reaches too many, so the walk stops there.
-              fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot, nocase: true, nobrace: true, noext: true, symlink: false, limit: GLOB_LIMIT + 1 }),
+              Effect.promise(() => Wildcard.expand(folder, pattern, { ...options, limit: GLOB_LIMIT, budget })),
         ),
         Effect.map((found) => {
           budget.matches += found?.length ?? 0
@@ -352,8 +354,7 @@ ${pattern}`
 const GLOB_LIMIT = 500
 const GLOB_WORDS = 32
 const GLOB_MILLIS = 3000
-// Input that turns on what makes a shell's wildcard reach dotfiles or ignore case.
-const DOTGLOB = /dotglob|nocaseglob|globdots|globignore|case_?glob|glob_?dots/i
+const GLOB_ENTRIES = 50_000
 
 // The part of a wildcard operand after its folder, as a pattern relative to that folder. None when the folder part is the
 // whole operand (a `..` after the wildcard), which cannot be expanded from one folder.
@@ -364,6 +365,32 @@ function globRemainder(operand: ShellPaths.Operand, win: boolean) {
   const rest = prefix.endsWith("/") ? text.slice(prefix.length) : text.startsWith(`${prefix}/`) ? text.slice(prefix.length + 1) : text
   const trimmed = rest.replace(/^\/+/, "")
   return trimmed === "" ? undefined : trimmed
+}
+
+// Commands that can change how a later wildcard is read (dotglob, globstar, GLOBIGNORE, zsh's options), here or by running
+// text the guard cannot see. Decided from the parsed commands after quote removal, never from the raw text, so a quoted or
+// escaped spelling cannot hide one (class 8).
+const OPTION_COMMANDS = new Set([
+  "shopt", "set", "setopt", "unsetopt", "emulate", "declare", "typeset", "export", "local", "readonly", "eval", "source", ".",
+  "builtin", "command",
+])
+const OPTION_VARIABLES = /^(globignore|bashopts|shellopts|zsh_?opts)$/i
+
+function globOptions(all: Level[], ps: boolean, ctx: Context) {
+  if (ps) return { dot: true, globstar: false }
+  const zsh = /^zsh(\.exe)?$/i.test(ctx.path.basename(ctx.shell))
+  const undecided = all.some(
+    (level) =>
+      level.analysis.opaque !== undefined || level.analysis.features.assignment ||
+      level.analysis.commands.some(
+        (command) =>
+          command.dynamicHead ||
+          command.wrapper === "unanalysable" ||
+          [command.head, command.inner[0] ?? ""].some((head) => OPTION_COMMANDS.has(head)) ||
+          command.env.some((item) => OPTION_VARIABLES.test(item.name)),
+      ),
+  )
+  return { dot: undecided, globstar: undecided || zsh }
 }
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
@@ -620,7 +647,7 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
         } else if (word.value === "--git-dir" && next?.literal) {
           scope.forEach((base) => named.push({ base, value: next.value }))
           at++
-        } else if (["-c", "--work-tree", "--namespace", "--exec-path"].includes(word.value)) at++
+        } else if (["-c", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source", "--shallow-file"].includes(word.value)) at++
       }
     })
     ;[...level.text.matchAll(GIT_DIR)]
@@ -746,7 +773,6 @@ export function request(
   if (analysis.opaque) return opaque(analysis, whole, scan)
   if (isPowerShell(analysis)) return powershell(analysis, whole, findings)
   const resources = [...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? [])]
-  const save = scan?.commands.map((command) => command.save) ?? []
   // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
   if (resources.length > 0) {
     // Requests of their own beside the scanned commands (class 8):
@@ -758,21 +784,65 @@ export function request(
     const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
       if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
       const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      return steps
-        .slice(command.env.length > 0 ? 0 : 1)
-        .map((argv) => ({ resource: argv.join(" "), save: `${ShellParse.prefix(argv).join(" ")} *` }))
+      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => ({
+        resource: argv.join(" "),
+        // A command that can change which program runs or what it finds saves no program behind it: the stripped spelling
+        // is there for a deny or an ask only (class 8).
+        save: steersProgram(command, steps) ? undefined : innerSave(command, argv),
+      }))
     })
     const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
-    // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`),
-    // since both spellings were asked about and a repeat must be lifted. The wrapper's own save is the one scanned above,
-    // so `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
+    // A scanned save of a command that reshapes its program is that command's exact text: it repeats, and lifts no other.
+    const exact = new Set(
+      analysis.commands
+        .filter((command) => reshapes(command, ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps))
+        .map((command) => command.text.trim()),
+    )
+    const saves = (scan?.commands ?? []).map((command) => (exact.has(command.resource) ? command.resource : command.save))
+    // An "always" reply to a wrapped command saves the program it runs as well (`timeout 60 npm test` saves `npm test *`)
+    // when every word naming that program is plain, as typed. The wrapper's own save is the one scanned above, so
+    // `timeout 5 rm x` still needs a grant for `rm`. The extras come after the scanned saves, so pairing by index holds.
     return {
       resources: distinct([...resources, ...added.map((item) => item.resource)]),
-      save: [...save, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !save.includes(item))],
+      save: [...saves, ...distinct(added.flatMap((item) => (item.save === undefined ? [] : [item.save]))).filter((item) => !saves.includes(item))],
     }
   }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
+}
+
+const RESHAPERS = new Set(["env", "sudo", "doas", "exec"])
+
+function reshapes(command: Command, steps: string[][]) {
+  return command.env.length > 0 || steps.some((argv) => RESHAPERS.has(argv[0] ?? ""))
+}
+
+const LOOKUP = /^(PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_\w*|BASH_ENV|ENV|IFS)=/i
+
+// Whether the command changes how its program is found or started: sudo, doas or exec, an `env` option (-i, -u), or an
+// assignment to a variable that picks the program or loads code into it.
+function steersProgram(command: Command, steps: string[][]) {
+  return (
+    command.env.some((item) => LOOKUP.test(item.name + "=")) ||
+    steps.some((argv, index) => {
+      if (argv[0] === "sudo" || argv[0] === "doas" || argv[0] === "exec") return true
+      if (argv[0] !== "env") return false
+      const next = steps[index + 1]
+      return argv.slice(1, argv.length - (next?.length ?? 0)).some((word) => word.startsWith("-") || LOOKUP.test(word))
+    })
+  )
+}
+
+// The save for the program a wrapper runs, or undefined unless the words that name it are plain: unquoted, unescaped, with
+// no whitespace or wildcard, so the pattern is the text as the person wrote it.
+function innerSave(command: Command, argv: string[]) {
+  const named = ShellParse.prefix(argv)
+  const offset = command.argv.length - argv.length
+  const plain = named.every((_, index) => {
+    const word = command.argv[offset + index]
+    return word !== undefined && word.literal && !word.quoted && !word.glob && !word.escaped && !/[\s*?[\\]/.test(word.value)
+  })
+  return plain ? `${named.join(" ")} *` : undefined
 }
 
 function distinct<A>(list: readonly A[]) {

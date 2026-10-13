@@ -553,6 +553,56 @@ describe("ShellTool scanner permissions", () => {
           }),
         ))
 
+    // An "always" never saves more than the command as written (class 8). A command that reshapes its program (env, sudo,
+    // doas, exec, leading assignments) saves its exact text, and a word that is quoted or holds a wildcard or a space adds no
+    // save for the program behind a wrapper. Each later command must still ask, with the file it would delete or run absent.
+    for (const [first, later] of [
+      ["env A=1 ls", "env PATH=. ls"],
+      ["env LD_PRELOAD=./nothing.so A=1 ls", "env LD_PRELOAD=./nothing.so PATH=. ls"],
+      ["env -i A=1 ls", "env -i PATH=. ls"],
+      ["timeout 5 env A=1 ls", "timeout 5 env PATH=. ls"],
+      ["sudo ls", "sudo ls -la"],
+      ["FOO=1 ls", "FOO=1 PATH=. ls"],
+      ["FOO=1 ls", "PATH=. ls"],
+      ["timeout 5 'r*' x", "rm -rf x"],
+      ['timeout 5 "rm -rf" x', "rm -rf x"],
+      ["timeout 5 r\\* x", "rm -rf x"],
+      ["FOO=1 'r*' x", "rm -rf x"],
+    ] as const)
+      test(`${scanner}: always on ${first} does not lift ${later}`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const agents = yield* Agent.Service
+            yield* agents.transform((editor) =>
+              editor.update(toolIdentity.agent, (agent) => {
+                agent.permissions = [{ action: "Bash", resource: "*", effect: "ask" }]
+              }),
+            )
+            yield* Effect.promise(() =>
+              Promise.all([
+                Bun.write(path.join(fixture.active, "x"), "keep"),
+                Bun.write(path.join(fixture.active, "ls"), "#!/bin/sh\necho pwned > pwned\n"),
+              ]),
+            )
+            const marker = path.join(fixture.active, "marker")
+            yield* runPermissionCommand(registry, first, marker, ["always"])
+            const asked = yield* runPermissionCommand(registry, later, marker, ["reject"])
+            expect(asked.requests).toHaveLength(1)
+            expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "x")).exists())).toBe(true)
+            expect(yield* Effect.promise(() => Bun.file(path.join(fixture.active, "pwned")).exists())).toBe(false)
+          }),
+        ))
+
+    test(`${scanner}: always on env A=1 printf x repeats`, () =>
+      withScanner(portable, (registry, fixture) =>
+        Effect.gen(function* () {
+          const marker = path.join(fixture.active, "marker")
+          yield* runPermissionCommand(registry, "env A=1 printf x", marker, ["always"])
+          const repeated = yield* runPermissionCommand(registry, "env A=1 printf x", marker, [])
+          expect(repeated.requests).toEqual([])
+        }),
+      ))
+
     // A declaration that prints the environment is a request beside any other command (class 8): a rule written for it
     // applies, and an allow for the other command does not lift it. The secret is what the model would be shown.
     for (const [command, declaration] of [

@@ -156,6 +156,13 @@ describe("bash output files of read-class commands", () => {
     ["git --work-tree . diff --output=../x", ["write /x"]],
     ["git --namespace x diff --output=o", ["write /work/o"]],
     ["git --super-prefix p diff --output=o", ["write /work/o"]],
+    ["git --attr-source HEAD diff --output=o", ["write /work/o"]],
+    ["git --shallow-file x diff --output=o", ["write /work/o"]],
+    ["git --config-env a=B diff --output=o", ["write /work/o"]],
+    // An empty `-C` leaves the folder as it is, even repeated.
+    ["git -C '' diff --output=o", ["write /work/o"]],
+    ["git -C d -C '' diff --output=o", ["write /work/d/o"]],
+    ["git -C '' -C '' diff --output=o", ["write /work/o"]],
     ["git -c a=b diff --output=o", ["write /work/o"]],
     // `-o` inside a cluster of short options.
     ["git format-patch -1 -ko ../x", ["write /x"]],
@@ -199,6 +206,14 @@ describe("bash output files of read-class commands", () => {
 
   test("the write is also found with Windows path rules", () => {
     expect(cells(bash("sort -o out f", windows())).filter((item) => item.startsWith("write"))).toEqual(["write C:\\work\\out"])
+  })
+
+  test("a root-relative or UNC output is not joined under -C on Windows, and stays a relative name on Linux", () => {
+    const writes = (text: string, ctx?: ReturnType<typeof windows>) => cells(bash(text, ctx)).filter((item) => item.startsWith("write"))
+    expect(writes("git -C sub diff --output='\\x'", windows())).toEqual(["write C:\\x"])
+    expect(writes("git -C '' diff --output=o", windows())).toEqual(["write C:\\work\\o"])
+    expect(writes("git -C sub diff --output=//srv/share/x", windows())).toEqual(["write //srv/share/x [share]"])
+    expect(writes("git -C sub diff --output='\\x'")).toEqual(["write /work/sub/\\x"])
   })
 
   test("rg --pre names a program, so the command cannot be judged", () => {
