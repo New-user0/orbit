@@ -2927,7 +2927,7 @@ wording of those notes, and models that sent a one-character query or both domai
 
 **Affects:** people who answered "always" on `env` or `PATH=` commands; an `env *` grant saved earlier still covers other `env` commands but not the ones above.
 
-**What to do:** Answer again; the new grant is narrower.
+**What to do:** Do not rely on "always" for such a command. It saves `env *` or the program's pattern, which does not lift the command and lifts every other `env` command. To stop the question, write a Bash allow rule with the command's exact text.
 
 ## A project ID file shipped in a folder is ignored unless the folder is trusted
 
