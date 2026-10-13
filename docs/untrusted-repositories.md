@@ -1920,7 +1920,10 @@ fixes it or asks.
   (`ShellParse.operands`, `FileAccess.escaped`). It does not ask about a path the command builds as it runs (a variable,
   a substitution, a glob before the link's name, quoting that the scan does not undo), one a script or program opens by
   itself, or a path in the text that names a place outside the project directly, such as `cat ~/.ssh/id_rsa`, which the
-  Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis.
+  Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis. The Read rules
+  are asked about each match of a wildcard read (`globRemainder` in `shell/guard.ts`, pinned by `shell-glob-read.test.ts`),
+  and the output files of `sort`, `uniq`, `find`, `tree`, `git` and `sed` are writes (`outputs` in `shell/paths.ts`,
+  pinned by `paths.test.ts`); other writers and interpreters are not modelled.
 - **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
   rule covers the folder. Task `permissions-3` (M6) carries a Read check for each file a search returns.
