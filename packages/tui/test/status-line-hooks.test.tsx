@@ -81,6 +81,9 @@ test("the status line draws every non-empty line, below one another, and skips a
     config: { animations: false, status_line: { interval: 60_000, command: `${bun} ${script}` } },
   })
   await setup.ready
+  // the command runs `bun <script>` at mount; give the first run room before the bounded frame wait
+  await Bun.sleep(2_500)
+  await setup.renderOnce()
   await setup.waitForFrame((frame) => frame.includes("LINE-THREE"))
   const rows = setup.captureCharFrame().split("\n")
   const at = (text: string) => rows.findIndex((row) => row.includes(text))
