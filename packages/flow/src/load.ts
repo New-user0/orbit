@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url"
+import { LinkShare } from "@orbit/util/link-share"
 import type { EvalSuite } from "./eval.js"
 import type { Workflow } from "./workflow.js"
 import { compile, validate, type NodeSpec, type Spec } from "./yaml.js"
@@ -230,6 +231,11 @@ function listed(id: unknown, checks: unknown) {
 }
 
 async function read(file: string, kind: string): Promise<unknown> {
+  // Every reader above comes through here, before the trust question: `trustOptions` reads the file to decide what trust
+  // it needs, and `resume` takes the file name from the run store, which a clone ships. A path that leads to a share or a
+  // device is not handed to the file system, because checking that it exists already connects (class 6).
+  const share = LinkShare.ofSync(file)
+  if (share !== undefined) throw new Error(`${kind} ${JSON.stringify(file)} leads to a network share, so it is not read`)
   const handle = Bun.file(file)
   if (!(await handle.exists())) throw new Error(`${kind} not found: ${file}`)
   if (isYaml(file)) return Bun.YAML.parse(await handle.text())
