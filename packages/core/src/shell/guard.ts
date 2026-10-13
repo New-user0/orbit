@@ -620,7 +620,7 @@ const probeGit = Effect.fnUntraced(function* (all: Level[], workdir: string) {
         } else if (word.value === "--git-dir" && next?.literal) {
           scope.forEach((base) => named.push({ base, value: next.value }))
           at++
-        } else if (["-c", "--work-tree", "--namespace", "--exec-path"].includes(word.value)) at++
+        } else if (["-c", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source", "--shallow-file"].includes(word.value)) at++
       }
     })
     ;[...level.text.matchAll(GIT_DIR)]
