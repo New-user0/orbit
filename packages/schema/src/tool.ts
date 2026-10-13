@@ -229,6 +229,12 @@ export const ErrorCode = {
    * be shown), so nothing was searched.
    */
   WebSearchNotEnabled: "websearch.not-enabled",
+  /** A web search call that was refused before anything was asked or sent: the query is too short, or both domain lists were given. */
+  WebSearchInvalid: "websearch.invalid",
+  /** WebFetch (or Code Mode fetch) refused the address before sending anything: an unusable URL, one with credentials or too long, or a host the address guard blocks. */
+  WebFetchRefused: "webfetch.refused",
+  /** WebFetch stopped following same-site redirects because the chain was too long. */
+  WebFetchRedirectLimit: "webfetch.redirect-limit",
 } as const
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode]
 

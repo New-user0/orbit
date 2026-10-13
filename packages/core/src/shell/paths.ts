@@ -486,12 +486,15 @@ function sed(words: Word[], sink: Sink) {
   let ended = false
   const files: Word[] = []
   const sources: Word[] = []
+  const scripts: Word[] = []
   for (let index = 0; index < words.length; index++) {
     const item = words[index]
     const text = item.value
     if (ended || text === "-" || !text.startsWith("-")) {
-      if (!scripted) scripted = true
-      else files.push(item)
+      if (!scripted) {
+        scripted = true
+        scripts.push(item)
+      } else files.push(item)
       continue
     }
     if (text === "--") {
@@ -505,7 +508,8 @@ function sed(words: Word[], sink: Sink) {
       if (name === "in-place") inPlace = true
       else if (name === "expression") {
         scripted = true
-        if (!inline) index++
+        const value = inline ?? words[++index]
+        if (value) scripts.push(value)
       } else if (name === "file") {
         scripted = true
         const value = inline ?? words[++index]
@@ -526,14 +530,74 @@ function sed(words: Word[], sink: Sink) {
         if (char !== "l") scripted = true
         const value = rest === "" ? words[++index] : { ...item, value: rest, glob: false, tilde: false }
         if (char === "f" && value) sources.push(value)
+        if (char === "e" && value) scripts.push(value)
         break
       }
       if (!"nErsuzb".includes(char)) ok = false
     }
   }
   sources.forEach((item) => sink("source", item))
+  // The files a script of the command line names itself (`w out`, `s/a/b/w out`, `r in`). A script read from a file is not seen.
+  scripts.forEach((script) => sedFiles(script.value).forEach((found) => sink(found.role, { ...script, value: found.file, glob: false, tilde: false })))
   if (inPlace) files.forEach((item) => sink("write", item))
   return ok
+}
+
+// The files named by the commands of a sed script, found by walking its commands so that a `w` inside a regex, a
+// replacement or the text of `a`, `i` and `c` is not one. A file name runs to the end of the line.
+function sedFiles(script: string) {
+  const found: { role: "write" | "source"; file: string }[] = []
+  let at = 0
+  const name = (role: "write" | "source") => {
+    const end = script.indexOf("\n", at)
+    const stop = end < 0 ? script.length : end
+    const file = script.slice(at, stop).replace(/^[ \t]+/, "")
+    at = stop
+    // GNU sed writes these two to the streams, not to files.
+    if (file !== "" && file !== "/dev/stdout" && file !== "/dev/stderr") found.push({ role, file })
+  }
+  const skip = (delimiter: string) => {
+    while (at < script.length) {
+      const char = script[at++]
+      if (char === "\\") at++
+      else if (char === delimiter) return true
+    }
+    return false
+  }
+  const rest = () => {
+    const end = script.indexOf("\n", at)
+    at = end < 0 ? script.length : end
+  }
+  while (at < script.length) {
+    const char = script[at]
+    // Separators, and the characters of an address.
+    if (/[\s;{}!0-9$+~,]/.test(char)) {
+      at++
+      continue
+    }
+    if (char === "/" || char === "\\") {
+      const delimiter = char === "/" ? "/" : script[at + 1]
+      at += char === "/" ? 1 : 2
+      if (delimiter === undefined || !skip(delimiter)) break
+      continue
+    }
+    at++
+    if (char === "s" || char === "y") {
+      const delimiter = script[at++]
+      if (delimiter === undefined || !skip(delimiter) || !skip(delimiter)) break
+      if (char === "y") continue
+      // The flags end at `;`, `}` or the end of the line, except `w`, whose file name takes the rest of the line.
+      while (at < script.length && !/[;}\n]/.test(script[at])) {
+        if (script[at++] !== "w") continue
+        name("write")
+        break
+      }
+    } else if (char === "w" || char === "W") name("write")
+    else if (char === "r" || char === "R") name("source")
+    else if ("aice#".includes(char)) rest()
+    else if (":btT".includes(char)) while (at < script.length && !/[;\n]/.test(script[at])) at++
+  }
+  return found
 }
 
 export type BashInput = {
@@ -579,15 +643,19 @@ export function bash(input: BashInput): Facts {
 }
 
 const READ_CLASS = new Set(
-  "ls find cat head tail sort uniq wc cut paste column tr file stat diff awk strings hexdump od base64 nl grep rg jq sha256sum sha1sum md5sum".split(" "),
+  "ls find tree cat head tail sort uniq wc cut paste column tr file stat diff awk strings hexdump od base64 nl grep rg jq sha256sum sha1sum md5sum".split(" "),
 )
 
 // A read-class command that the read-only check does not pass still reads what it names, so a read rule or an allow rule
 // for the command must not hide it: every word that is not an option (and every word after `--`) is a read operand. `git`
-// names paths only in `diff --no-index`.
+// names paths only in `diff --no-index`. The files that an output option names (`sort -o`, `find -fprint`) are writes,
+// and `rg --pre` names a program, so the command cannot be judged from its words.
 function operands(state: State, index: number, command: Command, ctx: Context) {
   const name = headName(command.inner[0] ?? "", ctx)
   const words = command.argv.slice(command.argv.length - command.inner.length + 1)
+  const found = outputs(name, words)
+  if (found.unvalidatable) refuse(state, index, "option")
+  found.writes.forEach((item) => word(state, index, "write", item))
   const named = name === "git" ? (words.some((item) => item.value === "diff") && words.some((item) => item.value === "--no-index") ? words.slice(words.findIndex((item) => item.value === "diff") + 1) : []) : READ_CLASS.has(name) ? words : []
   let ended = false
   for (const item of named) {
@@ -595,8 +663,119 @@ function operands(state: State, index: number, command: Command, ctx: Context) {
       ended = true
       continue
     }
+    if (found.skip.has(item)) continue
     if (ended || !item.value.startsWith("-")) word(state, index, "read", item)
   }
+}
+
+// Where `git` takes a file or a folder to write, by subcommand.
+const GIT_OUTPUTS: Record<string, string[]> = {
+  diff: ["--output"],
+  log: ["--output"],
+  show: ["--output"],
+  whatchanged: ["--output"],
+  "range-diff": ["--output"],
+  "format-patch": ["--output", "--output-directory", "-o"],
+  archive: ["--output", "-o"],
+}
+
+type Outputs = {
+  /** Words that a write option names, in the command's own words or cut out of one (`-ofile`). */
+  writes: Word[]
+  /** Words of the command that are option values, not operands. */
+  skip: Set<Word>
+  unvalidatable: boolean
+}
+
+function outputs(name: string, words: Word[]): Outputs {
+  const found: Outputs = { writes: [], skip: new Set(), unvalidatable: false }
+  const cut = (item: Word, value: string): Word => ({ ...item, value, glob: false, tilde: false })
+  const write = (value: Word | undefined) => {
+    if (!value) return
+    found.writes.push(value)
+    found.skip.add(value)
+  }
+  // The value of the option written at `at`: what is fused to it, else the next word.
+  const take = (at: number, fused: string) => (fused !== "" ? cut(words[at], fused) : words[at + 1])
+  if (name === "sort" || name === "tree") {
+    // `-o` and its long spelling write; the other letters take a value that must not be read as an operand. GNU `sort`
+    // takes any prefix of `--output`.
+    const valued = name === "sort" ? "ktST" : "LPIHT"
+    for (let at = 0; at < words.length; at++) {
+      const text = words[at].value
+      if (text === "--") break
+      if (text.startsWith("--")) {
+        const equals = text.indexOf("=")
+        const long = text.slice(2, equals < 0 ? undefined : equals)
+        if (!(name === "sort" ? long !== "" && "output".startsWith(long) : long === "output")) continue
+        write(take(at, equals < 0 ? "" : text.slice(equals + 1)))
+        if (equals < 0) at++
+        continue
+      }
+      if (!text.startsWith("-") || text === "-") continue
+      for (let char = 1; char < text.length; char++) {
+        const letter = text[char]
+        if (letter !== "o" && !valued.includes(letter)) continue
+        const fused = text.slice(char + 1)
+        if (letter === "o") write(take(at, fused))
+        else if (fused === "" && words[at + 1]) found.skip.add(words[at + 1])
+        if (fused === "") at++
+        break
+      }
+    }
+  } else if (name === "uniq") {
+    // `uniq IN OUT`: the second operand is written.
+    const operands: Word[] = []
+    for (let at = 0; at < words.length; at++) {
+      const text = words[at].value
+      if (text === "--") {
+        operands.push(...words.slice(at + 1))
+        break
+      }
+      if (!text.startsWith("-") || text === "-") {
+        operands.push(words[at])
+        continue
+      }
+      if (text.startsWith("--")) {
+        if (!text.includes("=") && ["skip-fields", "skip-chars", "check-chars"].includes(text.slice(2))) found.skip.add(words[++at] ?? words[at - 1])
+        continue
+      }
+      const valued = [...text.slice(1)].findIndex((letter) => "fsw".includes(letter))
+      if (valued >= 0 && text.length === valued + 2 && words[at + 1]) found.skip.add(words[++at])
+    }
+    if (operands[1] && operands[1].value !== "-") write(operands[1])
+  } else if (name === "find") {
+    for (let at = 0; at < words.length; at++) {
+      const text = words[at].value
+      if (text === "-fprint" || text === "-fprint0" || text === "-fls") write(words[++at])
+      else if (text === "-fprintf") {
+        write(words[++at])
+        // The format string that follows is not a file.
+        if (words[at + 1]) found.skip.add(words[++at])
+      }
+    }
+  } else if (name === "git") {
+    const verb = words.findIndex((item, at) => !item.value.startsWith("-") && !["-C", "-c"].includes(words[at - 1]?.value ?? ""))
+    const options = GIT_OUTPUTS[words[verb]?.value ?? ""]
+    if (verb >= 0 && options)
+      for (let at = verb + 1; at < words.length; at++) {
+        const text = words[at].value
+        if (text === "--") break
+        const equals = text.indexOf("=")
+        const option = equals < 0 ? text : text.slice(0, equals)
+        if (options.includes(option)) write(equals < 0 ? words[++at] : cut(words[at], text.slice(equals + 1)))
+        else if (options.includes("-o") && text.startsWith("-o") && !text.startsWith("--")) write(cut(words[at], text.slice(2)))
+      }
+  } else if (name === "rg") {
+    // `--pre` and `--hostname-bin` run the program they name, which is no file to read.
+    words.forEach((item, at) => {
+      const option = item.value.split("=", 1)[0]
+      if (option !== "--pre" && option !== "--hostname-bin") return
+      found.unvalidatable = true
+      if (!item.value.includes("=") && words[at + 1]) found.skip.add(words[at + 1])
+    })
+  }
+  return found
 }
 
 function bareVerdict(commands: Command[], command: Command, ctx: Context) {

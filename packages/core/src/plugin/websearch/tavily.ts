@@ -2,6 +2,7 @@ export * as WebSearchTavily from "./tavily.js"
 
 import { define } from "@orbit/plugin/effect/plugin"
 import { Duration, Effect, Schema, Scope } from "effect"
+import { untraced } from "./untraced.js"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { App } from "../../app.js"
 
@@ -27,7 +28,7 @@ const SearchResponse = Schema.Struct({
 export const Plugin = define<HttpClient.HttpClient | Scope.Scope>({
   id: "orbit.websearch.tavily",
   effect: Effect.fn("WebSearchTavily.Plugin")(function* (ctx) {
-    const http = yield* HttpClient.HttpClient
+    const http = untraced(yield* HttpClient.HttpClient)
     yield* ctx.integration.transform((editor) => {
       editor.update("tavily", (integration) => (integration.name = "Tavily"))
       editor.method.update({

@@ -565,3 +565,117 @@ describe("ReadToolFileSystem", () => {
     }),
   )
 })
+
+describe("ReadTool directory budget", () => {
+  // The model text of a page, as the tool renders it: the header, one line per entry and the continuation note.
+  const rendered = (resource: string, offset: number, page: ReadToolFileSystem.ListPage) => {
+    const text = ReadTool.toModelContent(resource, offset, page)
+    if (typeof text !== "string") throw new Error("expected text")
+    return text
+  }
+
+  for (const [label, nameLength, pages] of [
+    ["short names", 20, 1],
+    ["long names", 120, undefined],
+  ] as const)
+    it.effect(`pages a folder of 2,000 entries with ${label} within the token budget, reaching each entry once`, () =>
+      Effect.gen(function* () {
+        const { environment, files, directory } = yield* fixture
+        const names = Array.from({ length: 2_000 }, (_, index) => String(index).padStart(4, "0").padEnd(nameLength, "n"))
+        yield* Effect.forEach(names, (name) => files.writeFileString(path.join(directory, name), ""), {
+          concurrency: 32,
+          discard: true,
+        })
+
+        const seen: string[] = []
+        let offset = 1
+        let count = 0
+        for (let guard = 0; guard < 100; guard++) {
+          const page = yield* readContent(environment, absolute(directory), directory, { offset })
+          if (page.type !== "list-page") throw new Error("expected a list page")
+          count++
+          expect(Token.estimate(rendered(directory, offset, page))).toBeLessThanOrEqual(ReadToolFileSystem.MAX_READ_TOKENS)
+          seen.push(...page.entries.map((entry) => entry.path))
+          if (page.next === undefined) break
+          expect(page.truncated).toBe(true)
+          expect(page.next).toBe(offset + page.entries.length)
+          offset = page.next
+        }
+        expect(seen).toEqual(names)
+        if (pages !== undefined) expect(count).toBe(pages)
+        else expect(count).toBeGreaterThan(1)
+      }),
+      60_000,
+    )
+
+  it.effect("keeps one entry on a page even when the heading alone passes the budget", () =>
+    Effect.gen(function* () {
+      const { environment, files, directory } = yield* fixture
+      yield* Effect.forEach(["a", "b", "c"], (name) => files.writeFileString(path.join(directory, name), ""))
+      // The heading names the path, so a path this long leaves no room for a second entry.
+      const page = yield* readContent(environment, absolute(directory), "x".repeat(100_000), { offset: 1 })
+      expect(page).toMatchObject({ type: "list-page", entries: [{ path: "a" }], truncated: true, next: 2 })
+    }),
+  )
+})
+
+describe("ReadTool a file with very long lines", () => {
+  const script = path.join(import.meta.dir, "fixture", "read-long-line.ts")
+  // A child process with a deadline: a quadratic loop blocks the event loop, so the test runner's own timeout never fires.
+  const readInChild = (file: string, offset?: number, limit?: number) =>
+    Effect.promise(async () => {
+      const child = Bun.spawn([process.execPath, script, file, String(offset ?? "-"), String(limit ?? "-")], {
+        cwd: path.resolve(import.meta.dir, ".."),
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 25_000,
+        killSignal: "SIGKILL",
+      })
+      const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
+      await child.exited
+      if (child.signalCode) throw new Error(`the read did not finish within its deadline (${child.signalCode}): ${err}`)
+      return JSON.parse(out.trim().split("\n").at(-1) ?? "") as {
+        outcome: { type?: string; content?: string; length?: number; next?: number; error?: string }
+        ms: number
+        maxRssMb: number
+      }
+    })
+
+  const mib = 1024 * 1024
+  const line = (size: number, fill = 97) => Buffer.alloc(size, fill)
+  const rows = [
+    {
+      name: "one line of 64 MiB with no line break",
+      bytes: () => line(64 * mib),
+      page: [] as const,
+      expected: { type: "text-page", length: 2_000 + `... (line truncated to 2000 chars)`.length },
+    },
+    {
+      name: "a 64 MiB first line, read from the line after it",
+      bytes: () => Buffer.concat([line(64 * mib), Buffer.from("\nsecond\nthird\n")]),
+      page: [2, 1] as const,
+      expected: { type: "text-page", length: "second".length, next: 3 },
+    },
+    {
+      name: "a NUL inside the part of a 64 MiB line that is not kept",
+      bytes: () => Buffer.concat([line(2 * mib), Buffer.of(0), line(62 * mib)]),
+      page: [] as const,
+      expected: { error: "ReadTool.BinaryFileError" },
+    },
+  ]
+  for (const row of rows)
+    it.effect(`reads ${row.name} in bounded time and memory`, () =>
+      Effect.gen(function* () {
+        const { files, directory } = yield* fixture
+        const file = path.join(directory, "long-line.txt")
+        yield* files.writeFile(file, row.bytes())
+
+        const result = yield* readInChild(file, row.page[0], row.page[1])
+
+        expect(result.outcome).toMatchObject(row.expected)
+        // Unfixed, 64 MiB took 30 s and 1 GiB; kept lines are bounded now.
+        expect(result.maxRssMb).toBeLessThan(450)
+      }),
+      60_000,
+    )
+})

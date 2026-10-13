@@ -216,6 +216,36 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   )
   const everything = [...resolved, ...extra, ...guessed]
 
+  // A read through a wildcard reaches every file the wildcard matches, so the Read rules are asked about each match and
+  // not only about the folder it starts in (class 8). Matches are found on the real folder without following links; one
+  // that is a link is probed as the place it leads to as well. A walk that cannot be bounded or decided asks instead.
+  const matched = yield* Effect.forEach(operands, ({ operand }, index) => {
+    const place = resolved[index]!
+    if (operand.form !== "glob" || WRITES.has(operand.role) || place.status === "unresolved")
+      return Effect.succeed({ resources: [] as { action: "Read" | "Edit"; resource: string }[], undecided: false })
+    const pattern = globRemainder(operand, input.ctx.platform === "win32")
+    if (pattern === undefined) return Effect.succeed({ resources: [], undecided: true })
+    const actions: ("Read" | "Edit")[] = operand.role === "source" ? ["Read", "Edit"] : ["Read"]
+    return Effect.forEach(place.real, (folder) =>
+      fs.scan(pattern, { cwd: folder, absolute: true, include: "all", dot: true, symlink: false }).pipe(
+        Effect.map((found) => (found.length > GLOB_LIMIT ? undefined : found)),
+        Effect.catch(() => Effect.succeed(undefined)),
+        Effect.flatMap((found) =>
+          found === undefined
+            ? Effect.succeed({ targets: [] as string[], undecided: true })
+            : Effect.forEach(found, (file) =>
+                resolveCandidate(file, { candidates: [file], kind: "file", role: operand.role, removal: false, change: false, level: 0 }),
+              ).pipe(Effect.map((all) => ({ targets: all.flatMap((item) => item.targets), undecided: false }))),
+        ),
+      ),
+    ).pipe(
+      Effect.map((all) => ({
+        resources: actions.flatMap((action) => [...new Set(all.flatMap((item) => item.targets))].map((resource) => ({ action, resource }))),
+        undecided: all.some((item) => item.undecided),
+      })),
+    )
+  })
+
   const git = ShellSafety.runsGit(input.analysis, input.ctx.platform)
   const probed = git ? yield* probeGit(all, input.cwd.absolute) : { bare: [], dynamic: false }
   const bare = probed.bare
@@ -243,7 +273,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
   return {
     places: everything.map(({ resources: _resources, external: _external, ...place }) => place),
     external: everything.flatMap((item) => item.external),
-    probes: everything.flatMap((item) => {
+    probes: [...everything, ...matched].flatMap((item) => {
       const actions = [...new Set(item.resources.map((entry) => entry.action))]
       return actions.map((action) => ({
         action,
@@ -253,7 +283,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     bare,
     findings: [
       ...found,
-      ...own(all, operands, resolved, ps),
+      ...own(all, operands, resolved, ps, matched.map((item) => item.undecided)),
       // A folder that only the raw reading found and FileAccess cannot name never fails the call, but it is said.
       ...guessed
         .filter((item) => item.status === "unresolved")
@@ -262,6 +292,20 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
     ].filter(unique),
   } satisfies Facts
 })
+
+// The most matches of one wildcard that are checked one by one; a wildcard that reaches more is asked about.
+const GLOB_LIMIT = 500
+
+// The part of a wildcard operand after its folder, as a pattern relative to that folder. None when the folder part is the
+// whole operand (a `..` after the wildcard), which cannot be expanded from one folder.
+function globRemainder(operand: ShellPaths.Operand, win: boolean) {
+  const text = win ? operand.spelled.replaceAll("\\", "/") : operand.spelled
+  const prefix = win ? (operand.prefix ?? "").replaceAll("\\", "/") : (operand.prefix ?? "")
+  if (prefix === text) return undefined
+  const rest = prefix.endsWith("/") ? text.slice(prefix.length) : text.startsWith(`${prefix}/`) ? text.slice(prefix.length + 1) : text
+  const trimmed = rest.replace(/^\/+/, "")
+  return trimmed === "" ? undefined : trimmed
+}
 
 function unique(finding: ShellSafety.Finding, index: number, list: ShellSafety.Finding[]) {
   return (
@@ -281,9 +325,11 @@ function own(
   operands: { level: Level; operand: ShellPaths.Operand; file: number }[],
   resolved: { status: Place["status"]; why?: Place["why"] }[],
   ps: boolean,
+  undecided: boolean[],
 ) {
   const found: ShellSafety.Finding[] = []
   operands.forEach(({ level, operand }, index) => {
+    if (undecided[index]) found.push(ShellSafety.finding("too-complex", "glob-read", level.depth === 0 ? operand.command : undefined))
     const at = level.depth === 0 ? operand.command : undefined
     const place = resolved[index]!
     const unplaceable =
@@ -642,7 +688,20 @@ export function request(
   const resources = [...(scan?.commands.map((command) => command.resource) ?? []), ...(scan?.bare ?? [])]
   const save = scan?.commands.map((command) => command.save) ?? []
   // The saves stay one per scanned command, as they always were: a client may pair them with the commands.
-  if (resources.length > 0) return { resources, save }
+  if (resources.length > 0) {
+    // Requests of their own beside the scanned commands (class 8), none with a save:
+    // - a declaration that prints the environment, so a Bash ask or a rule for it applies and a grant for the other command
+    //   does not lift it;
+    // - a command that starts with assignments or a wrapper, in the spelling of the program it runs (`FOO=1 rm x` and
+    //   `timeout 5 rm x` as `rm x`), so a deny or ask written for the program meets it. An allow for that spelling lifts
+    //   only this extra request, never the command as written.
+    const extra = analysis.commands.flatMap((command) => {
+      if (PRINTERS.has(command.head) && !assigns(command)) return [command.text.trim()]
+      const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
+      return steps.slice(command.env.length > 0 ? 0 : 1).map((argv) => argv.join(" "))
+    })
+    return { resources: [...resources, ...distinct(extra).filter((item) => item !== "" && !resources.includes(item))], save }
+  }
   if (findings.length === 0 && inert(analysis)) return undefined
   return { resources: [whole], save: [] }
 }
@@ -660,7 +719,10 @@ function opaque(analysis: Analysis, whole: string, scan: ShellParse.Result | und
     : bashFragments(whole)
   const spelled = ps ? pieces.map((piece) => spellings(piece, analysis)) : []
   const aliases = Object.fromEntries(
-    spelled.filter((item) => item.names.length > 0).map((item) => [item.piece, item.names]),
+    // A path or module-qualified first word puts its spellings on the stripped resource, never on the piece: a rule written for
+    // the cmdlet then meets the stripped spelling (a deny), while the piece, which may be a program of the repository, still
+    // needs a rule of its own.
+    spelled.filter((item) => item.names.length > 0).map((item) => [item.stripped ?? item.piece, item.names]),
   )
   return {
     resources: distinct([
@@ -768,6 +830,11 @@ const NEVER = new Set(
     // Spawners and code runners that a saved "name *" would lift for every argument.
     "start-threadjob register-scheduledjob register-engineevent register-objectevent register-wmievent new-pssession",
     "enter-pssession save-script new-object python2 tsx lua bunx ssh py new-psdrive",
+    // Cmdlets whose script-block and member-access arguments run code: a saved "name *" would lift every such argument. Each
+    // is listed with its aliases, since a written alias is checked as spelled.
+    "where-object where ? select-object select sort-object sort group-object group measure-object measure",
+    "format-table ft format-list fl format-wide fw format-custom fc out-string out-host oh write-output echo write",
+    "write-host start-sleep sleep invoke-wmimethod iwmi invoke-cimmethod icim",
   ]
     .join(" ")
     .split(" "),

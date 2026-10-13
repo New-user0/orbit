@@ -37,13 +37,15 @@ export function pattern(text: string): string | undefined {
   if (text.includes(":") && !/^\[[0-9a-fA-F:.]+\]$/.test(text)) return undefined
   const host = AddressGuard.canonical(text)
   if (host === undefined || host === "" || host.split(".").some((part) => part === "")) return undefined
-  return host
+  // An IPv6 spelling of an IPv4 address is kept as that address, so one entry covers every spelling (class 6).
+  return AddressGuard.embeddedIPv4(host) ?? host
 }
 
-/** Whether a host matches one of the patterns. `*.d` matches the subdomains of `d` at any depth, never `d` or an address. */
+/** Whether a host matches one of the patterns, an IPv4 address in any IPv6 spelling counting as itself. `*.d` matches the subdomains of `d` at any depth, never `d` or an address. */
 export function matches(patterns: readonly string[], host: string) {
-  const name = AddressGuard.canonical(host)
-  if (name === undefined) return false
+  const spelled = AddressGuard.canonical(host)
+  if (spelled === undefined) return false
+  const name = AddressGuard.embeddedIPv4(spelled) ?? spelled
   return patterns.some((item) => {
     if (!item.startsWith("*.")) return item === name
     return !isAddress(name) && name.endsWith(item.slice(1))

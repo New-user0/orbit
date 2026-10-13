@@ -490,6 +490,39 @@ describe("ShellGuard.request", () => {
     }),
   )
 
+  // A declaration that prints the environment is a request beside any other command, with no save (class 8).
+  for (const [command, resources] of [
+    ["export -p; ls", ["ls", "export -p"]],
+    ["ls; declare -p", ["ls", "declare -p"]],
+    ["declare -p && git status", ["git status", "declare -p"]],
+    ["export -p | cat", ["cat", "export -p"]],
+  ] as const)
+    it.live(`holds the printing declaration of ${command} as a request of its own`, () =>
+      Effect.gen(function* () {
+        const asked = (yield* request(command)).request
+        expect(asked?.resources).toEqual([...resources])
+        expect(asked?.save).toHaveLength(1)
+      }),
+    )
+
+  // A leading assignment or a wrapper is also judged in the spelling of the program it runs, as a request of its own, so a
+  // deny or ask for the program meets it and an allow for it cannot lift the command as written (class 8).
+  for (const [command, resources] of [
+    ["FOO=1 rm x", ["FOO=1 rm x", "rm x"]],
+    ["timeout 5 rm x", ["timeout 5 rm x", "rm x"]],
+    ["nice -n 5 rm x", ["nice -n 5 rm x", "rm x"]],
+    ["nohup rm x", ["nohup rm x", "rm x"]],
+    ["env A=1 rm x", ["env A=1 rm x", "rm x"]],
+    ["FOO=1 timeout 5 nice rm x", ["FOO=1 timeout 5 nice rm x", "timeout 5 nice rm x", "nice rm x", "rm x"]],
+    ["rm x", ["rm x"]],
+  ] as const)
+    it.live(`holds ${command} in the spelling of the program it runs`, () =>
+      Effect.gen(function* () {
+        const asked = (yield* request(command)).request
+        expect(asked?.resources).toEqual([...resources])
+      }),
+    )
+
   it.live("skips only input that does nothing", () =>
     Effect.gen(function* () {
       for (const command of ["export A=1; cd sub", "# note", "", "A=1", "unset A", "declare -x B=2"])
@@ -723,6 +756,35 @@ describe("ShellGuard.authorize", () => {
       expect(asked.map((input) => input.action)).toEqual(["external_directory", "Bash"])
     }),
   )
+
+  // A read-class command that names an output file writes it: an Edit rule decides it, and a file outside the project is
+  // asked about as a folder, whichever spelling of the option the command uses (class 8, the shell-paths round).
+  for (const command of [
+    "sort -o OUT f",
+    "sort -oOUT f",
+    "sort --output=OUT f",
+    "sort --out OUT f",
+    "uniq f OUT",
+    "find . -fprint OUT",
+    "find . -fprintf OUT %p",
+    "tree -o OUT",
+    "git diff --output=OUT",
+    "git format-patch -o OUT",
+    "sed -n 'w OUT' f",
+    "sed -n 's/a/b/w OUT' f",
+  ])
+    it.live(`${command}: an Edit deny on the output file stops it, and an outside one asks`, () =>
+      Effect.gen(function* () {
+        const denied = yield* run(command.replaceAll("OUT", "out"), (input) => input.action === "Edit")
+        expect(Exit.isFailure(denied)).toBe(true)
+        expect(asked).toEqual([])
+        const control = yield* run(command.replaceAll("OUT", "out"), () => false)
+        expect(Exit.isSuccess(control)).toBe(true)
+        const outside = yield* run(command.replaceAll("OUT", "../outside/out"), () => false)
+        expect(Exit.isSuccess(outside)).toBe(true)
+        expect(asked.map((input) => input.action)).toContain("external_directory")
+      }),
+    )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
   // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can

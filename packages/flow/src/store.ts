@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite"
 import { mkdirSync } from "node:fs"
 import path from "node:path"
+import { LinkShare } from "@orbit/util/link-share"
 
 // The run store is an append-only event log; every other view of a run is derived from it. One SQLite file per
 // project, at .orbit/runs.db.
@@ -74,7 +75,13 @@ export class Store {
   }
 
   static at(directory: string) {
-    return new Store(path.join(directory, ".orbit", "runs.db"))
+    // The store folder is part of the repository, so a clone can ship `.orbit` as a link to a share, and creating or
+    // opening a database through it connects to a host the clone chose, before any trust answer (class 6). It is refused
+    // without being opened, for every command that opens the store.
+    const file = path.join(directory, ".orbit", "runs.db")
+    if (LinkShare.ofSync(file) !== undefined)
+      throw new Error(`The run store ${JSON.stringify(file)} leads to a network share, so it is not opened`)
+    return new Store(file)
   }
 
   create(input: Omit<Run, "status" | "created" | "updated">, data: Readonly<Record<string, unknown>> = {}) {

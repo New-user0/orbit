@@ -23,11 +23,24 @@ export interface Result {
 }
 
 /**
- * Orbit sets this variable itself, so no setting may remove or change it, in any spelling. A child is handed it after
- * every setting, and the parent copy is what the runtime's own program lookup reads.
+ * Variables no setting may remove or change, in any spelling (class 8). Orbit sets the first one itself: a child is
+ * handed it after every setting, and the parent copy is what the runtime's own program lookup reads. The others are
+ * Orbit's own control variables, read at start: a nested `orb` that inherited a changed one would read managed settings
+ * from another folder, trust its folder implicitly or take another config, so they stay as the parent process has them.
  */
+const reserved = new Set([
+  "nodefaultcurrentdirectoryinexepath",
+  "orbit_managed_dir",
+  "orbit_trust_project",
+  "orbit_config",
+  "orbit_config_dir",
+  "orbit_config_content",
+  "orbit_config_content_file",
+  "orbit_password",
+])
+
 export function isReserved(name: string) {
-  return name.toLowerCase() === "nodefaultcurrentdirectoryinexepath"
+  return reserved.has(name.toLowerCase())
 }
 
 export function decode(input: unknown): Result {
@@ -46,7 +59,7 @@ export function decode(input: unknown): Result {
       return
     }
     if (isReserved(name)) {
-      diagnostics.push({ kind: "unsupported", path: at, message: "ignored a variable that Orbit sets itself" })
+      diagnostics.push({ kind: "unsupported", path: at, message: "ignored a variable that Orbit controls itself" })
       return
     }
     // A defined property, so a name such as `__proto__` stays a variable and does not reach the prototype.

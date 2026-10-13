@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from "bun:test"
+import { stateHome } from "./fixture/state-home"
 import fs from "node:fs/promises"
 import os from "node:os"
 import { randomUUID } from "node:crypto"
@@ -13,9 +14,14 @@ import { ORBIT_VERSION } from "../src/version"
 
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-overlay-")))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() =>
+  Promise.all(
+    [root, stateHome].map((folder) => fs.rm(folder, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })),
+  ),
+)
 
-// Where the CLI keeps its overlays: per user, and not the temporary folder that every agent may write to.
+// Where the CLI keeps its overlays: per user, and not the temporary folder that every agent may write to. The test
+// process has a state folder of its own (see fixture/state-home.ts), so these tests never touch the real one.
 const overlays = path.join(Global.Path.state, "overlays")
 
 const server = (extra: object = {}) => ({ type: "local", command: ["fx"], ...extra })
@@ -31,6 +37,10 @@ async function refused(input: Partial<Parameters<typeof ConfigOverlay.build>[0]>
     (error: Error) => error.message,
   )
 }
+
+test("the overlays of these tests live in a temporary state folder, never the real one", () => {
+  expect(overlays.startsWith(stateHome)).toBe(true)
+})
 
 test("no flag builds nothing, so the run keeps the background service", async () => {
   expect(await ConfigOverlay.build({ mcpConfig: [], cwd: root, inherited: '{"model":"a/b"}' })).toBeUndefined()
