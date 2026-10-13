@@ -1416,6 +1416,63 @@ describe("Permission under managed settings", () => {
       }),
     )
 
+  // The production defaults (`Info.default`, marked where the Agent layer makes them): a managed allow lifts the built-in
+  // `external_directory * ask`, and nothing the person or a hook wrote (class 8).
+  const outsideFile = (resource = "/shared/x.txt") =>
+    assertion({ action: "external_directory", resources: [resource], ...next() })
+  for (const row of [
+    { name: "the built-in ask", extra: [], effect: "allow" },
+    {
+      name: "the person's own external_directory ask",
+      extra: [{ action: "external_directory", resource: "/shared/*", effect: "ask" as const }],
+      effect: "ask",
+    },
+  ])
+    it.effect(`a managed external_directory allow over the production defaults and ${row.name} gives ${row.effect}`, () =>
+      Effect.gen(function* () {
+        yield* setup()
+        const agents = yield* Agent.Service
+        yield* agents.transform((editor) =>
+          {
+            // `setup` emptied the agent's rules; a new agent starts from the production defaults.
+            editor.remove(Agent.ID.make("test"))
+            editor.update(Agent.ID.make("test"), (agent) => {
+              agent.permissions.push(...row.extra)
+            })
+          },
+        )
+        yield* managed({ rules: [{ action: "external_directory", resource: "/shared/*", effect: "allow" }] })
+        const service = yield* Permission.Service
+        expect(yield* service.ask(outsideFile())).toMatchObject({ effect: row.effect })
+        // A place the managed rule does not name stays a question.
+        expect(yield* service.ask(outsideFile("/elsewhere/x.txt"))).toMatchObject({ effect: "ask" })
+      }),
+    )
+
+  it.effect("a managed external_directory allow does not lift a place that a link leads out to, nor a .env ask", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) =>
+        {
+          editor.remove(Agent.ID.make("test"))
+          editor.update(Agent.ID.make("test"), () => {})
+        },
+      )
+      yield* managed({
+        rules: [
+          { action: "external_directory", resource: "/shared/*", effect: "allow" },
+          { action: "Read", resource: "*", effect: "allow" },
+        ],
+      })
+      const service = yield* Permission.Service
+      expect(
+        yield* service.ask(assertion({ ...next(), action: "external_directory", resources: ["/shared/*"], escaped: ["/shared/*"] })),
+      ).toMatchObject({ effect: "ask" })
+      expect(yield* service.ask(read(["prod.env"]))).toMatchObject({ effect: "ask" })
+    }),
+  )
+
   it.effect("a managed ask does not lift a hook's deny", () =>
     Effect.gen(function* () {
       yield* setup()
