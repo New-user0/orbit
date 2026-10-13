@@ -784,11 +784,13 @@ export function request(
     const extra = analysis.commands.flatMap((command): { resource: string; save: string | undefined }[] => {
       if (PRINTERS.has(command.head) && !assigns(command)) return [{ resource: command.text.trim(), save: undefined }]
       const steps = ShellWrappers.unwrap(command.argv.map((word) => word.value)).steps
-      // Only the program at the end of the chain gets a save, and none when anything in the chain reshapes it (class 8).
-      const open = command.env.length === 0 && !reshapes(command, steps) && !steersProgram(command, steps)
+      // Only the program at the end of the chain gets a save. When anything in the chain reshapes it (env, assignments),
+      // that save is the stripped text itself, not a pattern, so a repeat is covered and a later PATH=. is not (class 8).
+      const open = command.env.length === 0 && !reshapes(command, steps)
+      const stripped = !steersProgram(command, steps)
       return steps.slice(command.env.length > 0 ? 0 : 1).map((argv, index, rest) => ({
         resource: argv.join(" "),
-        save: open && index === rest.length - 1 ? innerSave(command, argv) : undefined,
+        save: stripped && index === rest.length - 1 ? innerSave(command, argv, !open) : undefined,
       }))
     })
     const added = extra.filter((item) => item.resource !== "" && !resources.includes(item.resource))
@@ -837,15 +839,15 @@ function steersProgram(command: Command, steps: string[][]) {
 
 // The save for the program a wrapper runs, or undefined unless the words that name it are plain: unquoted, unescaped, with
 // no whitespace or wildcard, so the pattern is the text as the person wrote it.
-function innerSave(command: Command, argv: string[]) {
-  const named = ShellParse.prefix(argv)
-  if (ASSIGNED.test(named[0] ?? "")) return undefined
+function innerSave(command: Command, argv: string[], exact: boolean) {
+  const named = exact ? argv : ShellParse.prefix(argv)
+  if (ASSIGNED.test(named[0] ?? "") || RESHAPERS.has(named[0] ?? "")) return undefined
   const offset = command.argv.length - argv.length
   const plain = named.every((_, index) => {
     const word = command.argv[offset + index]
     return word !== undefined && word.literal && !word.quoted && !word.glob && !word.escaped && !/[\s*?[\\]/.test(word.value)
   })
-  return plain ? `${named.join(" ")} *` : undefined
+  return plain ? (exact ? named.join(" ") : `${named.join(" ")} *`) : undefined
 }
 
 function distinct<A>(list: readonly A[]) {
