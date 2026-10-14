@@ -1819,6 +1819,8 @@ is carried by it, and one that names none has no task yet: give it one. An entry
 <task>` once the owner has said so in writing. None does yet, so until one does, a change that touches that surface
 fixes it or asks.
 
+The program-wide register of every follow-up, these gaps included, with each one's carrier and status, is [follow-ups.md](follow-ups.md).
+
 - **Fingerprints stop short of three things.** The skill and agent directories of other products' roots
   are not digested, so a hook added to a skill there is not asked about, and no consumer of those hooks exists yet:
   hooks-21 must digest them before it runs one. The modules that a plugin's entry file imports are not digested
