@@ -1961,12 +1961,12 @@ The program-wide register of every follow-up, these gaps included, with each one
   itself, or a path in the text that names a place outside the project directly, such as `cat ~/.ssh/id_rsa`, which the
   Bash approval shows but no folder question names. Task `shell-safety-9` (M3) carries the shell analysis. A read
   through a wildcard is judged by its folder only: a glob spelling of a file can still read past a Read deny on that file
-  (the per-match check was reverted in round 8 after it kept opening holes, and is a follow-up). A leading assignment or a
-  wrapper (`FOO=1`, `timeout`, `nice`, `env`) is not looked through either, so it can step around a Bash deny rule (also a
-  follow-up). The output files of `sort`, `uniq`, `find`, `tree` and `sed` are writes (`outputs` in `shell/paths.ts`,
+  (the per-match check was reverted in round 8 after it kept opening holes, and is a follow-up carried by
+  `shell-safety-12`). A leading assignment or a wrapper (`FOO=1`, `timeout`, `nice`, `env`) is not looked through
+  either, so it can step around a Bash deny rule (also a follow-up carried by `shell-safety-12`). The output files of `sort`, `uniq`, `find`, `tree` and `sed` are writes (`outputs` in `shell/paths.ts`,
   pinned by `paths.test.ts`). A `git` output file (`git diff --output`, `format-patch -o`, `archive -o`, with or without
-  `-C`) is not checked as a write, and a word shaped like an assignment (`cat x=~/s`) has its `~` read literally, although
-  bash expands it; both were reverted in round 9 after the placement kept opening holes, and are follow-ups carried by
+  `-C`) is not checked as a write, and a word shaped like an assignment as an argument (`cat x=~/s`) has its `~` read literally, although
+  bash expands it (`paths.test.ts`; `dd if=~/x of=~/y` is expanded, as bash does, and `sed` refuses such a word); both were reverted in round 9 after the placement kept opening holes, and are follow-ups carried by
   `shell-safety-12`. Other writers and interpreters are not modelled.
 - **A search of a folder and Read rules.** Grep and Glob ask the Read rules about the path they search, but not about
   each file that a search of a folder finds, so a Grep of `.` reads a `.env` in it under a Read deny of `*.env` unless a
