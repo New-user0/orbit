@@ -8,7 +8,7 @@ import path from "path"
 const lone = (line: string) => [...line.matchAll(/`\\(?:\.|[A-Za-z][A-Za-z0-9_.-]+)\\[^`]*`/g)]
 
 describe("share and device spellings in the docs", () => {
-  for (const name of ["upgrading.md", "untrusted-repositories.md"])
+  for (const name of ["upgrading.md", "untrusted-repositories.md", "follow-ups.md"])
     test(`${name} has no code span that starts with a single backslash`, async () => {
       const text = await Bun.file(path.join(import.meta.dir, "../../../docs", name)).text()
       expect(
