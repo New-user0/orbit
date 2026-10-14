@@ -589,6 +589,27 @@ describe("ShellTool scanner permissions", () => {
         ))
     }
 
+    // A wrapper-led command saves the wrapper's pattern, and a plain `IFS=` command is opaque and saves nothing. Neither
+    // is lifted again by what it saved: each asks on the next run (class 8).
+    for (const [command, save] of [
+      ["sudo PATH=/usr/bin printf x", "sudo *"],
+      ["timeout 5 env -i printf x", "timeout *"],
+      ["nice env PATH=/usr/bin printf x", "nice *"],
+      ["PATH=/usr/bin ./prog x", "./prog *"],
+      ["IFS=: printf x", undefined],
+    ] as const)
+      test(`${scanner}: always on ${command} saves ${save ?? "nothing"} and asks again`, () =>
+        withScanner(portable, (registry, fixture) =>
+          Effect.gen(function* () {
+            const saved = yield* PermissionSaved.Service
+            const marker = path.join(fixture.active, "marker")
+            yield* runPermissionCommand(registry, command, marker, ["always"])
+            expect((yield* saved.list()).map((item) => item.resource)).toEqual(save ? [save] : [])
+            const again = yield* runPermissionCommand(registry, command, marker, ["reject"])
+            expect(again.requests).toHaveLength(1)
+          }),
+        ))
+
     // A declaration that prints the environment is a request beside any other command (class 8): a rule written for it
     // applies, and an allow for the other command does not lift it. The secret is what the model would be shown.
     for (const [command, declaration] of [
